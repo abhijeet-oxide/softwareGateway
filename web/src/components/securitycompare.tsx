@@ -1156,7 +1156,11 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
         scroll={{ x: 'max-content' }}
         pagination={{ pageSize: 25, showSizeChanger: true, size: 'small' }}
         columns={[
-          { title: 'CVE', width: 160, render: (_, r) => <CveCell cve={r.cve} id={r.id} /> },
+          {
+            title: 'CVE',
+            width: 200,
+            render: (_, r) => <CveCell cve={r.cve} id={r.id} kev={r.kev} />,
+          },
           {
             title: 'Change',
             width: 160,

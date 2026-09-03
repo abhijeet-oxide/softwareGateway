@@ -166,6 +166,19 @@ func (s *Server) attachSecurity(
 	// make.
 	canSync, reason := s.productCanSync(productName)
 
+	// Which scanners are behind each release's numbers. One query for the
+	// page; empty on a single-scanner deployment, where the caption it feeds
+	// is not drawn.
+	sources := map[int64][]security.SourceCounts{}
+	if lister, ok := s.deps.SecurityStore.(securitySourceLister); ok {
+		if found, err := lister.SourcesForPackages(ctx, ids); err == nil {
+			sources = found
+		} else {
+			// A caption, never the page.
+			s.deps.Logger.Warn("could not read per-scanner rows for listing", "error", err)
+		}
+	}
+
 	for i, row := range rows {
 		sec, ok := found[row.ID]
 		if !ok {
@@ -190,6 +203,9 @@ func (s *Server) attachSecurity(
 			DistinctCVEs:    sec.DistinctCVEs,
 			DistinctCounts:  toAPICounts(sec.DistinctCounts),
 			UniqueCVECounts: toAPICounts(sec.UniqueCVECounts),
+			KEVs:            sec.KEVs,
+			KEVFixable:      sec.KEVFixable,
+			Providers:       providersOf(sec, sources[row.ID]),
 			Complete:        sec.Coverage.Complete(),
 			Scanned:         sec.Coverage.Scanned,
 			Scannable:       sec.Coverage.Scannable(),
@@ -202,6 +218,35 @@ func (s *Server) attachSecurity(
 		}
 		out[i].Security = summary
 	}
+}
+
+// providersOf names the scanners behind a release's stored numbers.
+//
+// From the per-source rows where a sync wrote them, falling back to the single
+// provider column - which is what a release synced before there was a second
+// scanner has, and which must not read as "no scanner".
+func providersOf(row store.PackageSecurityRow, sources []security.SourceCounts) []string {
+	if len(sources) > 0 {
+		out := make([]string, 0, len(sources))
+		for _, src := range sources {
+			out = append(out, src.Provider)
+		}
+		return out
+	}
+	if row.Provider != "" {
+		return []string{row.Provider}
+	}
+	return nil
+}
+
+// securitySourceLister is the optional half of SecurityStore that answers the
+// per-scanner breakdown for many releases at once.
+//
+// An optional interface rather than a method on SecurityStore, because a
+// listing is the only caller and a store that cannot answer it should cost a
+// caption rather than fail to compile.
+type securitySourceLister interface {
+	SourcesForPackages(ctx context.Context, ids []int64) (map[int64][]security.SourceCounts, error)
 }
 
 // securitySyncRunningHere reports whether this replica is the one syncing a

@@ -63,7 +63,11 @@ func (s Status) Label() string {
 	case StatusUnsupported:
 		return "Not applicable"
 	case StatusDisabled:
-		return "Xray disabled"
+		// Not "Xray disabled". The status means "the scanner that answers for
+		// this repository is switched off", and naming one of two scanners in
+		// it made every Anchore-disabled artifact claim Xray was off - which
+		// sends the reader to the wrong line of the wrong document.
+		return "Scanner off"
 	case StatusUnavailable:
 		return "Unavailable"
 	default:
@@ -118,6 +122,42 @@ func (c Component) Display() string {
 	}
 }
 
+// EPSS is the Exploit Prediction Scoring System's estimate for a vulnerability.
+//
+// Two numbers rather than one, because they answer different questions and the
+// second is the readable one: Score is the modelled probability of exploitation
+// in the next thirty days (0.00042 means what it looks like), and Percentile is
+// where that sits among every scored CVE. "0.00042" tells almost nobody
+// anything; "in the bottom 12%" tells everybody something.
+type EPSS struct {
+	Score      float64 `json:"score"`
+	Percentile float64 `json:"percentile,omitempty"`
+}
+
+// Observation is one scanner's grading of one finding, kept with its source.
+//
+// See Finding.Observations for why the disagreements are preserved rather than
+// resolved. Nothing sorts or counts on these; they are what a reader opens when
+// two sources put a different word on the same CVE.
+type Observation struct {
+	// Provider is the scanner this came from - "anchore", "jfrog-xray".
+	Provider string `json:"provider"`
+	// Source is the scanner's own name for the data set within it: "nvd",
+	// "vendor", the feed group. Empty where the scanner reports one grade and
+	// does not say where it got it.
+	Source   string   `json:"source,omitempty"`
+	Severity Severity `json:"severity,omitempty"`
+	// Score and Vector are the CVSS pair, where this source supplied one.
+	Score  float64 `json:"score,omitempty"`
+	Vector string  `json:"vector,omitempty"`
+}
+
+// ObservationKey identifies one observation, so merging two reports of the same
+// grading does not print it twice.
+func (o Observation) ObservationKey() string {
+	return o.Provider + "|" + o.Source + "|" + string(o.Severity) + "|" + o.Vector
+}
+
 // Finding is one vulnerability, against one component, in one artifact.
 //
 // Flat rather than nested under the component, because every question the
@@ -153,6 +193,60 @@ type Finding struct {
 	// compares on them - Severity does that.
 	CVSSScore  float64 `json:"cvssScore,omitempty"`
 	CVSSVector string  `json:"cvssVector,omitempty"`
+
+	// KEV says this vulnerability is on a known-exploited catalogue - CISA's,
+	// in every scanner that reports one today.
+	//
+	// # Why this outranks severity everywhere it appears
+	//
+	// Because it is not a grade, it is an observation. A critical is somebody's
+	// judgement that a vulnerability WOULD be bad to exploit; a KEV is a record
+	// that somebody HAS exploited it. A release with nine hundred criticals and
+	// four KEVs has four things to do first, and every sort order, every default
+	// filter and every badge in this platform says so.
+	//
+	// False is not "not exploited". It is "no scanner that answered for this
+	// finding said so", which on a scanner with no KEV feed is every finding -
+	// hence KEVSource, which says who claimed it.
+	KEV bool `json:"kev,omitempty"`
+	// KEVSource names the scanner whose data carried the KEV flag, so a reader
+	// who wants to check the claim knows where it came from. Empty when KEV is
+	// false.
+	KEVSource string `json:"kevSource,omitempty"`
+
+	// EPSS is the exploit-prediction score and its percentile, where a scanner
+	// supplies them. Carried, never sorted on: it is a probability and the
+	// people who use it know what to do with it, while the people who do not
+	// must not have a list reordered by a number they cannot read.
+	EPSS *EPSS `json:"epss,omitempty"`
+
+	// WillNotFix says the vendor has declined to fix this in the affected
+	// stream.
+	//
+	// Distinct from `Fixable == false`, and the distinction is the point: no
+	// fixed version means nobody has shipped one YET, and will-not-fix means
+	// nobody is going to. The first is a wait, the second is a decision to
+	// mitigate or accept, and a table that renders them identically sends
+	// somebody back to the same vendor every month for an answer they already
+	// have.
+	WillNotFix bool `json:"willNotFix,omitempty"`
+
+	// Observations is every severity and score this finding was reported with,
+	// with the source that reported each.
+	//
+	// # Why the disagreements are kept rather than resolved
+	//
+	// Because they are not noise. Anchore reports a vendor severity and an NVD
+	// severity for one CVE and they routinely differ - Debian grades an OpenSSL
+	// issue low that NVD grades critical, and both are right about different
+	// questions. Xray reports a third. Collapsing them to one number loses the
+	// only evidence a reader has for which to believe, and the reader is the
+	// one who knows whether their deployment looks like the vendor's assumption.
+	//
+	// Severity above is the REPORTED grade - the one this platform sorts,
+	// counts and compares on - and it is chosen by a documented rule (worst
+	// wins, see MergeFindings). This is the audit trail behind it.
+	Observations []Observation `json:"observations,omitempty"`
 
 	// References are advisory URLs.
 	References []string `json:"references,omitempty"`
@@ -389,6 +483,13 @@ const (
 // DocumentSummary is a held document, named and measured but not carried.
 type DocumentSummary struct {
 	Kind DocumentKind `json:"kind"`
+	// Provider names the scanner whose body this is.
+	//
+	// Needed once two scanners answer for one image: the vulnerability response
+	// exists once per scanner, they are different documents about the same
+	// bytes, and a download menu that could not name them would offer two
+	// identical-looking buttons.
+	Provider string `json:"provider,omitempty"`
 	// Available is false for a document the scanner was asked for and did not
 	// have - which is worth saying, because the alternative is a button that
 	// silently downloads nothing.
@@ -404,7 +505,7 @@ type DocumentSummary struct {
 func (r *Report) Recount() {
 	r.Counts = Counts{}
 	for _, f := range r.Findings {
-		r.Counts.Add(f.Severity, f.Fixable)
+		r.Counts.AddGrade(GradeOf(f))
 	}
 }
 
@@ -446,23 +547,103 @@ func DedupeFindings(in []Finding) []Finding {
 		// impact path may name a fixed version the other omits. Keep the worse
 		// grade and the union of what is known, because losing a fix version to
 		// deduplication would report a fixable finding as unfixable.
-		kept := out[i]
-		if f.Severity.Rank() > kept.Severity.Rank() {
-			kept.Severity = f.Severity
+		out[i] = enrich(out[i], f)
+	}
+	return out
+}
+
+// enrich folds one finding's knowledge into another's, keeping the worse grade
+// and the union of the facts.
+//
+// # Why this is one function and not two
+//
+// Two findings arrive at the same row by two routes: a single scanner reporting
+// the same package twice by two impact paths (DedupeFindings), and two
+// scanners reporting the same package once each (MergeFindings). The arithmetic
+// is identical - keep the worse severity, union what is known, never lose a
+// fix version - and writing it twice is how the two drift until a fix version
+// survives one path and not the other.
+//
+// The rules, and each of them is a bug that was fixed by choosing this way:
+//
+//   - Severity: the WORSE wins. Two scanners disagreeing about one CVE is not
+//     a reason to report the kinder answer, and Observations keeps both so the
+//     disagreement is still auditable.
+//   - Fixable and FixedIn: the UNION. Losing a fix version to a merge would
+//     report a fixable finding as unfixable, which is the one direction of
+//     error that costs somebody an upgrade they could have asked for.
+//   - KEV: sticky, with its claimant. One scanner with a KEV feed is enough;
+//     a scanner without one saying nothing is not a denial.
+//   - Prose, CVSS, EPSS, references: filled where absent. This is the
+//     enrichment the whole exercise is for - Anchore carries an EPSS score and
+//     a description where Xray carries a CVSS vector and a policy, and a reader
+//     wants the union rather than whichever arrived first.
+//   - WillNotFix: sticky. A vendor's refusal is a fact one source may know and
+//     another may not have loaded.
+func enrich(kept, f Finding) Finding {
+	if f.Severity.Rank() > kept.Severity.Rank() {
+		kept.Severity = f.Severity
+	}
+	kept.Fixable = kept.Fixable || f.Fixable
+	kept.FixedIn = mergeStrings(kept.FixedIn, f.FixedIn)
+	kept.Sources = mergeStrings(kept.Sources, f.Sources)
+	kept.References = mergeStrings(kept.References, f.References)
+	if !kept.KEV && f.KEV {
+		kept.KEV, kept.KEVSource = true, f.KEVSource
+	}
+	kept.WillNotFix = kept.WillNotFix || f.WillNotFix
+	if kept.Summary == "" {
+		kept.Summary = f.Summary
+	}
+	if kept.Description == "" {
+		kept.Description = f.Description
+	}
+	if kept.ID == "" {
+		kept.ID = f.ID
+	}
+	if kept.CVE == "" {
+		kept.CVE = f.CVE
+	}
+	if kept.Policy == "" {
+		kept.Policy = f.Policy
+	}
+	if kept.Component.Path == "" {
+		kept.Component.Path = f.Component.Path
+	}
+	if kept.Published == nil {
+		kept.Published = f.Published
+	}
+	// The higher score wins rather than the first one, for the same reason the
+	// worse severity does: two sources scoring one CVE differently is not a
+	// licence to quote the gentler number.
+	if f.CVSSScore > kept.CVSSScore {
+		kept.CVSSScore, kept.CVSSVector = f.CVSSScore, f.CVSSVector
+	} else if kept.CVSSVector == "" {
+		kept.CVSSVector = f.CVSSVector
+	}
+	if kept.EPSS == nil || (f.EPSS != nil && f.EPSS.Score > kept.EPSS.Score) {
+		kept.EPSS = f.EPSS
+	}
+	kept.Observations = mergeObservations(kept.Observations, f.Observations)
+	return kept
+}
+
+// mergeObservations unions two gradings lists, preserving first-seen order.
+func mergeObservations(a, b []Observation) []Observation {
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]Observation, 0, len(a)+len(b))
+	for _, list := range [][]Observation{a, b} {
+		for _, o := range list {
+			k := o.ObservationKey()
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			out = append(out, o)
 		}
-		kept.Fixable = kept.Fixable || f.Fixable
-		kept.FixedIn = mergeStrings(kept.FixedIn, f.FixedIn)
-		kept.Sources = mergeStrings(kept.Sources, f.Sources)
-		if kept.Summary == "" {
-			kept.Summary = f.Summary
-		}
-		if kept.Description == "" {
-			kept.Description = f.Description
-		}
-		if kept.CVSSScore == 0 {
-			kept.CVSSScore, kept.CVSSVector = f.CVSSScore, f.CVSSVector
-		}
-		out[i] = kept
 	}
 	return out
 }
@@ -487,11 +668,37 @@ func mergeStrings(a, b []string) []string {
 }
 
 // SortFindings orders a finding slice worst-first and deterministically.
+//
+// # The order, and why it is that order
+//
+// Known-exploited first, then severity, then fixable, then identity. It is the
+// order somebody works in, not the order the data arrives in:
+//
+//  1. KEV, because a vulnerability that is being exploited is not the same kind
+//     of thing as one that is merely severe. Every other criterion is a
+//     judgement about what COULD happen; this one is a record of what HAS.
+//  2. Severity within that, so the four exploited criticals come before the
+//     eleven exploited mediums.
+//  3. FIXABLE ahead of unfixable at equal severity, and this is the one that
+//     surprises people. A release here is a vendor's build: nothing in it can
+//     be patched locally, so the only actionable rows are the ones with a
+//     version to ask the vendor for. Sorting a hundred unfixable criticals
+//     above four fixable ones puts the whole of the afternoon's work below the
+//     fold.
+//  4. Identifier, then component, so two runs over the same data produce
+//     byte-identical output. Exports are diffed by people; a stable order is
+//     not cosmetic.
 func SortFindings(fs []Finding) {
 	sort.SliceStable(fs, func(i, j int) bool {
 		a, b := fs[i], fs[j]
+		if a.KEV != b.KEV {
+			return a.KEV
+		}
 		if a.Severity.Rank() != b.Severity.Rank() {
 			return a.Severity.Rank() > b.Severity.Rank()
+		}
+		if a.Fixable != b.Fixable {
+			return a.Fixable
 		}
 		if a.Identifier() != b.Identifier() {
 			return a.Identifier() < b.Identifier()
@@ -534,6 +741,18 @@ type Posture struct {
 	// pair breakdown in UniqueCounts.
 	UniqueCVECounts Counts `json:"uniqueCveCounts"`
 
+	// KEVs is the DISTINCT advisories in this release that are known to be
+	// exploited, and KEVFixable how many of those have a fix.
+	//
+	// Distinct rather than per-occurrence, and that is the difference between a
+	// number somebody acts on and one they argue with: a KEV in a base image
+	// carried by forty images is one advisory to chase and forty places it
+	// lands, and "40 known-exploited vulnerabilities" reads as forty problems.
+	// Counts.KEV still carries the per-occurrence figure for the work estimate.
+	KEVs        int            `json:"kevs"`
+	KEVFixable  int            `json:"kevFixable"`
+	KEVSeverity SeverityCounts `json:"kevSeverity"`
+
 	Coverage Coverage `json:"coverage"`
 
 	// BySource is the same arithmetic, per scanner, plus how much of it only
@@ -570,6 +789,13 @@ type SourceCounts struct {
 	// OnlyHere is the distinct advisories NO other scanner reported. Zero on a
 	// single-scanner deployment, where every finding is trivially only there.
 	OnlyHere int `json:"onlyHere"`
+	// KEVs is the distinct known-exploited advisories this scanner reported.
+	//
+	// Worth its own field because it is the number that decides whether a
+	// second scanner earned its licence: a scanner that contributed four
+	// thousand extra lows nobody will read and a scanner that contributed two
+	// KEVs nobody else saw look identical in OnlyHere.
+	KEVs int `json:"kevs"`
 	// Artifacts is how many artifacts this scanner answered for.
 	Artifacts int `json:"artifacts"`
 }
@@ -618,6 +844,8 @@ func Summarize(reports []Report) Posture {
 	uniqueCVEs := map[string]bool{}
 	uniqueCVESeverity := map[string]Severity{}
 	uniqueCVEFixable := map[string]bool{}
+	// KEV is tracked per ADVISORY rather than per occurrence. See Posture.KEVs.
+	uniqueCVEKEV := map[string]bool{}
 	// Per-source arithmetic, and which sources saw each advisory. Built in the
 	// same pass because a second walk over a release's findings is a second walk
 	// over a hundred thousand rows.
@@ -680,6 +908,9 @@ func Summarize(reports []Report) Posture {
 				if f.Fixable {
 					uniqueCVEFixable[id] = true
 				}
+				if f.KEV {
+					uniqueCVEKEV[id] = true
+				}
 				for _, src := range f.SourceSet() {
 					seen, ok := sawCVE[id]
 					if !ok {
@@ -695,7 +926,7 @@ func Summarize(reports []Report) Posture {
 					sc = &SourceCounts{Provider: src}
 					bySource[src] = sc
 				}
-				sc.Counts.Add(f.Severity, f.Fixable)
+				sc.Counts.AddGrade(GradeOf(f))
 			}
 		}
 	}
@@ -705,8 +936,13 @@ func Summarize(reports []Report) Posture {
 	}
 	p.UniqueCVEs = len(uniqueCVEs)
 	for id, severity := range uniqueCVESeverity {
-		p.UniqueCVECounts.Add(severity, uniqueCVEFixable[id])
+		p.UniqueCVECounts.AddGrade(Grade{
+			Severity: severity, Fixable: uniqueCVEFixable[id], KEV: uniqueCVEKEV[id],
+		})
 	}
+	p.KEVs = len(uniqueCVEKEV)
+	p.KEVFixable = p.UniqueCVECounts.KEVFixable
+	p.KEVSeverity = p.UniqueCVECounts.KEVBySeverity
 
 	for id, srcs := range sawCVE {
 		for src := range srcs {
@@ -715,9 +951,11 @@ func Summarize(reports []Report) Posture {
 				if len(srcs) == 1 {
 					sc.OnlyHere++
 				}
+				if uniqueCVEKEV[id] {
+					sc.KEVs++
+				}
 			}
 		}
-		_ = id
 	}
 	// Only worth reporting once there is something to compare. One scanner's
 	// per-source breakdown is the release's breakdown restated, and a segmented
@@ -766,7 +1004,9 @@ func FingerprintReports(reports []Report) string {
 		fs := append([]Finding(nil), r.Findings...)
 		SortFindings(fs)
 		for _, f := range fs {
-			fmt.Fprintf(h, "%s\x00%s\x00%t\x00%s\x00", f.Key(), f.Severity, f.Fixable, strings.Join(f.FixedIn, ","))
+			fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00",
+				f.Key(), f.Severity, f.Fixable, f.KEV,
+				strings.Join(f.FixedIn, ","), strings.Join(f.SourceSet(), ","))
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil)[:16])

@@ -102,7 +102,14 @@ func (s stubProvider) Scan(_ context.Context, refs []ArtifactRef, _ ScanOptions)
 
 type stubResolver struct{ p Provider }
 
-func (s stubResolver) ProviderFor(context.Context, string, string) (Provider, error) { return s.p, nil }
+func (s stubResolver) ProviderFor(context.Context, Scope) (Provider, error) { return s.p, nil }
+
+func (s stubResolver) ProvidersFor(context.Context, string, string) ([]string, error) {
+	if s.p == nil {
+		return nil, nil
+	}
+	return []string{s.p.Name()}, nil
+}
 
 func syncerFor(t *testing.T, p Provider) (*Syncer, *fakeRecorder) {
 	t.Helper()

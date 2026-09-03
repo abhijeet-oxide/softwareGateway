@@ -64,6 +64,21 @@ type ScanOptions struct {
 	// Progress, when set, is told what is happening. May be called from several
 	// goroutines; implementations of Progress must be safe for that.
 	Progress Progress
+	// Release names the release these artifacts belong to.
+	//
+	// # Why the core tells a provider what it is scanning
+	//
+	// Because one scanner groups by it. Xray indexes a repository and has no
+	// notion of a release; Anchore has an Application/Version model that is
+	// exactly a product and a release, and using it is what makes a hundred and
+	// fifty images legible as one thing in Anchore's own interface - and what
+	// unlocks its release-level vulnerability report.
+	//
+	// A provider that has no use for it ignores it, which is the ordinary case
+	// and costs nothing. The alternative - a provider built per release rather
+	// than per repository - would rebuild a credential and a transport for
+	// every release on a listing.
+	Release ReleaseRef
 	// Sink, when set, receives the scanner's own bodies as they arrive.
 	//
 	// # Why the raw payload rides out on a callback rather than on the Report
@@ -81,6 +96,24 @@ type ScanOptions struct {
 	// May be called from several goroutines.
 	Sink DocumentSink
 }
+
+// ReleaseRef names the release a scan is about, in the platform's own terms.
+//
+// Deliberately three plain strings. A provider that groups by release needs
+// what a PERSON calls it - so that somebody can find their release in the
+// scanner's own interface by typing what they call it here - and nothing
+// internal would do.
+type ReleaseRef struct {
+	// Product is the product's configured name.
+	Product string
+	// Version is the release's version, as the vendor publishes it.
+	Version string
+	// Label is the release as the interface names it, for progress messages.
+	Label string
+}
+
+// Named reports whether there is enough here to group by.
+func (r ReleaseRef) Named() bool { return r.Product != "" && r.Version != "" }
 
 // DocumentSink receives raw scanner bodies as a scan produces them.
 type DocumentSink interface {
@@ -208,17 +241,37 @@ const (
 	StageFailing = "failing"
 )
 
-// Resolver finds the provider that can answer for a repository.
+// Resolver finds the providers that can answer for a repository.
 //
 // Separated from Provider because "which scanner covers this artifact" is a
 // configuration question and "what does that scanner say" is not. The
 // implementation lives beside the registry factory, where the configured
 // repositories already are.
 type Resolver interface {
-	// ProviderFor returns the provider covering one configured repository of
-	// one product. Returns ErrNoProvider when the repository has no scanner -
-	// which is an ordinary answer and not a failure.
-	ProviderFor(ctx context.Context, product, repository string) (Provider, error)
+	// ProviderFor returns the provider named by the scope.
+	//
+	// # Why this takes a scope rather than a product and a repository
+	//
+	// Because a repository can have more than one scanner, and the scope is
+	// already the thing that says which one: it is the storage key, the
+	// authorization boundary, and now the address of an answerer. Before there
+	// was a second scanner, "the provider for this repository" was
+	// unambiguous; a signature that stayed that way would have made the
+	// SECOND scanner's rows land in the first one's storage.
+	//
+	// Returns ErrNoProvider when the repository has no such scanner - which is
+	// an ordinary answer and not a failure.
+	ProviderFor(ctx context.Context, scope Scope) (Provider, error)
+
+	// ProvidersFor names every scanner switched on for one repository, in the
+	// order they should be asked.
+	//
+	// A separate call rather than a list of providers, because building one is
+	// a credential resolution and a transport, and the caller that needs this
+	// most - the sync, deciding what work there is - needs the NAMES before it
+	// decides to do any of it. An empty list is an ordinary answer: a
+	// repository with no scanner is a correctly configured system.
+	ProvidersFor(ctx context.Context, product, repository string) ([]string, error)
 }
 
 // ErrNoProvider means no scanner covers the repository. Callers turn it into a

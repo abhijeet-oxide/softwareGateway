@@ -13,6 +13,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -206,6 +207,7 @@ func run() error {
 		Concurrency:    cfg.Coordinator.Security.Concurrency,
 		BatchSize:      cfg.Coordinator.Security.BatchSize,
 		RequestTimeout: cfg.Coordinator.Security.RequestTimeout,
+		Anchore:        anchoreTuning(cfg.Coordinator.Security.Anchore, resolver, logger),
 	}
 	securityRetention := security.CacheTTL{
 		Summary:   cfg.Coordinator.Security.IndexRetention,
@@ -643,4 +645,59 @@ func (s securitySecurityStore) DocumentSummaries(
 	ctx context.Context, scope security.Scope, refs []security.ArtifactRef,
 ) (map[string][]security.DocumentSummary, error) {
 	return s.reports.DocumentSummaries(ctx, scope, refs)
+}
+
+// anchoreTuning resolves the deployment's Anchore stanza into the values the
+// security resolver needs, including its credential.
+//
+// # Why a missing credential is a warning rather than a failed start
+//
+// Because an unreachable scanner must not be an outage. A Coordinator that
+// refused to start over a secret that has not been projected yet takes down
+// replication, discovery, promotion and every read of everything already
+// scanned - to protect a feature whose absence is one tab. So the endpoint is
+// dropped, the reason is logged once at startup, and a repository asking for
+// Anchore is told this Coordinator has none configured.
+func anchoreTuning(
+	cfg config.AnchoreConfig, secrets *product.SecretResolver, log *slog.Logger,
+) regclient.AnchoreTuning {
+	if !cfg.Available() {
+		return regclient.AnchoreTuning{}
+	}
+
+	tuning := regclient.AnchoreTuning{
+		Endpoint:       cfg.Endpoint,
+		Account:        cfg.Account,
+		Concurrency:    cfg.Concurrency,
+		RequestTimeout: cfg.RequestTimeout,
+		AnalysisWait:   cfg.AnalysisWait,
+		PollInterval:   cfg.PollInterval,
+		Submit:         cfg.SubmitImages(),
+		Grouping:       cfg.Grouping(),
+		SBOMFormat:     cfg.SBOMFormat,
+	}
+
+	if cfg.SecretName == "" {
+		log.Warn("anchore is configured with no credential and will not be used",
+			"endpoint", cfg.Endpoint,
+			"fix", "set coordinator.security.anchore.secretName to a projected secret holding "+
+				"a username and password, or an API key in the password key")
+		return regclient.AnchoreTuning{}
+	}
+	creds, err := secrets.Credentials(product.CredentialsRef{
+		SecretName:  cfg.SecretName,
+		UsernameKey: cfg.UsernameKey,
+		PasswordKey: cfg.PasswordKey,
+	})
+	if err != nil {
+		log.Warn("anchore credential could not be read; anchore will not be used",
+			"endpoint", cfg.Endpoint, "secret", cfg.SecretName, "error", err)
+		return regclient.AnchoreTuning{}
+	}
+	tuning.Username = creds.Username
+	tuning.Password = creds.Password.Reveal()
+
+	log.Info("anchore is available for products that enable it",
+		"endpoint", cfg.Endpoint, "submit", tuning.Submit, "grouping", tuning.Grouping)
+	return tuning
 }

@@ -389,6 +389,25 @@ subdomain returns a 404 that reads like a missing artifact. Set it only there.
 
 Full argument in [21 - Security Posture](21-security-posture.md) §3.
 
+#### `anchoreEnabled`
+
+Asks the deployment's Anchore to analyse the images that live in this
+repository. One field, on the same argument `xrayEnabled` makes: the endpoint,
+the credential, the concurrency and how long a sync waits for analysis are one
+stanza in the system configuration (§8), stated once for the deployment.
+
+**Valid on any registry type**, where `xrayEnabled` is not. Xray is a JFrog
+endpoint; Anchore pulls over the registry API, so it works against any registry
+it can reach and has credentials for, and refusing it on a Quay target would be
+this schema inventing a limitation Anchore does not have.
+
+**On a target, not a source.** A source is the vendor's registry, and Anchore
+cannot reach it - that is why the release was replicated. Setting it on a source
+is a warning rather than an error, because an estate whose Anchore can reach a
+vendor mirror may want exactly that; it is almost always the wrong line.
+
+Full argument in [21 - Security Posture](21-security-posture.md) §12.2.
+
 `jfrogEndpoint` is the same escape hatch for everything on that platform that is
 not Xray - today, native promotion - and it FALLS BACK to `xrayEndpoint`. In
 every ordinary estate they are the same host reached for the same reason, and a
@@ -592,6 +611,64 @@ coordinator:
     # is minutes and tens of megabytes per image, and is generated on demand
     # behind the download button instead.
     documents: [policy, malware]
+
+    # ANCHORE, and the reason its address is here where Xray's is not.
+    #
+    # Xray is a second endpoint on a JFrog platform this codebase already
+    # speaks to, reached with the credential the repository already holds - so
+    # everything about reaching it is derived and a product says only whether
+    # it is on. There is nothing to derive an Anchore endpoint from: it is its
+    # own host with its own credential. One stanza here is the only alternative
+    # to repeating that host in every product document and watching the copies
+    # drift.
+    #
+    # A product document still says exactly one thing about Anchore, and it is
+    # the same one thing it says about Xray: `anchoreEnabled: true` on the
+    # repository Anchore should analyse.
+    #
+    # AN EMPTY ENDPOINT MEANS THIS DEPLOYMENT HAS NO ANCHORE, whatever a
+    # product says. A product asking for a scanner this Coordinator has no
+    # address for is told so, rather than failing every sync against a URL
+    # nobody set. See 21 §12.2.
+    anchore:
+      endpoint: https://anchore.example.com   # /v2 is appended if absent
+      secretName: anchore-api                 # <secretsDir>/anchore-api/{username,password}
+      # usernameKey / passwordKey default to `username` and `password`. An API
+      # key goes in the password key, which is what a service account uses.
+
+      # Higher than the Xray concurrency above, and for a structural reason
+      # rather than a preference: Anchore answers per IMAGE where Xray answers
+      # per batch of fifty, so a release of 150 images is 150 requests here.
+      concurrency: 12
+      requestTimeout: 60s
+
+      # HOW LONG A SYNC WAITS for images it had to submit.
+      #
+      # Anchore does not index a repository; it is told about an image and
+      # analyses it asynchronously, in minutes. A first sync therefore submits
+      # everything and finds nothing analysed - and a sync that read
+      # immediately would report the whole release as unscanned and leave the
+      # reader with no way to know that pressing Sync again in five minutes is
+      # exactly right.
+      #
+      # Bounded, because the wait holds the release's sync claim: waiting out
+      # somebody's Anchore backlog would block every later sync of that release
+      # for an hour. Past the bound the sync records what finished and labels
+      # the rest as still analysing. Negative disables waiting entirely, which
+      # is right for a deployment that submits at transfer time and syncs later.
+      analysisWait: 10m
+      pollInterval: 15s
+
+      # Whether this Coordinator may REGISTER images with Anchore.
+      #
+      # True by default, because an image Anchore has never been told about
+      # produces no findings and a platform that could only read would report
+      # every new release as unscanned forever. Worth being able to turn off:
+      # an estate whose own pipeline registers images wants this platform to
+      # read Anchore rather than add to it.
+      submit: true
+
+      sbomFormat: spdx-json          # or cyclonedx-json, native-json
 
 worker:
   coordinatorEndpoint: http://coordinator.softwaregateway.svc:8080

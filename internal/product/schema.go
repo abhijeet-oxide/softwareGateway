@@ -138,6 +138,9 @@ type Source struct {
 	// proxy and timeouts. Valid only on a JFrog type. See xray.go for why it
 	// is one field rather than a block.
 	XrayEnabled *bool `json:"xrayEnabled,omitempty"`
+	// AnchoreEnabled asks the deployment's Anchore to analyse the images that
+	// live in this repository. See anchore.go for why it is one field.
+	AnchoreEnabled *bool `json:"anchoreEnabled,omitempty"`
 	// XrayEndpoint overrides the JFrog PLATFORM base URL, needed only where
 	// the docker host is a subdomain and the platform is not.
 	XrayEndpoint string `json:"xrayEndpoint,omitempty"`
@@ -363,6 +366,14 @@ type Target struct {
 	// proxy and timeouts. Valid only on a JFrog type. See xray.go for why it is
 	// one field rather than a block.
 	XrayEnabled *bool `json:"xrayEnabled,omitempty"`
+	// AnchoreEnabled asks the deployment's Anchore to analyse the images that
+	// land in this repository.
+	//
+	// Unlike xrayEnabled it is valid on ANY registry type, because Anchore
+	// pulls an image rather than indexing a repository - it needs a reachable
+	// registry and its own credential for it, not a particular vendor's
+	// platform. See anchore.go.
+	AnchoreEnabled *bool `json:"anchoreEnabled,omitempty"`
 	// XrayEndpoint overrides the JFrog PLATFORM base URL, needed only where the
 	// docker host is a subdomain and the platform is not.
 	XrayEndpoint string `json:"xrayEndpoint,omitempty"`

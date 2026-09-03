@@ -34,9 +34,19 @@ type SecurityCounts struct {
 	Total      int `json:"total"`
 	Fixable    int `json:"fixable"`
 	NonFixable int `json:"nonFixable"`
+	// KEV is how many are known to be exploited, and KEVFixable how many of
+	// those have a version to upgrade to.
+	//
+	// The second is this afternoon's work, in one number. Sent rather than
+	// derived because a listing draws the badge without any findings loaded.
+	KEV        int `json:"kev"`
+	KEVFixable int `json:"kevFixable"`
 
 	BySeverity        SecuritySeverityCounts `json:"bySeverity"`
 	FixableBySeverity SecuritySeverityCounts `json:"fixableBySeverity"`
+	// KEVBySeverity grades the exploited ones, because "4 KEVs" and "4
+	// critical KEVs" are read differently.
+	KEVBySeverity SecuritySeverityCounts `json:"kevBySeverity"`
 }
 
 // SecurityCoverage states how much of a release the numbers actually cover.
@@ -118,6 +128,32 @@ type SecurityFinding struct {
 	References []string `json:"references,omitempty"`
 	Published  string   `json:"published,omitempty"`
 
+	// KEV says this vulnerability is on a known-exploited catalogue, and
+	// KEVSource names the scanner that said so.
+	//
+	// The single most load-bearing field on this type. It is not a severity -
+	// it is a record that somebody has already exploited this - so it sorts
+	// above severity, carries its own badge, and has its own segment on the
+	// page. False means "no scanner that answered said so", which on a scanner
+	// with no exploited-vulnerability feed is every finding.
+	KEV       bool   `json:"kev,omitempty"`
+	KEVSource string `json:"kevSource,omitempty"`
+	// EPSS is the exploit-prediction score and its percentile, where a scanner
+	// supplied them. Displayed, never sorted on.
+	EPSS *SecurityEPSS `json:"epss,omitempty"`
+	// WillNotFix says the vendor has declined to fix this in the affected
+	// stream - which is not the same as having no fixed version yet. The first
+	// is a wait; the second is a decision to mitigate or accept.
+	WillNotFix bool `json:"willNotFix,omitempty"`
+	// Observations is every severity and score this finding was reported with,
+	// and who reported each.
+	//
+	// Sent because the disagreements are the evidence behind the one number the
+	// row shows: two scanners grading one CVE differently is not noise, and the
+	// reader is the one who knows whether their deployment matches the vendor's
+	// assumption.
+	Observations []SecurityObservation `json:"observations,omitempty"`
+
 	Provider string `json:"provider"`
 	Policy   string `json:"policy,omitempty"`
 	// Sources names every scanner that reported this finding.
@@ -127,6 +163,26 @@ type SecurityFinding struct {
 	// column - a column that says "JFrog Xray" on every row is a column that
 	// costs width and says nothing.
 	Sources []string `json:"sources,omitempty"`
+}
+
+// SecurityEPSS is the Exploit Prediction Scoring System's estimate.
+//
+// Two numbers because the second is the readable one: 0.00042 tells almost
+// nobody anything, and "in the bottom 12%" tells everybody something.
+type SecurityEPSS struct {
+	Score      float64 `json:"score"`
+	Percentile float64 `json:"percentile,omitempty"`
+}
+
+// SecurityObservation is one source's grading of one finding.
+type SecurityObservation struct {
+	Provider      string  `json:"provider"`
+	ProviderLabel string  `json:"providerLabel,omitempty"`
+	Source        string  `json:"source,omitempty"`
+	Severity      string  `json:"severity,omitempty"`
+	SeverityLabel string  `json:"severityLabel,omitempty"`
+	Score         float64 `json:"score,omitempty"`
+	Vector        string  `json:"vector,omitempty"`
 }
 
 // SecurityViolation is one breach of a configured policy.
@@ -169,6 +225,16 @@ type SecurityDocumentRef struct {
 	// Kind is vulnerabilities | sbom | policy | malware.
 	Kind  string `json:"kind"`
 	Label string `json:"label"`
+	// Provider names the scanner whose body this is, and is EMPTY on the
+	// default entry for a kind.
+	//
+	// Two shapes on purpose: an unqualified entry per kind, which is what a
+	// menu offers by default ("download the SBOM"), and one entry per scanner
+	// underneath once two of them hold one. A reader who wants "the SBOM"
+	// should not have to choose; a reader sending a vendor "what YOUR scanner
+	// said" must be able to.
+	Provider      string `json:"provider,omitempty"`
+	ProviderLabel string `json:"providerLabel,omitempty"`
 	// Available is false for a body the scanner was asked for and did not
 	// have, which is worth saying: the alternative is a button that silently
 	// downloads nothing.
@@ -194,6 +260,68 @@ type SecuritySourceCounts struct {
 	UniqueCVEs int            `json:"uniqueCves"`
 	OnlyHere   int            `json:"onlyHere"`
 	Artifacts  int            `json:"artifacts"`
+	// KEVs is the distinct known-exploited advisories this scanner reported.
+	//
+	// Its own number because it is the one that decides whether a second
+	// scanner earned its licence: four thousand extra lows nobody will read
+	// and two exploited CVEs nobody else saw look identical in OnlyHere.
+	KEVs int `json:"kevs"`
+	// KEVOnly is how many of OnlyHere are known-exploited.
+	KEVOnly int `json:"kevOnly"`
+	// Enriched is advisories another scanner also reported, where this one
+	// supplied a fact the other lacked - a fix version, a description, a CVSS
+	// vector, a KEV flag.
+	//
+	// The honest defence of a scanner whose OnlyHere is zero: it found nothing
+	// new and it explained several thousand findings better.
+	Enriched int `json:"enriched"`
+	// Status says whether this scanner answered at all: ok | partial |
+	// unavailable | disabled.
+	Status string `json:"status,omitempty"`
+	// Message explains a Status that is not ok, in words with an action.
+	Message string `json:"message,omitempty"`
+	// SyncedAt is when this scanner was last asked.
+	SyncedAt string `json:"syncedAt,omitempty"`
+	// Coverage is this scanner's own coverage of the release, which is NOT the
+	// release's: Anchore may have analysed 140 of 157 images while Xray has
+	// indexed all of them, and one coverage figure for both would be a lie
+	// about whichever it did not describe.
+	Coverage SecurityCoverage `json:"coverage"`
+}
+
+// SecuritySourceComparison is the set arithmetic between the scanners.
+//
+// # Why the server computes this
+//
+// Because the numbers have to agree with the export, the release summary and
+// the stored per-scanner rows, and four implementations of "only in Anchore"
+// is four chances for them not to. It is also the answer to the question a
+// second scanner exists to make askable, and that answer should not depend on
+// which page you are on.
+//
+// Absent on a single-scanner deployment, where there is nothing to compare.
+type SecuritySourceComparison struct {
+	// Providers is every scanner that answered.
+	Providers []string `json:"providers"`
+	// Shared is how many advisories every scanner agreed on.
+	Shared int `json:"shared"`
+	// SharedCVEs is those advisories, capped - a list somebody reads rather
+	// than a set they download.
+	SharedCVEs []string `json:"sharedCves,omitempty"`
+	// OnlyIn maps a scanner to the advisories only it reported, capped the
+	// same way. This is the list somebody opens the comparison for.
+	OnlyIn map[string][]string `json:"onlyIn,omitempty"`
+	// KEVOnlyIn maps a scanner to the KNOWN-EXPLOITED advisories only it
+	// reported.
+	//
+	// Its own field because it is the finding that decides whether a scanner
+	// stays switched on. Two thousand unique lows is a difference in feed
+	// coverage; one unique KEV is a vulnerability being exploited that the
+	// other scanner did not mention.
+	KEVOnlyIn map[string][]string `json:"kevOnlyIn,omitempty"`
+	// Truncated says a list was capped, so the interface can say "and 1,204
+	// more" rather than implying it has them all.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // SecurityStatusNotFound is a report status the SCANNER never returns: it is
@@ -328,6 +456,18 @@ type SyncSecurityRequest struct {
 	// changed. It is minutes of somebody else's scanner, so it is asked for
 	// rather than assumed.
 	Force bool `json:"force,omitempty"`
+
+	// Provider narrows the sync to one scanner - "jfrog-xray", "anchore".
+	//
+	// Empty syncs every scanner configured for the release, which is what the
+	// main Sync button does. Naming one is for the case the scanners' very
+	// different speeds create: a reader whose Anchore is mid-analysis should be
+	// able to refresh Xray without waiting ten minutes for the other half.
+	//
+	// A name the release has no scanner for is ignored rather than refused - a
+	// stale browser tab must not turn a sync into an error, and syncing
+	// everything is never the wrong answer to "sync this".
+	Provider string `json:"provider,omitempty"`
 }
 
 type SyncSecurityResponse struct {
@@ -423,6 +563,31 @@ type PackageSecurityResponse struct {
 	// more than one did. A segmented control with a single position is a
 	// control that should not be drawn.
 	Sources []SecuritySourceCounts `json:"sources,omitempty"`
+	// SourceComparison is what each scanner found that the others did not.
+	// Absent with fewer than two scanners.
+	SourceComparison *SecuritySourceComparison `json:"sourceComparison,omitempty"`
+
+	// KEVs is the DISTINCT known-exploited advisories in this release, and
+	// KEVFixable how many have a fix.
+	//
+	// Distinct rather than per-occurrence, because it is the number the page
+	// prints: a KEV in a base image carried by forty images is one advisory to
+	// chase. Counts.KEV carries the per-occurrence figure.
+	KEVs       int `json:"kevs"`
+	KEVFixable int `json:"kevFixable"`
+	// KEVSeverity grades the exploited advisories.
+	KEVSeverity SecuritySeverityCounts `json:"kevSeverity"`
+	// KEVCapable says at least one scanner that answered has an
+	// exploited-vulnerability feed at all.
+	//
+	// # Why "0 known-exploited" needs this to be readable
+	//
+	// Because zero means two different things. On a deployment running a
+	// scanner with a KEV feed, zero is a genuine and very good result. On one
+	// running only a scanner without one, zero is "nobody checked" - and
+	// drawing that as a clean bill of health is the same failure the whole
+	// scanned/not-scanned distinction exists to prevent, one level up.
+	KEVCapable bool `json:"kevCapable"`
 }
 
 // PackageSecuritySummary is a release's vulnerability counts, for a listing.
@@ -453,6 +618,13 @@ type PackageSecuritySummary struct {
 	DistinctCVEs    int            `json:"distinctCves"`
 	DistinctCounts  SecurityCounts `json:"distinctCounts"`
 	UniqueCVECounts SecurityCounts `json:"uniqueCveCounts"`
+	// KEVs is the distinct known-exploited advisories in this release, and
+	// KEVFixable how many have a fix. The listing's most important cell.
+	KEVs       int `json:"kevs"`
+	KEVFixable int `json:"kevFixable"`
+	// Providers names every scanner that contributed to these numbers, so a
+	// listing can say "Xray + Anchore" rather than one of the two.
+	Providers []string `json:"providers,omitempty"`
 	// Complete is whether every scannable artifact has a result. False means
 	// the counts cover only part of the release.
 	Complete bool `json:"complete"`
@@ -489,6 +661,17 @@ type SecurityChange struct {
 
 	Fixable bool     `json:"fixable"`
 	FixedIn []string `json:"fixedIn,omitempty"`
+	// KEV says the vulnerability this change is about is known to be exploited.
+	//
+	// "This release introduced a known-exploited vulnerability" is the most
+	// consequential sentence a release comparison can produce, and without this
+	// it renders as one more row in a list of four hundred introduced findings
+	// ordered by a severity that may well be medium.
+	KEV bool `json:"kev,omitempty"`
+	// Sources names every scanner that reported the finding, so a reader can
+	// tell a genuine regression from a scanner that was switched on between the
+	// two releases.
+	Sources []string `json:"sources,omitempty"`
 
 	Summary     string            `json:"summary,omitempty"`
 	Description string            `json:"description,omitempty"`
@@ -685,7 +868,11 @@ type SecuritySearchHit struct {
 	Severity      string `json:"severity"`
 	SeverityLabel string `json:"severityLabel"`
 	Fixable       bool   `json:"fixable"`
-	Summary       string `json:"summary,omitempty"`
+	// KEV says this finding is known to be exploited, so a search result
+	// carries the same badge the release page does - and so the first row of a
+	// truncated result is the one that matters.
+	KEV     bool   `json:"kev,omitempty"`
+	Summary string `json:"summary,omitempty"`
 
 	Component SecurityComponent `json:"component"`
 	FixedIn   string            `json:"fixedIn,omitempty"`
@@ -707,6 +894,12 @@ type SecuritySearchResponse struct {
 	Kind  string `json:"kind"`
 	Query string `json:"query"`
 	Exact bool   `json:"exact,omitempty"`
+	// KEVOnly says the search was narrowed to known-exploited vulnerabilities.
+	KEVOnly bool `json:"kevOnly,omitempty"`
+	// Provider says the search was narrowed to one scanner. Empty searched
+	// every scanner's findings, which is the right default: a reader hunting a
+	// CVE wants it found, not attributed.
+	Provider string `json:"provider,omitempty"`
 
 	Hits []SecuritySearchHit `json:"hits"`
 	// Truncated says the result hit the limit, so a reader knows the list is a

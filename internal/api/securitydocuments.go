@@ -80,15 +80,27 @@ func (s *Server) handleSecurityDocument(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	docs, err := s.deps.SecurityStore.LoadDocuments(
-		r.Context(), target.Scope, []security.ArtifactRef{artifact},
-		[]security.DocumentKind{kind})
+	// WHICH scanner's body, when more than one produced one.
+	//
+	// The vulnerability response for an image exists once per scanner and they
+	// are different documents about the same bytes - which is the whole reason
+	// somebody downloads one to send to a vendor. Naming none takes the first
+	// scanner that has it, in the order they are asked, so an unqualified link
+	// keeps working.
+	//
+	// A name this release has no scanner for is IGNORED rather than refused,
+	// which is the same rule the sync applies to the same parameter: a stale
+	// browser tab, or a link somebody kept after a scanner was switched off,
+	// must not turn a download into an error when the document is right there.
+	// Naming a scanner that IS configured and has nothing gives the ordinary
+	// "not held" answer, because that scope is the only one searched.
+	wanted := strings.TrimSpace(r.URL.Query().Get("provider"))
+	scope, doc, held, err := s.documentFrom(r.Context(), target, artifact, kind, wanted)
 	if err != nil {
 		s.internal(w, r, "read security document", err)
 		return
 	}
 
-	doc, held := docs[artifact.Ref()][kind]
 	if (!held || !doc.Available) && s.deps.SecurityDocuments != nil {
 		// Not held. Worth generating for an SBOM, which a sync deliberately
 		// does not fetch; not worth it for the other three, whose absence means
@@ -99,9 +111,10 @@ func (s *Server) handleSecurityDocument(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		fetched, err := s.deps.SecurityDocuments.Documents(r.Context(), security.DocumentRequest{
-			Scope:     target.Scope,
+			Scope:     scope,
 			Artifacts: []security.ArtifactRef{artifact},
 			Kinds:     []security.DocumentKind{kind},
+			Release:   releaseRefFor(productName, pkg),
 			TTL:       s.deps.SecurityRetention,
 		})
 		if err != nil {
@@ -127,7 +140,10 @@ func (s *Server) handleSecurityDocument(w http.ResponseWriter, r *http.Request) 
 	filename := strings.Join([]string{
 		bundleSegment(productName), bundleSegment(releaseLabel(pkg)),
 		bundleSegment(artifact.ArtifactKey()), bundleSegment(tagOrDigest(artifact)),
-		string(kind),
+		// The scanner in the filename, because a reader who downloads both
+		// scanners' vulnerability bodies for one image ends up with two files
+		// in one directory and needs to be able to tell them apart afterwards.
+		bundleSegment(scope.Provider), string(kind),
 	}, "_") + doc.Extension()
 
 	w.Header().Set("Content-Type", contentType)
@@ -154,10 +170,18 @@ func (s *Server) documentMissing(
 	}
 	switch kind {
 	case security.DocumentSBOM:
+		// Named generically, because it is no longer always Xray.
+		//
+		// The two scanners decline for different reasons and the message has to
+		// carry both: Xray needs the image indexed and a credential allowed to
+		// export component details, Anchore needs the analysis to have
+		// finished. A sentence naming only the first sends half the readers to
+		// check a permission that is fine.
 		Error(w, r, v1.CodeNotFound,
-			"JFrog Xray has no SBOM for this image. It is generated on demand, so this "+
-				"means the scanner declined - check that the image is indexed, and that the "+
-				"JFrog credential is allowed to export component details.")
+			"No scanner has an SBOM for this image. It is generated on demand, so this means "+
+				"the scanner declined - check that the image has been scanned, that JFrog Xray's "+
+				"credential may export component details, and that Anchore has finished "+
+				"analysing it.")
 	default:
 		Error(w, r, v1.CodeNotFound,
 			"This release has no stored "+kind.Label()+" for that image. "+
@@ -181,4 +205,51 @@ func (s *Server) artifactByDigest(
 		}
 	}
 	return security.ArtifactRef{}, false
+}
+
+// documentFrom finds one image's document, from the scanner asked for or from
+// whichever scanner has it.
+//
+// Returns the scope it came from as well as the document, because the caller
+// needs it twice afterwards: to generate a missing SBOM from the right scanner,
+// and to name the scanner in the downloaded filename.
+func (s *Server) documentFrom(
+	ctx context.Context, target securityTarget, artifact security.ArtifactRef,
+	kind security.DocumentKind, wanted string,
+) (security.Scope, security.Document, bool, error) {
+	scopes := target.scopes()
+	// Narrowed only where the name matches a configured scanner. An unmatched
+	// name leaves every scope in play - see the caller for why that is the
+	// friendlier failure.
+	if wanted != "" {
+		for _, scope := range scopes {
+			if scope.Provider == wanted {
+				scopes = []security.Scope{scope}
+				break
+			}
+		}
+	}
+
+	var (
+		firstScope security.Scope
+		lastErr    error
+	)
+	for i, scope := range scopes {
+		if i == 0 {
+			firstScope = scope
+		}
+		docs, err := s.deps.SecurityStore.LoadDocuments(
+			ctx, scope, []security.ArtifactRef{artifact}, []security.DocumentKind{kind})
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if doc, ok := docs[artifact.Ref()][kind]; ok && doc.Available {
+			return scope, doc, true, nil
+		}
+	}
+	if lastErr != nil {
+		return firstScope, security.Document{}, false, lastErr
+	}
+	return firstScope, security.Document{}, false, nil
 }

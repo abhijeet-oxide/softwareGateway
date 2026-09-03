@@ -29,8 +29,11 @@ func toAPICounts(c security.Counts) v1.SecurityCounts {
 		Total:             c.Total,
 		Fixable:           c.Fixable,
 		NonFixable:        c.NonFixable,
+		KEV:               c.KEV,
+		KEVFixable:        c.KEVFixable,
 		BySeverity:        toAPISeverityCounts(c.BySeverity),
 		FixableBySeverity: toAPISeverityCounts(c.FixableBySeverity),
+		KEVBySeverity:     toAPISeverityCounts(c.KEVBySeverity),
 	}
 }
 
@@ -81,14 +84,44 @@ func toAPIFinding(f security.Finding) v1.SecurityFinding {
 		CVSSScore:     f.CVSSScore,
 		CVSSVector:    f.CVSSVector,
 		References:    f.References,
+		KEV:           f.KEV,
+		KEVSource:     f.KEVSource,
+		WillNotFix:    f.WillNotFix,
 		Provider:      f.Provider,
 		Policy:        f.Policy,
 		Sources:       f.SourceSet(),
+	}
+	if f.EPSS != nil {
+		out.EPSS = &v1.SecurityEPSS{Score: f.EPSS.Score, Percentile: f.EPSS.Percentile}
+	}
+	for _, o := range f.Observations {
+		out.Observations = append(out.Observations, v1.SecurityObservation{
+			Provider:      o.Provider,
+			ProviderLabel: providerLabel(o.Provider),
+			Source:        o.Source,
+			Severity:      string(o.Severity),
+			SeverityLabel: severityLabelOrEmpty(o.Severity),
+			Score:         o.Score,
+			Vector:        o.Vector,
+		})
 	}
 	if f.Published != nil {
 		out.Published = f.Published.UTC().Format(time.RFC3339)
 	}
 	return out
+}
+
+// severityLabelOrEmpty leaves an ungraded observation unlabelled.
+//
+// An observation that carries a CVSS score and no severity - which is every
+// NVD entry in an Anchore response - would otherwise render as "Unknown", and a
+// row reading "NVD: Unknown, 9.8" invites the reader to believe NVD had no
+// opinion when it plainly did.
+func severityLabelOrEmpty(s security.Severity) string {
+	if s == "" {
+		return ""
+	}
+	return s.Label()
 }
 
 func toAPIReport(r security.Report) v1.SecurityReport {
@@ -97,7 +130,12 @@ func toAPIReport(r security.Report) v1.SecurityReport {
 	// scanner's vocabulary and two different jobs for two different people, so
 	// the interface is given the distinction the store keeps as a flag.
 	if r.Status == security.StatusNotScanned && r.Missing {
-		status, label = v1.SecurityStatusNotFound, "Not in JFrog"
+		// "Not in registry", not "Not in JFrog". The fact is that the image is
+		// not where the scanner that answered pulls from - which for Anchore
+		// need not be JFrog at all, and naming the wrong system sends somebody
+		// to look in a registry that was never involved. The report's own
+		// message names the actual repository.
+		status, label = v1.SecurityStatusNotFound, "Not in registry"
 	}
 	out := v1.SecurityReport{
 		Artifact:    toAPIArtifact(r.Artifact),
@@ -155,6 +193,7 @@ func toAPIDocumentRef(d security.DocumentSummary) v1.SecurityDocumentRef {
 	return v1.SecurityDocumentRef{
 		Kind:        string(d.Kind),
 		Label:       d.Kind.Label(),
+		Provider:    d.Provider,
 		Available:   d.Available,
 		ContentType: d.ContentType,
 		Bytes:       d.SourceBytes,
@@ -172,7 +211,54 @@ func toAPISourceCounts(src security.SourceCounts) v1.SecuritySourceCounts {
 		UniqueCVEs: src.UniqueCVEs,
 		OnlyHere:   src.OnlyHere,
 		Artifacts:  src.Artifacts,
+		KEVs:       src.KEVs,
 	}
+}
+
+// maxComparedCVEs bounds each list in a source comparison.
+//
+// # Why a cap rather than everything
+//
+// Because "only in Anchore" on a first cross-scanner sync is routinely four
+// thousand advisories, and a page that ships four thousand identifiers to
+// render a panel somebody glances at is a page that takes a second to open. The
+// count is exact; the list is a sample somebody reads, and the export carries
+// all of them.
+const maxComparedCVEs = 200
+
+// toAPISourceComparison renders the set arithmetic between scanners.
+func toAPISourceComparison(cmp security.SourceComparison) *v1.SecuritySourceComparison {
+	if len(cmp.Providers) < 2 {
+		return nil
+	}
+	out := &v1.SecuritySourceComparison{
+		Providers: cmp.Providers,
+		Shared:    cmp.SharedCount,
+	}
+	out.SharedCVEs, out.Truncated = capList(cmp.Shared, out.Truncated)
+	if len(cmp.OnlyIn) > 0 {
+		out.OnlyIn = map[string][]string{}
+		for provider, ids := range cmp.OnlyIn {
+			out.OnlyIn[provider], out.Truncated = capList(ids, out.Truncated)
+		}
+	}
+	if len(cmp.KEVOnlyIn) > 0 {
+		out.KEVOnlyIn = map[string][]string{}
+		for provider, ids := range cmp.KEVOnlyIn {
+			// NOT capped. An exploited advisory only one scanner reported is
+			// the whole reason to run two, and there are never four thousand
+			// of them.
+			out.KEVOnlyIn[provider] = ids
+		}
+	}
+	return out
+}
+
+func capList(ids []string, truncated bool) ([]string, bool) {
+	if len(ids) <= maxComparedCVEs {
+		return ids, truncated
+	}
+	return ids[:maxComparedCVEs], true
 }
 
 // securityState is the one-word summary of whether a release's numbers can be
@@ -303,13 +389,47 @@ func toAPIPackageSecurity(
 		out.SyncedAt = row.SyncedAt.UTC().Format(rfc3339)
 	}
 	out.Freshness = toAPIFreshness(fresh, row.SyncedAt)
-	if out.Provider != "" {
+	out.KEVs = row.KEVs
+	out.KEVFixable = row.KEVFixable
+	// Which scanners are CONFIGURED, not which the last sync used.
+	//
+	// The difference matters on the day somebody switches a second one on: the
+	// stored row names one scanner and the release now has two, and a page
+	// listing only what the last sync recorded would hide the very control that
+	// fills the gap.
+	out.Providers = target.Providers
+	if len(out.Providers) == 0 && out.Provider != "" {
 		out.Providers = []string{out.Provider}
 	}
+	out.KEVCapable = anyKEVCapable(out.Providers)
 	for _, src := range row.Sources {
 		out.Sources = append(out.Sources, toAPISourceCounts(src))
 	}
 	return out
+}
+
+// kevCapableProviders is the scanners that report a known-exploited catalogue.
+//
+// # Why this is a list rather than a field on the finding
+//
+// Because the question it answers is about ABSENCE. A finding says whether it
+// is exploited; nothing on a set of findings says whether anybody checked, and
+// "0 known-exploited vulnerabilities" is a very good result on a deployment
+// running Anchore and a meaningless one on a deployment running only Xray -
+// whose versions here carry no KEV feed. The interface needs to tell those
+// apart, and only the list of who answered can.
+//
+// Named rather than probed, because a scanner that HAPPENED to report no KEVs
+// in this release would otherwise look like one that cannot report them at all.
+var kevCapableProviders = map[string]bool{"anchore": true}
+
+func anyKEVCapable(providers []string) bool {
+	for _, p := range providers {
+		if kevCapableProviders[p] {
+			return true
+		}
+	}
+	return false
 }
 
 func providerOr(stored string, target securityTarget) string {
@@ -364,6 +484,8 @@ func toAPIChange(c security.Change) v1.SecurityChange {
 		ToSeverity:     string(c.ToSeverity),
 		Fixable:        c.Fixable,
 		FixedIn:        c.FixedIn,
+		KEV:            c.KEV,
+		Sources:        c.Sources,
 		Summary:        c.Summary,
 		Description:    c.Description,
 		Component:      toAPIComponent(c.Component),
@@ -530,12 +652,15 @@ func toAPISecurityComparison(
 func toAPISecuritySearch(
 	productName, kind, query string, exact bool,
 	hits []store.SearchHit, releases map[string][]store.ReleaseRef, truncated bool,
+	kevOnly bool, provider string,
 ) v1.SecuritySearchResponse {
 	out := v1.SecuritySearchResponse{
 		Product:   productName,
 		Kind:      kind,
 		Query:     query,
 		Exact:     exact,
+		KEVOnly:   kevOnly,
+		Provider:  provider,
 		Truncated: truncated,
 		Hits:      make([]v1.SecuritySearchHit, 0, len(hits)),
 	}
@@ -551,6 +676,7 @@ func toAPISecuritySearch(
 			Severity:      h.Severity,
 			SeverityLabel: sev.Label(),
 			Fixable:       h.Fixable,
+			KEV:           h.KEV,
 			Summary:       h.Summary,
 			Component: v1.SecurityComponent{
 				ID: h.ComponentID, Name: h.ComponentName,

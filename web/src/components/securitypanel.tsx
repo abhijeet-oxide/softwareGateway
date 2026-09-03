@@ -17,13 +17,17 @@ import { download } from '../api/client'
 import { CodeBlock } from './filecontent'
 import { SEVERITIES } from '../api/types'
 import type {
-  PackageSecurityResponse, SecurityCounts, SecurityDocumentRef, SecurityFinding, SecurityFreshness,
-  SecurityReport,
-  SecuritySeverityCounts, SecurityViolation, Severity,
+  PackageSecurityResponse, SecurityCounts, SecurityDocumentRef, SecurityEPSS, SecurityFinding,
+  SecurityFreshness, SecurityObservation, SecurityReport, SecuritySeverityCounts,
+  SecurityViolation, Severity,
 } from '../api/types'
 import {
   anySource, isAnySource, matchesSource, SourceControls,
 } from './securitysources'
+import {
+  EpssText, KevAbsence, KevBanner, kevColour, kevSegmentLabel, KevTag,
+} from './securitykev'
+import { SourceComparisonPanel, SourceComparisonPending } from './securitysourcepanel'
 import type { SourceFilter } from './securitysources'
 import {
   ComponentCell, CveCell, DescriptionCell, FindingsEmpty, FixCell, ScanStatusTag,
@@ -76,16 +80,47 @@ export function SecurityTab({ product, reference, repository }: {
     [data?.reports],
   )
 
-  const showProblems = () => {
-    setTab('problems')
+  /*
+   * A filter handed DOWN from the comparison panel to the findings table.
+   *
+   * The panel is below the table and the table owns its own filter state, so
+   * "show me the 402 advisories only Anchore reported" has to travel upward
+   * through here and back down. A one-shot value rather than a controlled prop:
+   * once the table has applied it the reader owns the filter again, and a
+   * controlled one would snap back every time they changed it.
+   */
+  const [sourceFilter, setSourceFilter] = useState<string | undefined>()
+
+  const scrollToFindings = () => {
     document.getElementById('security-findings')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
-  const startSync = (force?: boolean) => {
-    sync.mutate({ product, ref: reference, repository, force }, {
+  const showProblems = () => {
+    setTab('problems')
+    scrollToFindings()
+  }
+
+  const showExploited = () => {
+    setTab('exploited')
+    scrollToFindings()
+  }
+
+  const showOnlyIn = (provider: string) => {
+    setTab('vulnerabilities')
+    setSourceFilter(provider)
+    scrollToFindings()
+  }
+
+  const startSync = (force?: boolean, provider?: string) => {
+    sync.mutate({ product, ref: reference, repository, force, provider }, {
       onSuccess: (res) => {
         message.info(res.started
-          ? force
+          ? provider
+            // Named, because the reader chose one scanner out of several and a
+            // message that did not say which would leave them wondering
+            // whether the menu item did anything.
+            ? `${providerLabel(provider)} sync started for ${res.artifacts} artifacts.`
+            : force
             ? `Re-fetching all ${res.artifacts} artifacts. This may take several minutes.`
             // Deliberately not "started for N artifacts": most of those N are
             // routinely already answered for and are not asked about again,
@@ -198,6 +233,7 @@ export function SecurityTab({ product, reference, repository }: {
                 onSync={startSync}
                 pending={sync.isPending}
                 freshness={data.freshness}
+                providers={data.providers}
               />
             </>
           )}
@@ -251,6 +287,23 @@ export function SecurityTab({ product, reference, repository }: {
 
       {!syncing && (data.sync.state === 'synced' || data.sync.syncedAt) && (
         <>
+          {/*
+            ABOVE the summary cards, and that placement is the whole argument.
+
+            The cards answer "how much is wrong with this release" - a number
+            that scales with the release's size and that nobody acts on today.
+            This answers "is anything in this release being attacked right
+            now", which is usually nothing and is occasionally the only thing on
+            the page that matters. Fourth in reading order it would be read
+            fourth.
+          */}
+          <KevBanner
+            kevs={data.kevs}
+            fixable={data.kevFixable}
+            severity={data.kevSeverity}
+            capable={data.kevCapable}
+            onShow={showExploited}
+          />
           <SummaryCards data={data} />
           <FindingsSection
             data={data}
@@ -260,6 +313,22 @@ export function SecurityTab({ product, reference, repository }: {
             tab={tab}
             onTabChange={setTab}
             syncing={syncing}
+            sourceFilter={sourceFilter}
+            onSourceFilterUsed={() => setSourceFilter(undefined)}
+          />
+          {/*
+            BELOW the findings, because it is read once when somebody is
+            deciding whether to keep both scanners rather than every time they
+            open a release. Renders nothing with one scanner.
+          */}
+          <SourceComparisonPanel
+            sources={data.sources ?? []}
+            comparison={data.sourceComparison}
+            onFilter={showOnlyIn}
+          />
+          <SourceComparisonPending
+            configured={data.providers ?? []}
+            answered={(data.sources ?? []).map((s) => s.provider)}
           />
         </>
       )}
@@ -407,8 +476,11 @@ function SummaryCards({ data }: { data: PackageSecurityResponse }) {
                 total: stats.total,
                 fixable: stats.fixable,
                 nonFixable: stats.nonFixable,
+                kev: stats.kev,
+                kevFixable: stats.kevFixable,
                 bySeverity: stats.bySeverity,
                 fixableBySeverity: stats.fixableBySeverity,
+                kevBySeverity: stats.kevBySeverity,
               }}
               height={8}
             />
@@ -417,6 +489,44 @@ function SummaryCards({ data }: { data: PackageSecurityResponse }) {
             {stats.total.toLocaleString()} findings
             {affected > 0 && ` across ${affected.toLocaleString()} of ${coverage.scanned.toLocaleString()} images`}
           </Typography.Text>
+          {/*
+            The exploited line, under the totals rather than beside them.
+
+            A release with none says nothing here - the banner above the cards
+            is where a non-zero is loud, and repeating "0 known-exploited" in
+            two places would make the zero the loudest thing on a clean page.
+            What DOES appear at zero is the absence sentence, on a deployment
+            whose scanners cannot answer the question at all, because there the
+            reader must not read silence as "none".
+          */}
+          {data.kevs > 0
+            ? (
+              <Typography.Text
+                style={{
+                  fontSize: 12, display: 'block', marginTop: 6,
+                  color: kevColour.fill, fontWeight: 600,
+                }}
+              >
+                {data.kevs.toLocaleString()} known-exploited
+                {data.kevFixable > 0 && `, ${data.kevFixable.toLocaleString()} fixable`}
+              </Typography.Text>
+            )
+            : (
+              <div style={{ marginTop: 6 }}>
+                <KevAbsence capable={data.kevCapable} providers={data.providers ?? []} />
+              </div>
+            )}
+          {/*
+            Which scanners these numbers came from, once there is more than one.
+            A release whose totals are the union of two scanners' answers has to
+            say so, or the reader compares it with a neighbouring release synced
+            by one and concludes the software got worse.
+          */}
+          {(data.sources?.length ?? 0) > 1 && (
+            <Typography.Text type="secondary" style={{ fontSize: 11.5, display: 'block', marginTop: 6 }}>
+              from {(data.sources ?? []).map((src) => src.label).join(' and ')}
+            </Typography.Text>
+          )}
         </div>
 
         {/* ------------------------------------------- what it is made of -- */}
@@ -686,20 +796,31 @@ function summariseCounts(findings: SecurityFinding[]): SecurityCounts {
   const zero = (): SecuritySeverityCounts => ({ critical: 0, high: 0, medium: 0, low: 0, unknown: 0 })
   const bySeverity = zero()
   const fixableBySeverity = zero()
+  const kevBySeverity = zero()
   let fixable = 0
+  let kev = 0
+  let kevFixable = 0
   for (const f of findings) {
     bySeverity[f.severity] += 1
     if (f.fixable) {
       fixable += 1
       fixableBySeverity[f.severity] += 1
     }
+    if (f.kev) {
+      kev += 1
+      kevBySeverity[f.severity] += 1
+      if (f.fixable) kevFixable += 1
+    }
   }
   return {
     total: findings.length,
     fixable,
     nonFixable: findings.length - fixable,
+    kev,
+    kevFixable,
     bySeverity,
     fixableBySeverity,
+    kevBySeverity,
   }
 }
 
@@ -714,7 +835,24 @@ function summariseCounts(findings: SecurityFinding[]): SecurityCounts {
  * finding a release manager must not miss at row 43,712 of a table sorted by
  * severity.
  */
-export type FindingsTab = 'vulnerabilities' | 'artifacts' | 'malware' | 'policy' | 'problems'
+export type FindingsTab =
+  | 'vulnerabilities'
+  /*
+   * Known-exploited, and a TAB rather than a filter on the vulnerabilities
+   * table.
+   *
+   * A filter is something you set when you already know what you are looking
+   * for; a tab is something you see. The whole value of this feature is that
+   * somebody who opened the release for another reason notices four rows they
+   * would otherwise have scrolled past - and a checkbox nobody ticks does not
+   * achieve that. It also carries its own count in its label, which is the
+   * number a release manager repeats in a meeting.
+   *
+   * Offered only where a scanner that can answer the question actually
+   * answered: see PackageSecurityResponse.kevCapable.
+   */
+  | 'exploited'
+  | 'artifacts' | 'malware' | 'policy' | 'problems'
 
 /**
  * The detailed view: artifacts, and every finding in them.
@@ -724,7 +862,10 @@ export type FindingsTab = 'vulnerabilities' | 'artifacts' | 'malware' | 'policy'
  * that quietly ignored the filter would be a file that looked complete and was
  * a different question's answer.
  */
-function FindingsSection({ data, product, reference, repository, tab, onTabChange, syncing }: {
+function FindingsSection({
+  data, product, reference, repository, tab, onTabChange, syncing,
+  sourceFilter, onSourceFilterUsed,
+}: {
   data: PackageSecurityResponse
   product: string
   reference: string
@@ -732,6 +873,14 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
   tab: FindingsTab
   onTabChange: (tab: FindingsTab) => void
   syncing?: boolean
+  /**
+   * A scanner whose EXCLUSIVE advisories the comparison panel asked to show.
+   *
+   * Applied once and then handed back, so the reader owns the filter
+   * afterwards. See the state that holds it in SecurityTab.
+   */
+  sourceFilter?: string
+  onSourceFilterUsed?: () => void
 }) {
   type KindCounts = Record<ArtifactKind, number>
 
@@ -762,6 +911,19 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
 
   /** The scanners that contributed. Empty or single means no comparison. */
   const sources = data.sources ?? []
+
+  /*
+   * The comparison panel's "show me the 402 only Anchore found".
+   *
+   * `exactly` rather than `includes`, because "only here" is a set-membership
+   * question and `includes` would also return the several thousand both
+   * scanners agreed on - which is the opposite of what the link says.
+   */
+  useEffect(() => {
+    if (!sourceFilter) return
+    setSource({ mode: 'exactly', providers: [sourceFilter] })
+    onSourceFilterUsed?.()
+  }, [sourceFilter, onSourceFilterUsed])
 
   /** The artifact kinds this release actually holds. */
   const kinds = useMemo(() => {
@@ -930,8 +1092,14 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
     if (severities.length > 0 && !severities.includes(f.severity)) return false
     if (fixability === 'fixable' && !f.fixable) return false
     if (fixability === 'non-fixable' && f.fixable) return false
+    // The exploited tab is the same table with one more predicate, rather than
+    // a table of its own. Everything else on this line - the severity filter,
+    // the fixability switch, the scanner control, the unique/all grouping - is
+    // as useful there as here, and a second table would have had to grow all
+    // of them again or offer none of them.
+    if (tab === 'exploited' && !f.kev) return false
     return matchesSource(f, source)
-  }), [findings, severities, fixability, source])
+  }), [findings, severities, fixability, source, tab])
 
   const visible = useMemo(
     () => (search === '' ? selected : selected.filter((f) => matchesText(f, f.artifactName, search))),
@@ -999,6 +1167,28 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
     () => reports.reduce((sum, r) => sum + r.counts.total, 0),
     [reports],
   )
+
+  /*
+   * The exploited count for the tab's own label.
+   *
+   * Independent of which tab is open, and of the severity and fixability
+   * filters: a tab label that changed when you filtered the table under it
+   * would make "Exploited (4)" mean "4 of the ones you are currently looking
+   * at", and the number somebody carries away from this page is the one on the
+   * label. It respects the SCANNER filter, because that is a statement about
+   * whose answer you are reading rather than about which findings count.
+   *
+   * DISTINCT advisories, matching the banner and the release summary, because
+   * one exploited CVE in forty images is one thing to chase.
+   */
+  const exploitedCount = useMemo(() => {
+    const seen = new Set<string>()
+    for (const f of findings) {
+      if (!f.kev || !matchesSource(f, source)) continue
+      seen.add(f.cve || f.id || 'unknown')
+    }
+    return seen.size
+  }, [findings, source])
 
   /*
    * The same CVE in ten images is ten rows and one problem.
@@ -1120,7 +1310,8 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
   useEffect(() => {
     if (tab === 'malware' && !malwareOffered) onTabChange('vulnerabilities')
     if (tab === 'policy' && !policyOffered) onTabChange('vulnerabilities')
-  }, [tab, malwareOffered, policyOffered, onTabChange])
+    if (tab === 'exploited' && !data.kevCapable) onTabChange('vulnerabilities')
+  }, [tab, malwareOffered, policyOffered, data.kevCapable, onTabChange])
 
   /*
    * Only when there is genuinely nothing to show.
@@ -1175,8 +1366,22 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
                 : vulnerabilityTotal).toLocaleString()})`,
             },
             /*
+              Exploited, SECOND, and offered even at zero.
+
+              Second because it is a subset of the tab before it and reads as
+              one; offered at zero because "Exploited (0)" is a sentence - a
+              scanner with a known-exploited catalogue looked and found none -
+              and that is a result somebody wants to be able to see rather than
+              infer from an absent control.
+              Not offered at all when no scanner that answered can tell: see
+              kevCapable, and KevAbsence for the sentence that replaces it.
+            */
+            ...(data.kevCapable
+              ? [{ value: 'exploited', label: kevSegmentLabel(exploitedCount, true) }]
+              : []),
+            /*
               The fraction, not the total. "Images (160)" over a table where 140
-              rows say "Not in JFrog" reads as a release of 160 scanned images,
+              rows say "Not in registry" reads as a release of 160 scanned images,
               and the number a reader carries away is the one on the tab.
             */
             {
@@ -1248,7 +1453,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
           />
         )}
 
-        {tab === 'vulnerabilities' && (
+        {(tab === 'vulnerabilities' || tab === 'exploited') && (
           <Segmented
             value={grouping}
             onChange={(v) => setGrouping(v as typeof grouping)}
@@ -1338,9 +1543,31 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
         />
       )}
 
-      {tab === 'vulnerabilities'
+      {tab === 'vulnerabilities' || tab === 'exploited'
         ? (
           <>
+            {tab === 'exploited' && exploitedCount === 0 && (
+              /*
+                The good news, said out loud.
+
+                An empty table under a tab reading "Exploited (0)" is the same
+                pixels as an empty table under a broken filter, and the reader
+                cannot tell which they are looking at. This one names the
+                scanners, so "none" is attributable.
+              */
+              <Alert
+                type="success"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="No known-exploited vulnerabilities in this release"
+                description={
+                  `${(data.sources ?? []).map((s) => s.label).join(' and ') || 'The scanner'} checked `
+                  + 'this release against a known-exploited vulnerability catalogue and found '
+                  + 'nothing on it. Every other finding here is a vulnerability somebody could '
+                  + 'exploit rather than one somebody has.'
+                }
+              />
+            )}
             {detailRowsUnavailable && (
               <Alert
                 type="warning"
@@ -1482,10 +1709,10 @@ const MalwareTable = memo(function MalwareTable({ rows, scanUrlFor }: {
           },
           {
             title: 'Identifier',
-            width: 170,
+            width: 210,
             render: (_, r) => (
               <a onClick={() => setFinding(r)} style={{ display: 'block' }}>
-                <CveCell cve={r.cve} id={r.id} link />
+                <CveCell cve={r.cve} id={r.id} link kev={r.kev} kevSource={r.kevSource} />
               </a>
             ),
           },
@@ -1681,10 +1908,18 @@ function problemRank(status: string): number {
   return PROBLEM_RANK[status] ?? 0
 }
 
+/*
+  Scanner-agnostic, and the not_scanned line is the one that had to change.
+  Xray holds an image and has not indexed it; Anchore has accepted it and is
+  analysing it. Those need different things from the reader - the first is a
+  wait on somebody else's indexer, the second finishes on its own in minutes -
+  and the per-group message under this advice carries the scanner's own
+  sentence, which says which.
+*/
 const PROBLEM_ADVICE: Record<string, string> = {
   unavailable: 'A transient failure rather than a refusal. Sync again to retry these.',
-  not_scanned: 'JFrog Xray holds these images but has not indexed them yet. Syncing again will report '
-    + 'the same until it does.',
+  not_scanned: 'The scanner has these images and has not finished with them. Syncing again will '
+    + 'report the same until it has - the message below says what it is waiting on.',
   not_found: 'This is a transfer to run, not a scan to wait for. Replicate the release, then sync again.',
   disabled: 'Enable a scanner on the repository these images are in.',
 }
@@ -1704,9 +1939,9 @@ function problemHeadline(status: string, n: number, repository?: string): string
     case 'not_found':
       return `${images} were not found${where}`
     case 'not_scanned':
-      return `${images} have not been scanned by JFrog Xray`
+      return `${images} have not been scanned yet`
     case 'unavailable':
-      return `${images} could not be retrieved from JFrog Xray`
+      return `${images} could not be retrieved from the scanner`
     case 'disabled':
       return `${images} are in a repository with no scanner`
     default:
@@ -1836,6 +2071,29 @@ type CveGroup = {
    */
   cvssScore?: number
   cvssVector?: string
+  /**
+   * Whether ANY occurrence of this advisory is known to be exploited, and who
+   * said so.
+   *
+   * Any, because being exploited is a property of the advisory rather than of
+   * the image it turned up in - and a group whose KEV flag depended on which
+   * occurrence happened to be first would put the same CVE above the fold in
+   * one release and below it in another.
+   */
+  kev: boolean
+  kevSource?: string
+  epss?: SecurityEPSS
+  /**
+   * The gradings and the vendor's position, carried up from the first
+   * occurrence that had them.
+   *
+   * They belong to the advisory rather than to the image it turned up in, so
+   * every row of a group has the same set - and without them the grouped view's
+   * detail panel would show less than the flat view's for the same advisory,
+   * which is the wrong way round.
+   */
+  observations?: SecurityObservation[]
+  willNotFix?: boolean
   references: string[]
   published?: string
   provider?: string
@@ -1876,6 +2134,7 @@ function groupByCve(findings: FlatFinding[]): CveGroup[] {
         severity: f.severity,
         fixable: false,
         fixedIn: [],
+        kev: false,
         summary: f.summary,
         description: f.description,
         references: [],
@@ -1896,6 +2155,13 @@ function groupByCve(findings: FlatFinding[]): CveGroup[] {
     }
     if (SEVERITIES.indexOf(f.severity) < SEVERITIES.indexOf(g.severity)) g.severity = f.severity
     if (f.fixable) g.fixable = true
+    if (f.kev) {
+      g.kev = true
+      if (!g.kevSource) g.kevSource = f.kevSource
+    }
+    if (f.epss && (!g.epss || f.epss.score > g.epss.score)) g.epss = f.epss
+    if (!g.observations && f.observations && f.observations.length > 0) g.observations = f.observations
+    if (f.willNotFix) g.willNotFix = true
     for (const v of f.fixedIn ?? []) {
       if (!g.fixedIn.includes(v)) g.fixedIn.push(v)
     }
@@ -1910,11 +2176,34 @@ function groupByCve(findings: FlatFinding[]): CveGroup[] {
     g.rows.push(f)
   }
 
-  return [...byKey.values()].sort((a, b) => (
-    SEVERITIES.indexOf(a.severity) !== SEVERITIES.indexOf(b.severity)
-      ? SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity)
-      : b.images.length - a.images.length
-  ))
+  /*
+   * Known-exploited first, then severity, then fixable, then blast radius.
+   *
+   * The same order the server sorts findings in and the same order the export
+   * writes them in, because a page that ordered its rows differently from its
+   * own download would make somebody check which was right. It is also the
+   * order somebody works in:
+   *
+   *  1. KEV, because a vulnerability being exploited is not the same kind of
+   *     fact as one being severe. Every other criterion here is a judgement
+   *     about what could happen; this one is a record of what has.
+   *  2. Severity within that.
+   *  3. FIXABLE ahead of unfixable, which surprises people until they remember
+   *     what a release here is: a vendor's build, where nothing can be patched
+   *     locally, so the rows with a version to ask for are the only actionable
+   *     ones. A hundred unfixable criticals above four fixable ones puts the
+   *     whole of the afternoon's work below the fold.
+   *  4. Blast radius, so of two equal advisories the one in forty images is
+   *     first.
+   */
+  return [...byKey.values()].sort((a, b) => {
+    if (a.kev !== b.kev) return a.kev ? -1 : 1
+    if (SEVERITIES.indexOf(a.severity) !== SEVERITIES.indexOf(b.severity)) {
+      return SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity)
+    }
+    if (a.fixable !== b.fixable) return a.fixable ? -1 : 1
+    return b.images.length - a.images.length
+  })
 }
 
 /**
@@ -2005,10 +2294,10 @@ const UniqueCveTable = memo(function UniqueCveTable({ groups, state, detailRowsU
       columns={[
         {
           title: 'CVE',
-          width: 160,
+          width: 200,
           render: (_, g) => (
             <a onClick={() => setOpen(g)} style={{ display: 'block' }}>
-              <CveCell cve={g.cve} id={g.id} link />
+              <CveCell cve={g.cve} id={g.id} link kev={g.kev} kevSource={g.kevSource} />
             </a>
           ),
         },
@@ -2105,6 +2394,14 @@ function CveDetailDrawer({ group, scanUrlFor, onClose }: {
       description={group?.description}
       cvssScore={group?.cvssScore}
       cvssVector={group?.cvssVector}
+      kev={group?.kev}
+      kevSource={group?.kevSource}
+      epss={group?.epss}
+      // From the first occurrence that carried them: the gradings belong to the
+      // ADVISORY rather than to the image it turned up in, so every row of a
+      // group has the same set and the group need only keep one.
+      observations={group?.observations}
+      willNotFix={group?.willNotFix}
       published={group?.published}
       provider={group?.provider}
       sources={group?.sources}
@@ -2204,6 +2501,11 @@ function FindingDetailDrawer({ finding, scanUrlFor, onClose }: {
       description={finding?.description}
       cvssScore={finding?.cvssScore}
       cvssVector={finding?.cvssVector}
+      kev={finding?.kev}
+      kevSource={finding?.kevSource}
+      epss={finding?.epss}
+      willNotFix={finding?.willNotFix}
+      observations={finding?.observations}
       published={finding?.published}
       provider={finding?.provider}
       sources={finding?.sources}
@@ -2326,7 +2628,8 @@ function FindingDetailDrawer({ finding, scanUrlFor, onClose }: {
  */
 function AdvisoryDrawer({
   open, onClose, identifier, alternateId, severity, fixable, fixedIn, summary, description,
-  cvssScore, cvssVector, published, provider, sources, policy, references, subtitle, children,
+  cvssScore, cvssVector, kev, kevSource, epss, willNotFix, observations,
+  published, provider, sources, policy, references, subtitle, children,
 }: {
   open: boolean
   onClose: () => void
@@ -2339,6 +2642,13 @@ function AdvisoryDrawer({
   description?: string
   cvssScore?: number
   cvssVector?: string
+  /** Known-exploited, badged in the title bar. See the title below. */
+  kev?: boolean
+  kevSource?: string
+  epss?: SecurityEPSS
+  willNotFix?: boolean
+  /** Every grading this advisory was reported with, and who reported each. */
+  observations?: SecurityObservation[]
   published?: string
   provider?: string
   /** Every scanner that reported this, where more than one did. */
@@ -2358,6 +2668,51 @@ function AdvisoryDrawer({
     },
     cvssScore !== undefined && cvssScore > 0
       ? { key: 'cvss', label: 'CVSS score', children: <Typography.Text strong>{cvssScore}</Typography.Text> }
+      : null,
+    /*
+      Exploited, as a FACT ROW as well as a badge.
+
+      The badge in the title says it at a glance; this row says who claimed it,
+      which is what a reader checks before acting. A badge nobody can trace is
+      a badge somebody eventually decides to distrust.
+    */
+    kev
+      ? {
+        key: 'kev',
+        label: 'Exploited',
+        children: (
+          <Space size={8} wrap>
+            <KevTag source={kevSource} epss={epss} />
+            {kevSource && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                reported by {providerLabel(kevSource)}
+              </Typography.Text>
+            )}
+          </Space>
+        ),
+      }
+      : null,
+    epss
+      ? { key: 'epss', label: 'Exploit prediction', children: <EpssText epss={epss} /> }
+      : null,
+    /*
+      The vendor's refusal, said plainly and only when it is true.
+
+      "No fix" and "there will not be one" are the same empty cell in the Fix
+      column and two different conversations: the first is a wait, the second
+      is a decision to mitigate or accept. Somebody who cannot tell them apart
+      asks the same vendor the same question every month.
+    */
+    willNotFix
+      ? {
+        key: 'wontfix',
+        label: 'Vendor position',
+        children: (
+          <Typography.Text>
+            The vendor has stated this will not be fixed in the affected stream.
+          </Typography.Text>
+        ),
+      }
       : null,
     published
       ? {
@@ -2417,6 +2772,16 @@ function AdvisoryDrawer({
               {identifier ?? 'Vulnerability'}
             </Typography.Text>
             {severity && <SeverityTag value={severity} />}
+            {/*
+              TOP RIGHT of the identifier, beside the severity and before
+              anything else.
+
+              It has to sit where the reader's eye already is when they open
+              this panel. Further down it would be one fact among nine, and the
+              whole argument for treating exploited differently from severe is
+              that it is not one fact among nine.
+            */}
+            {kev && <KevTag source={kevSource} epss={epss} />}
             {alternateId && (
               <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 12 }}>
                 {alternateId}
@@ -2480,6 +2845,86 @@ function AdvisoryDrawer({
               </Typography.Text>
             )}          
         </Section>
+
+        {observations && observations.length > 1 && (
+          /*
+            WHERE THE SOURCES DISAGREE.
+
+            # Why the disagreements are shown rather than resolved
+
+            Because they are evidence, not noise. Anchore reports a vendor
+            grading and an NVD grading for one CVE and they routinely differ -
+            Debian grades an OpenSSL issue low that NVD grades critical, and
+            both are right about different questions. The severity at the top
+            of this panel is the WORST of them by a documented rule, and this
+            is the audit trail behind that one number.
+
+            The reader is the one who knows whether their deployment looks like
+            the vendor's assumption. A page that collapsed this to one word
+            would be deciding, for every reader, which vulnerability database
+            their organisation believes.
+
+            Only shown with more than one grading: a single row restating the
+            severity already at the top of the panel is a section that teaches
+            people to skip sections.
+          */
+          <Section title="How each source graded this">
+            <Table<SecurityObservation>
+              size="small"
+              rowKey={(o, i) => `${o.provider}-${o.source ?? ''}-${i ?? 0}`}
+              dataSource={observations}
+              pagination={false}
+              columns={[
+                {
+                  title: 'Source',
+                  render: (_: unknown, o) => (
+                    <Space direction="vertical" size={0}>
+                      <Typography.Text>{o.providerLabel || providerLabel(o.provider)}</Typography.Text>
+                      {o.source && (
+                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>{o.source}</Typography.Text>
+                      )}
+                    </Space>
+                  ),
+                },
+                {
+                  title: 'Severity',
+                  width: 130,
+                  render: (_: unknown, o) => (
+                    // Ungraded is left BLANK rather than labelled Unknown. An
+                    // NVD entry carrying a 9.8 and no severity word had no
+                    // opinion about the word, and "Unknown" beside 9.8 invites
+                    // the reader to believe it had no opinion at all.
+                    o.severity
+                      ? <SeverityTag value={o.severity as Severity} />
+                      : <Typography.Text type="secondary">-</Typography.Text>
+                  ),
+                },
+                {
+                  title: 'CVSS',
+                  width: 90,
+                  align: 'right' as const,
+                  render: (_: unknown, o) => (
+                    o.score
+                      ? <Typography.Text strong>{o.score}</Typography.Text>
+                      : <Typography.Text type="secondary">-</Typography.Text>
+                  ),
+                },
+                {
+                  title: 'Vector',
+                  render: (_: unknown, o) => (
+                    o.vector
+                      ? (
+                        <Typography.Text style={{ fontFamily: mono, fontSize: 11.5 }}>
+                          {o.vector}
+                        </Typography.Text>
+                      )
+                      : <Typography.Text type="secondary">-</Typography.Text>
+                  ),
+                },
+              ]}
+            />
+          </Section>
+        )}
 
         {references && references.length > 0 && (
           <Section title="References">
@@ -2589,10 +3034,10 @@ const VulnerabilityTable = memo(function VulnerabilityTable({
       columns={[
         {
           title: 'CVE',
-          width: 150,
+          width: 195,
           render: (_, r) => (
             <a onClick={() => setOpen(r)} style={{ display: 'block' }}>
-              <CveCell cve={r.cve} id={r.id} link />
+              <CveCell cve={r.cve} id={r.id} link kev={r.kev} kevSource={r.kevSource} />
             </a>
           ),
         },
@@ -3358,10 +3803,10 @@ function ImageDetailDrawer({ report, onClose }: {
               columns={[
                 {
                   title: 'CVE',
-                  width: 150,
+                  width: 195,
                   render: (_, r) => (
                     <a onClick={() => setFinding(r)} style={{ display: 'block' }}>
-                      <CveCell cve={r.cve} id={r.id} link />
+                      <CveCell cve={r.cve} id={r.id} link kev={r.kev} kevSource={r.kevSource} />
                     </a>
                   ),
                 },

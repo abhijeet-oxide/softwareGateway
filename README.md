@@ -15,6 +15,8 @@ A cloud-native platform that continuously discovers software packages published 
 - **Discovers** new software packages across vendor OCI repositories, continuously and without duplicates
 - **Replicates** them into one or more internal registries, streaming blobs registry-to-registry without ever touching disk
 - **Promotes** packages between internal registries (lab → production)
+- **Scans** replicated releases with JFrog Xray and Anchore, merging what both
+  say into one posture and reporting what only one of them saw
 - **Verifies** vendor signatures with cosign/Sigstore, at source and at destination
 - **Deduplicates** by content address, so a blob moves once no matter how many packages reference it
 
@@ -39,6 +41,13 @@ How to build (including Windows), configure the two separate kinds of configurat
 **New here? [Read the Functional Overview →](docs/FUNCTIONAL-OVERVIEW.md)**
 
 What the tool does, the logical components and where they run, the file-level code layout, the CLI grouped by task, and ten day-in-the-life scenarios showing what operating it actually looks like.
+
+**Running two scanners? [Read the Anchore integration guide →](docs/security/ANCHORE-INTEGRATION.md)**
+
+What Anchore has to be able to reach, the two lines of configuration, what a
+sync does in five phases, what each failure means, and what running a second
+scanner beside JFrog Xray actually buys - which is auditable disagreement rather
+than a bigger number.
 
 **Enforcing your own standards? [Read the compliance ground truth →](docs/compliance/README.md)**
 

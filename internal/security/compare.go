@@ -126,6 +126,27 @@ type Change struct {
 	// are genuine improvements and they are not the same event.
 	ViaRemoval bool `json:"viaRemoval,omitempty"`
 
+	// KEV says the vulnerability this change is about is known to be exploited.
+	//
+	// # Why a comparison has to carry it
+	//
+	// Because "this release introduced a known-exploited vulnerability" is the
+	// single most consequential sentence a release comparison can produce, and
+	// without this field it renders as one more row in a list of four hundred
+	// introduced findings, ordered by a severity that may well be medium.
+	// It sorts above severity here for the same reason it does everywhere else.
+	KEV bool `json:"kev,omitempty"`
+
+	// Sources names every scanner that reported the finding this change is
+	// about, so a reader can tell a genuine regression from a scanner that was
+	// switched on between the two releases.
+	//
+	// That distinction is the one a two-scanner deployment gets wrong first:
+	// syncing release B with Anchore switched on and comparing it against a
+	// release A synced by Xray alone reports several thousand "introduced"
+	// findings that were always there and were simply not being looked for.
+	Sources []string `json:"sources,omitempty"`
+
 	Provider string `json:"provider,omitempty"`
 }
 
@@ -528,6 +549,8 @@ func newChange(t ChangeType, f Finding, artifact ArtifactRef, ac ArtifactChange)
 		Component:      f.Component,
 		Artifact:       artifact,
 		ArtifactChange: ac,
+		KEV:            f.KEV,
+		Sources:        f.SourceSet(),
 		Provider:       f.Provider,
 	}
 }
@@ -888,6 +911,16 @@ func sortChanges(cs []Change) {
 		a, b := cs[i], cs[j]
 		if order[a.Type] != order[b.Type] {
 			return order[a.Type] < order[b.Type]
+		}
+		// Known-exploited above severity WITHIN a change type, not across it.
+		//
+		// Across would be wrong: an exploited vulnerability this release
+		// RESOLVED is good news, and floating it above a plain critical the
+		// release introduced would put the best row of the comparison at the
+		// top of a list somebody opened to find the worst. The change type
+		// already says which direction a row points; this orders within it.
+		if a.KEV != b.KEV {
+			return a.KEV
 		}
 		if a.Severity.Rank() != b.Severity.Rank() {
 			return a.Severity.Rank() > b.Severity.Rank()

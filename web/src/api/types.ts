@@ -1560,6 +1560,11 @@ export interface PackageSecuritySummary {
   distinctCves: number
   distinctCounts: SecurityCounts
   uniqueCveCounts: SecurityCounts
+  /** Distinct known-exploited advisories, and how many have a fix. */
+  kevs: number
+  kevFixable: number
+  /** Which scanners are behind these numbers, so a row can say "Xray + Anchore". */
+  providers?: string[]
   complete: boolean
   /**
    * What "0 vulnerabilities" actually means. Zero of zero is "nobody looked"
@@ -1588,8 +1593,18 @@ export interface SecurityCounts {
   total: number
   fixable: number
   nonFixable: number
+  /**
+   * How many are KNOWN to be exploited, and how many of those have a fix.
+   *
+   * The second is this afternoon's work in one number. Sent rather than
+   * derived because a listing draws the badge without any findings loaded.
+   */
+  kev: number
+  kevFixable: number
   bySeverity: SecuritySeverityCounts
   fixableBySeverity: SecuritySeverityCounts
+  /** The exploited ones graded: "4 KEVs" and "4 critical KEVs" read differently. */
+  kevBySeverity: SecuritySeverityCounts
 }
 
 /** Always rendered beside the counts: 1,286 means one thing at full coverage. */
@@ -1639,6 +1654,32 @@ export interface SecurityFinding {
   fixable: boolean
   cvssScore?: number
   cvssVector?: string
+  /**
+   * On a known-exploited catalogue, and which scanner said so.
+   *
+   * The single most load-bearing field on this type. It is not a severity - it
+   * is a record that somebody has already exploited this - so it sorts above
+   * severity, carries its own badge and has its own segment on the page. False
+   * means "no scanner that answered said so", which on a scanner with no
+   * exploited-vulnerability feed is every finding.
+   */
+  kev?: boolean
+  kevSource?: string
+  /** The exploit-prediction score. Displayed, never sorted on. */
+  epss?: SecurityEPSS
+  /**
+   * The vendor has declined to fix this in the affected stream.
+   *
+   * Not the same as having no fixed version yet: the first is a decision to
+   * mitigate or accept, the second is a wait. A table that renders them
+   * identically sends somebody back to the same vendor every month.
+   */
+  willNotFix?: boolean
+  /**
+   * Every severity and score this finding was reported with, and who reported
+   * each. The evidence behind the one grade the row shows.
+   */
+  observations?: SecurityObservation[]
   references?: string[]
   published?: string
   provider: string
@@ -1651,6 +1692,28 @@ export interface SecurityFinding {
    * reading "JFrog Xray" on every row costs width and says nothing.
    */
   sources?: string[]
+}
+
+/**
+ * The Exploit Prediction Scoring System's estimate.
+ *
+ * Two numbers because the second is the readable one: 0.00042 tells almost
+ * nobody anything, "in the bottom 12%" tells everybody something.
+ */
+export interface SecurityEPSS {
+  score: number
+  percentile?: number
+}
+
+/** One source's grading of one finding, kept with its source. */
+export interface SecurityObservation {
+  provider: string
+  providerLabel?: string
+  source?: string
+  severity?: Severity | ''
+  severityLabel?: string
+  score?: number
+  vector?: string
 }
 
 /**
@@ -1684,6 +1747,16 @@ export interface SecurityDocumentRef {
   kind: 'vulnerabilities' | 'sbom' | 'policy' | 'malware'
   label: string
   /**
+   * The scanner whose body this is, EMPTY on the default entry for a kind.
+   *
+   * Two shapes on purpose: an unqualified entry per kind, which is what the
+   * menu offers by default, and one per scanner underneath once two hold one.
+   * A reader who wants "the SBOM" should not have to choose; a reader sending a
+   * vendor "what YOUR scanner said" must be able to.
+   */
+  provider?: string
+  providerLabel?: string
+  /**
    * False for a body the scanner was asked for and did not have. Worth saying:
    * the alternative is a button that silently downloads nothing.
    */
@@ -1708,6 +1781,57 @@ export interface SecuritySourceCounts {
   uniqueCves: number
   onlyHere: number
   artifacts: number
+  /**
+   * Distinct known-exploited advisories this scanner reported, and how many of
+   * those no other scanner did.
+   *
+   * `kevOnly` is the number that decides whether a second scanner earned its
+   * licence: four thousand extra lows nobody will read and two exploited CVEs
+   * nobody else saw look identical in `onlyHere`.
+   */
+  kevs: number
+  kevOnly: number
+  /**
+   * Advisories another scanner also reported, where this one supplied a fact
+   * the other lacked - a fix version, a description, a vector, a KEV flag.
+   *
+   * The honest defence of a scanner whose `onlyHere` is zero: it found nothing
+   * new and explained several thousand findings better.
+   */
+  enriched: number
+  status?: SecurityState
+  message?: string
+  syncedAt?: string
+  /**
+   * This scanner's own coverage, which is NOT the release's: Anchore may have
+   * analysed 140 of 157 images while Xray has indexed all of them, and one
+   * figure for both is a lie about whichever it does not describe.
+   */
+  coverage: SecurityCoverage
+}
+
+/**
+ * The set arithmetic between the scanners.
+ *
+ * Computed on the server so the numbers cannot disagree with the export, the
+ * release summary and the stored per-scanner rows. Absent with one scanner.
+ */
+export interface SecuritySourceComparison {
+  providers: string[]
+  /** How many advisories every scanner agreed on. */
+  shared: number
+  sharedCves?: string[]
+  /** Advisories only one scanner reported - the list somebody opens this for. */
+  onlyIn?: Record<string, string[]>
+  /**
+   * The KNOWN-EXPLOITED half of `onlyIn`, and never truncated.
+   *
+   * An exploited advisory only one scanner reported is the whole reason to run
+   * two, and there are never four thousand of them.
+   */
+  kevOnlyIn?: Record<string, string[]>
+  /** A list was capped, so the interface can say "and 1,204 more". */
+  truncated?: boolean
 }
 
 export interface SecurityReport {
@@ -1781,6 +1905,25 @@ export interface PackageSecurityResponse {
    * A segmented control with one position is a control that should not be drawn.
    */
   sources?: SecuritySourceCounts[]
+  /** What each scanner found that the others did not. Absent below two. */
+  sourceComparison?: SecuritySourceComparison
+  /**
+   * DISTINCT known-exploited advisories in this release, and how many have a
+   * fix. `counts.kev` carries the per-occurrence figure.
+   */
+  kevs: number
+  kevFixable: number
+  kevSeverity: SecuritySeverityCounts
+  /**
+   * At least one scanner that answered has an exploited-vulnerability feed.
+   *
+   * Without this, "0 known-exploited" is unreadable: on a deployment running a
+   * scanner with a KEV feed it is a very good result, and on one running only a
+   * scanner without one it is "nobody checked". Drawing the second as a clean
+   * bill of health is the failure the whole scanned/not-scanned distinction
+   * exists to prevent, one level up.
+   */
+  kevCapable: boolean
   scannedAt?: string
   syncedAt?: string
   freshness?: SecurityFreshness
@@ -1798,6 +1941,24 @@ export interface SecurityChange {
   fromSeverity?: Severity
   toSeverity?: Severity
   fixable: boolean
+  /**
+   * Known to be exploited.
+   *
+   * "This release introduced a known-exploited vulnerability" is the most
+   * consequential sentence a release comparison can produce, and without this
+   * it is one more row in a list of four hundred introduced findings ordered by
+   * a severity that may well be medium.
+   */
+  kev?: boolean
+  /**
+   * Every scanner that reported the finding.
+   *
+   * The distinction a two-scanner deployment gets wrong first: comparing a
+   * release synced with Anchore switched on against one synced by Xray alone
+   * reports several thousand "introduced" findings that were always there and
+   * were simply not being looked for.
+   */
+  sources?: string[]
   fixedIn?: string[]
   summary?: string
   description?: string

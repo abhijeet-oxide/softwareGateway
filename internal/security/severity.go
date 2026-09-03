@@ -202,29 +202,72 @@ func (c SeverityCounts) Plus(o SeverityCounts) SeverityCounts {
 	return c
 }
 
-// Counts is a full account of a set of findings: how many, how severe, and
-// how many of them anybody can actually do something about.
+// Counts is a full account of a set of findings: how many, how severe, how
+// many of them anybody can actually do something about, and how many are
+// already being exploited.
 //
 // Fixable is carried separately rather than derived on read because it is the
 // number that decides what a release manager does this afternoon. A release
 // with 900 non-fixable findings and 4 fixable ones has four pieces of work in
 // it, and a summary that reports only 904 hides all four.
+//
+// KEV is carried for the same reason and it is the stronger of the two. A
+// vulnerability on CISA's Known Exploited list is not a risk estimate; it is a
+// report that somebody has already used it. Nine hundred criticals graded from
+// a CVSS vector and one KEV are not the same backlog, and a summary that can
+// only say "901 criticals" cannot tell a release manager which one to open.
 type Counts struct {
 	Total      int `json:"total"`
 	Fixable    int `json:"fixable"`
 	NonFixable int `json:"nonFixable"`
+	// KEV is the findings a scanner marked known-exploited, and KEVFixable the
+	// subset with a version to upgrade to - which is the whole of this
+	// afternoon's work, in one number.
+	KEV        int `json:"kev"`
+	KEVFixable int `json:"kevFixable"`
 
 	BySeverity        SeverityCounts `json:"bySeverity"`
 	FixableBySeverity SeverityCounts `json:"fixableBySeverity"`
+	// KEVBySeverity grades the exploited ones, because "4 KEVs" and "4 critical
+	// KEVs" are read differently and the ladder is what the interface sorts on.
+	KEVBySeverity SeverityCounts `json:"kevBySeverity"`
 }
 
 // Add records one finding.
-func (c *Counts) Add(sev Severity, fixable bool) {
+func (c *Counts) Add(sev Severity, fixable bool) { c.AddGrade(Grade{Severity: sev, Fixable: fixable}) }
+
+// Grade is what counting one finding needs to know about it.
+//
+// A struct rather than three positional booleans, because the next scanner will
+// bring a fourth fact worth counting - reachability, an exploit maturity - and
+// a signature that grows by one parameter per scanner is one every call site
+// has to be edited for.
+type Grade struct {
+	Severity Severity
+	Fixable  bool
+	// KEV says the vulnerability is on a known-exploited list.
+	KEV bool
+}
+
+// GradeOf is one finding's countable facts.
+func GradeOf(f Finding) Grade {
+	return Grade{Severity: f.Severity, Fixable: f.Fixable, KEV: f.KEV}
+}
+
+// AddGrade records one finding.
+func (c *Counts) AddGrade(g Grade) {
 	c.Total++
-	c.BySeverity.Add(sev, 1)
-	if fixable {
+	c.BySeverity.Add(g.Severity, 1)
+	if g.KEV {
+		c.KEV++
+		c.KEVBySeverity.Add(g.Severity, 1)
+		if g.Fixable {
+			c.KEVFixable++
+		}
+	}
+	if g.Fixable {
 		c.Fixable++
-		c.FixableBySeverity.Add(sev, 1)
+		c.FixableBySeverity.Add(g.Severity, 1)
 		return
 	}
 	c.NonFixable++
@@ -236,8 +279,11 @@ func (c Counts) Plus(o Counts) Counts {
 		Total:             c.Total + o.Total,
 		Fixable:           c.Fixable + o.Fixable,
 		NonFixable:        c.NonFixable + o.NonFixable,
+		KEV:               c.KEV + o.KEV,
+		KEVFixable:        c.KEVFixable + o.KEVFixable,
 		BySeverity:        c.BySeverity.Plus(o.BySeverity),
 		FixableBySeverity: c.FixableBySeverity.Plus(o.FixableBySeverity),
+		KEVBySeverity:     c.KEVBySeverity.Plus(o.KEVBySeverity),
 	}
 }
 

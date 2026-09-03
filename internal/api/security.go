@@ -104,9 +104,17 @@ type SecurityIndex interface {
 
 // packageVerbSyncSecurity is the custom method that talks to the scanner.
 const (
-	packageVerbSyncSecurity    = "syncSecurity"
-	packageVerbCancelSecurity  = "cancelSecuritySync"
-	packageVerbCompareSecurity = "compareSecurity"
+	packageVerbSyncSecurity = "syncSecurity"
+	// packageVerbReplicateSecurity registers a release with a scanner that has
+	// to be TOLD about it before it can answer - Anchore, today.
+	//
+	// A verb of its own rather than a phase of syncSecurity, because the two
+	// have completely different durations and completely different failure
+	// modes: this is our own request count against a responsive service, and a
+	// sync is somebody else's analysis queue. See internal/security/replicate.go.
+	packageVerbReplicateSecurity = "replicateSecurity"
+	packageVerbCancelSecurity    = "cancelSecuritySync"
+	packageVerbCompareSecurity   = "compareSecurity"
 )
 
 // maxSecurityArtifacts bounds one sync.
@@ -191,6 +199,16 @@ func (s *Server) packageSecurity(
 
 	out := toAPIPackageSecurity(productName, pkg, row, target, detail, s.deps.SecurityFreshness)
 	out.Sync = s.syncStatusFor(pkg.ID, row, target)
+
+	// WHETHER THE RELEASE HAS BEEN REPLICATED to the scanners that have to be
+	// told about it.
+	//
+	// Sent on every read, including a release that has never been synced,
+	// because it is the thing the page has to say FIRST on such a release: a
+	// scanner that has never been told an image exists has no findings, and the
+	// honest reason is not "the scanner found nothing" but "the scanner has
+	// never been asked".
+	out.Registrations = s.registrationsFor(ctx, target, pkg.ID)
 
 	// The per-scanner breakdown, which is empty on a single-scanner deployment
 	// and is what the source toggle is drawn from when it is not.

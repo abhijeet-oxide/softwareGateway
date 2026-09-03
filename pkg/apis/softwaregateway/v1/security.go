@@ -470,6 +470,81 @@ type SyncSecurityRequest struct {
 	Provider string `json:"provider,omitempty"`
 }
 
+// SecurityRegistration is whether a release has been replicated to a scanner
+// that has to be TOLD about it, and what that scanner holds for it.
+//
+// # Why a page needs this at all
+//
+// Because Anchore does not index a repository - it is told an image exists and
+// analyses it on its own schedule. A release nobody has replicated has no
+// findings, and the honest reason is not "the scanner found nothing" but "the
+// scanner has never been asked". Without this the two are the same empty table.
+//
+// Absent for a scanner that indexes rather than being told, which is the whole
+// reason the interface never offers the button for JFrog Xray.
+type SecurityRegistration struct {
+	Provider string `json:"provider"`
+	Label    string `json:"label"`
+	// State is "" (never) | registering | registered | partial | failed.
+	State      string `json:"state"`
+	StateLabel string `json:"stateLabel"`
+	Error      string `json:"error,omitempty"`
+
+	// Expected is what this release wants registered, Associated what the
+	// scanner's own grouping holds on read-back, and Outstanding the gap.
+	//
+	// Outstanding is sent rather than derived because it is what the notice
+	// counts, and a client subtracting two numbers is a client that can get the
+	// sign wrong on an empty release.
+	Expected     int `json:"expected"`
+	Submitted    int `json:"submitted"`
+	AlreadyKnown int `json:"alreadyKnown"`
+	Associated   int `json:"associated"`
+	Outstanding  int `json:"outstanding"`
+	// Analysed is how many of them the scanner had finished with when this was
+	// last written. It is the answer to "why has the sync not found anything
+	// yet", and being an hour old does not make it a wrong answer to that.
+	Analysed int `json:"analysed"`
+
+	// Application and Version are the scanner's own names for this release, and
+	// URL opens it there.
+	Application string `json:"application,omitempty"`
+	Version     string `json:"version,omitempty"`
+	URL         string `json:"url,omitempty"`
+
+	RegisteredAt string `json:"registeredAt,omitempty"`
+	// Stalled is a `registering` row whose holder stopped. Without it a page
+	// shows a spinner on a replication nobody is running.
+	Stalled bool `json:"stalled,omitempty"`
+
+	// CanReplicate is whether the button should be offered, and Reason why not.
+	//
+	// Sent rather than derived, because "should this button exist" depends on
+	// the provider's type, the product's configuration and the deployment's -
+	// three facts the browser does not hold and should not have to.
+	CanReplicate bool   `json:"canReplicate"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+// ReplicateSecurityRequest asks for a release to be registered with a scanner.
+type ReplicateSecurityRequest struct {
+	// Provider narrows it to one scanner. Empty replicates to every scanner
+	// configured for the release that needs telling - which today is at most
+	// one, and is the right default when it is more.
+	Provider string `json:"provider,omitempty"`
+}
+
+// ReplicateSecurityResponse is what one replication did.
+type ReplicateSecurityResponse struct {
+	Product string `json:"product"`
+	Package string `json:"package"`
+	// Registrations is one entry per scanner this replicated to.
+	Registrations []SecurityRegistration `json:"registrations"`
+	// Log is the run's transcript, so a reader who pressed the button sees
+	// what happened rather than a number that changed.
+	Log []SecurityLogEntry `json:"log,omitempty"`
+}
+
 type SyncSecurityResponse struct {
 	Product string `json:"product"`
 	Package string `json:"package"`
@@ -566,6 +641,13 @@ type PackageSecurityResponse struct {
 	// SourceComparison is what each scanner found that the others did not.
 	// Absent with fewer than two scanners.
 	SourceComparison *SecuritySourceComparison `json:"sourceComparison,omitempty"`
+
+	// Registrations is one entry per scanner that has to be TOLD about this
+	// release before it can answer.
+	//
+	// Empty on a deployment running only scanners that index a repository, so
+	// the notice and its button are never drawn there.
+	Registrations []SecurityRegistration `json:"registrations,omitempty"`
 
 	// KEVs is the DISTINCT known-exploited advisories in this release, and
 	// KEVFixable how many have a fix.

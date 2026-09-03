@@ -203,6 +203,10 @@ func run() error {
 	// works perfectly.
 	securityCache := store.NewSecurity(st)
 	packageSecurity := store.NewPackageSecurity(st)
+	// Which releases have been replicated to a scanner that has to be told
+	// about them. Its own table, because "have we told Anchore this release
+	// exists" is not a fact about a sync. See security/replicate.go.
+	securityRegistrations := store.NewSecurityRegistrations(st)
 	securityTuning := regclient.SecurityTuning{
 		Concurrency:    cfg.Coordinator.Security.Concurrency,
 		BatchSize:      cfg.Coordinator.Security.BatchSize,
@@ -228,7 +232,11 @@ func run() error {
 		cfg.Coordinator.Security.SecurityDocumentKinds())
 	securityService := security.NewService(
 		regclient.NewSecurityResolver(registryClients, securityTuning),
-		securityCache, logger).WithDocuments(securityCache)
+		securityCache, logger).
+		WithDocuments(securityCache).
+		// Replicating a release to a scanner that has to be told about it is
+		// its own act, recorded in its own table. See security/replicate.go.
+		WithRegistrations(securityRegistrations)
 	securitySyncer := security.NewSyncer(securityService, packageSecurity, logger).
 		WithDocuments(securityDocuments)
 	// The requester turns `transfers create` and `transfers promote` into
@@ -305,7 +313,6 @@ func run() error {
 	// evictable, and the sweep removes the least recently read ones only while
 	// the store is over its budget. A budget of zero - the default - means it
 	// never is. See internal/maintenance/security.go.
-	securityRegistrations := store.NewSecurityRegistrations(st)
 	securitySweeper := maintenance.NewSecurityCacheSweeper(
 		securityCache, packageSecurity, cfg.Coordinator.Security.SweepInterval,
 		store.CacheBudget{Bytes: cfg.Coordinator.Security.CacheBudgetBytes}, logger).
@@ -513,6 +520,12 @@ func run() error {
 		// The on-demand half: an SBOM a sync deliberately did not fetch,
 		// generated when somebody presses the button beside an image.
 		SecurityDocuments: securityService,
+		// Replicating a release to a scanner that has to be told about it, and
+		// reading what that scanner holds. Two dependencies because they fail
+		// differently: running one needs a reachable scanner, reading the state
+		// needs only the database.
+		SecurityReplicate:     securityService,
+		SecurityRegistrations: securityRegistrations,
 		// Compliance, split the same three ways and for the same reason. The
 		// runner needs a reachable registry and a helm binary; the store and
 		// the catalogue need neither. A release's findings and the rulebook

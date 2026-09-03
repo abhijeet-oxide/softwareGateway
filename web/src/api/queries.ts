@@ -1025,7 +1025,7 @@ export function usePackageSecurity(
 export function useSyncPackageSecurity() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ product, ref, repository, force }: {
+    mutationFn: ({ product, ref, repository, force, provider }: {
       product: string
       ref: string
       repository?: string
@@ -1038,11 +1038,23 @@ export function useSyncPackageSecurity() {
        * so it is a separate thing to press.
        */
       force?: boolean
+      /**
+       * Narrow the sync to ONE scanner.
+       *
+       * Undefined syncs every scanner configured for the release, which is what
+       * the plain button does. Naming one is for the case the scanners' very
+       * different speeds create: a reader whose Anchore is mid-analysis should
+       * be able to refresh Xray without waiting ten minutes for the other half.
+       */
+      provider?: string
     }) => {
       const { segment, query: q } = packageRef(ref)
+      const body: { force?: boolean; provider?: string } = {}
+      if (force) body.force = true
+      if (provider) body.provider = provider
       return api.post<SyncSecurityResponse>(
         `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:syncSecurity` +
-        scopeQuery(q, repository), force ? { force: true } : {})
+        scopeQuery(q, repository), body)
     },
     onSuccess: (res) => {
       /*

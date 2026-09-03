@@ -15,6 +15,7 @@ import {
   verdict as verdictColour, withAlpha,
 } from '../uikit'
 import { RunTiles } from './runtiles'
+import { kevColour, KevTag } from './securitykev'
 import type { RunTile } from './runtiles'
 import { SEVERITIES } from '../api/types'
 import type {
@@ -432,6 +433,38 @@ export function VulnerabilityCell({
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0 }}>
       <SeverityMeter counts={summary.uniqueCveCounts} compact secondaryLabel="UNIQUE" />
+      {/*
+        The exploited count, on the LISTING and not only on the release page.
+
+        # Why it belongs in a cell this narrow
+
+        Because the listing is where somebody scans twenty releases looking for
+        the one to worry about, and severity alone cannot tell them: every
+        release of a large product has criticals, and the one with a KEV is a
+        different kind of row. It is the only thing in this cell that is
+        usually absent, which is what makes it readable when it is not.
+
+        Never at zero. A badge reading "0 exploited" on nineteen rows is
+        nineteen rows of noise around the one that matters.
+      */}
+      {summary.kevs > 0 && (
+        <Tooltip
+          title={
+            `${summary.kevs.toLocaleString()} known-exploited `
+            + `${summary.kevs === 1 ? 'vulnerability' : 'vulnerabilities'} in this release`
+            + (summary.kevFixable > 0 ? `, ${summary.kevFixable.toLocaleString()} with a fix.` : '.')
+            + ' These are advisories somebody has already been attacked through, not a prediction'
+            + ' that this release could be.'
+          }
+        >
+          <Tag
+            color={kevColour.fill}
+            style={{ marginInlineEnd: 0, flex: '0 0 auto', fontSize: 10.5, fontWeight: 600, lineHeight: '16px' }}
+          >
+            {summary.kevs} KEV
+          </Tag>
+        </Tooltip>
+      )}
       {caveats.length > 0 && (
         <Tooltip title={caveats.join(' ')}>
           <span style={{ display: 'inline-flex', flex: '0 0 auto' }}>
@@ -439,9 +472,25 @@ export function VulnerabilityCell({
           </span>
         </Tooltip>
       )}
+      {/*
+        Which scanners these numbers came from, once there is more than one.
+
+        A dot rather than the names: the cell is narrow and "Xray + Anchore" is
+        wider than the meter it would sit beside. What matters on a listing is
+        that a release synced by both is not being compared like-for-like with
+        one synced by a single scanner, and the tooltip says which.
+      */}
+      {(summary.providers?.length ?? 0) > 1 && (
+        <Tooltip title={`Scanned by ${(summary.providers ?? []).map(scannerName).join(' and ')}.`}>
+          <Typography.Text type="secondary" style={{ fontSize: 10, flex: '0 0 auto' }}>
+            {summary.providers?.length}x
+          </Typography.Text>
+        </Tooltip>
+      )}
     </div>
   )
 }
+
 
 // ---------------------------------------------------------------------------
 // Coverage and state
@@ -853,9 +902,9 @@ export function SecurityProgressPanel({ sync, onStop, stopping, starting }: {
             */}
             <Typography.Text strong>
               {starting && total === 0
-                ? `Starting the vulnerability sync against ${scannerName(sync)}`
+                ? `Starting the vulnerability sync against ${syncScannerName(sync)}`
                 : total > 0
-                  ? `Retrieving results for ${total.toLocaleString()} images from ${scannerName(sync)}`
+                  ? `Retrieving results for ${total.toLocaleString()} images from ${syncScannerName(sync)}`
                   // No stages at all is a sync running on another Coordinator,
                   // and this replica does not know what step it has reached.
                   // Saying it is resolving artifacts would be inventing a
@@ -1154,9 +1203,24 @@ export function SyncInterrupted({ sync, onSync, pending }: {
   )
 }
 
-function scannerName(sync: SecuritySyncStatus): string {
-  if (sync.provider === 'jfrog-xray') return 'JFrog Xray'
-  return sync.provider || 'the scanner'
+/**
+ * The scanner behind a sync, in the words the interface shows.
+ *
+ * Wraps scannerName so a sync with no recorded provider - a release nobody has
+ * synced - still has a noun to put in a sentence.
+ */
+function syncScannerName(sync: SecuritySyncStatus): string {
+  return sync.provider ? scannerName(sync.provider) : 'the scanner'
+}
+
+/** A scanner's name in the words the interface shows. */
+function scannerName(provider: string): string {
+  switch (provider) {
+    case 'jfrog-xray': return 'JFrog Xray'
+    case 'anchore': return 'Anchore'
+    case 'astra': return 'Astra'
+    default: return provider
+  }
 }
 
 /**
@@ -1192,7 +1256,7 @@ function useElapsed(startedAt: string | undefined, running: boolean): string | u
  * all, and the second is a refresh of one that exists. A button that said the
  * same thing in both places would make the first look optional.
  */
-export function SyncButton({ sync, onSync, pending, size = 'middle', freshness }: {
+export function SyncButton({ sync, onSync, pending, size = 'middle', freshness, providers }: {
   sync: SecuritySyncStatus
   /**
    * `force` asks the scanner about every image, ignoring what is stored.
@@ -1202,11 +1266,22 @@ export function SyncButton({ sync, onSync, pending, size = 'middle', freshness }
    * the images that are missing or past the age limit and reuses the rest -
    * which is the difference between a sync of seven images and one of a
    * hundred and fifty-seven against somebody else's rate limit.
+   *
+   * `provider` narrows it to ONE scanner. See the menu below for why that is
+   * worth offering.
    */
-  onSync: (force?: boolean) => void
+  onSync: (force?: boolean, provider?: string) => void
   pending?: boolean
   size?: 'small' | 'middle'
   freshness?: SecurityFreshness
+  /**
+   * Every scanner configured for this release.
+   *
+   * Fewer than two draws no per-scanner menu: a "sync JFrog Xray" item beside
+   * a "sync" button, on a deployment with only Xray, is two names for one
+   * action.
+   */
+  providers?: string[]
 }) {
   if (!sync.canSync) {
     return (
@@ -1219,7 +1294,10 @@ export function SyncButton({ sync, onSync, pending, size = 'middle', freshness }
   // one is a release nobody can sync until a sweeper notices. The server takes
   // the claim from a run that has stopped beating, so this offer is real.
   const running = sync.state === 'syncing' && !sync.stalled
-  const scanner = sync.provider === 'jfrog-xray' ? 'JFrog Xray' : 'the scanner'
+  const named = providers ?? []
+  const scanner = named.length > 0
+    ? named.map(scannerName).join(' and ')
+    : sync.provider ? scannerName(sync.provider) : 'the scanner'
   const where = sync.repository ? ` in ${sync.repository}` : ''
   const reuse = (freshness?.maxAgeSeconds ?? 0) > 0
 
@@ -1246,9 +1324,39 @@ export function SyncButton({ sync, onSync, pending, size = 'middle', freshness }
     </Tooltip>
   )
 
-  // Nothing to reuse means nothing to force past, so the second option would
-  // be two names for one action.
-  if (!reuse || running) return button
+  // Nothing to reuse and nothing to narrow means the menu would be two names
+  // for one action.
+  if ((!reuse && named.length < 2) || running) return button
+
+  /*
+   * ONE SCANNER AT A TIME, and why that is worth a menu item each.
+   *
+   * The scanners here fail and finish at very different speeds. Xray answers
+   * about a release in tens of seconds because it indexes a repository;
+   * Anchore's first sync of a release submits every image and then waits
+   * minutes for analysis it does not control. A reader who wants Xray's view
+   * refreshed after a re-transfer should not have to sit through the other
+   * half - and somebody whose Anchore is mid-analysis should be able to ask it
+   * again without re-fetching a scan that is already current.
+   *
+   * The plain button still syncs everything, because that is what "sync this
+   * release" means and it is the right default nine times out of ten.
+   */
+  const items = [
+    ...(reuse
+      ? [{ key: 'force', icon: <SyncOutlined />, label: 'Re-fetch every image' }]
+      : []),
+    ...(named.length > 1
+      ? [{
+        type: 'divider' as const,
+        key: 'divider',
+      }, ...named.map((p) => ({
+        key: `only:${p}`,
+        icon: <SyncOutlined />,
+        label: `Sync ${scannerName(p)} only`,
+      }))]
+      : []),
+  ]
 
   return (
     <Space.Compact>
@@ -1256,12 +1364,14 @@ export function SyncButton({ sync, onSync, pending, size = 'middle', freshness }
       <Dropdown
         disabled={pending}
         menu={{
-          items: [{
-            key: 'force',
-            icon: <SyncOutlined />,
-            label: 'Re-fetch every image',
-          }],
-          onClick: () => onSync(true),
+          items,
+          onClick: ({ key }) => {
+            if (key === 'force') {
+              onSync(true)
+              return
+            }
+            if (key.startsWith('only:')) onSync(false, key.slice(5))
+          },
         }}
       >
         <Button size={size} icon={<DownOutlined />} aria-label="More sync options" />
@@ -1620,21 +1730,41 @@ export function SecurityExportMenu({
  * thing that does something, dressed as a thing that does not. Nobody clicks
  * what does not look clickable.
  */
-export function CveCell({ cve, id, link }: { cve?: string; id?: string; link?: boolean }) {
+export function CveCell({ cve, id, link, kev, kevSource }: {
+  cve?: string
+  id?: string
+  link?: boolean
+  /**
+   * Known-exploited, badged in line with the identifier.
+   *
+   * # Why here rather than in a column of its own
+   *
+   * Because a column is a thing you read when you get to it, and this has to be
+   * read at the same instant as the CVE it qualifies. It is also the badge that
+   * survives every one of this table's layouts - the columns are reorderable
+   * and hideable, and an exploited flag somebody had dragged off screen would
+   * be a fact the page can lose.
+   */
+  kev?: boolean
+  kevSource?: string
+}) {
   if (!cve && !id) return <Typography.Text type="secondary">-</Typography.Text>
   return (
     <Space direction="vertical" size={0}>
-      <Typography.Text
-        style={{
-          fontFamily: mono,
-          color: link ? c.brand : undefined,
-          textDecoration: link ? 'underline' : undefined,
-          textDecorationStyle: link ? 'dotted' : undefined,
-          textUnderlineOffset: 3,
-        }}
-      >
-        {cve || id}
-      </Typography.Text>
+      <Space size={6} align="center">
+        <Typography.Text
+          style={{
+            fontFamily: mono,
+            color: link ? c.brand : undefined,
+            textDecoration: link ? 'underline' : undefined,
+            textDecorationStyle: link ? 'dotted' : undefined,
+            textUnderlineOffset: 3,
+          }}
+        >
+          {cve || id}
+        </Typography.Text>
+        {kev && <KevTag source={kevSource} compact />}
+      </Space>
       {cve && id && id !== cve && (
         <Typography.Text type="secondary" style={{ fontSize: 11, fontFamily: mono }}>{id}</Typography.Text>
       )}

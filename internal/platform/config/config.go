@@ -402,6 +402,13 @@ type SecurityConfig struct {
 //	    type: jfrog
 //	    xrayEnabled: true
 //	    anchoreEnabled: true
+//
+// Everything here is a DEFAULT rather than the only answer. A product that has
+// to reach a different Anchore, or the same one under a different account,
+// overrides the endpoint, the credential and the account in `spec.anchore` (see
+// product.Anchore) and inherits the rest of this stanza - the concurrency, the
+// timeouts, the document kinds - which are operator tuning rather than a
+// property of the product.
 type AnchoreConfig struct {
 	// Endpoint is the Anchore API base URL as an operator has it in a browser -
 	// "https://anchore.example.com". The `/v2` prefix is appended if absent, so
@@ -441,28 +448,19 @@ type AnchoreConfig struct {
 	// RequestTimeout bounds one Anchore call end to end.
 	RequestTimeout time.Duration `koanf:"requestTimeout"`
 
-	// AnalysisWait is how long a sync waits for images it had to submit.
+	// NOTHING WAITS FOR ANALYSIS, and there is deliberately no knob for how
+	// long it would.
 	//
-	// # Why a sync waits at all
+	// There was one. A sync submitted every image and waited up to ten minutes
+	// for Anchore to finish, and the design was wrong however the number was
+	// set: Anchore analyses on its own schedule and nobody can promise a bound,
+	// so a sync that waited had its duration decided by somebody else's queue,
+	// held a claim on the release throughout, and reported the release as
+	// unscanned every time the wait ran out.
 	//
-	// Anchore does not index a repository; it is told about an image and
-	// analyses it asynchronously, in minutes. A first sync therefore submits
-	// everything and finds nothing analysed - and a sync that read immediately
-	// would report the whole release as unscanned and leave the reader with no
-	// way to know that pressing Sync again in five minutes is exactly right.
-	//
-	// # Why it is bounded
-	//
-	// Because the wait holds the release's sync claim, and a sync that waited
-	// out somebody's Anchore backlog would block every later sync of that
-	// release for an hour. Past the bound the sync records what finished,
-	// labels the rest as still analysing, and says so.
-	//
-	// Negative disables waiting entirely, which is right for a deployment that
-	// submits images at transfer time and syncs much later.
-	AnalysisWait time.Duration `koanf:"analysisWait"`
-	// PollInterval is how often a waiting sync re-asks Anchore.
-	PollInterval time.Duration `koanf:"pollInterval"`
+	// Registering a release with Anchore and reading its results are now
+	// separate acts - `:replicateSecurity` and `:syncSecurity`. Neither blocks
+	// on the other.
 
 	// Submit says whether this Coordinator may register images with Anchore.
 	//
@@ -869,8 +867,6 @@ func Defaults() SystemConfig {
 				Anchore: AnchoreConfig{
 					Concurrency:    12,
 					RequestTimeout: 60 * time.Second,
-					AnalysisWait:   10 * time.Minute,
-					PollInterval:   15 * time.Second,
 					SBOMFormat:     "spdx-json",
 				},
 			},

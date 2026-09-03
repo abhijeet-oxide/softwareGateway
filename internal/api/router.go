@@ -230,6 +230,18 @@ type Deps struct {
 	SecurityStore SecurityStore
 	// SecurityIndex is the searchable record of what syncs have recorded.
 	SecurityIndex SecurityIndex
+	// SecurityReplicate registers a release with a scanner that has to be TOLD
+	// about it before it can answer - Anchore, today.
+	//
+	// Set only on a Coordinator that may reach such a scanner. Without it the
+	// replicate route is absent and a caller gets an honest 404 rather than a
+	// route that always fails.
+	SecurityReplicate SecurityReplicator
+	// SecurityRegistrations serves the STORED replication state. Separate from
+	// SecurityReplicate because the two fail differently: running one needs a
+	// reachable scanner and this needs only the database, so a release's state
+	// stays readable while the scanner is down - which is when somebody looks.
+	SecurityRegistrations SecurityRegistrationStore
 	// SecurityRetention is how long a sync's tiers are PINNED, from the system
 	// configuration. Past it a row is evictable rather than gone. The zero
 	// value means the store's own defaults.

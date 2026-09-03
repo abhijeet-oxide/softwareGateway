@@ -1908,6 +1908,14 @@ export interface PackageSecurityResponse {
   /** What each scanner found that the others did not. Absent below two. */
   sourceComparison?: SecuritySourceComparison
   /**
+   * One entry per scanner that has to be TOLD about this release before it can
+   * answer.
+   *
+   * Empty on a deployment running only scanners that index a repository, so the
+   * notice and its button are never drawn there.
+   */
+  registrations?: SecurityRegistration[]
+  /**
    * DISTINCT known-exploited advisories in this release, and how many have a
    * fix. `counts.kev` carries the per-occurrence figure.
    */
@@ -1929,6 +1937,72 @@ export interface PackageSecurityResponse {
   freshness?: SecurityFreshness
   fingerprint?: string
   detail: boolean
+}
+
+/** How far a release's replication to a scanner got. */
+export type RegistrationState = '' | 'registering' | 'registered' | 'partial' | 'failed'
+
+/**
+ * Whether a release has been replicated to a scanner that has to be TOLD about
+ * it, and what that scanner holds for it.
+ *
+ * # Why the page needs this
+ *
+ * Anchore does not index a repository - it is told an image exists and analyses
+ * it on its own schedule. A release nobody has replicated has no findings, and
+ * the honest reason is not "the scanner found nothing" but "the scanner has
+ * never been asked". Without this the two are the same empty table.
+ */
+export interface SecurityRegistration {
+  provider: string
+  label: string
+  state: RegistrationState
+  stateLabel: string
+  error?: string
+
+  /**
+   * `expected` is what this release wants registered, `associated` what the
+   * scanner's own grouping holds on read-back, `outstanding` the gap.
+   *
+   * `submitted` and `alreadyKnown` are both sent because a second press of the
+   * button should visibly do nothing: "submitted 0, already known 157" is how a
+   * reader sees that it ran and had nothing to do, where a silent no-op reads
+   * as a button that is broken.
+   */
+  expected: number
+  submitted: number
+  alreadyKnown: number
+  associated: number
+  outstanding: number
+  /**
+   * How many the scanner had finished analysing when this was last written.
+   *
+   * The answer to "why has the sync not found anything yet". It goes stale
+   * immediately and that is fine - being an hour old does not make it a wrong
+   * answer to that question.
+   */
+  analysed: number
+
+  /** The scanner's own names for this release, and where to open it there. */
+  application?: string
+  version?: string
+  url?: string
+
+  registeredAt?: string
+  /** A `registering` row whose holder stopped: nothing is running. */
+  stalled?: boolean
+
+  /** Whether to offer the button, and why not. */
+  canReplicate: boolean
+  reason?: string
+}
+
+/** What one replication did. */
+export interface ReplicateSecurityResponse {
+  product: string
+  package: string
+  registrations: SecurityRegistration[]
+  log?: SecurityLogEntry[]
 }
 
 export interface SecurityChange {

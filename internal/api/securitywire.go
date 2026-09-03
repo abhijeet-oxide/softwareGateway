@@ -758,3 +758,77 @@ func toAPIFreshness(f security.Freshness, syncedAt *time.Time) v1.SecurityFreshn
 	}
 	return out
 }
+
+// toAPIRegistration renders one scanner's stored registration state.
+//
+// The empty row is a real answer and the most important one: a release nobody
+// has replicated has state "" and CanReplicate true, which is exactly the
+// notice and the button the page draws.
+func toAPIRegistration(
+	provider string, row store.RegistrationRow, target securityTarget,
+) v1.SecurityRegistration {
+	out := v1.SecurityRegistration{
+		Provider:     provider,
+		Label:        providerLabel(provider),
+		State:        string(row.State),
+		StateLabel:   row.State.Label(),
+		Error:        row.Error,
+		Expected:     row.Expected,
+		Submitted:    row.Submitted,
+		AlreadyKnown: row.AlreadyKnown,
+		Associated:   row.Associated,
+		Outstanding:  row.Outstanding(),
+		Analysed:     row.Analysed,
+		Application:  row.Application,
+		Version:      row.Version,
+		URL:          row.URL,
+		Stalled:      row.Stalled(store.StaleRegistrationAfter),
+		CanReplicate: target.Available,
+		Reason:       target.Reason,
+	}
+	if row.RegisteredAt != nil {
+		out.RegisteredAt = row.RegisteredAt.UTC().Format(rfc3339)
+	}
+	// A stalled claim is not a running replication, and a button that refused
+	// because of one would leave a release un-replicable until a sweep noticed.
+	if out.Stalled {
+		out.State = string(security.RegistrationFailed)
+		out.StateLabel = security.RegistrationFailed.Label()
+		if out.Error == "" {
+			out.Error = "The replication was interrupted. Run it again."
+		}
+	}
+	return out
+}
+
+// toAPIRegistrationFrom renders a registration that has JUST run, which carries
+// its own counts rather than the stored row's.
+func toAPIRegistrationFrom(
+	reg security.Registration, target securityTarget,
+) v1.SecurityRegistration {
+	out := v1.SecurityRegistration{
+		Provider:     reg.Provider,
+		Label:        providerLabel(reg.Provider),
+		State:        string(reg.State),
+		StateLabel:   reg.State.Label(),
+		Error:        reg.Message,
+		Expected:     reg.Expected,
+		Submitted:    reg.Submitted,
+		AlreadyKnown: reg.AlreadyKnown,
+		Associated:   reg.Associated,
+		Outstanding:  reg.Outstanding(),
+		Analysed:     reg.Analysed,
+		Application:  reg.Application,
+		Version:      reg.Version,
+		URL:          reg.URL,
+		CanReplicate: target.Available,
+		Reason:       target.Reason,
+	}
+	if !reg.At.IsZero() {
+		out.RegisteredAt = reg.At.UTC().Format(rfc3339)
+	}
+	if out.Error == "" && len(reg.Failed) > 0 {
+		out.Error = reg.FirstFailure()
+	}
+	return out
+}

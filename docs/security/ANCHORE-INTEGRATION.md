@@ -36,7 +36,7 @@ uploads anything to it.
 |---|---|---|
 | Reach the internal registry a release lands in | **In Anchore**: `POST /v2/registries` | Every image reports "Anchore would not accept this image for analysis" |
 | Credentials for that registry | **In Anchore**, same place | Same |
-| An account whose credential this platform holds | `coordinator.security.anchore.secretName` | "Anchore refused the credential" |
+| An account whose credential this platform holds | `coordinator.security.anchore.secretName`, or `spec.anchore.credentialsRef` on the product | "Anchore refused the credential" |
 | Permission to create Applications and Versions | Anchore RBAC | Findings still arrive; the release is not grouped, and the transcript says so |
 
 **Anchore does not need to reach the vendor's registry.** It analyses the
@@ -47,7 +47,8 @@ uploads anything to it.
 
 ## 3. Configuration
 
-Two places, and only one of them is per product.
+Two places. The deployment says where Anchore is; a product says whether to use
+it - and, if it has to, which Anchore instead.
 
 ### The deployment (system configuration)
 
@@ -65,8 +66,6 @@ Everything else has a default that works:
 |---|---|---|
 | `concurrency` | 12 | Anchore rate-limits (lower), or a first sync of a 200-image release is slow and Anchore has headroom (raise) |
 | `requestTimeout` | 60s | A single image's vulnerability list is large and times out |
-| `analysisWait` | 10m | Analysis routinely takes longer here (raise), or you submit at transfer time and sync later (set negative to skip waiting) |
-| `pollInterval` | 15s | Rarely |
 | `submit` | true | Your own pipeline registers images with Anchore and you want this platform to read rather than add |
 | `sbomFormat` | `spdx-json` | Your tooling reads CycloneDX |
 | `account` | (empty) | An admin credential must act as another account |
@@ -102,31 +101,106 @@ Setting it on a **source** is a warning: it asks your Anchore to reach a
 vendor's registry across the internet, with a credential it does not have, for
 images already sitting in your own.
 
+### The product, when it must not use the deployment's Anchore
+
+A product under a customer's own contract, one under evaluation on a staging
+Anchore, or one whose findings belong to another business unit's account:
+
+```yaml
+spec:
+  anchore:
+    endpoint: https://anchore.customer.example.com
+    credentialsRef:
+      secretName: customer-anchore     # <secretsDir>/customer-anchore/{username,password}
+      usernameKey: username            # optional, this is the default
+      passwordKey: password            # optional; an API key goes here
+    account: apm0014228                # optional; sent as x-anchore-account
+  targets:
+    - name: internal-jfrog
+      # ...
+      anchoreEnabled: true
+```
+
+**The same credential mechanism as a source or a target** - a `credentialsRef`
+naming a projected secret, same resolver, same `usernameKey` / `passwordKey`
+defaults. If you can point a target at a registry secret you already know how to
+point a product at an Anchore.
+
+**Every field is optional; absent means the deployment's.** Only the account
+differs? Write the one line. Different Anchore entirely? Write the endpoint and
+the credential.
+
+**An endpoint without a `credentialsRef` is rejected**, at validation and again
+when the provider is built. Inheriting the deployment's credential across a
+change of host would send your Anchore password to whatever address a product
+document names.
+
+This block overrides **which** Anchore, never **whether**. That is still
+`anchoreEnabled` on a repository.
+
 ---
 
-## 4. What a sync does
+## 4. Replicate, then sync
 
-Press **Sync vulnerabilities** on a release, or **Sync Anchore only** from the
-menu beside it.
+Two buttons, two acts, and the split is the point. Anchore analyses on **its own
+schedule** - minutes for a small image, hours behind a busy queue, and nothing
+in its API promises a bound. So nothing here waits for analysis, and there is no
+knob that would make it.
+
+### Replicate (seconds)
+
+**Replicate to Anchore**, on the release's Security tab. Anchore has to be *told*
+an image exists; nothing else in this platform does that.
 
 ```
 1  Take stock       one request: what does Anchore already know about these 157 images?
 2  Submit           only the images it has never been told about, BY DIGEST
-3  Wait             up to analysisWait, saying how many are left
-4  Read             one request per analysed image, in parallel
-5  Group            find-or-create Application + Version, associate, READ BACK
+3  Group            find-or-create Application + Version, associate EVERY image
+                    Anchore holds, READ BACK
 ```
 
-**A first sync of a release is mostly step 3.** Anchore analyses a typical
-container image in one to three minutes and works through a release in parallel,
-but a 157-image release submitted from cold will not all be finished inside ten
-minutes. That is not a failure: the sync records what did finish, reports the
-rest as still analysing, and **pressing Sync again picks them up**. The
-transcript says exactly this.
+It finishes in seconds whatever Anchore's queue is doing, and the release is
+visible in Anchore immediately - as an Application and Version holding its
+images, with analysis running behind it.
+
+**It is idempotent, so press it again freely.** Images Anchore already holds are
+not submitted twice, a duplicate application is treated as the one that already
+exists, and the associations are read back rather than assumed. The common
+second press - a release whose remaining images have since landed - submits
+nothing and says so: *"0 submitted, 157 already known."*
+
+### Sync (reads, never submits)
+
+**Sync vulnerabilities** on a release, or **Sync Anchore only** from the menu
+beside it, collects what has finished. It does *not* submit anything: an image
+Anchore has no record of is reported as **"Anchore has no record of this image.
+Replicate this release to Anchore to submit it for analysis."** and the Security
+tab offers the button that fixes it.
+
+An image still being analysed is reported as exactly that, and pressing Sync
+again later picks it up. Nothing is lost by syncing early.
 
 **A re-sync is cheap.** Stored answers are keyed by image and releases of one
 product share nearly all of theirs, so a sync asks about the images it has no
 answer for or whose answer is past `coordinator.security.maxAge`.
+
+### What the Security tab says when replication has not happened
+
+An unreplicated release and a clean release both render as an empty findings
+table, and that is the single confusion this whole integration guards against.
+So the tab says which, above everything else:
+
+| State | What the tab shows |
+|---|---|
+| Never replicated | *"This release has not been replicated to Anchore"*, and the button |
+| Replicating | *"Replicating this release to Anchore"* |
+| Interrupted | The Coordinator running it stopped; run it again, nothing is submitted twice |
+| Failed | Anchore's own error text, and the button |
+| Partial | *"N of this release's M images are not in Anchore"* - the ordinary state of a release still being transferred |
+| Replicated | One quiet line: when, how many images, how many analysed so far, and a link into Anchore |
+
+Today this is a user action, like Sync, because it costs somebody else's compute
+and belongs to a person who decided this release matters.
 
 ### The grouping, and why the read-back matters
 
@@ -137,9 +211,13 @@ an application version holding three quarters of a release reports three
 quarters of the truth while reading like all of it, and the transcript says
 which it is.
 
-Images Anchore has not finished analysing are **not** associated. They have no
-vulnerabilities, so associating them would report the version as covering an
-image it cannot speak for. The next sync picks them up.
+Images Anchore has not finished analysing **are** associated, and that is
+deliberate. The alternative is an application version that appears in Anchore
+only once the slowest image in the release has finished - which is exactly when
+somebody goes looking for the release and does not find it. A version holding
+submitted-but-unanalysed images is the honest picture of a release in flight; an
+absent version is not. The counts on the Security tab say how many of them have
+finished.
 
 Images somebody else put in that version are **left alone** and reported, not
 removed. Deleting them would be this platform deleting somebody else's work.
@@ -156,11 +234,11 @@ that names the fix.
 | **Anchore refused the credential** | 401/403 | Check the secret and that the account can read images |
 | **Anchore is not answering at this address** | 404 on `/v2/account` | The endpoint is the UI host rather than the API host, or the deployment is not Anchore Enterprise 5.x |
 | **Anchore would not accept N images for analysis** | The submission failed | Anchore has no registry configured for the host this release landed in |
-| **Anchore has no record of this image** | Never submitted | `submit: false`, or the submission failed above |
+| **Anchore has no record of this image** | Never replicated | Press **Replicate to Anchore** on the Security tab. If it was replicated, `submit: false` or the submission failed above |
 | **Anchore has not finished analysing this image yet** | Still working | Sync again in a few minutes |
 | **Anchore could not analyse this image** | Terminal failure inside Anchore | Look at the image in Anchore; it will not fix itself by waiting |
-| **This image is not in the registry Anchore pulls from** | The release has not been replicated | Transfer the release, then sync |
-| **Anchore is still analysing N images after 10m** | The wait ran out | Sync again; nothing is lost |
+| **This image is not in the registry Anchore pulls from** | The image has not been transferred yet | Transfer the release, then replicate |
+| **Anchore is still analysing N images** | Analysis runs on Anchore's schedule; nothing waits for it | Sync again later; nothing is lost |
 | **Anchore would not group them under an application version** | RBAC, or a duplicate application name | Findings are unaffected; check Anchore's Applications |
 | **N applications are named X** | Two applications share a name | Resolve the duplicate in Anchore. This platform refuses to guess: picking one silently would split a product's releases across two applications |
 
@@ -252,7 +330,7 @@ POST /v2/applications                                        create it
 GET  /v2/applications/{id}/versions                          find the Version
 POST /v2/applications/{id}/versions                          create it
 GET  /v2/applications/{id}/versions/{v}/artifacts            READ BACK the associations
-POST /v2/applications/{id}/versions/{v}/artifacts            associate an analysed image
+POST /v2/applications/{id}/versions/{v}/artifacts            associate an image Anchore holds
 GET  /v2/applications/{id}/versions/{v}/vulnerabilities      the release-level report
 ```
 

@@ -672,7 +672,8 @@ which starts the whole retrieval again.
 
 | Method | Path | Answers |
 |---|---|---|
-| `POST` | `/products/{p}/packages/{pkg}:syncSecurity` | **The only route that talks to a scanner.** Claims the release and returns immediately |
+| `POST` | `/products/{p}/packages/{pkg}:syncSecurity` | **Reads** from every configured scanner. Claims the release and returns immediately |
+| `POST` | `/products/{p}/packages/{pkg}:replicateSecurity` | **Tells** a scanner this release exists (§12.4). Submits its images and creates the application version. Idempotent, and synchronous because it is seconds |
 | `POST` | `/products/{p}/packages/{pkg}:cancelSecuritySync` | Releases the claim, wherever the sync is running. The release keeps its last completed result |
 | `GET` | `/products/{p}/packages/{pkg}/security` | This release's stored posture and its sync state. `?detail=true` for findings |
 | `POST` | `/products/{p}/packages/{pkg}:compareSecurity` | How the posture changed to `against`, from both sides' stored data |
@@ -685,6 +686,9 @@ which starts the whole retrieval again.
 
 Every route is registered **only when the dependency exists**, so a deployment
 with no scanner answers an honest 404 rather than a route that always fails.
+`:replicateSecurity` is offered only for scanners that implement `Registrar`, so
+a release scanned by Xray alone never grows a Replicate button for a scanner
+that has nothing to be told.
 
 Search reads the index a sync wrote and **never the scanner**. It therefore
 answers "is this CVE in a release somebody has synced", not "is it anywhere in
@@ -937,8 +941,6 @@ coordinator:
       secretName: anchore-api                  # <secretsDir>/anchore-api/{username,password}
       concurrency: 12
       requestTimeout: 60s
-      analysisWait: 10m
-      pollInterval: 15s
       submit: true
       sbomFormat: spdx-json
 ```
@@ -973,38 +975,124 @@ that - but almost always the wrong line, and its failure reads as "Anchore has
 no record of this image", which sends the reader to look at Anchore rather than
 at the four characters that caused it.
 
-### 12.3 What the sync does, in order
+### 12.3 Two levels: the deployment's Anchore, and the product's
+
+The stanza above is a **default**, not the only answer. A product under a
+customer's own contract goes to that customer's Anchore; a product under
+evaluation goes to a staging one; a product owned by another business unit goes
+to the same Anchore under a different account, so its findings are visible to
+them and not to everybody. None of those is exotic and all of them are
+impossible with a single deployment-wide address.
+
+```yaml
+spec:
+  anchore:
+    endpoint: https://anchore.customer.example.com
+    credentialsRef:
+      secretName: customer-anchore     # <secretsDir>/customer-anchore/{username,password}
+      usernameKey: username            # optional, this is the default
+      passwordKey: password            # optional; an API key goes here
+    account: apm0014228                # optional; sent as x-anchore-account
+```
+
+**It is the same credential mechanism as a source or a target**, deliberately
+and to the letter: a `credentialsRef` naming a projected secret, resolved by the
+same `SecretResolver`, with the same `usernameKey` / `passwordKey` defaults. A
+second credential model for a third system is a second thing to rotate, a second
+thing to get wrong and a second thing an operator has to learn - and the one
+they already know works.
+
+**Every field is optional and absent means "the deployment's."** A product that
+only needs a different account writes one line. A product that needs a different
+Anchore writes an endpoint and a credential. Nothing has to be restated to
+change one thing, which is the difference between an override and a second copy
+of the configuration.
+
+**An endpoint with no credential of its own is a validation ERROR**, and it is
+the one rule here worth stating twice. Falling back field by field is right for
+the account and right for the endpoint; applied to the credential it would send
+this deployment's Anchore password to a host somebody named in a product
+document. `validateAnchore` refuses it, and `anchoreFor` refuses it again when
+the provider is built - because a document that predates the rule must not
+become a credential leak on the next Coordinator restart.
+
+**It overrides WHICH Anchore, never WHETHER.** Whether Anchore looks at a
+release is still `anchoreEnabled` on a repository, for the reason §12.2 gives. A
+product with `spec.anchore` and no `anchoreEnabled` anywhere has said where to
+send nothing.
+
+### 12.4 Replicating and syncing are two acts
+
+Anchore analyses on **its own schedule**: minutes for a small image, hours behind
+a busy queue, and no API in it promises a bound. Any design that makes one
+operation span "submit" and "read the results" therefore has a duration nobody
+can predict and a failure mode - the queue is busy today - indistinguishable
+from a broken integration. There is no `analysisWait` knob for the same reason
+there is no knob for how long somebody else's CI takes.
+
+So they are separate acts, and that separation is the load-bearing decision of
+this section.
+
+**Replicate** (`Registrar.Register`; one press, seconds):
 
 1. **Take stock.** One request asks Anchore what it already knows about every
-   image in the release. A re-synced release is overwhelmingly images that are
-   already analysed, and this is what makes that case cost one request rather
-   than one per image.
+   image in the release. A re-replicated release is overwhelmingly images
+   Anchore already holds, and this is what makes that case cost one request
+   rather than one per image.
 2. **Submit what is missing** - only images Anchore has never been told about.
    By **digest**, always: the pull string is `<registry>/<repo>@<digest>` and
    the tag rides alongside as metadata. Submitting by tag would let Anchore
    analyse whatever the tag points at when it gets round to pulling, so a vendor
    who re-pushes between the transfer and the analysis would have this platform
-   reporting one release's findings against another release's bytes.
-   `force` is deliberately never sent: it discards the existing analysis and
-   starts again, for bytes that cannot have changed.
-3. **Wait**, up to `analysisWait`, saying what it is waiting for. A first sync
-   is entirely this phase. It is bounded because the wait holds the release's
-   sync claim - waiting out somebody's Anchore backlog would block every later
-   sync of that release for an hour. Past the bound the sync records what
-   finished, labels the rest as still analysing, and says so.
-4. **Read**, in parallel, per image. The raw body rides out on the request that
-   was going to happen anyway (§11).
-5. **Group**: find-or-create the Application (the product's name) and the
-   Version (the release's), associate the analysed images, and **read the
-   associations back**. A successful write is not evidence of the final state,
-   and an application version holding three quarters of a release reports three
-   quarters of the truth while reading like all of it.
+   reporting one release's findings against another release's bytes. `force` is
+   deliberately never sent: it discards the existing analysis and starts again,
+   for bytes that cannot have changed.
+3. **Group, immediately.** Find-or-create the Application (the product's name)
+   and the Version (the release's), associate **every image Anchore has a record
+   of** - not only the analysed ones - and **read the associations back**. A
+   successful write is not evidence of the final state, and an application
+   version holding three quarters of a release reports three quarters of the
+   truth while reading like all of it.
 
-Grouping is last because it associates only images that reached `analyzed`, and
-because its failure costs the least: the findings are already in hand, so every
-failure in that phase is a note in the transcript and nothing more.
+Associating before analysis finishes is a departure from the obvious reading of
+Anchore's own guidance, and it is deliberate. The alternative is an application
+version that appears in Anchore only once the slowest image in the release has
+finished - which is precisely when somebody goes looking for the release and
+does not find it. A version holding submitted-but-unanalysed images is the
+honest picture of a release in flight; an absent version is not.
 
-### 12.4 The two quirks that would have been silent bugs
+**Sync** (`Provider.Scan`, the same button the Xray sync uses) **never submits**.
+It takes stock and reads, per image, in parallel; the raw body rides out on the
+request that was going to happen anyway (§11). An image Anchore has no record of
+is reported as exactly that - "Anchore has no record of this image. Replicate
+this release to Anchore to submit it for analysis." - rather than quietly
+submitted by something the reader asked to be a read.
+
+**Every step is idempotent**, which is what lets the button be pressed again
+without thought. Submitting an image Anchore holds is a no-op it reports as
+already-known; find-or-create treats a conflict as success; the read-back
+reconciles whatever actually happened. The common second press - a release whose
+remaining images have since landed - legitimately submits nothing, and the
+interface says "0 submitted, 157 already known" rather than printing success
+over a run that did nothing.
+
+**The registration state is stored per (release, scanner)** in
+`security_registrations`, because the interface has to be able to tell "Anchore
+was never told about this release" from "Anchore was told and has not finished".
+Both render as an empty findings table, and that single ambiguity is the failure
+this whole feature exists to prevent: an unreplicated release reading as a clean
+one. The Security tab therefore says which, above everything else, with the
+button that resolves it. A `failed` row keeps the counts of the last good run,
+so a release replicated last week whose Anchore is unreachable today still shows
+what it holds.
+
+Today Replicate is a **user action** from the release's Security tab, beside
+Sync, for the reason Sync is: it costs somebody else's compute and belongs to a
+person who has decided this release matters. Automating it at transfer time is a
+scheduling question layered on top of this rather than a different mechanism -
+the operation is already idempotent and already records its own state.
+
+### 12.5 The two quirks that would have been silent bugs
 
 **`fix` is the literal string `"None"`.** Not an empty string, not a null. Read
 naively, every unfixable finding in a release arrives with a fixed version
@@ -1152,10 +1240,10 @@ sheet in the workbook carries the full set.
 
 `Service.Postures` asks every configured scanner **concurrently** - they are
 independent hosts with independent rate limits, and asking them in sequence
-makes a sync the sum of their times rather than the longest of them. On a first
-sync that is the difference between ten minutes and twenty, because Anchore's
-phase is dominated by waiting for analysis that is happening whether we watch it
-or not.
+makes a sync the sum of their times rather than the longest of them. Anchore
+answers per image where Xray answers per batch of fifty, so on a large release
+its phase is several times the length of Xray's and the sequential version of
+this is the one a reader watches a spinner through.
 
 They share one progress reporter, deliberately: a reader wants one transcript,
 not two interleaved ones to demultiplex. Each provider names itself in its own
@@ -1169,9 +1257,10 @@ exists to keep visible.
 
 A sync can be narrowed to one scanner (`{"provider": "anchore"}`), and the
 interface offers that as a menu item beside the Sync button. The scanners fail
-and finish at very different speeds - Xray answers about a release in tens of
-seconds, Anchore's first sync waits minutes for analysis it does not control -
-so refreshing one without the other is worth offering. A name the release has no
+and finish at very different speeds - Xray answers about a whole release in tens
+of seconds, Anchore takes one request per image - and Anchore is the one worth
+re-reading on its own, because its analysis finishes on its own schedule long
+after the replication that started it. A name the release has no
 scanner for is **ignored rather than refused**: a stale browser tab must not
 turn a sync into a 400, and syncing everything is never the wrong answer to
 "sync this".

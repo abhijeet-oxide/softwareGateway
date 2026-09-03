@@ -88,6 +88,7 @@ func (p *Product) Validate(resolver *SecretResolver) error {
 	errs = append(errs, p.validateVerification(resolver)...)
 	errs = append(errs, p.validateNotifications(resolver)...)
 	errs = append(errs, validateNetwork("spec.network", &p.Spec.Network, resolver)...)
+	errs = append(errs, validateAnchore("spec.anchore", p.Spec.Anchore, resolver)...)
 	errs = append(errs, p.validateEnablement()...)
 
 	return errs.ErrOrNil()
@@ -967,6 +968,60 @@ func validateJFrogPromotion(path string, t Target) Errors {
 		}
 	}
 
+	return errs
+}
+
+// validateAnchore checks a product's override of the deployment's Anchore.
+//
+// # The one rule that is not cosmetic
+//
+// An endpoint of its own with NO credential of its own is refused. The
+// deployment's credential would otherwise be sent to whatever host the product
+// names - a credential leak written in four lines of YAML, applied without
+// complaint, and discovered when somebody reads another organization's Anchore
+// access log. It is the same class of mistake `xrayEnabled` on a non-JFrog
+// repository makes and it is worse, so it fails validation rather than warning.
+//
+// The reverse - a credential with no endpoint - is fine and is a real
+// configuration: a product using a different Anchore ACCOUNT, or a different
+// service account, on the deployment's own Anchore.
+func validateAnchore(path string, a *Anchore, resolver *SecretResolver) Errors {
+	if a == nil {
+		return nil
+	}
+	var errs Errors
+
+	if a.Endpoint != "" {
+		switch u, err := url.Parse(a.Endpoint); {
+		case err != nil:
+			errs = append(errs, Error{path + ".endpoint",
+				fmt.Sprintf("%q is not a valid URL", a.Endpoint), ""})
+		case u.Scheme != "http" && u.Scheme != "https":
+			errs = append(errs, Error{path + ".endpoint", "must start with https:// or http://",
+				"this is the Anchore API base URL, e.g. https://anchore.example.com"})
+		case u.Host == "":
+			errs = append(errs, Error{path + ".endpoint", "has no host", ""})
+		}
+
+		if a.CredentialsRef == nil {
+			errs = append(errs, Error{path + ".credentialsRef",
+				"required when spec.anchore.endpoint names a different Anchore",
+				"without it this product would send the deployment's Anchore credential to " +
+					a.Endpoint})
+		}
+	}
+
+	if a.Endpoint == "" && a.CredentialsRef == nil && a.Account == "" {
+		// An empty block is not an error, but it is not a configuration
+		// either: it reads as an override and overrides nothing, so somebody
+		// editing this document later will believe it is doing something.
+		errs = append(errs, Error{path,
+			"is empty, so it overrides nothing",
+			"set endpoint, credentialsRef or account - or remove the block to use the " +
+				"deployment's Anchore"})
+	}
+
+	errs = append(errs, validateCredentialsRef(path+".credentialsRef", a.CredentialsRef, resolver)...)
 	return errs
 }
 

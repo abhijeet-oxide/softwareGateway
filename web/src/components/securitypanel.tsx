@@ -11,7 +11,7 @@ import { Table as DataTable } from '../tablekit'
 import { CopyOutlined, DownloadOutlined, ExportOutlined, LoadingOutlined } from '../icons'
 import {
   packageSecurityExportUrl, useCancelPackageSecuritySync, usePackageSecurity,
-  useSecurityDocument, useSyncPackageSecurity,
+  useReplicatePackageSecurity, useSecurityDocument, useSyncPackageSecurity,
 } from '../api/queries'
 import { download } from '../api/client'
 import { CodeBlock } from './filecontent'
@@ -28,6 +28,7 @@ import {
   EpssText, KevAbsence, KevBanner, kevColour, kevSegmentLabel, KevTag,
 } from './securitykev'
 import { SourceComparisonPanel, SourceComparisonPending } from './securitysourcepanel'
+import { ReplicationNotice } from './securityreplicate'
 import type { SourceFilter } from './securitysources'
 import {
   ComponentCell, CveCell, DescriptionCell, FindingsEmpty, FixCell, ScanStatusTag,
@@ -65,7 +66,17 @@ export function SecurityTab({ product, reference, repository }: {
   const security = usePackageSecurity(product, reference, { repository, detail: true })
   const sync = useSyncPackageSecurity()
   const cancel = useCancelPackageSecuritySync()
+  const replicate = useReplicatePackageSecurity()
   const data = security.data
+
+  /*
+   * WHICH scanner is being replicated, not merely THAT one is.
+   *
+   * The notice draws one banner per scanner that needs telling, and a shared
+   * `isPending` would spin every button on the page for one press. There is one
+   * such scanner today; there will not be for long.
+   */
+  const [replicating, setReplicating] = useState<string | undefined>()
 
   /*
    * The view lives up here rather than inside the tables, because the banner at
@@ -144,6 +155,47 @@ export function SecurityTab({ product, reference, repository }: {
         void security.refetch()
       },
       onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be stopped.'),
+    })
+  }
+
+  /*
+   * Telling a scanner this release exists.
+   *
+   * Deliberately a SEPARATE act from syncing, and the message says what it did
+   * rather than that it succeeded. The second press of this button is the
+   * common one - a release whose remaining images have since landed - and it
+   * legitimately submits nothing at all. "Replicated" over a run that did
+   * nothing reads as a button that is broken; "0 submitted, 157 already known"
+   * reads as the idempotent operation it is.
+   */
+  const startReplicate = (provider: string) => {
+    setReplicating(provider)
+    replicate.mutate({ product, ref: reference, repository, provider }, {
+      onSuccess: (res) => {
+        const r = res.registrations.find((x) => x.provider === provider) ?? res.registrations[0]
+        if (!r) {
+          message.info('Nothing to replicate for this release.')
+        } else if (r.state === 'failed') {
+          message.error(r.error || `This release could not be replicated to ${r.label}.`)
+        } else {
+          const done = r.submitted > 0
+            ? `${r.submitted.toLocaleString()} images submitted for analysis`
+            : `no new images to submit - ${r.label} already held all `
+              + `${r.alreadyKnown.toLocaleString()}`
+          message.info(r.outstanding > 0
+            ? `${r.label}: ${done}. ${r.outstanding.toLocaleString()} still outstanding.`
+            // Analysis is the long part and it has not started finishing yet,
+            // so promising results would be promising something this press did
+            // not do.
+            : `${r.label}: ${done}. Analysis runs on ${r.label}'s own schedule; `
+              + 'sync this release to collect the results.')
+        }
+        void security.refetch()
+      },
+      onError: (e) => message.error(e instanceof Error
+        ? e.message
+        : 'This release could not be replicated.'),
+      onSettled: () => setReplicating(undefined),
     })
   }
 
@@ -280,6 +332,25 @@ export function SecurityTab({ product, reference, repository }: {
               problemCount={problemCount}
             />
           )}
+
+      {/*
+        BEFORE the sync offer, because replicating comes before syncing.
+
+        A release nobody has told Anchore about will sync perfectly and report
+        nothing from it, and the reader will read that empty half of the page as
+        a clean one. The order on screen is the order of the two acts: tell the
+        scanner it exists, then collect what it found.
+
+        Outside the `state === 'synced'` block below on purpose - the release
+        this matters most for is the one that has never been synced at all.
+      */}
+      {!syncing && (
+        <ReplicationNotice
+          registrations={data.registrations}
+          onReplicate={startReplicate}
+          pending={replicating}
+        />
+      )}
 
       {!syncing && data.sync.state === '' && data.sync.canSync && (
         <NeverSynced onSync={startSync} pending={sync.isPending} />

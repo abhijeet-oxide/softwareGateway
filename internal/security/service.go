@@ -174,7 +174,11 @@ type Service struct {
 	// they are retrieved, used, and thrown away - correct for a deployment
 	// without storage, and an export that costs a fresh fetch every time.
 	documents DocumentStore
-	log       *slog.Logger
+	// registrations records which releases have been registered with a scanner
+	// that has to be told about them. Nil is legal and means the Replicate path
+	// is not available - correct for a deployment with no such scanner.
+	registrations Registrations
+	log           *slog.Logger
 }
 
 // NewService builds the service. A nil cache is legal and means every read goes

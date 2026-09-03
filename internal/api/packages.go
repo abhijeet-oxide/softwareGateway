@@ -1116,6 +1116,7 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 	known := []string{
 		packageVerbInspect, packageVerbCancelAnalysis, packageVerbCompare,
 		packageVerbCompareSecurity, packageVerbSyncSecurity, packageVerbCancelSecurity,
+		packageVerbReplicateSecurity,
 	}
 	if !slices.Contains(known, verb) {
 		Error(w, r, v1.CodeInvalidArgument, fmt.Sprintf(
@@ -1142,6 +1143,8 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 		s.handleSyncPackageSecurity(w, r)
 	case packageVerbCancelSecurity:
 		s.handleCancelPackageSecuritySync(w, r)
+	case packageVerbReplicateSecurity:
+		s.handleReplicatePackageSecurity(w, r)
 	case packageVerbCancelAnalysis:
 		s.handleCancelAnalysis(w, r)
 	default:

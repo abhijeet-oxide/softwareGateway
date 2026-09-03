@@ -177,14 +177,12 @@ func newProvider(t *testing.T, f *fakeAnchore, mutate func(*Settings)) *Provider
 	t.Helper()
 	srv := f.server(t)
 	settings := Settings{
-		Enabled:      true,
-		Registry:     "internal.example.com",
-		Repository:   "vendor/app",
-		Grouping:     true,
-		Submit:       true,
-		Concurrency:  4,
-		AnalysisWait: 2 * time.Second,
-		PollInterval: 10 * time.Millisecond,
+		Enabled:     true,
+		Registry:    "internal.example.com",
+		Repository:  "vendor/app",
+		Grouping:    true,
+		Submit:      true,
+		Concurrency: 4,
 	}
 	if mutate != nil {
 		mutate(&settings)
@@ -212,6 +210,14 @@ func scanOptions() security.ScanOptions {
 	}
 }
 
+// registerOptions is a registration of a named release, which is what the
+// Replicate button makes.
+func registerOptions() security.RegisterOptions {
+	return security.RegisterOptions{
+		Release: security.ReleaseRef{Product: "cfx-5000", Version: "25.7.2131", Label: "cfx-5000 25.7.2131"},
+	}
+}
+
 func imageRef(name, digest string) security.ArtifactRef {
 	return security.ArtifactRef{
 		Name: name, Tag: "1.0", Digest: digest,
@@ -219,35 +225,159 @@ func imageRef(name, digest string) security.ArtifactRef {
 	}
 }
 
-// The whole point of the integration: an image Anchore has never heard of is
-// submitted, waited for, read, and grouped - in one sync.
-func TestFirstSyncSubmitsWaitsAndReads(t *testing.T) {
+// THE TWO ACTS, and the seam between them.
+//
+// Register tells Anchore the release exists and returns; it does not wait for
+// analysis, and it associates every submitted image immediately so the release
+// is legible in Anchore's own interface straight away. Scan reads whatever has
+// finished. Neither blocks on the other.
+func TestRegisterSubmitsAndGroupsWithoutWaiting(t *testing.T) {
 	f := newFake()
-	f.analyzeAfter["sha256:aaa"] = 1
-	f.vulns["sha256:aaa"] = kevResponse
+	// Deliberately still analysing. The whole point is that this does not stop
+	// the release being grouped.
+	f.analyzeAfter["sha256:aaa"] = 1000
 
 	p := newProvider(t, f, nil)
+	refs := []security.ArtifactRef{imageRef("app", "sha256:aaa")}
+
+	reg, err := p.Register(context.Background(), refs, registerOptions())
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if reg.Submitted != 1 {
+		t.Errorf("submitted = %d, want the one unknown image", reg.Submitted)
+	}
+	if !f.associated["sha256:aaa"] {
+		t.Error("an image still analysing was not associated - the release is invisible in Anchore until it finishes")
+	}
+	if reg.State != security.RegistrationComplete {
+		t.Errorf("state = %q, want registered", reg.State)
+	}
+	if reg.Application == "" || reg.Version == "" {
+		t.Errorf("the registration did not record the application version: %+v", reg)
+	}
+	// Nothing analysed yet, and the registration says so rather than pretending.
+	if reg.Analysed != 0 {
+		t.Errorf("analysed = %d, want 0 - nothing has finished", reg.Analysed)
+	}
+}
+
+// A second press of the button does nothing, and says it did nothing.
+func TestRegisterIsIdempotent(t *testing.T) {
+	f := newFake()
+	p := newProvider(t, f, nil)
+	refs := []security.ArtifactRef{imageRef("app", "sha256:aaa")}
+
+	if _, err := p.Register(context.Background(), refs, registerOptions()); err != nil {
+		t.Fatalf("first register: %v", err)
+	}
+	submittedOnce := len(f.submitted)
+
+	reg, err := p.Register(context.Background(), refs, registerOptions())
+	if err != nil {
+		t.Fatalf("second register: %v", err)
+	}
+	if len(f.submitted) != submittedOnce {
+		t.Errorf("the second press resubmitted: %v", f.submitted)
+	}
+	if reg.Submitted != 0 || reg.AlreadyKnown != 1 {
+		t.Errorf("a no-op press reported submitted=%d known=%d, want 0 and 1 - "+
+			"a silent no-op reads as a broken button", reg.Submitted, reg.AlreadyKnown)
+	}
+	if reg.State != security.RegistrationComplete {
+		t.Errorf("state = %q, want registered", reg.State)
+	}
+}
+
+// A sync NEVER submits. An image Anchore was never told about is reported as
+// such, with the remedy named - not quietly registered by a read.
+func TestScanNeverSubmits(t *testing.T) {
+	f := newFake()
+	p := newProvider(t, f, nil)
+
 	reports, err := p.Scan(context.Background(),
-		[]security.ArtifactRef{imageRef("app", "sha256:aaa")},
-		scanOptions())
+		[]security.ArtifactRef{imageRef("app", "sha256:zzz")}, scanOptions())
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if len(reports) != 1 {
-		t.Fatalf("expected one report, got %d", len(reports))
+	if len(f.submitted) != 0 {
+		t.Errorf("a read submitted an image: %v", f.submitted)
 	}
-	r := reports[0]
-	if r.Status != security.StatusScanned {
-		t.Fatalf("expected the image to be scanned, got %q (%s)", r.Status, r.Message)
+	if reports[0].Status != security.StatusNotScanned {
+		t.Errorf("status = %q, want not_scanned", reports[0].Status)
 	}
-	if len(f.submitted) != 1 {
-		t.Errorf("expected the unknown image to be submitted once, got %d submissions", len(f.submitted))
+	if reports[0].Message == "" {
+		t.Error("an unregistered image must say so")
 	}
-	if len(r.Findings) != 2 {
-		t.Fatalf("expected two findings, got %d", len(r.Findings))
+}
+
+// Register then Scan is the whole flow, and the results arrive on the read.
+func TestRegisterThenScanReadsResults(t *testing.T) {
+	f := newFake()
+	f.vulns["sha256:aaa"] = kevResponse
+
+	p := newProvider(t, f, nil)
+	refs := []security.ArtifactRef{imageRef("app", "sha256:aaa")}
+
+	if _, err := p.Register(context.Background(), refs, registerOptions()); err != nil {
+		t.Fatalf("register: %v", err)
 	}
-	if !f.associated["sha256:aaa"] {
-		t.Error("the analysed image was not associated with the application version")
+	reports, err := p.Scan(context.Background(), refs, scanOptions())
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if reports[0].Status != security.StatusScanned {
+		t.Fatalf("status = %q (%s)", reports[0].Status, reports[0].Message)
+	}
+	if len(reports[0].Findings) != 2 {
+		t.Errorf("expected two findings, got %d", len(reports[0].Findings))
+	}
+}
+
+// A release that has not been transferred has nothing for Anchore to pull, and
+// that is a transfer to run rather than anything to do with Anchore.
+func TestRegisterReportsUnreplicatedImages(t *testing.T) {
+	f := newFake()
+	p := newProvider(t, f, func(s *Settings) { s.Registry = "" })
+
+	ref := imageRef("app", "sha256:ddd")
+	ref.Registry = ""
+	reg, err := p.Register(context.Background(), []security.ArtifactRef{ref}, registerOptions())
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if reg.Expected != 0 || len(reg.Failed) != 1 {
+		t.Fatalf("expected the image to be reported unusable: %+v", reg)
+	}
+	if reg.Message == "" {
+		t.Error("a release with nothing to register must say why")
+	}
+}
+
+// RegistrationFor asks Anchore rather than trusting our own record, because our
+// record cannot know somebody deleted the application there.
+func TestRegistrationForReadsAnchore(t *testing.T) {
+	f := newFake()
+	p := newProvider(t, f, nil)
+	refs := []security.ArtifactRef{imageRef("app", "sha256:aaa")}
+
+	before, err := p.RegistrationFor(context.Background(), refs, registerOptions())
+	if err != nil {
+		t.Fatalf("registration: %v", err)
+	}
+	if before.Associated != 0 || before.State == security.RegistrationComplete {
+		t.Errorf("an unregistered release read as registered: %+v", before)
+	}
+
+	if _, err := p.Register(context.Background(), refs, registerOptions()); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	after, err := p.RegistrationFor(context.Background(), refs, registerOptions())
+	if err != nil {
+		t.Fatalf("registration: %v", err)
+	}
+	if after.Associated != 1 || after.State != security.RegistrationComplete {
+		t.Errorf("a registered release read as %+v", after)
 	}
 }
 
@@ -303,7 +433,7 @@ func TestUnanalysedImageIsNotReportedClean(t *testing.T) {
 	f.images["sha256:bbb"] = AnalysisAnalyzing
 	f.analyzeAfter["sha256:bbb"] = 1000
 
-	p := newProvider(t, f, func(s *Settings) { s.AnalysisWait = 30 * time.Millisecond })
+	p := newProvider(t, f, nil)
 	reports, err := p.Scan(context.Background(),
 		[]security.ArtifactRef{imageRef("app", "sha256:bbb")}, scanOptions())
 	if err != nil {

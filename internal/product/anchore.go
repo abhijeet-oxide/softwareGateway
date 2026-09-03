@@ -1,5 +1,7 @@
 package product
 
+import "strings"
+
 // Anchore, in one field.
 //
 // See docs/design/21-security-posture.md and docs/security/Anchore.md.
@@ -12,19 +14,23 @@ package product
 //
 // A repository already declares its registry host and its path, which is what
 // Anchore has to be told to pull. The Anchore endpoint, the credential, the
-// concurrency, the timeouts and how long a sync waits for analysis are one
-// stanza in the SYSTEM configuration (config.AnchoreConfig), stated once for
-// the deployment - because there is one Anchore in an estate, and repeating its
-// host in every product document is a set of copies that drift.
+// concurrency and the timeouts are one stanza in the SYSTEM configuration
+// (config.AnchoreConfig), stated once for the deployment - because there is one
+// Anchore in an estate, and repeating its host in every product document is a
+// set of copies that drift.
 //
-// So a product document says exactly one thing about Anchore, and it is the
-// same thing it says about Xray:
+// So the ordinary product document says exactly one thing about Anchore, and it
+// is the same thing it says about Xray:
 //
 //	targets:
 //	  - name: internal-jfrog
 //	    type: jfrog
 //	    xrayEnabled: true
 //	    anchoreEnabled: true
+//
+// The product that is NOT ordinary - one going to a customer's own Anchore, or
+// to a different account on the shared one - says which in `spec.anchore`. See
+// the Anchore type below: it overrides WHICH Anchore, and never whether.
 //
 // # Why it is on a repository rather than on the product
 //
@@ -103,4 +109,81 @@ func AnchoreEnabledAnywhere(p *Product) bool {
 		}
 	}
 	return false
+}
+
+// Anchore overrides which Anchore a product's releases are registered with.
+//
+// # Why an override exists at all, when the deployment already has one
+//
+// Because "one Anchore per estate" is true right up until it is not. A product
+// under a customer's own contract goes to that customer's Anchore; a product
+// under evaluation goes to a staging one; a product owned by another business
+// unit goes to the same Anchore under a different account, so its findings are
+// visible to them and not to everybody. None of those is exotic and all of them
+// are impossible with a single deployment-wide address.
+//
+// # Why it is the SAME mechanism as a source or a target
+//
+// `credentialsRef` naming a projected secret, resolved by the same
+// SecretResolver, with the same `usernameKey` / `passwordKey` defaults. A
+// second credential model for a third system is a second thing to rotate, a
+// second thing to get wrong, and a second thing an operator has to learn - and
+// the one they already know works.
+//
+// # Every field is optional, and absent means "the deployment's"
+//
+// A product that only needs a different ACCOUNT on the same Anchore writes one
+// line and inherits the endpoint and the credential. A product that needs a
+// different Anchore entirely writes an endpoint and a credentialsRef. Nothing
+// has to be restated to change one thing, which is the difference between an
+// override and a second copy of the configuration.
+type Anchore struct {
+	// Endpoint is the Anchore API base URL for this product's releases. Empty
+	// uses the deployment's.
+	Endpoint string `json:"endpoint,omitempty"`
+
+	// CredentialsRef names the projected secret holding the username and
+	// password (or an API key in the password key) for that Anchore.
+	//
+	// Empty uses the deployment's credential - which is right when this
+	// override exists only to change the account, and wrong the moment the
+	// endpoint changes. See validateAnchore: an endpoint of its own with no
+	// credential of its own is refused, because it would send this
+	// deployment's credential to somebody else's Anchore.
+	CredentialsRef *CredentialsRef `json:"credentialsRef,omitempty"`
+
+	// Account scopes this product's requests to one Anchore account, through
+	// the `x-anchore-account` header. Admin-only in Anchore.
+	//
+	// The lightest override there is, and the common one: one Anchore, one
+	// credential, and each business unit's products landing in their own
+	// account rather than in everybody's.
+	Account string `json:"account,omitempty"`
+}
+
+// AnchoreEndpoint is this product's Anchore address, or the deployment's.
+func (p Product) AnchoreEndpoint(deploymentDefault string) string {
+	if p.Spec.Anchore != nil && strings.TrimSpace(p.Spec.Anchore.Endpoint) != "" {
+		return strings.TrimSpace(p.Spec.Anchore.Endpoint)
+	}
+	return deploymentDefault
+}
+
+// AnchoreAccount is this product's Anchore account, or the deployment's.
+func (p Product) AnchoreAccount(deploymentDefault string) string {
+	if p.Spec.Anchore != nil && strings.TrimSpace(p.Spec.Anchore.Account) != "" {
+		return strings.TrimSpace(p.Spec.Anchore.Account)
+	}
+	return deploymentDefault
+}
+
+// AnchoreCredentials is this product's own Anchore credential, if it has one.
+//
+// Returns false when the product inherits the deployment's, which is the common
+// case and is NOT an error - the caller falls back rather than failing.
+func (p Product) AnchoreCredentials() (CredentialsRef, bool) {
+	if p.Spec.Anchore == nil || p.Spec.Anchore.CredentialsRef == nil {
+		return CredentialsRef{}, false
+	}
+	return *p.Spec.Anchore.CredentialsRef, true
 }

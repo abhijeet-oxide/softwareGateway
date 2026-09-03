@@ -38,8 +38,12 @@ type SecurityCacheSweeper struct {
 	// stuck showing "syncing" forever is a release nobody can ever sync again,
 	// which is a worse outcome than the rare duplicate a released claim allows.
 	packages *store.PackageSecurity
-	interval time.Duration
-	log      *slog.Logger
+	// registrations releases replication claims held by a process that is gone,
+	// on the same argument as `packages` above: a Coordinator killed mid-run
+	// otherwise leaves a release showing a spinner and refusing the button.
+	registrations *store.SecurityRegistrations
+	interval      time.Duration
+	log           *slog.Logger
 
 	mu     sync.Mutex
 	leader bool
@@ -65,6 +69,17 @@ func NewSecurityCacheSweeper(
 	return &SecurityCacheSweeper{
 		security: security, packages: packages, interval: interval, budget: budget, log: log,
 	}
+}
+
+// WithRegistrations attaches the replication-claim store.
+//
+// A setter rather than a sixth positional argument, because it is optional -
+// a deployment with no scanner that needs registering has none - and adding a
+// parameter to every call site to pass nil at most of them is how a constructor
+// becomes something people copy without reading.
+func (s *SecurityCacheSweeper) WithRegistrations(r *store.SecurityRegistrations) *SecurityCacheSweeper {
+	s.registrations = r
+	return s
 }
 
 // StaleSyncAfter is how long a sync claim is honoured before it is treated as
@@ -130,6 +145,18 @@ func (s *SecurityCacheSweeper) SweepOnce(ctx context.Context) error {
 			s.log.WarnContext(ctx, "security: released abandoned sync claims",
 				"releases", released,
 				"note", "a Coordinator stopped mid-sync; these can be synced again")
+		}
+	}
+
+	if s.registrations != nil {
+		released, err := s.registrations.ReleaseAbandoned(ctx)
+		if err != nil {
+			return err
+		}
+		if released > 0 {
+			s.log.WarnContext(ctx, "security: released abandoned replication claims",
+				"releases", released,
+				"note", "a Coordinator stopped mid-replication; these can be replicated again")
 		}
 	}
 

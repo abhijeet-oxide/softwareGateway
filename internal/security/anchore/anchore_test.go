@@ -347,8 +347,42 @@ func TestPullFailureIsNotReportedAsUnreachable(t *testing.T) {
 		t.Errorf("a rejection was reported as unreachable, which sends an operator to the "+
 			"wrong system: %q", why)
 	}
-	if !strings.Contains(why, "could not pull") || !strings.Contains(why, "registr") {
-		t.Errorf("the reason does not name what failed or where to fix it: %q", why)
+	// ANCHORE'S OWN SENTENCE, kept whole. The remedy is derived separately and
+	// named the registry - see registrationRemedy in internal/api - so this
+	// string stays quotable evidence rather than a paragraph.
+	if !strings.Contains(why, "cannot fetch image digest/manifest from registry") {
+		t.Errorf("the scanner's own message was not kept: %q", why)
+	}
+	if !IsPullFailure(why) {
+		t.Errorf("a pull failure was not recognised as one, so no remedy is offered: %q", why)
+	}
+}
+
+// Nothing accepted means there is nothing to attach, so the application step is
+// skipped entirely.
+//
+// It was not: a release whose every image Anchore refused still went on to find
+// or create an application and a version, which is four requests to group an
+// empty set - and a transcript that ended "application ... is ready" directly
+// under "154 of 154 images failed".
+func TestApplicationIsNotCreatedWhenNothingWasAccepted(t *testing.T) {
+	f := newFake()
+	f.rejectSubmit = "cannot fetch image digest/manifest from registry"
+	p := newProvider(t, f, nil)
+
+	reg, err := p.Register(context.Background(),
+		[]security.ArtifactRef{imageRef("app", "sha256:aaa")}, registerOptions())
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if reg.Application != "" || reg.Version != "" {
+		t.Errorf("an application was created for a release with nothing in it: %+v", reg)
+	}
+	if n := f.calls["POST /applications"]; n != 0 {
+		t.Errorf("POST /applications called %d times, want 0", n)
+	}
+	if reg.State != security.RegistrationFailed {
+		t.Errorf("state = %q, want failed", reg.State)
 	}
 }
 

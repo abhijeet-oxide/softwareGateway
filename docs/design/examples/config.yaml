@@ -1,0 +1,240 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+#  softwareGateway — site configuration
+#
+#  High-level functionality, rules and defaults. Nothing here names a registry,
+#  a repository or a credential: those belong to the product that uses them.
+#
+#  Proposed v1alpha2 shape. See docs/design/24-software-flow.md.
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: softwaregateway.io/v1alpha2
+kind: SystemConfig
+
+# Root of the mounted tree this deployment reads: <configDir>/products/*.yaml and
+# <configDir>/secrets/<name>/<key>. It is the one path that cannot itself be
+# configured relative to anything, which is why it is a key rather than derived.
+# In-cluster this is where the projected volumes land.
+configDir: /etc/softwaregateway
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  1. STAGE — the tasks a release can go through
+#
+#  The tool has no built-in notion of download, onboard or promote. It has
+#  TASKS, and every one of them is a line in this block. `from` and `to` are
+#  stage names; a product binds its targets to them with `stage:`.
+#
+#  Rename `displayName` and the button changes. Add a task and every product
+#  that has targets for its `to` stage gets another action. A product whose
+#  targets cover only `external` has one task and no promotion.
+# ═══════════════════════════════════════════════════════════════════════════════
+stage:
+  tasks:
+
+    - name: download
+      displayName: Download
+      from: source                      # `source` = the product's sources
+      to: external
+      purge: false                      # delete from `from` once `to` has it
+      verify: enforce                   # disabled | enabled | enforce
+      compliance: enforce               # disabled | enabled | enforce
+      scanners: [xray, anchore]         # run these once the release has landed
+
+    - name: onboard
+      displayName: Onboard to Lab
+      from: external
+      to: lab
+      purge: true                       # the external copy goes once lab has it
+      verify: disabled
+      compliance: enabled               # runs and reports; does not block
+      scanners: [xray, anchore]
+
+    - name: promote
+      displayName: Promote to Prod
+      from: lab
+      to: prod
+      purge: false
+      verify: disabled
+      compliance: disabled
+      scanners: [xray]
+
+# `verify` and `compliance` take the same three values:
+#
+#   disabled   the check does not run, and nothing appears on the timeline
+#   enabled    the check runs and reports; a failure is recorded and the task
+#              continues
+#   enforce    the check runs and a failure stops the task
+#
+# A check this build does not implement records "skipped" on the timeline and
+# lets the release through, whatever it is set to. `verify: enforce` above is
+# therefore inert today, and starts enforcing the day signature verification
+# ships — with no edit to this file or any product.
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  2. SCANNERS
+#
+#  Defined here, referenced by name from a task's `scanners:` list. A product
+#  may override any of it — see the product document's own `scanners:` block.
+#
+#  MOVED: Anchore was `coordinator.security.anchore`. It is an integration this
+#  deployment has, not tuning for the Coordinator process, and Xray had nowhere
+#  to live at all.
+# ═══════════════════════════════════════════════════════════════════════════════
+scanners:
+
+  anchore:
+    endpoint: https://anchore.example.com
+
+    # The SAME shape a source uses: a secret reference for the credential, and
+    # a network block for the certificate, the proxy and the timeouts. Nothing
+    # about reaching Anchore is spelled differently from reaching a registry.
+    credentialsRef:
+      secretName: anchore-api           # an API key goes in the password key
+      usernameKey: username
+      passwordKey: password
+
+    network:
+      caBundleRef:
+        secretName: internal-ca
+        key: ca.crt
+      tls:
+        insecureSkipVerify: false
+      proxy:
+        direct: true
+      timeouts:
+        connect: 10s
+        responseHeader: 30s
+
+    account: ''                         # a product may override
+    concurrency: 12                     # Anchore answers per image, not per batch
+    requestTimeout: 60s
+    submit: true                        # may this deployment register images
+    sbomFormat: spdx-json
+    maxAge: 6h                          # a sync re-asks about anything older
+    grouping:                           # how a release is named in Anchore
+      application: '{{ .Product }}'     # `-` switches grouping off
+      version: '{{ .Version }}'
+
+  xray:
+    # Xray is a second endpoint on a JFrog platform, reached with the target's
+    # own credential, CA bundle and proxy. A target sets `jfrog.endpoint` only
+    # where the docker host and the platform host differ.
+    maxAge: 6h
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  3. STORAGE — where fetched scanner responses are kept
+#
+#  The vulnerability responses, SBOMs and policy verdicts as the scanner sent
+#  them. All of it is recreatable: delete the directory and the next sync
+#  refetches. The platform is not the system of record for findings; Anchore
+#  and Xray are.
+# ═══════════════════════════════════════════════════════════════════════════════
+storage:
+  path: /var/lib/softwaregateway/scans
+  retention: 720h                       # 30d
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  4. DEFAULTS — what a product inherits unless it says otherwise
+# ═══════════════════════════════════════════════════════════════════════════════
+# THE DEFAULT every source and target uses. A source states its own
+# `concurrency:` only to override this one — for a vendor that cannot take 32.
+concurrency:
+  perRegistry: 32                       # in-flight requests AND pool size
+  requestsPerSecond: 0                  # 0 = no artificial ceiling
+
+timeouts:
+  connect: 10s
+  responseHeader: 30s
+  idleStall: 5m                         # blob transfers are bounded by silence,
+                                        # not by a total deadline
+
+retention:
+  packages: 8760h
+  transfers: 2160h
+  auditEvents: 8760h
+
+notifications:
+  # Delivery is deliberately not built. Events are written to the outbox in the
+  # same transaction as the fact they announce; this reserves the shape.
+  enabled: false
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  5. PROCESS — unchanged from today, kept as-is
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Where the Coordinator LISTENS. It serves the REST API, the web interface, and
+# the lease endpoint every Worker polls — so this is the address in
+# `worker.coordinatorEndpoint` below, seen from the other side.
+server:
+  address: ':8080'
+  shutdownGracePeriod: 15s
+
+database:
+  driver: postgres
+  dsn: ''                               # SWGW_DATABASE_DSN in the environment
+  maxOpenConns: 25
+  maxIdleConns: 5
+
+coordinator:
+  leaderElection:
+    enabled: true
+    lockID: 1
+    retryInterval: 10s
+  scheduler:
+    tickInterval: 10s
+  reaper:
+    tickInterval: 30s
+    leaseDuration: 2m
+  queue:
+    maxLeaseBatchSize: 32
+  gc:
+    tickInterval: 1h
+    batchSize: 5000
+  # The cached manifest BODIES. See the note in the plan: a cache, bounded, and
+  # exactly recoverable. Set budgetBytes to 0 to spend disk instead.
+  manifestCache:
+    budgetBytes: 536870912              # 512 MiB
+    ttl: 168h                           # a week
+    sweepInterval: 15m
+  files:
+    downloadEnabled: false              # may a reader save a file's raw bytes
+  compliance:
+    enabled: true
+    helmBinary: helm
+    kubeVersion: '1.29.0'
+    approvedRegistries:
+      - artifactory.internal.example.com
+      - quay-eu.example.com
+
+worker:
+  # Where this Worker LEASES JOBS FROM. A Worker holds no database credential
+  # and no product configuration: it polls this URL for work, streams progress
+  # back to it, and reports completion to it. It is the Coordinator's
+  # `server.address` as reachable from the Worker's network — a Service DNS
+  # name in-cluster, http://localhost:8080 in development.
+  coordinatorEndpoint: http://coordinator.softwaregateway:8080
+  address: ':8081'                      # this Worker's own health/metrics port
+  maxConcurrentJobs: 16
+  copyBufferSize: 1048576
+  heartbeatInterval: 20s
+
+observability:
+  log:
+    level: info
+    format: json
+  metrics:
+    enabled: true
+    path: /metrics
+  tracing:
+    enabled: false
+    sampleRatio: 0.05
+
+# PROCESS-WIDE X.509 relaxation, and it cannot be anywhere else. See the plan:
+# this is Go's GODEBUG mechanism, read by crypto/x509 from the process
+# environment, with no per-connection equivalent. Set it on the Coordinator AND
+# the Worker.
+tls:
+  allowNegativeSerialNumbers: false

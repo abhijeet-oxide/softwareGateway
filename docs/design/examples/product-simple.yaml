@@ -1,0 +1,40 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Product — a flow that is NOT the software flow
+#
+#  One team copies an upstream image into one internal repository. It has a
+#  target in the `external` stage and in no other, so the download task is the
+#  only one it has. The release page shows one button and never mentions
+#  onboarding or promotion — because there is nowhere for them to go, not
+#  because anything was switched off.
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: softwaregateway.io/v1alpha2
+kind: Product
+
+metadata:
+  name: openshift-cli
+  owner: platform-tools
+
+spec:
+  sources:
+    - name: upstream
+      registry: quay.io
+      repositories: ['openshift/cli']
+      anonymous: true
+      discovery:
+        interval: 6h
+
+  targets:
+    - name: internal
+      stage: external
+      registry: artifactory.internal.example.com:9444
+      repository: mirror/openshift-cli
+      type: jfrog
+      credentialsRef:
+        secretName: internal-registry
+
+  autoDownload:
+    enabled: true
+    task: download
+    rules:
+      - name: stable
+        tagPattern: '^4\.\d+$'

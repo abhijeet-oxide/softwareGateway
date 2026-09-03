@@ -30,6 +30,11 @@ const EnvPrefix = "SWGW_"
 type SystemConfig struct {
 	ConfigDir string `koanf:"configDir"`
 
+	// Stage is the task vocabulary: what a release can be moved through, and
+	// what each move checks. See stage.go - this is the block that makes
+	// download, onboard and promote configuration rather than code.
+	Stage StageConfig `koanf:"stage"`
+
 	Server        ServerConfig        `koanf:"server"`
 	Database      DatabaseConfig      `koanf:"database"`
 	Coordinator   CoordinatorConfig   `koanf:"coordinator"`
@@ -1029,6 +1034,14 @@ func (c SystemConfig) Validate() error {
 			"coordinator.reaper.leaseDuration (%v) must exceed tickInterval (%v), "+
 				"or leases expire faster than the reaper can observe them",
 			c.Coordinator.Reaper.LeaseDuration, c.Coordinator.Reaper.TickInterval)
+	}
+	// The task list is read by every product in the estate, so a mistake in it
+	// is a mistake everywhere. Refusing to start is cheaper than discovering at
+	// three in the morning that two tasks both claim to move a release out of
+	// lab. An EMPTY list is legal and means this deployment has no configured
+	// route yet, which is what an upgrade looks like before the file is written.
+	if err := ValidateTasks(c.Stage.Tasks); err != nil {
+		return err
 	}
 	return nil
 }

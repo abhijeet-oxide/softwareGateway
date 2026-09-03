@@ -1,0 +1,204 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Product — CFX 5000 (NEAR)
+#
+#  Every registry, repository and credential this product uses is declared HERE.
+#  The site config says what the tasks are; this says what they operate on.
+#
+#  `stage:` on a target is the whole binding. Three targets carry `stage: lab`,
+#  so the onboard task writes all three — the JFrog lab repository and both
+#  Quays — as one action. There is no separate mirror concept: a Quay mirror is
+#  an ordinary target with `type: quay` and a `replication:` block.
+#
+#  Proposed v1alpha2 shape. See docs/design/24-software-flow.md.
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: softwaregateway.io/v1alpha2
+kind: Product
+
+metadata:
+  name: cfx-5000
+  displayName: CFX 5000 Product (NEAR)
+  owner: packet-core
+  enabled: true
+
+spec:
+
+  # ── SOURCES ────────────────────────────────────────────────────────────────
+  sources:
+    - name: vendor
+      registry: registry.nokia.example.com:9443
+      repositories: ['orbs/cfx-5000-k8s']
+      type: near                        # OCI Distribution + NEAR conventions
+      credentialsRef:
+        secretName: vendor-registry     # keys: username, password
+
+      network:
+        caBundleRef:
+          secretName: vendor-signing-ca
+          key: ca.crt
+        tls:
+          insecureSkipVerify: false
+        proxy:
+          httpsProxy: http://proxy.internal.example.com:3128
+          noProxy: ['.internal.example.com']
+        timeouts:
+          connect: 15s
+
+      # OVERRIDE ONLY. The default lives in config.yaml `concurrency:`; this
+      # is here because this vendor cannot take the fleet's 32.
+      concurrency:
+        perRegistry: 8
+
+      discovery:
+        enabled: true
+        interval: 30m
+        maxRepositories: 10000
+        repositoryFilters:
+          include: ['^orbs/']
+        tagFilters:
+          include: ['^orb_']
+          exclude: ['^orb_.*_base_.*$']
+
+      # WHO is trusted. WHETHER we check is `verify:` on the task.
+      trust:
+        transferSignatures: true
+        cosign:
+          mode: keyless
+          keyless:
+            # Both REQUIRED. Without certificateIdentity any valid Sigstore
+            # signature is accepted — proof somebody signed it, not the vendor.
+            certificateIdentity: >-
+              https://github.com/vendor-a/platform/.github/workflows/release.yaml@refs/heads/main
+            certificateOidcIssuer: https://token.actions.githubusercontent.com
+
+  # ── TARGETS ────────────────────────────────────────────────────────────────
+  #
+  # `stage` is what binds a target to the tasks in config.yaml. Several targets
+  # may share one stage; the task writes all of them.
+  targets:
+
+    - name: external
+      stage: external                   # ← the download task's `to`
+      registry: artifactory.internal.example.com:9444
+      repository: sw-external/cfx-5000
+      type: jfrog
+      credentialsRef:
+        secretName: internal-registry
+      network:
+        caBundleRef:
+          secretName: internal-ca
+          key: ca.crt
+        proxy:
+          direct: true                  # internal host: never via the proxy
+
+    - name: lab
+      stage: lab                        # ← the onboard task's `to`
+      registry: artifactory.internal.example.com:9444
+      repository: sw-lab/cfx-5000
+      type: jfrog
+      credentialsRef:
+        secretName: internal-registry
+      network:
+        proxy:
+          direct: true
+
+    # Two Quays, also in the lab stage. Onboarding writes lab, quay-eu and
+    # quay-us as one action — ordinary targets, no mirror list anywhere.
+    - name: quay-eu
+      stage: lab
+      registry: quay-eu.example.com
+      repository: packet-core/cfx-5000  # <organization>/<repository>
+      type: quay
+      credentialsRef:
+        secretName: quay-eu-robot       # the org+robot that pushes
+      replication:
+        mode: copy                      # copy: we push. mirror: Quay pulls.
+      quay:
+        apiEndpoint: https://quay-eu.example.com/api/v1
+        apiTokenRef:
+          secretName: quay-eu-api
+          key: token
+
+    - name: quay-us
+      stage: lab
+      registry: quay-us.example.com
+      repository: packet-core/cfx-5000
+      type: quay
+      credentialsRef:
+        secretName: quay-us-robot
+      replication:
+        mode: mirror                    # Quay pulls, on its own schedule
+        mirror:
+          from: lab                     # the upstream Quay syncs from
+          robot: packet-core+swgw
+          interval: 24h
+          skopeoTimeout: 30m
+          syncOnRequest: true           # onboarding = sync now, then wait
+          manage: apply
+          network:
+            verifyTLS: true             # Quay's own egress, not ours
+      quay:
+        apiEndpoint: https://quay-us.example.com/api/v1
+        apiTokenRef:
+          secretName: quay-us-api
+          key: token
+
+    - name: gold
+      stage: prod                       # ← the promote task's `to`
+      registry: artifactory.internal.example.com:9444
+      repository: sw-gold/cfx-5000
+      type: jfrog
+      credentialsRef:
+        secretName: internal-registry
+      network:
+        proxy:
+          direct: true
+
+    # Production has its own Quay, exactly as lab does. Promoting writes gold
+    # and this one together — the same mechanism, a different stage.
+    - name: quay-eu-prod
+      stage: prod
+      registry: quay-eu.example.com
+      repository: packet-core-prod/cfx-5000
+      type: quay
+      credentialsRef:
+        secretName: quay-eu-robot
+      replication:
+        mode: copy
+      quay:
+        apiEndpoint: https://quay-eu.example.com/api/v1
+        apiTokenRef:
+          secretName: quay-eu-api
+          key: token
+
+  # ── WHAT RUNS BY ITSELF ────────────────────────────────────────────────────
+  #
+  # One place. `task` names which of the site's tasks fires automatically; the
+  # rules say on what. Nothing in config.yaml decides this.
+  autoDownload:
+    enabled: true
+    task: download
+    rules:
+      - name: ga-releases
+        tagPattern: '^orb_.*'
+        sources: [vendor]
+
+  # ── OVERRIDES: all optional ────────────────────────────────────────────────
+  #
+  # No `scanners:` block: this product uses the deployment's Anchore and Xray as
+  # config.yaml declares them. A product that needs its own writes the same
+  # block here — and one naming its own `endpoint` MUST also name its own
+  # `credentialsRef`, because falling back would send this deployment's Anchore
+  # credential to whatever host a product document named.
+
+  notifications:
+    channels:
+      - name: owners
+        type: email
+        email:
+          recipients: ['packet-core@example.com']
+    subscriptions:
+      - events: [SoftwareAvailable, TaskFailed, TransferFailed]
+        channels: [owners]
+
+  retention:
+    packages: 8760h

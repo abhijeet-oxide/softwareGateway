@@ -3,69 +3,174 @@ kind: PolicyPack
 metadata:
   name: sgw-baseline-storage
   prefix: STO
-  version: 1.0.0
+  version: 2.0.0
   description: >
-    Storage and data. Whether the release's persistence behaves the same way in
-    two clusters, and whether it can be scaled without losing data.
+    Where the release keeps data that has to survive a restart, and whether it
+    behaves the same way in two different clusters.
   maintainer: platform-sre
+  reference: docs/compliance/source-standards.md - 9. Storage & Data
 spec:
   checks:
     - id: STO-01
-      title: Claims name their storage class
+      title: Every storage request names the kind of storage it needs
       description: >
-        Every PersistentVolumeClaim sets storageClassName explicitly.
+        Every request for storage names its storage class, rather than accepting
+        whatever the cluster happens to default to.
       rationale: >
-        Relying on the cluster default makes the same chart behave differently
-        in two clusters - different performance, different reclaim policy,
-        sometimes different access modes. It is the failure that is hardest to
-        diagnose, because nothing in the release changed.
+        Relying on the cluster's default makes the same chart behave differently
+        in two clusters - different speed, different behaviour when the release
+        is removed, sometimes different sharing rules. It is the hardest kind of
+        problem to diagnose, because nothing in the release changed between the
+        cluster where it worked and the one where it did not.
       severity: warn
       tier: 1
       category: Storage & Data
+      subcategory: Storage class
+      keywords: [storageClassName, PersistentVolumeClaim, PVC, StorageClass, "default class"]
+      confidence: confirmed
+      whenItBites: install
+      fixOwner: chart-values
+      fixEffort: low
+      reference: source-standards.md - STO-01
       remediation: >
-        Set spec.storageClassName, exposed as a value so an operator can pick
-        their own class.
+        Set spec.storageClassName, exposed as a chart value so an operator can
+        name their own class.
+      fixExample: |
+        spec:
+          storageClassName: fast-ssd
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests: {storage: 20Gi}
       appliesTo:
         kinds: [PersistentVolumeClaim]
       assert:
         required: [spec.storageClassName]
 
     - id: STO-02
-      title: Shared-write claims are listed for review
+      title: Shared storage is not written by a process running as root
       description: >
-        Reports every claim requesting ReadWriteMany, with the workload that
-        asked for it.
+        Where several copies of a service write to the same shared folder, none
+        of the workloads mounting it runs as root.
       rationale: >
-        ReadWriteMany means the software claims to handle concurrent writes
-        from several pods. Sometimes that is true. The finding exists so
-        somebody confirms it rather than inheriting the assumption.
-      severity: warn
-      tier: 1
-      category: Storage & Data
-      remediation: >
-        Confirm the application coordinates concurrent writers, or use
-        ReadWriteOnce with a StatefulSet.
-      appliesTo:
-        kinds: [PersistentVolumeClaim]
-      assert:
-        expr: 'value(self, "spec.accessModes") == null || !self.spec.accessModes.exists(m, string(m) == "ReadWriteMany")'
-        locus: spec.accessModes
-        expected: an access mode other than ReadWriteMany
-        observed: 'self.spec.accessModes.map(m, string(m)).join(", ")'
-
-    - id: STO-04
-      title: Claims request a real amount of storage
-      description: >
-        Every claim declares resources.requests.storage as a parseable,
-        non-zero quantity.
-      rationale: >
-        A claim with no size, or a size of zero, is either rejected at install
-        or bound to whatever the provisioner decides. Both are a surprise, and
-        the second one is a surprise that shows up when the volume fills.
+        Shared storage is a legitimate design, and this organization's standard
+        sets out how to use it safely rather than discouraging it: run as a
+        normal user, agree the file ownership, and reach the files through group
+        membership. Running as root defeats all of that. It writes files nothing
+        else can read back, it removes the protection the storage server applies
+        to everybody else's data on the same share, and it usually leads to the
+        start-up ownership rewrite that STO-07 exists to prevent.
       severity: block
       tier: 1
       category: Storage & Data
+      subcategory: Shared storage
+      keywords: [ReadWriteMany, RWX, accessModes, NFS, runAsUser, root, "shared volume", supplementalGroups]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - STO-02, STO-07
+      remediation: >
+        Run the workload as a normal user, and give it access to the shared
+        folder through fsGroup or supplementalGroups rather than by owning the
+        files.
+      fixExample: |
+        spec:
+          template:
+            spec:
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 10001
+                runAsGroup: 10001
+                supplementalGroups: [20001]      # access by group membership
+                fsGroupChangePolicy: OnRootMismatch
+      appliesTo:
+        kinds: [PersistentVolumeClaim]
+        where: 'value(self, "spec.accessModes") != null && self.spec.accessModes.exists(m, string(m) == "ReadWriteMany")'
+      assert:
+        expr: 'mountersOf(self).all(w, !runsAsRoot(w))'
+        locus: spec.accessModes
+        expected: every workload writing to this shared folder running as a normal user
+        observed: |
+          mountersOf(self).filter(w, runsAsRoot(w))
+            .map(w, string(value(w, "kind")) + " " + string(value(w, "metadata.name")) + " runs as root")
+            .join(", ")
+        message: |
+          "the shared folder " + text(self, "metadata.name") + " is written by " +
+          mountersOf(self).filter(w, runsAsRoot(w))
+            .map(w, string(value(w, "kind")) + " " + string(value(w, "metadata.name"))).join(", ") +
+          ", running as root. Files written this way cannot be read back by a normal user, and the " +
+          "protections the storage server applies to everything else on the same share are bypassed."
+
+    - id: STO-13
+      title: Shared storage has one writer unless it is meant to have more
+      description: >
+        Where a shared folder is written by more than one workload, it is
+        reported so that somebody confirms the software is built for it.
+      rationale: >
+        Storage that several workloads can write to at once is a claim about the
+        software: that it coordinates concurrent writers. Sometimes that is true.
+        When it is not, the result is not an error message - it is corrupted data
+        found weeks later. This finding is recorded so that the claim is
+        confirmed by a person rather than inherited by assumption.
+      severity: info
+      tier: 1
+      category: Storage & Data
+      subcategory: Shared storage
+      keywords: [ReadWriteMany, RWX, accessModes, "concurrent writers", "shared volume"]
+      confidence: needs-review
+      whenItBites: under-load
+      fixOwner: needs-decision
+      fixEffort: medium
+      reference: source-standards.md - STO-02
+      remediation: >
+        Confirm that the software coordinates concurrent writers - a lock, a
+        leader, or per-writer directories. If it does not, give each workload its
+        own folder.
+      fixExample: |
+        # Each writer gets its own subdirectory of the share:
+        volumeMounts:
+          - name: shared
+            mountPath: /var/shared
+            subPathExpr: $(POD_NAME)
+      appliesTo:
+        kinds: [PersistentVolumeClaim]
+        where: 'value(self, "spec.accessModes") != null && self.spec.accessModes.exists(m, string(m) == "ReadWriteMany")'
+      assert:
+        # Recorded on a pass too, so the report says who writes to every shared
+        # folder rather than only naming the ones with several writers.
+        observeOnPass: true
+        expr: 'size(mountersOf(self)) <= 1'
+        locus: spec.accessModes
+        expected: one workload writing to this shared folder, or a confirmed design that allows more
+        observed: |
+          "written by " + mountersOf(self)
+            .map(w, string(value(w, "kind")) + " " + string(value(w, "metadata.name"))).join(", ")
+
+    - id: STO-04
+      title: Every storage request states how much space it needs
+      description: >
+        Every request for storage names a real, non-zero size.
+      rationale: >
+        A request with no size, or a size of zero, is either rejected when the
+        release is installed or filled by whatever the storage system decides.
+        Both are a surprise, and the second one is a surprise that arrives the
+        day the volume fills up.
+      severity: block
+      tier: 1
+      category: Storage & Data
+      subcategory: Volume sizing
+      keywords: [resources.requests.storage, PersistentVolumeClaim, PVC, capacity, storage]
+      confidence: confirmed
+      whenItBites: install
+      fixOwner: chart-values
+      fixEffort: low
+      reference: source-standards.md - STO-04
       remediation: Set spec.resources.requests.storage to the size the workload needs.
+      fixExample: |
+        spec:
+          resources:
+            requests:
+              storage: 20Gi
       appliesTo:
         kinds: [PersistentVolumeClaim]
       assert:
@@ -73,47 +178,80 @@ spec:
           spec.resources.requests.storage: {min: 1}
 
     - id: STO-05
-      title: A replicated Deployment does not share one claim
+      title: Copies of a service do not share one exclusive disk
       description: >
-        No Deployment with more than one replica mounts a
-        PersistentVolumeClaim.
+        A service running more than one copy as a plain Deployment does not point
+        them all at the same storage request.
       rationale: >
-        Every replica of a Deployment mounts the same claim. On ReadWriteOnce
-        that is a scheduling deadlock the second replica never resolves; on
-        ReadWriteMany it is silent data corruption for anything not written for
-        concurrent access. A workload with per-replica storage is a
-        StatefulSet.
+        Every copy of a Deployment mounts the same storage. If the storage allows
+        only one writer, the second copy waits forever for a disk it can never
+        get, and the service never reaches full strength. If it allows several,
+        every copy writes over the others unless the software was specifically
+        built for that. A service where each copy needs its own storage is a
+        StatefulSet, which is the shape that gives each copy its own.
       severity: block
       tier: 1
       category: Storage & Data
+      subcategory: Stateful workloads
+      keywords: [Deployment, StatefulSet, PersistentVolumeClaim, PVC, volumeClaimTemplates, ReadWriteOnce, RWO]
+      confidence: confirmed
+      whenItBites: install
+      fixOwner: chart-template
+      fixEffort: high
+      reference: source-standards.md - STO-05
       remediation: >
-        Use a StatefulSet with volumeClaimTemplates, so each replica gets its
-        own volume.
+        Use a StatefulSet with volumeClaimTemplates, so each copy gets storage of
+        its own.
+      fixExample: |
+        kind: StatefulSet
+        spec:
+          volumeClaimTemplates:
+            - metadata: {name: data}
+              spec:
+                accessModes: [ReadWriteOnce]
+                storageClassName: fast-ssd
+                resources: {requests: {storage: 20Gi}}
       appliesTo:
         kinds: [Deployment]
         where: 'replicas(self) >= 2'
       assert:
         expr: 'size(pvcMountPaths(self)) == 0'
         locus: spec.template.spec.volumes
-        expected: no persistent volume claim on a multi-replica Deployment
-        observed: '"mounts " + pvcMountPaths(self).join(", ")'
+        expected: no shared storage on a service running several interchangeable copies
+        observed: '"all " + string(replicas(self)) + " copies mount " + pvcMountPaths(self).join(", ")'
 
     - id: STO-07
-      title: No init container recursively fixes permissions on a claim
+      title: Nothing rewrites file ownership across a whole volume at start-up
       description: >
-        No initContainer command runs chown or chmod against a path that is
-        also a persistent volume claim mount.
+        No container that runs before the main one changes the owner or the
+        permissions of a path that is also a mounted storage volume.
       rationale: >
-        On network-backed storage a recursive chown of a populated volume takes
-        hours, or times out and leaves the pod crash-looping. It is the
-        standard workaround for not knowing the image's UID model, and it works
-        on a laptop.
+        On network-backed or shared storage this walks every file on the volume.
+        On a full volume it takes hours, or times out and leaves the service
+        restarting in a loop - and it does it on every single start, not just the
+        first. It is the standard workaround for not knowing which user the image
+        runs as, and it works perfectly on a laptop.
       severity: block
       tier: 1
       category: Storage & Data
+      subcategory: Volume permissions
+      keywords: [chown, chmod, initContainer, fsGroup, "recursive ownership", volumeMounts]
+      confidence: confirmed
+      whenItBites: install
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - STO-07
       remediation: >
-        Set securityContext.fsGroup and let the kubelet apply ownership, or
-        build the image to run as the UID that owns the volume.
+        Set securityContext.fsGroup and let the platform apply ownership as the
+        volume is attached, or build the image to run as the user that already
+        owns the files.
+      fixExample: |
+        spec:
+          template:
+            spec:
+              securityContext:
+                fsGroup: 10001
+                fsGroupChangePolicy: OnRootMismatch    # only when it is wrong
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, Job, CronJob]
         containers: init
@@ -123,57 +261,104 @@ spec:
           !(self.command.exists(a, string(a).contains("chown") || string(a).contains("chmod")) &&
             pvcMountPaths(owner).exists(p, self.command.exists(a, string(a).contains(string(p)))))
         locus: command
-        expected: no chown or chmod against a persistent volume mount path
+        expected: no ownership or permission rewrite against a mounted storage path
         observed: 'self.command.map(a, string(a)).join(" ")'
 
     - id: STO-08
-      title: Pods with persistent storage declare a volume group
+      title: A service that uses storage says which group owns its files
       description: >
-        A pod mounting a claim sets securityContext.fsGroup or
-        fsGroupChangePolicy.
+        A workload that mounts storage sets a file-system group, a group-change
+        policy, or additional group memberships.
       rationale: >
-        Without fsGroup the volume is owned by root and a non-root container
-        cannot write to it. The usual fix for that is the recursive chown
-        STO-07 exists to prevent, so this check is the other half of the same
-        problem.
+        Without one of these the volume belongs to root and a service running as
+        a normal user cannot write to it. The usual fix for that is the start-up
+        ownership rewrite STO-07 exists to prevent, so this check is the other
+        half of the same problem: state the group and the rewrite is never
+        needed.
       severity: warn
       tier: 1
       category: Storage & Data
+      subcategory: Volume permissions
+      keywords: [fsGroup, fsGroupChangePolicy, supplementalGroups, securityContext, OnRootMismatch]
+      confidence: confirmed
+      whenItBites: install
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - STO-08
       remediation: >
         Set securityContext.fsGroup to the group the container runs as, and
-        fsGroupChangePolicy to OnRootMismatch.
+        fsGroupChangePolicy to OnRootMismatch so the platform only touches
+        ownership when it is actually wrong. On shared storage, prefer
+        supplementalGroups.
+      fixExample: |
+        spec:
+          template:
+            spec:
+              securityContext:
+                fsGroup: 10001
+                fsGroupChangePolicy: OnRootMismatch
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, Job, CronJob]
         subject: podSpec
         where: 'size(pvcMountPaths(owner)) > 0'
       assert:
-        expr: 'present(self, "securityContext.fsGroup") || present(self, "securityContext.fsGroupChangePolicy")'
+        expr: |
+          present(self, "securityContext.fsGroup") ||
+          present(self, "securityContext.fsGroupChangePolicy") ||
+          present(self, "securityContext.supplementalGroups")
         locus: securityContext.fsGroup
-        expected: fsGroup or fsGroupChangePolicy set
+        expected: a file-system group, a group-change policy, or additional group memberships
+        observed: '"none of fsGroup, fsGroupChangePolicy or supplementalGroups is declared"'
 
     - id: STO-10
-      title: A StatefulSet does not keep state in ephemeral storage
+      title: A service that must remember things does not keep them in scratch space
       description: >
-        Reports emptyDir, hostPath and local volumes on a StatefulSet.
+        A StatefulSet does not mount a folder from the server or a server-local
+        volume, and does not rely on temporary scratch space when it declares no
+        storage of its own at all.
       rationale: >
-        A StatefulSet exists because the data outlives the pod. An emptyDir
-        does not - it is deleted with the pod - so state written there is lost
-        on every restart, and the restart is the one case a StatefulSet was
-        chosen for.
-      severity: warn
+        A StatefulSet exists because its data has to outlive the copy that wrote
+        it. Scratch space does not: it is deleted with the copy, so anything
+        written there is gone on the next restart - which is the exact case the
+        StatefulSet was chosen for. Server-local storage is worse than that: it
+        cannot move, so when the server is taken out for maintenance the service
+        either cannot move with its data or moves and finds the data gone.
+        Scratch space alongside real storage is fine and is not reported.
+      severity: block
       tier: 1
       category: Storage & Data
+      subcategory: Stateful workloads
+      keywords: [StatefulSet, emptyDir, hostPath, local, volumeClaimTemplates, ephemeral]
+      confidence: confirmed
+      whenItBites: node-maintenance
+      fixOwner: chart-template
+      fixEffort: high
+      reference: source-standards.md - STO-10
       remediation: >
-        Move the data to a volumeClaimTemplate, or confirm the volume is
-        genuinely scratch.
+        Move the data to a volumeClaimTemplate so each copy gets storage that
+        survives it. Keep scratch space only for genuinely disposable files.
+      fixExample: |
+        spec:
+          volumeClaimTemplates:
+            - metadata: {name: data}
+              spec:
+                accessModes: [ReadWriteOnce]
+                storageClassName: fast-ssd
+                resources: {requests: {storage: 50Gi}}
       appliesTo:
         kinds: [StatefulSet]
-        subject: podSpec
-        where: 'value(self, "volumes") != null'
+        where: 'value(self, "spec.template.spec.volumes") != null'
       assert:
-        expr: '!self.volumes.exists(v, has(v.emptyDir) || has(v.hostPath) || has(v.local))'
-        locus: volumes
-        expected: persistent volumes only on a StatefulSet
+        expr: |
+          !self.spec.template.spec.volumes.exists(v, has(v.hostPath) || has(v.local)) &&
+          (value(self, "spec.volumeClaimTemplates") != null ||
+           !self.spec.template.spec.volumes.exists(v, has(v.emptyDir)))
+        locus: spec.template.spec.volumes
+        expected: storage that outlives the copy, for a service that has to remember things
         observed: |
-          self.volumes.filter(v, has(v.emptyDir) || has(v.hostPath) || has(v.local))
-              .map(v, string(v.name)).join(", ")
+          self.spec.template.spec.volumes
+            .filter(v, has(v.hostPath) || has(v.local) || has(v.emptyDir))
+            .map(v, string(v.name) + (has(v.hostPath) ? " (a folder on the server)" :
+                                      has(v.local) ? " (storage tied to one server)" :
+                                      " (scratch space, deleted with the copy)"))
+            .join(", ")

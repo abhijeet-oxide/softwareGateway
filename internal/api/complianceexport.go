@@ -375,12 +375,17 @@ func complianceUniqueSheet(productName, release string, views []ComplianceResult
 			v.Title,
 			compliance.Severity(v.Severity).Label(),
 			v.Category,
+			v.Subcategory,
 			strconv.Itoa(g.places),
 			strconv.Itoa(len(g.charts)),
 			joinSet(g.kinds),
+			v.FixOwnerLabel,
+			v.FixEffortLabel,
+			whenItBites(v),
 			joinSet(g.owners),
 			strings.Join(g.samples, "\n"),
 			v.Remediation,
+			v.FixExample,
 			v.Reference,
 			v.Pack,
 			tierLabel(v.Tier),
@@ -392,16 +397,18 @@ func complianceUniqueSheet(productName, release string, views []ComplianceResult
 	return export.Sheet{
 		Name: sheetUniqueFindings,
 		Headers: []string{
-			"Check", "Title", "Severity", "Category",
-			"Places", "Charts", "Kinds", "Owner",
-			"Examples", "Remediation", "Reference", "Pack", "Tier",
+			"Check", "Title", "Severity", "Category", "Mechanism",
+			"Places", "Charts", "Kinds",
+			"Who fixes it", "Effort", "When it bites",
+			"Value is", "Examples", "Remediation", "Example fix", "Reference", "Pack", "Tier",
 			"Product", "Release",
 		},
-		Rows:   rows,
-		Widths: []int{12, 46, 11, 20, 9, 9, 20, 24, 52, 60, 34, 16, 10, 20, 20},
-		// Title, Examples, Remediation. The examples column holds three
-		// addresses on three lines and rendered as the first of them.
-		Wrap:    []int{1, 8, 9},
+		Rows: rows,
+		Widths: []int{12, 46, 11, 20, 26, 9, 9, 20,
+			22, 30, 38, 24, 52, 60, 46, 34, 16, 10, 20, 20},
+		// Title, Examples, Remediation, Example fix. The examples column holds
+		// three addresses on three lines and rendered as the first of them.
+		Wrap:    []int{1, 12, 13, 14},
 		Primary: true,
 	}
 }
@@ -430,9 +437,10 @@ func complianceFindingsSheet(
 		Headers: complianceFindingHeaders,
 		Rows:    rows,
 		Widths:  complianceFindingWidths,
-		// Title, Field, Finding, Remediation - the four that are prose or a
-		// path long enough to be clipped.
-		Wrap: []int{1, 15, 18, 19},
+		// Title, Search terms, Field, Finding, Remediation, Example fix - the
+		// ones that are prose, YAML, a term list, or a path long enough to be
+		// clipped.
+		Wrap: []int{1, 10, 21, 24, 25, 26},
 	}
 }
 
@@ -474,22 +482,36 @@ func complianceUncheckedSheet(productName, release string, views []ComplianceRes
 	}
 }
 
+// The findings sheet's columns, in the order a reader uses them.
+//
+// # Why "Who fixes it" and "Value is" are two columns
+//
+// They were one, headed "Owner", and it held neither. It held the DETERMINACY -
+// whether the chart fixes the value or a values file can override it - and on a
+// real report a third of its rows read "Could not be established", which is not
+// something anybody can route anywhere. The two questions are both worth
+// asking and they are different questions: one is whose change it is, the other
+// is whether the vendor or the site owns the value.
 var complianceFindingHeaders = []string{
-	"Check", "Title", "Severity", "Outcome", "Owner",
+	"Check", "Title", "Severity", "Outcome",
+	"Who fixes it", "Effort", "When it bites", "Confidence", "Value is",
+	"Mechanism", "Search terms",
 	"Chart", "Chart version", "Template file", "Line",
 	"API version", "Kind", "Namespace", "Resource", "Container", "Container type",
 	"Field", "Observed", "Expected", "Finding",
-	"Remediation", "Reference", "Category", "Pack", "Tier",
+	"Remediation", "Example fix", "Reference", "Category", "Pack", "Tier",
 	"Chart digest", "Chart reference", "Product", "Release", "Release digest",
 	"Waiver", "Fingerprint",
 }
 
 var complianceFindingWidths = []int{
-	12, 46, 11, 12, 24,
+	12, 46, 11, 12,
+	22, 30, 38, 34, 24,
+	26, 52,
 	24, 14, 40, 7,
 	16, 18, 16, 26, 16, 14,
 	40, 26, 26, 64,
-	60, 34, 20, 16, 10,
+	60, 46, 34, 20, 16, 10,
 	26, 40, 20, 20, 26,
 	16, 20,
 }
@@ -506,7 +528,19 @@ func complianceFindingRow(
 		v.Title,
 		compliance.Severity(v.Severity).Label(),
 		v.OutcomeLabel,
+
+		v.FixOwnerLabel,
+		v.FixEffortLabel,
+		whenItBites(v),
+		v.ConfidenceLabel,
 		determinacyOrBlank(v),
+
+		// The other half of the audience. Everything to the left of here is
+		// written for somebody deciding whether to ship; these two are the
+		// vocabulary the engineer who has to fix it would search for, and the
+		// plain-language columns deliberately do not contain them.
+		v.Subcategory,
+		strings.Join(v.Keywords, ", "),
 
 		v.Chart,
 		v.ChartVersion,
@@ -526,6 +560,7 @@ func complianceFindingRow(
 		firstNonEmpty(v.Message, v.Error),
 
 		v.Remediation,
+		v.FixExample,
 		v.Reference,
 		v.Category,
 		v.Pack,
@@ -752,6 +787,18 @@ func complianceWhere(v ComplianceResultView) string {
 		parts = append(parts, v.Locus)
 	}
 	return strings.Join(parts, " · ")
+}
+
+// whenItBites writes the timing as a sentence a reader can sort a plan by.
+//
+// It reads as a fragment on purpose - "on the next upgrade", "when a server is
+// taken out for maintenance" - so the column says when the consequence arrives
+// rather than naming a category the reader has to look up.
+func whenItBites(v ComplianceResultView) string {
+	if v.WhenItBitesLabel == "" {
+		return ""
+	}
+	return "Bites " + v.WhenItBitesLabel
 }
 
 func determinacyOrBlank(v ComplianceResultView) string {

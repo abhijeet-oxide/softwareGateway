@@ -3,95 +3,219 @@ kind: PolicyPack
 metadata:
   name: sgw-baseline-security
   prefix: SEC
-  version: 1.0.0
+  version: 2.0.0
   description: >
-    Container security posture. What a compromised process in this release can
-    reach.
+    What a compromised process inside this release could reach. Every check here
+    is about limiting the damage of one bad day. Where Kubernetes allows a
+    setting on the pod as well as on the container - the user it runs as, the
+    system-call filter - it is resolved the way the platform resolves it: the
+    container's own value wins, otherwise the pod's applies to every container
+    in it. The rest are container settings with no pod-level equivalent, and
+    each container declares them for itself.
   maintainer: platform-sre
+  reference: docs/compliance/source-standards.md - 4. Container Security Posture
 spec:
   checks:
     - id: SEC-01
-      title: Containers do not run as root
+      title: No container runs as the all-powerful root user
       description: >
-        runAsNonRoot is true at the pod or container level, and runAsUser is
-        not 0 wherever it is set.
+        No container is set to run as user 0, and none has running-as-non-root
+        explicitly switched off. The setting is resolved the way the platform
+        resolves it: the container's own value first, then the pod's.
       rationale: >
         A process running as root inside a container is root on anything it
-        mounts from the node, and root is what turns a container escape from a
-        finding into an incident.
+        mounts from the server, and root is what turns a container escape from a
+        finding into an incident. This check reports only what the chart actually
+        says - a container that asserts nothing is a separate, lesser finding,
+        because on a cluster enforcing a restricted policy an unstated user is
+        assigned a non-root one rather than root.
       severity: block
       tier: 1
       category: Container Security Posture
+      subcategory: Run-as user
+      keywords: [runAsUser, runAsNonRoot, securityContext, root, "UID 0"]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: application
+      fixEffort: high
+      reference: source-standards.md - SEC-01
       remediation: >
-        Set securityContext.runAsNonRoot: true and a non-zero runAsUser, and
-        build the image to run as that user.
+        Set runAsNonRoot to true and runAsUser to a non-zero user id, and build
+        the image so its program can run as that user - which is usually the part
+        that takes the work.
+      fixExample: |
+        spec:
+          template:
+            spec:
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 10001
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: all
       assert:
         expr: |
-          (value(self, "securityContext.runAsNonRoot") == true ||
-           value(owner, "spec.template.spec.securityContext.runAsNonRoot") == true ||
-           value(owner, "spec.securityContext.runAsNonRoot") == true) &&
-          text(self, "securityContext.runAsUser") != "0"
+          securityValue(self, owner, "runAsUser") != "0" &&
+          securityValue(self, owner, "runAsNonRoot") != "false"
         locus: securityContext.runAsNonRoot
-        expected: "runAsNonRoot: true, and runAsUser other than 0"
+        expected: not running as root
         observed: |
-          text(self, "securityContext.runAsUser") == "0" ? "runAsUser 0" : "runAsNonRoot not set"
+          securityValue(self, owner, "runAsUser") == "0"
+            ? "runs as user 0 (root), " + securitySource(self, owner, "runAsUser")
+            : "running as non-root is switched off, " + securitySource(self, owner, "runAsNonRoot")
+        message: |
+          "container " + text(address, "container") + " runs as root. " +
+          (securityValue(self, owner, "runAsUser") == "0"
+            ? "The user id is set to 0, " + securitySource(self, owner, "runAsUser") + "."
+            : "Running as a non-root user is explicitly switched off, " +
+              securitySource(self, owner, "runAsNonRoot") + ".") +
+          " Anything that escapes this container is root on the server's filesystem."
+
+    - id: SEC-12
+      title: Every container states which user it runs as
+      description: >
+        Every container says, either on itself or on its pod, that it must not
+        run as root - or names the user id it runs as.
+      rationale: >
+        Saying nothing is not the same as running as root, and this check is
+        separate from SEC-01 for exactly that reason. On a cluster enforcing a
+        restricted policy an unstated user is assigned a non-root one, so nothing
+        breaks; on a cluster that does not, the image's own default applies, and
+        that is frequently root. Stating it removes the dependence on which kind
+        of cluster this lands in.
+      severity: warn
+      tier: 1
+      category: Container Security Posture
+      subcategory: Run-as user
+      keywords: [runAsNonRoot, runAsUser, securityContext, PodSecurity, restricted]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - SEC-01 (the unstated half)
+      remediation: >
+        Set securityContext.runAsNonRoot to true on the pod, which applies to
+        every container in it.
+      fixExample: |
+        spec:
+          template:
+            spec:
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 10001
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+      assert:
+        expr: |
+          securityValue(self, owner, "runAsNonRoot") != "" ||
+          securityValue(self, owner, "runAsUser") != ""
+        locus: securityContext.runAsNonRoot
+        expected: the user stated, on the container or on the pod
+        observed: '"neither runAsNonRoot nor runAsUser is declared, on the container or on the pod"'
 
     - id: SEC-02
-      title: Containers cannot escalate privileges
-      description: allowPrivilegeEscalation is false on every container.
+      title: A container cannot give itself more permissions while running
+      description: >
+        Privilege escalation is switched off. This is a container setting -
+        Kubernetes has no pod-level equivalent - so every container declares it
+        for itself.
       rationale: >
-        Left unset it defaults to true, so a setuid binary in the image regains
-        everything the securityContext dropped. It is the setting that makes
-        the others hold.
+        Left unset it defaults to on, so a program in the image that is marked to
+        run with elevated rights regains everything the other settings gave up.
+        It is the setting that makes all the others hold.
       severity: block
       tier: 1
       category: Container Security Posture
-      remediation: "Set securityContext.allowPrivilegeEscalation: false."
+      subcategory: Privilege escalation
+      keywords: [allowPrivilegeEscalation, securityContext, setuid, no_new_privs]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - SEC-02
+      remediation: "Set securityContext.allowPrivilegeEscalation to false."
+      fixExample: |
+        securityContext:
+          allowPrivilegeEscalation: false
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: all
       assert:
-        equals:
-          securityContext.allowPrivilegeEscalation: false
+        expr: 'securityValue(self, owner, "allowPrivilegeEscalation") == "false"'
+        locus: securityContext.allowPrivilegeEscalation
+        expected: privilege escalation switched off
+        observed: |
+          securityValue(self, owner, "allowPrivilegeEscalation") == ""
+            ? "not declared, so it defaults to allowed"
+            : securityValue(self, owner, "allowPrivilegeEscalation") + ", " +
+              securitySource(self, owner, "allowPrivilegeEscalation")
 
     - id: SEC-03
-      title: No container is privileged
-      description: No container sets securityContext.privileged to true.
+      title: No container is given full control of the server
+      description: >
+        No container is marked privileged. Like privilege escalation, this is a
+        container setting with no pod-level equivalent.
       rationale: >
-        A privileged container has every capability and full device access. It
-        is equivalent to root on the node, and it is almost always there
-        because something needed one capability.
+        A privileged container has every permission and direct access to the
+        server's devices. It is equivalent to being root on the machine, and it
+        is almost always there because somebody needed one specific permission
+        and reached for the switch that grants all of them.
       severity: block
       tier: 1
       category: Container Security Posture
+      subcategory: Privileged containers
+      keywords: [privileged, securityContext, "device access", "node access"]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - SEC-03
       remediation: >
-        Drop privileged and add the specific capability the container needs.
+        Remove privileged, and add back the one specific permission the container
+        actually needs.
+      fixExample: |
+        securityContext:
+          privileged: false
+          capabilities:
+            drop: [ALL]
+            add: [NET_BIND_SERVICE]     # only what is proven necessary
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: all
       assert:
-        expr: 'value(self, "securityContext.privileged") != true'
+        expr: 'securityValue(self, owner, "privileged") != "true"'
         locus: securityContext.privileged
         expected: not privileged
+        observed: '"privileged, " + securitySource(self, owner, "privileged")'
 
     - id: SEC-04
-      title: Containers drop all capabilities
+      title: Containers give up every special permission, then take back only what they need
       description: >
-        securityContext.capabilities.drop contains ALL. Anything added back is
-        named in the finding.
+        Every container drops the whole set of special operating-system
+        permissions, and anything added back is named in the finding.
       rationale: >
-        The default capability set includes several that matter, and dropping
-        ALL then adding the one needed turns a review of "is this container
-        safe" into a review of a named list.
+        A container starts with a handful of special permissions it almost
+        certainly does not need. Dropping all of them and adding back the one
+        that is required turns "is this container safe?" from a judgement into a
+        short list somebody can read.
       severity: block
       tier: 1
       category: Container Security Posture
+      subcategory: Linux capabilities
+      keywords: [capabilities, drop, ALL, securityContext, capability]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - SEC-04
       remediation: >
-        Set capabilities.drop to [ALL] and add back only what the process
+        Set capabilities.drop to [ALL], then add back only what the process
         needs.
+      fixExample: |
+        securityContext:
+          capabilities:
+            drop: [ALL]
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: all
@@ -100,80 +224,187 @@ spec:
           value(self, "securityContext.capabilities.drop") != null &&
           self.securityContext.capabilities.drop.exists(c, string(c) == "ALL")
         locus: securityContext.capabilities.drop
-        expected: drop includes ALL
+        expected: every special permission given up (drop includes ALL)
         observed: |
           value(self, "securityContext.capabilities.add") != null
-            ? "adds " + self.securityContext.capabilities.add.map(c, string(c)).join(", ")
-            : "no drop declared"
+            ? "keeps the default permissions and adds " +
+              self.securityContext.capabilities.add.map(c, string(c)).join(", ")
+            : "keeps the default set of special permissions"
+
+    - id: SEC-13
+      title: No container takes back a high-risk system permission
+      description: >
+        No container adds back one of the permissions that effectively undoes
+        container isolation: full administration, network administration,
+        process tracing, loading kernel code, or bypassing file permissions.
+      rationale: >
+        Giving up all permissions and adding one back is the right shape, but
+        these particular ones are not ordinary. Any of them lets a process reach
+        outside its own container in a way the other settings cannot contain, so
+        adding one is the same conversation as running privileged - it needs an
+        approved exception, not a line in a template.
+      severity: block
+      tier: 1
+      category: Container Security Posture
+      subcategory: Linux capabilities
+      keywords: [capabilities.add, SYS_ADMIN, NET_ADMIN, SYS_PTRACE, SYS_MODULE, DAC_OVERRIDE, SETUID, SETGID, capability]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - SEC-04 (added-capability half)
+      remediation: >
+        Remove the permission, or narrow it: NET_BIND_SERVICE instead of
+        NET_ADMIN, a specific file ownership at build time instead of CHOWN. If
+        it is genuinely required, it needs a waiver naming the permission.
+      fixExample: |
+        securityContext:
+          capabilities:
+            drop: [ALL]
+            add: [NET_BIND_SERVICE]     # narrow, and justified
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: 'value(self, "securityContext.capabilities.add") != null'
+      assert:
+        expr: |
+          !self.securityContext.capabilities.add.exists(c,
+            string(c).upperAscii() in ["SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE",
+                                       "SYS_RAWIO", "SYS_BOOT", "DAC_OVERRIDE", "DAC_READ_SEARCH",
+                                       "SETUID", "SETGID", "ALL"])
+        locus: securityContext.capabilities.add
+        expected: no high-risk system permission added back
+        observed: |
+          self.securityContext.capabilities.add
+            .filter(c, string(c).upperAscii() in ["SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE",
+                                                  "SYS_RAWIO", "SYS_BOOT", "DAC_OVERRIDE", "DAC_READ_SEARCH",
+                                                  "SETUID", "SETGID", "ALL"])
+            .map(c, string(c)).join(", ")
 
     - id: SEC-05
-      title: Containers without persistent storage use a read-only root filesystem
+      title: A container cannot rewrite its own program files
       description: >
-        readOnlyRootFilesystem is true on containers in workloads that mount no
-        PersistentVolumeClaim.
+        Containers in workloads that use no persistent storage run with their own
+        files read-only. A container setting, with no pod-level equivalent.
       rationale: >
-        A writable root filesystem is where a compromised process drops a
-        binary. Workloads with a claim are exempted because the check would
-        otherwise fire on every database, and a check that fires on every
-        database gets switched off.
+        A writable program directory is where a compromised process drops
+        something that survives a restart. Read-only means a restart always
+        returns a known state. Workloads with persistent storage are left out,
+        because this check would otherwise fire on every database - and a check
+        that fires on every database gets switched off.
       severity: warn
       tier: 1
       category: Container Security Posture
+      subcategory: Read-only root filesystem
+      keywords: [readOnlyRootFilesystem, securityContext, emptyDir, /tmp, "writable filesystem"]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - SEC-05
       remediation: >
-        Set readOnlyRootFilesystem: true and mount an emptyDir for anything
-        that needs to be written.
+        Set readOnlyRootFilesystem to true, and mount a small scratch volume for
+        anything the program writes - usually just /tmp.
+      fixExample: |
+        securityContext:
+          readOnlyRootFilesystem: true
+        volumeMounts:
+          - {name: tmp, mountPath: /tmp}
+        # and in the pod spec:
+        # volumes:
+        #   - {name: tmp, emptyDir: {}}
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet]
         containers: main
         where: 'size(pvcMountPaths(owner)) == 0'
       assert:
-        equals:
-          securityContext.readOnlyRootFilesystem: true
+        expr: 'securityValue(self, owner, "readOnlyRootFilesystem") == "true"'
+        locus: securityContext.readOnlyRootFilesystem
+        expected: program files read-only
+        observed: |
+          securityValue(self, owner, "readOnlyRootFilesystem") == ""
+            ? "not declared, so the program files are writable"
+            : "writable, " + securitySource(self, owner, "readOnlyRootFilesystem")
 
     - id: SEC-06
-      title: Containers use a seccomp profile
+      title: Containers use the platform's standard system-call filter
       description: >
-        seccompProfile.type is RuntimeDefault or Localhost at the pod or
-        container level. Unconfined fails.
+        Every container uses the platform's standard restriction on which
+        low-level operating-system calls it may make, or a named local profile.
+        Running unrestricted fails.
       rationale: >
-        Unconfined leaves the whole syscall surface open. RuntimeDefault blocks
-        the syscalls a normal application never makes, at effectively no cost.
+        Unrestricted leaves the whole operating-system surface open to a
+        compromised process. The standard filter blocks the calls a normal
+        application never makes, at effectively no cost and with no application
+        change.
       severity: warn
       tier: 1
       category: Container Security Posture
-      remediation: "Set securityContext.seccompProfile.type: RuntimeDefault."
+      subcategory: Seccomp
+      keywords: [seccompProfile, seccomp, RuntimeDefault, Localhost, Unconfined, syscall]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - SEC-06
+      remediation: "Set securityContext.seccompProfile.type to RuntimeDefault on the pod."
+      fixExample: |
+        spec:
+          template:
+            spec:
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: main
       assert:
         expr: |
-          text(self, "securityContext.seccompProfile.type") == "RuntimeDefault" ||
-          text(self, "securityContext.seccompProfile.type") == "Localhost" ||
-          text(owner, "spec.template.spec.securityContext.seccompProfile.type") == "RuntimeDefault" ||
-          text(owner, "spec.template.spec.securityContext.seccompProfile.type") == "Localhost" ||
-          text(owner, "spec.securityContext.seccompProfile.type") == "RuntimeDefault" ||
-          text(owner, "spec.securityContext.seccompProfile.type") == "Localhost"
+          securityValue(self, owner, "seccompProfile.type") == "RuntimeDefault" ||
+          securityValue(self, owner, "seccompProfile.type") == "Localhost"
         locus: securityContext.seccompProfile.type
-        expected: RuntimeDefault or Localhost
+        expected: the standard system-call filter (RuntimeDefault), or a named local profile
         observed: |
-          text(self, "securityContext.seccompProfile.type") == ""
-            ? "no seccomp profile" : text(self, "securityContext.seccompProfile.type")
+          securityValue(self, owner, "seccompProfile.type") == ""
+            ? "no system-call filter declared"
+            : securityValue(self, owner, "seccompProfile.type") + ", " +
+              securitySource(self, owner, "seccompProfile.type")
 
     - id: SEC-07
-      title: Pods do not share the node's namespaces
+      title: Containers stay inside their own sandbox
       description: >
-        No pod sets hostNetwork, hostPID or hostIPC, and no container declares
-        a hostPort.
+        No pod shares the server's network, process list or shared memory, and no
+        container claims a fixed port on the server itself.
       rationale: >
-        Each of these puts the container on the node's side of an isolation
-        boundary. hostNetwork also makes every containerPort a node port, which
-        is a listening service nobody declared.
+        Each of these puts the container on the server's side of the isolation
+        boundary, where it can see and affect every other workload on that
+        machine. Sharing the server's network also turns every port the container
+        declares into a port open on the server, which is a listening service
+        nobody declared and nothing is filtering. Claiming a fixed server port
+        also caps the service at one copy per server, silently.
       severity: block
       tier: 1
       category: Container Security Posture
+      subcategory: Host namespaces
+      keywords: [hostNetwork, hostPID, hostIPC, hostPort, "host namespace", "node namespace"]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - SEC-07
       remediation: >
-        Remove hostNetwork, hostPID, hostIPC and hostPort; use a Service for
-        external access.
+        Remove hostNetwork, hostPID, hostIPC and hostPort, and reach the service
+        through a Service object instead.
+      fixExample: |
+        spec:
+          template:
+            spec:
+              hostNetwork: false
+              containers:
+                - name: app
+                  ports:
+                    - name: http
+                      containerPort: 8080     # no hostPort
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         subject: podSpec
@@ -185,28 +416,43 @@ spec:
           (value(self, "containers") == null ||
             self.containers.all(c, value(c, "ports") == null || c.ports.all(p, !has(p.hostPort))))
         locus: hostNetwork
-        expected: no host namespaces and no hostPort
+        expected: no sharing of the server's network, processes or memory, and no fixed server port
         observed: |
-          value(self, "hostNetwork") == true ? "hostNetwork: true" :
-          value(self, "hostPID") == true ? "hostPID: true" :
-          value(self, "hostIPC") == true ? "hostIPC: true" : "a container declares hostPort"
+          value(self, "hostNetwork") == true ? "shares the server's network (hostNetwork)" :
+          value(self, "hostPID") == true ? "can see every process on the server (hostPID)" :
+          value(self, "hostIPC") == true ? "shares the server's memory channels (hostIPC)" :
+          "a container claims a fixed port on the server itself (hostPort)"
 
     - id: SEC-08
-      title: No pod mounts a path from the node
+      title: No container reaches into the server's own files
       description: >
-        No volume is a hostPath. A hostPath naming a container-runtime socket
-        is reported as cluster-admin equivalence rather than as a mount.
+        No volume is a folder taken directly from the server. A mount of the
+        container runtime's own control socket is reported as what it really is,
+        rather than as an ordinary mount.
       rationale: >
-        A hostPath is the node's filesystem inside the container, with the
-        container's privileges. A mount of the container runtime's socket is
-        not a mount at all - it is the ability to start a privileged container
-        on that node, which is cluster-admin by another name.
+        A folder mounted from the server is the server's filesystem inside the
+        container, with the container's own permissions applied to it. Mounting
+        the container runtime's control socket is not a mount at all - it is the
+        ability to start a fully privileged container on that server, which is
+        administrator access to the cluster by another route.
       severity: block
       tier: 1
       category: Container Security Posture
+      subcategory: Host path volumes
+      keywords: [hostPath, docker.sock, containerd.sock, crio.sock, "container runtime socket", "node filesystem"]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - SEC-08
       remediation: >
-        Use a PersistentVolumeClaim, a ConfigMap or an emptyDir. If node access
-        is genuinely required, it needs a waiver naming the path.
+        Use a persistent volume claim, a ConfigMap or a scratch volume. If access
+        to the server's filesystem is genuinely required, it needs a waiver
+        naming the path.
+      fixExample: |
+        volumes:
+          - name: scratch
+            emptyDir: {}          # instead of hostPath
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         subject: podSpec
@@ -214,34 +460,50 @@ spec:
       assert:
         expr: '!self.volumes.exists(v, has(v.hostPath))'
         locus: volumes
-        expected: no hostPath volumes
+        expected: no folders mounted from the server
         observed: |
-          self.volumes.filter(v, has(v.hostPath)).map(v, string(v.hostPath.path)).join(", ")
+          "mounts " + self.volumes.filter(v, has(v.hostPath)).map(v, string(v.hostPath.path)).join(", ") +
+          " from the server"
         message: |
           self.volumes.exists(v, has(v.hostPath) && (
             string(v.hostPath.path).startsWith("/var/run/docker.sock") ||
             string(v.hostPath.path).startsWith("/run/containerd") ||
             string(v.hostPath.path).startsWith("/run/crio")))
-          ? "mounts the container runtime socket, which is cluster-admin equivalence on this node: " +
-              self.volumes.filter(v, has(v.hostPath)).map(v, string(v.hostPath.path)).join(", ")
-          : "mounts the node filesystem at " +
-              self.volumes.filter(v, has(v.hostPath)).map(v, string(v.hostPath.path)).join(", ")
+          ? "this pod mounts the container runtime's control socket (" +
+              self.volumes.filter(v, has(v.hostPath)).map(v, string(v.hostPath.path)).join(", ") +
+              "). Anything in the pod can start a fully privileged container on that server, which is " +
+              "administrator access to the cluster."
+          : "this pod mounts the server's own filesystem at " +
+              self.volumes.filter(v, has(v.hostPath)).map(v, string(v.hostPath.path)).join(", ") +
+              ", so it can read and change files belonging to the server and to every other service on it."
 
     - id: SEC-10
-      title: Privileged policy grants name individual service accounts
+      title: Elevated security permission is given to one named identity
       description: >
-        A binding that grants a SecurityContextConstraints or PodSecurityPolicy
-        names ServiceAccount subjects, not system:authenticated,
-        system:serviceaccounts, or a group.
+        Where the chart grants a relaxed security policy, it grants it to named
+        service accounts - not to "everyone authenticated", not to "every account
+        in this namespace", and not to a group.
       rationale: >
-        Granting a privileged constraint to a group gives it to every workload
-        in that group, including ones installed later by somebody else. The
-        chart intended to exempt itself and exempted the cluster.
+        Granting a relaxed policy to a group gives it to every workload in that
+        group, including ones installed months later by a different team. The
+        chart meant to exempt itself and exempted the namespace.
       severity: block
       tier: 1
       category: Container Security Posture
+      subcategory: Security policy grants
+      keywords: [SecurityContextConstraints, SCC, PodSecurityPolicy, PSP, RoleBinding, anyuid, privileged, hostmount-anyuid]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - SEC-10
       remediation: >
-        Bind the constraint to the specific ServiceAccount the workload uses.
+        Bind the policy to the specific ServiceAccount this workload runs as.
+      fixExample: |
+        subjects:
+          - kind: ServiceAccount
+            name: my-service
+            namespace: my-namespace
       appliesTo:
         kinds: [RoleBinding, ClusterRoleBinding]
         where: |
@@ -256,5 +518,47 @@ spec:
           self.subjects.all(s, string(value(s, "kind")) == "ServiceAccount") &&
           !self.subjects.exists(s, string(value(s, "name")).startsWith("system:"))
         locus: subjects
-        expected: ServiceAccount subjects only
-        observed: 'self.subjects.map(s, string(value(s, "kind")) + "/" + string(value(s, "name"))).join(", ")'
+        expected: named service accounts only
+        observed: 'self.subjects.map(s, string(value(s, "kind")) + " " + string(value(s, "name"))).join(", ")'
+
+    - id: SEC-11
+      title: Memory-backed scratch space has a size limit
+      description: >
+        A scratch volume held in memory declares how large it may grow.
+      rationale: >
+        Without a limit the volume is bounded only by the server's memory, and
+        filling it does not just fail this service - it exhausts the server and
+        evicts every other workload on it. A single log file or a runaway
+        temporary write becomes an outage for unrelated software.
+      severity: warn
+      tier: 1
+      category: Container Security Posture
+      subcategory: Ephemeral storage
+      keywords: [emptyDir, "medium: Memory", sizeLimit, tmpfs, memory-backed, eviction]
+      confidence: confirmed
+      whenItBites: under-load
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - SEC-11 (proposed addition)
+      remediation: Set sizeLimit on every memory-backed scratch volume.
+      fixExample: |
+        volumes:
+          - name: cache
+            emptyDir:
+              medium: Memory
+              sizeLimit: 256Mi
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        subject: podSpec
+        where: 'value(self, "volumes") != null && self.volumes.exists(v, has(v.emptyDir) && value(v, "emptyDir.medium") == "Memory")'
+      assert:
+        expr: |
+          self.volumes.all(v,
+            !has(v.emptyDir) || value(v, "emptyDir.medium") != "Memory" ||
+            present(v, "emptyDir.sizeLimit"))
+        locus: volumes
+        expected: a size limit on every memory-backed scratch volume
+        observed: |
+          self.volumes.filter(v, has(v.emptyDir) && value(v, "emptyDir.medium") == "Memory" &&
+                                 !present(v, "emptyDir.sizeLimit"))
+            .map(v, string(v.name) + ": no size limit").join(", ")

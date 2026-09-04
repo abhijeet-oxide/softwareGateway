@@ -1,6 +1,8 @@
 package cel
 
 import (
+	"strconv"
+
 	"cel.dev/cel-go/common/types"
 	"cel.dev/cel-go/common/types/ref"
 
@@ -76,9 +78,23 @@ func bindings2(idx *compliance.Index) map[string]impl {
 		return types.Int(1)
 	})
 
-	// declaresPort() accepts a port by number or by name, because a probe may
-	// name either and a check that understood only one would fire on half the
-	// correct charts.
+	// declaresPort() answers whether a probe's port can resolve in this
+	// container.
+	//
+	// # Why a NUMBER always resolves
+	//
+	// A `containerPort` entry documents a port; it does not open, reserve or
+	// restrict one. A probe aimed at port 8443 reaches whatever is listening on
+	// 8443 in the pod, whether or not any container wrote the number down. So a
+	// numeric probe port is never a defect, and reporting one as unreachable is
+	// a finding with no fix - the "correction" is to add a line of
+	// documentation that changes nothing at runtime.
+	//
+	// A NAME is different. Kubernetes resolves a named probe port against the
+	// ports THIS container declares, and a name that is not there resolves to
+	// nothing: the probe can never succeed, and the container never becomes
+	// ready. That is the real defect this check exists for, and it is the case
+	// it is now narrowed to.
 	add([]string{FnDeclaresPort, "declaresport_dyn_dyn"}, func(args ...ref.Val) ref.Val {
 		if len(args) != 2 {
 			return types.NewErr("declaresPort() takes a container and a port")
@@ -87,9 +103,17 @@ func bindings2(idx *compliance.Index) map[string]impl {
 		if !ok {
 			return types.Bool(false)
 		}
+		switch native(args[1]).(type) {
+		case int, int64, float64:
+			return types.Bool(true)
+		}
 		want := scalarString(native(args[1]))
 		if want == "" {
 			return types.Bool(false)
+		}
+		// A numeric string is still a number to Kubernetes.
+		if _, err := strconv.Atoi(want); err == nil {
+			return types.Bool(true)
 		}
 		ports, _ := c["ports"].([]any)
 		for _, p := range ports {

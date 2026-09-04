@@ -3,57 +3,94 @@ kind: PolicyPack
 metadata:
   name: sgw-baseline-disruption
   prefix: PDB
-  version: 1.0.0
+  version: 2.0.0
   description: >
-    Disruption and availability. Whether a node drain proceeds, and whether the
-    workload is still there afterwards.
+    Staying available while the platform is maintained. These checks are about
+    what happens when a server is taken out for patching, and about whether an
+    update can start, finish, and be seen to have finished.
   maintainer: platform-sre
+  reference: docs/compliance/source-standards.md - 2. Disruption & Availability
 spec:
   checks:
     - id: PDB-01
-      title: Replicated workloads are covered by a PodDisruptionBudget
+      title: A service with more than one copy survives planned maintenance
       description: >
-        Every Deployment and StatefulSet with more than one replica is selected
-        by a PodDisruptionBudget shipped in the same release.
+        A service running two or more copies ships a rule saying how many copies
+        must stay running while servers are patched. Kubernetes calls that rule a
+        PodDisruptionBudget.
       rationale: >
-        Without a budget the eviction API will take every replica of a workload
-        at once during a node drain. The operator sees a successful drain and
-        an outage.
+        When a server is taken offline for patching, the platform asks each
+        service how many copies it can spare. A service that has not answered is
+        assumed to be able to spare all of them, so every copy can be stopped at
+        the same moment. The service goes fully offline during what was meant to
+        be routine, non-disruptive maintenance, and the maintenance itself
+        reports success.
       severity: block
       tier: 1
       category: Disruption & Availability
+      subcategory: PodDisruptionBudget
+      keywords: [PodDisruptionBudget, PDB, policy/v1, eviction, "node drain", minAvailable, maxUnavailable, replicas]
+      confidence: confirmed
+      whenItBites: node-maintenance
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - PDB-01
       remediation: >
-        Ship a PodDisruptionBudget whose selector matches the workload's pod
-        labels, with minAvailable set below the replica count.
+        Ship a PodDisruptionBudget whose selector matches this workload's pod
+        labels, allowing at most one copy to be unavailable at a time.
+      fixExample: |
+        apiVersion: policy/v1
+        kind: PodDisruptionBudget
+        metadata:
+          name: my-service
+        spec:
+          maxUnavailable: 1
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: my-service
+              app.kubernetes.io/instance: my-release
       appliesTo:
         kinds: [Deployment, StatefulSet]
         where: 'replicas(self) >= 2'
       assert:
         expr: 'size(pdbFor(self)) > 0'
         locus: metadata.labels
-        expected: a PodDisruptionBudget in this release selecting these pods
-        observed: '"none"'
+        expected: a rule in this release saying how many copies must stay running during maintenance
+        observed: '"no such rule matches this workload"'
         message: |
-          "no PodDisruptionBudget in this release selects the pods of " +
-          text(self, "kind") + " " + text(self, "metadata.name") +
-          ", so a node drain can evict all " + string(replicas(self)) + " replicas at once"
+          text(self, "metadata.name") + " runs " + string(replicas(self)) +
+          " copies, and the chart does not tell the platform how many must stay running during " +
+          "maintenance. When a server is drained for patching, all " + string(replicas(self)) +
+          " copies can be stopped at once and the service goes fully offline."
 
     - id: PDB-02
-      title: No PodDisruptionBudget forbids every eviction
+      title: No rule makes maintenance impossible
       description: >
-        A budget does not set maxUnavailable to 0 or "0%", nor minAvailable to
-        "100%" or to the full replica count of every workload it selects.
+        A maintenance rule never demands that every copy stays running. All four
+        ways of writing that are covered: maxUnavailable 0, maxUnavailable "0%",
+        minAvailable "100%", and minAvailable equal to the number of copies.
       rationale: >
-        All four spellings mean the same thing: the eviction API refuses every
-        request forever, so a node drain hangs and the cluster cannot be
-        patched. It is usually written by somebody protecting a workload very
-        carefully.
+        A rule demanding that every copy stays running can never be satisfied,
+        because moving a copy means stopping it first. Maintenance on any server
+        hosting this service waits for permission that can never be granted, so a
+        cluster-wide patch stalls until an engineer intervenes by hand. It is
+        almost always written by somebody protecting a service very carefully.
       severity: block
       tier: 1
       category: Disruption & Availability
+      subcategory: PodDisruptionBudget
+      keywords: [PodDisruptionBudget, PDB, maxUnavailable, minAvailable, eviction, "node drain", deadlock]
+      confidence: confirmed
+      whenItBites: node-maintenance
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - PDB-02
       remediation: >
-        Set minAvailable below the replica count, or maxUnavailable to at least
-        1.
+        Set minAvailable below the number of copies, or set maxUnavailable to at
+        least 1.
+      fixExample: |
+        spec:
+          maxUnavailable: 1     # one copy may be moved at a time
       appliesTo:
         kinds: [PodDisruptionBudget]
       assert:
@@ -63,52 +100,88 @@ spec:
           text(self, "spec.minAvailable") != "100%" &&
           covers(self).all(w, text(self, "spec.minAvailable") == "" || string(replicas(w)) != text(self, "spec.minAvailable"))
         locus: spec
-        expected: a budget that permits at least one eviction
+        expected: a rule that lets at least one copy be moved
         observed: |
           present(self, "spec.maxUnavailable")
-            ? "maxUnavailable " + text(self, "spec.maxUnavailable")
-            : "minAvailable " + text(self, "spec.minAvailable")
+            ? "at most " + text(self, "spec.maxUnavailable") + " copies may be unavailable"
+            : "at least " + text(self, "spec.minAvailable") + " copies must stay running"
+        message: |
+          "the rule " + text(self, "metadata.name") + " demands that every copy stays running, so " +
+          "the platform can never get permission to move one. Patching any server that hosts this " +
+          "service will wait indefinitely, and a cluster upgrade stalls until somebody intervenes."
 
     - id: PDB-03
-      title: No PodDisruptionBudget covers a single-replica workload
+      title: A single copy is not protected in a way that blocks maintenance
       description: >
-        A budget does not select a Deployment or StatefulSet with one replica,
-        nor a Job or CronJob.
+        A maintenance rule does not cover a service that runs only one copy, nor
+        a one-off task.
       rationale: >
-        A budget over one replica permits no eviction at all, which is PDB-02
-        arrived at by a different route. Drains block indefinitely and the
-        cause is one replica count away from where anybody looks.
-      severity: warn
+        Protecting a single copy does not make it more available - there is
+        nothing to keep running while it moves. All it does is refuse every
+        request to move it, so patching the server it is on hangs forever. The
+        cause is one number away from where anybody thinks to look.
+      severity: block
       tier: 1
       category: Disruption & Availability
+      subcategory: PodDisruptionBudget
+      keywords: [PodDisruptionBudget, PDB, minAvailable, "single replica", eviction, "node drain"]
+      confidence: confirmed
+      whenItBites: node-maintenance
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - PDB-03
       remediation: >
-        Raise the workload to two replicas, or drop the budget for it.
+        Either run two or more copies and allow one to be unavailable, or drop
+        the rule and accept a brief restart during maintenance.
+      fixExample: |
+        # Either raise the copy count...
+        spec:
+          replicas: 2
+        # ...or drop the PodDisruptionBudget for this workload entirely.
       appliesTo:
         kinds: [PodDisruptionBudget]
       assert:
         expr: 'covers(self).all(w, replicas(w) >= 2)'
         locus: spec.selector
-        expected: selecting only workloads with two or more replicas
-        observed: 'covers(self).map(w, string(value(w, "metadata.name")) + " (" + string(replicas(w)) + " replica(s))").join(", ")'
+        expected: covering only services that run two or more copies
+        observed: 'covers(self).map(w, string(value(w, "metadata.name")) + " runs " + string(replicas(w)) + " copy/copies").join(", ")'
         message: |
-          "this budget covers a workload that cannot spare a pod: " +
+          "the rule " + text(self, "metadata.name") + " protects " +
           covers(self).filter(w, replicas(w) < 2)
-                      .map(w, string(value(w, "kind")) + " " + string(value(w, "metadata.name")))
-                      .join(", ") + ". Evictions of it will be refused indefinitely"
+                      .map(w, string(value(w, "metadata.name")))
+                      .join(", ") +
+          ", which runs a single copy. There is no second copy to keep running, so the platform " +
+          "will never be allowed to move it and maintenance on its server will hang."
 
     - id: PDB-05
-      title: A rolling update can start
+      title: An update can always get started
       description: >
-        A Deployment using RollingUpdate sets maxSurge or maxUnavailable above
-        zero.
+        A service that replaces its copies one at a time allows either a
+        temporary extra copy or a temporarily missing one - at least one of the
+        two.
       rationale: >
-        Both at zero is a rollout that can neither create a new pod nor remove
-        an old one. The deployment reports progress forever and never makes
-        any.
+        If neither is allowed, the update has nowhere to begin. It cannot start a
+        new copy without room for it, and it cannot stop an old one without
+        breaking its own availability promise. The update reports that it is
+        progressing, forever, and never progresses.
       severity: block
       tier: 1
       category: Disruption & Availability
+      subcategory: Rollout strategy
+      keywords: [RollingUpdate, maxSurge, maxUnavailable, spec.strategy, rollout, rollingUpdate]
+      confidence: confirmed
+      whenItBites: upgrade
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - PDB-05
       remediation: Set maxSurge to 1, or maxUnavailable to 1.
+      fixExample: |
+        spec:
+          strategy:
+            type: RollingUpdate
+            rollingUpdate:
+              maxSurge: 1          # one extra copy while updating
+              maxUnavailable: 0
       appliesTo:
         kinds: [Deployment]
         where: 'text(self, "spec.strategy.type") == "RollingUpdate"'
@@ -117,63 +190,202 @@ spec:
           text(self, "spec.strategy.rollingUpdate.maxSurge") != "0" ||
           text(self, "spec.strategy.rollingUpdate.maxUnavailable") != "0"
         locus: spec.strategy.rollingUpdate
-        expected: maxSurge or maxUnavailable above zero
+        expected: room for either one extra copy or one missing copy during an update
+        observed: '"no extra copy allowed and no missing copy allowed"'
 
     - id: PDB-06
-      title: A workload behind a Service does not use the Recreate strategy
+      title: Updates do not take the service offline
       description: >
-        A Deployment selected by a Service does not set strategy.type to
-        Recreate.
+        A service that receives traffic starts its new copies before stopping the
+        old ones, rather than stopping all of them first.
       rationale: >
-        Recreate stops every pod before starting any. For a workload with
-        traffic that is a deliberate outage on every upgrade, and it is usually
-        copied from a chart for something that had none.
+        Stopping every copy before starting any is a complete outage on every
+        single update, by design - not a risk, a certainty. It lasts from the
+        moment the last old copy stops until the first new one is ready. It is
+        usually copied from a chart for something that had no traffic.
       severity: block
       tier: 1
       category: Disruption & Availability
-      remediation: Use RollingUpdate.
+      subcategory: Rollout strategy
+      keywords: [Recreate, RollingUpdate, spec.strategy.type, rollout, downtime]
+      confidence: confirmed
+      whenItBites: upgrade
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - PDB-06
+      remediation: Set the update strategy to RollingUpdate.
+      fixExample: |
+        spec:
+          strategy:
+            type: RollingUpdate
+            rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
       appliesTo:
         kinds: [Deployment]
         where: 'size(servicesFor(self)) > 0'
       assert:
         expr: 'text(self, "spec.strategy.type") != "Recreate"'
         locus: spec.strategy.type
-        expected: RollingUpdate for a workload receiving traffic
+        expected: new copies started before old ones stop (RollingUpdate)
+        observed: '"Recreate - every copy stops before any new one starts"'
+        message: |
+          text(self, "metadata.name") + " receives live traffic and is set to stop every copy " +
+          "before starting any new one. Every update to it is a full outage, every time."
 
     - id: PDB-07
-      title: Deployments declare a progress deadline
-      description: A Deployment sets spec.progressDeadlineSeconds explicitly.
+      title: A stuck update is reported instead of hanging
+      description: >
+        A service states how long an update may take before the platform declares
+        it failed.
       rationale: >
-        Without it a stuck rollout is reported as still progressing, and
-        automation waiting on the deployment waits forever rather than failing.
+        Without a deadline, an update that will never succeed is reported as
+        still in progress, and anything waiting on it waits forever rather than
+        failing and telling somebody. The release appears to be mid-deployment
+        for hours.
       severity: warn
       tier: 1
       category: Disruption & Availability
-      remediation: Set spec.progressDeadlineSeconds to a value above the expected rollout time.
+      subcategory: Rollout strategy
+      keywords: [progressDeadlineSeconds, rollout, ProgressDeadlineExceeded, "stuck deployment"]
+      confidence: confirmed
+      whenItBites: upgrade
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - PDB-07
+      remediation: >
+        Set spec.progressDeadlineSeconds to comfortably more than a normal update
+        takes - 600 is a common starting point.
+      fixExample: |
+        spec:
+          progressDeadlineSeconds: 600
       appliesTo:
         kinds: [Deployment]
       assert:
         required: [spec.progressDeadlineSeconds]
 
     - id: PDB-08
-      title: Pods declare a non-zero termination grace period
+      title: Shutdown time is stated rather than left to the platform
       description: >
-        A workload sets terminationGracePeriodSeconds explicitly, above zero.
+        A workload says how long it needs to finish work in progress before it is
+        stopped, instead of relying on the platform's 30-second default.
       rationale: >
-        Zero is SIGKILL at eviction, with no chance to finish a request, flush
-        a buffer or release a lock. It is a common copy-paste from a debugging
-        session.
-      severity: warn
+        Thirty seconds is usually enough, so this is a documentation gap rather
+        than a defect - which is why it is recorded and not a warning. It matters
+        where requests can take longer than that: those requests are cut off part
+        way through on every restart, update and maintenance event, and nothing
+        in the chart records that the author had considered it.
+      severity: info
       tier: 1
       category: Disruption & Availability
+      subcategory: Graceful shutdown
+      keywords: [terminationGracePeriodSeconds, SIGTERM, "grace period", "graceful shutdown"]
+      confidence: confirmed
+      whenItBites: upgrade
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - PDB-08
       remediation: >
         Set terminationGracePeriodSeconds to at least as long as the longest
-        in-flight operation.
+        piece of work the service can be in the middle of.
+      fixExample: |
+        spec:
+          template:
+            spec:
+              terminationGracePeriodSeconds: 45
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, Job, CronJob, Pod]
         subject: podSpec
       assert:
-        expr: 'present(self, "terminationGracePeriodSeconds") && int(value(self, "terminationGracePeriodSeconds")) > 0'
+        expr: 'present(self, "terminationGracePeriodSeconds")'
         locus: terminationGracePeriodSeconds
-        expected: set, above zero
-        observed: 'present(self, "terminationGracePeriodSeconds") ? text(self, "terminationGracePeriodSeconds") : "(absent)"' 
+        expected: a stated shutdown time
+        observed: '"not declared, so the platform allows 30 seconds"'
+        message: |
+          text(owner, "kind") + " " + text(owner, "metadata.name") +
+          " does not say how long it needs to finish work in progress before being stopped. " +
+          "The platform will allow 30 seconds. Declare the value if anything this service does " +
+          "can take longer than that."
+
+    - id: PDB-09
+      title: Every maintenance rule protects a real service
+      description: >
+        A maintenance rule's selector matches at least one workload in the
+        release.
+      rationale: >
+        A rule whose labels match nothing protects nothing. It is in the chart,
+        it passes review, and it provides exactly zero protection - which is the
+        most dangerous kind of failure, because everything about it looks
+        correct. It is discovered when a drain succeeds that should have been
+        refused.
+      severity: warn
+      tier: 1
+      category: Disruption & Availability
+      subcategory: PodDisruptionBudget
+      keywords: [PodDisruptionBudget, PDB, spec.selector, matchLabels, orphan, eviction]
+      confidence: confirmed
+      whenItBites: node-maintenance
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - PDB-09 (proposed addition)
+      remediation: >
+        Make the rule's selector match the labels on the workload's pod template -
+        the labels under spec.template.metadata.labels, which are often not the
+        same as the workload's own labels.
+      fixExample: |
+        spec:
+          maxUnavailable: 1
+          selector:
+            matchLabels:                          # must match the POD labels
+              app.kubernetes.io/name: my-service
+              app.kubernetes.io/instance: my-release
+      appliesTo:
+        kinds: [PodDisruptionBudget]
+      assert:
+        expr: 'size(covers(self)) > 0'
+        locus: spec.selector
+        expected: a selector matching at least one workload in this release
+        observed: 'selectorKeys(self).size() == 0 ? "no selector at all" : "selects on " + selectorKeys(self).join(", ") + ", which matches nothing here"'
+        message: |
+          "the rule " + text(self, "metadata.name") + " matches no workload in this release, so it " +
+          "protects nothing. It will look correct in review and provide no protection at all during " +
+          "maintenance."
+
+    - id: PDB-10
+      title: No service is stopped instantly
+      description: >
+        No workload sets its shutdown time to zero.
+      rationale: >
+        Zero means the service is killed outright the moment it is asked to stop,
+        with no chance to finish the request it is handling, flush what it has
+        buffered, or release a lock it holds. It is a common leftover from a
+        debugging session, and it turns every ordinary restart into data loss.
+      severity: warn
+      tier: 1
+      category: Disruption & Availability
+      subcategory: Graceful shutdown
+      keywords: [terminationGracePeriodSeconds, SIGKILL, "grace period", "graceful shutdown"]
+      confidence: confirmed
+      whenItBites: upgrade
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - PDB-08 (the explicit-zero half)
+      remediation: >
+        Set terminationGracePeriodSeconds to the time the service needs to finish
+        what it is doing. Thirty seconds is the platform default and a reasonable
+        starting point.
+      fixExample: |
+        spec:
+          template:
+            spec:
+              terminationGracePeriodSeconds: 30
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, Job, CronJob, Pod]
+        subject: podSpec
+      assert:
+        expr: '!present(self, "terminationGracePeriodSeconds") || int(value(self, "terminationGracePeriodSeconds")) > 0'
+        locus: terminationGracePeriodSeconds
+        expected: a shutdown time above zero
+        observed: '"0 - the service is killed immediately and work in progress is lost"'
+        message: |
+          text(owner, "kind") + " " + text(owner, "metadata.name") +
+          " is killed the instant it is asked to stop. Whatever request it was handling is dropped, " +
+          "on every restart, update and maintenance event."

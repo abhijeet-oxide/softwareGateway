@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
@@ -201,14 +202,28 @@ type ComplianceRenderedRow struct {
 type ComplianceResultRow struct {
 	Seq int
 
-	CheckID     string
-	CheckTitle  string
-	Severity    string
-	Tier        int
-	Category    string
+	CheckID    string
+	CheckTitle string
+	Severity   string
+	Tier       int
+	Category   string
+	// Subcategory is the mechanism, in an engineer's words; Keywords is the
+	// technical vocabulary the finding is searchable by. Stored flat, space
+	// separated, because what they exist for is a LIKE over the search box.
+	Subcategory string
+	Keywords    string
 	Pack        string
 	Remediation string
 	Reference   string
+
+	// The triage block: who fixes it, how much work, when it bites, and how
+	// firmly the tool knows. Stored per result, not joined from the catalogue,
+	// so an exported report keeps saying what it said.
+	Confidence  string
+	WhenItBites string
+	FixOwner    string
+	FixEffort   string
+	FixExample  string
 
 	Outcome     string
 	Determinacy string
@@ -358,13 +373,15 @@ func (p *Packages) FinishComplianceRun(
 
 	stmt, err := tx.PrepareContext(ctx, p.dialect.Rewrite(`
 		INSERT INTO compliance_results (
-			run_id, seq, check_id, check_title, severity, tier, category, pack,
+			run_id, seq, check_id, check_title, severity, tier, category,
+			subcategory, keywords, pack,
 			remediation, reference, outcome, determinacy,
+			confidence, when_it_bites, fix_owner, fix_effort, fix_example,
 			chart, chart_version, subchart_path, artifact_digest, artifact_ref,
 			source_file, rendered_line, api_version, kind, namespace, name,
 			container, container_type, locus,
 			observed, expected, message, error, waiver, waiver_expires, fingerprint)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
 	if err != nil {
 		return fmt.Errorf("prepare compliance result insert: %w", err)
 	}
@@ -372,8 +389,10 @@ func (p *Packages) FinishComplianceRun(
 
 	for _, r := range results {
 		if _, err := stmt.ExecContext(ctx,
-			run.ID, r.Seq, r.CheckID, r.CheckTitle, r.Severity, r.Tier, r.Category, r.Pack,
+			run.ID, r.Seq, r.CheckID, r.CheckTitle, r.Severity, r.Tier, r.Category,
+			r.Subcategory, r.Keywords, r.Pack,
 			r.Remediation, r.Reference, r.Outcome, r.Determinacy,
+			r.Confidence, r.WhenItBites, r.FixOwner, r.FixEffort, r.FixExample,
 			r.Chart, r.ChartVersion, r.SubchartPath, r.ArtifactDigest, r.ArtifactRef,
 			r.SourceFile, r.RenderedLine, r.APIVersion, r.Kind, r.Namespace, r.Name,
 			r.Container, r.ContainerType, r.Locus,
@@ -526,9 +545,16 @@ func (p *Packages) RecordComplianceRun(ctx context.Context, runID string, packag
 			Severity:    string(r.Severity),
 			Tier:        int(r.Tier),
 			Category:    r.Category,
+			Subcategory: r.Subcategory,
+			Keywords:    strings.Join(r.Keywords, " "),
 			Pack:        r.Pack,
 			Remediation: r.Remediation,
 			Reference:   r.Reference,
+			Confidence:  string(r.Confidence),
+			WhenItBites: string(r.WhenItBites),
+			FixOwner:    string(r.FixOwner),
+			FixEffort:   string(r.FixEffort),
+			FixExample:  r.FixExample,
 			Outcome:     string(r.Outcome),
 			Determinacy: string(r.Determinacy),
 

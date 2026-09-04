@@ -60,3 +60,26 @@ spec:
             seccompProfile: {type: RuntimeDefault}
             capabilities:
               drop: [ALL]
+---
+# Source: bad-security/templates/memory-scratch.yaml
+# Memory-backed scratch with no ceiling: filling it exhausts the server's
+# memory and evicts every other pod on it, not just this one.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: unbounded-scratch, namespace: bad}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: unbounded-scratch}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: unbounded-scratch}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: cache
+          emptyDir:
+            medium: Memory
+      containers:
+        - name: app
+          image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
+          volumeMounts:
+            - {name: cache, mountPath: /cache}

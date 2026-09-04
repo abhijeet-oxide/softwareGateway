@@ -14,9 +14,9 @@ import (
 // # Why a shorthand exists at all
 //
 // Most of the baseline is "field X of kind Y must satisfy Z", and writing that
-// eighty-eight times as an expression is eighty-eight chances to get absent-
-// field handling wrong and eighty-eight different spellings of the same
-// requirement in the vendor's report. The shorthand gives one spelling, and it
+// a hundred times as an expression is a hundred chances to get absent-field
+// handling wrong, and a hundred different spellings of the same requirement in
+// the vendor's report. The shorthand gives one spelling, and it
 // derives the observed value, the locus and the message from the form - which
 // is how the report gets a useful "expected" column without every author
 // remembering to write one.

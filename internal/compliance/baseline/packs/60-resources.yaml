@@ -3,28 +3,47 @@ kind: PolicyPack
 metadata:
   name: sgw-baseline-resources
   prefix: RES
-  version: 1.0.0
+  version: 2.0.0
   description: >
-    Resources and scaling. Whether the scheduler can place this release, and
-    what happens to the node when it misbehaves.
+    How much of a server each container asks for and is allowed to use. These
+    decide where the platform can place the release, and what happens to
+    everything else on the server when one part of it misbehaves.
   maintainer: platform-sre
+  reference: docs/compliance/source-standards.md - 7. Resources, Scaling & Performance
 spec:
   checks:
     - id: RES-01
-      title: Every container declares CPU and memory requests
+      title: Every container says how much processing power and memory it needs
       description: >
-        resources.requests.cpu and resources.requests.memory are set on every
-        container, including init containers and sidecars.
+        Every container - including helpers and the ones that run before the main
+        one - states the processing power and memory it needs.
       rationale: >
-        Requests are what the scheduler places on. A container without them is
-        placed as though it needs nothing, so the node is overcommitted by
-        exactly the amount that container actually uses. Init containers are
-        the ones every implementation forgets, and an init container's request
-        is part of the pod's effective request.
+        What a container asks for is what the platform uses to decide where to
+        put it. A container that asks for nothing is placed as though it needs
+        nothing, so the server ends up oversubscribed by exactly what that
+        container really uses, and under pressure it is among the first things
+        killed - without warning, and regardless of how important it is.
+        Containers that run before the main one are the ones every
+        implementation forgets, and what they ask for counts towards the whole
+        pod.
       severity: block
       tier: 1
       category: Resources, Scaling & Performance
-      remediation: Set resources.requests.cpu and resources.requests.memory on every container.
+      subcategory: Resource requests
+      keywords: [resources.requests.cpu, resources.requests.memory, requests, scheduling, QoS, eviction]
+      confidence: confirmed
+      whenItBites: under-load
+      fixOwner: chart-values
+      fixEffort: low
+      reference: source-standards.md - RES-01
+      remediation: >
+        Set resources.requests.cpu and resources.requests.memory on every
+        container, exposed as chart values so an operator can size them.
+      fixExample: |
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: all
@@ -32,57 +51,193 @@ spec:
         required: [resources.requests.cpu, resources.requests.memory]
 
     - id: RES-02
-      title: Every container declares a memory limit
-      description: resources.limits.memory is set on every container.
+      title: Every container has a memory ceiling
+      description: Every container states the most memory it may use.
       rationale: >
-        Without a memory limit a leaking container consumes the node until the
-        kernel picks a victim, and the victim is chosen by the OOM killer
-        rather than by anybody's intent. The pod that dies is usually not the
-        one that leaked.
+        Without a ceiling, a container with a memory leak grows until the server
+        runs out, and then the operating system picks something to kill. What it
+        picks is decided by an algorithm, not by anybody's intent, and the thing
+        that dies is usually not the thing that leaked. A ceiling turns one
+        service's bug into one service's outage.
       severity: block
       tier: 1
       category: Resources, Scaling & Performance
+      subcategory: Memory limits
+      keywords: [resources.limits.memory, limits, OOMKilled, OOM, "memory limit"]
+      confidence: confirmed
+      whenItBites: under-load
+      fixOwner: chart-values
+      fixEffort: low
+      reference: source-standards.md - RES-02
       remediation: Set resources.limits.memory on every container.
+      fixExample: |
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits:   {memory: 512Mi}
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: all
       assert:
         required: [resources.limits.memory]
 
-    - id: RES-03
-      title: Containers that cap CPU are listed for review
+    - id: RES-10
+      title: No container is allowed less than it asks for
       description: >
-        Reports every container setting resources.limits.cpu, so the throttling
-        review has a list to work from.
+        A container's ceiling is never below what it asks for, for either
+        processing power or memory.
       rationale: >
-        A CPU limit is not a defect - it is a decision with a consequence.
-        Under CFS quota a container at its limit is throttled rather than
-        slowed, which shows up as latency nobody can attribute. This check
-        exists to produce the list, not to fail anything, so it is
-        informational by construction.
-      severity: info
+        This configuration is not merely unwise, it is invalid. Kubernetes
+        rejects the pod outright and the service never starts at all - an install
+        that fails with an error about quantities, in somebody else's cluster,
+        for a reason nothing in the chart hints at.
+      severity: block
       tier: 1
       category: Resources, Scaling & Performance
-      remediation: >
-        No action required. Confirm the limit is above the container's p99
-        usage, or remove it and rely on requests.
+      subcategory: Resource limits
+      keywords: [resources.limits, resources.requests, limits, requests, invalid, rejected]
+      confidence: confirmed
+      whenItBites: install
+      fixOwner: chart-values
+      fixEffort: low
+      reference: source-standards.md - RES-02 (validity half)
+      remediation: Raise the ceiling above the request, or lower the request.
+      fixExample: |
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits:   {cpu: 500m, memory: 512Mi}     # never below the requests
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: all
+        where: 'value(self, "resources.limits") != null && value(self, "resources.requests") != null'
       assert:
-        forbidden: [resources.limits.cpu]
+        expr: |
+          (!present(self, "resources.limits.cpu") || !present(self, "resources.requests.cpu") ||
+            quantity(text(self, "resources.limits.cpu")) >= quantity(text(self, "resources.requests.cpu"))) &&
+          (!present(self, "resources.limits.memory") || !present(self, "resources.requests.memory") ||
+            quantity(text(self, "resources.limits.memory")) >= quantity(text(self, "resources.requests.memory")))
+        locus: resources.limits
+        expected: a ceiling at least as high as the request
+        observed: |
+          "asks for " + text(self, "resources.requests.cpu") + " processing power and " +
+          text(self, "resources.requests.memory") + " memory, but is capped at " +
+          text(self, "resources.limits.cpu") + " and " + text(self, "resources.limits.memory")
+
+    - id: RES-11
+      title: A memory ceiling is close enough to the request to be believable
+      description: >
+        A container's memory ceiling is no more than four times what it asks
+        for.
+      rationale: >
+        The request is what the platform reserves; the ceiling is what the
+        container may grow into. A container that reserves a little and is
+        allowed a great deal will be placed on a server that cannot actually give
+        it that much, so under load it grows into space that is not there - and
+        either it or a neighbouring service is killed for memory the server never
+        had. Recorded rather than warned about, because a wide gap is sometimes
+        the right answer for a bursty workload.
+      severity: info
+      tier: 1
+      category: Resources, Scaling & Performance
+      subcategory: Memory limits
+      keywords: [resources.limits.memory, resources.requests.memory, headroom, overcommit, burstable]
+      confidence: probable
+      whenItBites: under-load
+      fixOwner: chart-values
+      fixEffort: low
+      reference: source-standards.md - RES-02 (headroom half)
+      remediation: >
+        Raise the request towards real steady-state usage, or lower the ceiling
+        towards the real peak. Confirm the gap is deliberate if it is wide.
+      fixExample: |
+        resources:
+          requests: {memory: 512Mi}
+          limits:   {memory: 1Gi}      # twice the request, not ten times
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: 'present(self, "resources.requests.memory") && present(self, "resources.limits.memory")'
+      assert:
+        expr: |
+          quantity(text(self, "resources.limits.memory")) <=
+            4.0 * quantity(text(self, "resources.requests.memory"))
+        locus: resources.limits.memory
+        expected: a memory ceiling no more than four times the request
+        observed: |
+          "asks for " + text(self, "resources.requests.memory") + " and may use up to " +
+          text(self, "resources.limits.memory")
+
+    - id: RES-03
+      title: A processing-power ceiling leaves room above what the service asked for
+      description: >
+        Where a container caps its processing power, the cap is at least twice
+        what it asks for.
+      rationale: >
+        A processing cap does not slow a container down gently; the platform
+        pauses it repeatedly whenever it reaches the cap, which shows up as
+        latency nobody can attribute to anything. A cap close to the request
+        means the service is paused during every ordinary burst. This is a
+        decision with a consequence rather than a defect, so it is recorded for
+        the throttling review rather than warned about.
+      severity: info
+      tier: 1
+      category: Resources, Scaling & Performance
+      subcategory: CPU limits
+      keywords: [resources.limits.cpu, "CFS quota", throttling, "cpu cap", latency]
+      confidence: probable
+      whenItBites: under-load
+      fixOwner: chart-values
+      fixEffort: low
+      reference: source-standards.md - RES-03
+      remediation: >
+        Confirm the cap is above the container's real peak usage, raise it, or
+        remove it and rely on the request for placement.
+      fixExample: |
+        resources:
+          requests: {cpu: 250m}
+          limits:   {cpu: "1"}      # four times the request, room to burst
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: 'present(self, "resources.limits.cpu") && present(self, "resources.requests.cpu")'
+      assert:
+        # Recorded on a pass too: the throttling review the source catalogue
+        # asks for wants the list of containers that cap CPU, and making the
+        # check FAIL to produce that list is what turned it into a fifth of a
+        # real report describing no defect at all.
+        observeOnPass: true
+        expr: |
+          quantity(text(self, "resources.limits.cpu")) >=
+            2.0 * quantity(text(self, "resources.requests.cpu"))
+        locus: resources.limits.cpu
+        expected: a processing cap at least twice the request, so ordinary bursts are not paused
+        observed: |
+          "asks for " + text(self, "resources.requests.cpu") + " and is capped at " +
+          text(self, "resources.limits.cpu")
 
     - id: RES-04
-      title: An autoscaler keeps at least two replicas
-      description: Every HorizontalPodAutoscaler sets minReplicas to 2 or more.
+      title: Automatic scaling never drops to a single copy
+      description: >
+        Every automatic scaling rule keeps at least two copies running.
       rationale: >
-        minReplicas of 1 means the autoscaler will scale a service to a single
-        pod during quiet hours, and that pod's node is then a single point of
-        failure at exactly the time nobody is watching.
+        Scaling down to one copy means the server that copy is on becomes a
+        single point of failure - and the scaler does it during quiet hours,
+        which is exactly when nobody is watching and when a failure takes longest
+        to notice.
       severity: warn
       tier: 1
       category: Resources, Scaling & Performance
+      subcategory: Autoscaling
+      keywords: [HorizontalPodAutoscaler, HPA, minReplicas, maxReplicas, autoscaling]
+      confidence: confirmed
+      whenItBites: on-failure
+      fixOwner: chart-values
+      fixEffort: low
+      reference: source-standards.md - RES-04
       remediation: Set minReplicas to at least 2.
+      fixExample: |
+        spec:
+          minReplicas: 2
+          maxReplicas: 10
       appliesTo:
         kinds: [HorizontalPodAutoscaler]
       assert:

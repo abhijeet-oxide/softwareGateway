@@ -8,3 +8,10 @@ findings:
   # semver-tag is on the approved registry, so SUP-02 must NOT fire on it. Its
   # only defect is the tag, and the two checks stay separable - which is what
   # lets a vendor fix one without being told about the other.
+  # A moving label: what was tested and what starts after the next restart can
+  # be different software, with nothing recording that they differ.
+  - {check: SUP-11, kind: Deployment, name: moving, container: latest-tag}
+  # SUP-01 must NOT also fire on it. There is no specific version to pin yet, so
+  # reporting "not pinned by fingerprint" alongside "uses a moving label" would
+  # penalise one decision twice - on exactly the images a reader most needs to
+  # look at.

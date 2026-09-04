@@ -46,9 +46,61 @@ type Check struct {
 	Severity Severity `json:"severity"`
 	Tier     Tier     `json:"tier,omitempty"`
 	Category string   `json:"category,omitempty"`
+	// Subcategory names the MECHANISM in the words an engineer uses for it -
+	// "PodDisruptionBudget", "Taints & tolerations", "Seccomp". Category is the
+	// section of the standard and is written for whoever is deciding whether to
+	// ship; this is written for whoever is about to fix it, and it is what makes
+	// findings groupable by the thing they are actually about.
+	Subcategory string `json:"subcategory,omitempty"`
+	// Keywords is the technical vocabulary this check is findable by: the field
+	// paths, the API kinds, the acronyms, the annotation names.
+	//
+	// # Why a plain-language rewrite needs this
+	//
+	// Titles and messages are written so that somebody who is not a Kubernetes
+	// engineer can act on them, which means they say "the rule that tells the
+	// platform how many copies must stay running" rather than
+	// "PodDisruptionBudget". That is right for the person deciding whether to
+	// ship and useless for the person fixing it: an engineer types `toleration`
+	// or `maxUnavailable` or `RWX` into the search box, and the plainer the
+	// prose gets the fewer of those words remain anywhere in the report.
+	//
+	// So the vocabulary is carried deliberately instead of being a side effect
+	// of how the sentences happen to be worded. It is indexed by the search on
+	// the findings table, so both readers get the report they need out of one
+	// set of results.
+	Keywords []string `json:"keywords,omitempty"`
 
 	Remediation string `json:"remediation,omitempty"`
 	Reference   string `json:"reference,omitempty"`
+
+	// The four fields below are what turns a finding from a statement into
+	// something a reader can triage without being a Kubernetes engineer. They
+	// are declared on the check because they are properties of the RULE, not of
+	// the instance: "who fixes a missing memory limit" has one answer, and
+	// writing it once is what stops the report answering it differently in two
+	// rows.
+
+	// Confidence says how firmly the tool can assert this from the manifest
+	// alone. It is the field that keeps an argument short: a vendor disputing a
+	// `needs-review` finding is not disputing the tool, they are supplying the
+	// context the tool said it did not have.
+	Confidence Confidence `json:"confidence,omitempty"`
+	// WhenItBites is when the consequence actually arrives. A defect that only
+	// shows up during node maintenance is urgent before a platform upgrade
+	// window and can wait otherwise, and nothing else in a finding says so.
+	WhenItBites Timing `json:"whenItBites,omitempty"`
+	// FixOwner is who makes the change. It replaces the reader's guess, and it
+	// is the difference between a report a release manager can route and one
+	// they have to ask about.
+	FixOwner FixOwner `json:"fixOwner,omitempty"`
+	// FixEffort is how much work it is, so a reader can plan rather than
+	// discover.
+	FixEffort FixEffort `json:"fixEffort,omitempty"`
+	// FixExample is the corrected configuration, as YAML. Prose describing a
+	// fix and the four lines that are the fix are not the same artifact, and
+	// the second one is the one that gets applied.
+	FixExample string `json:"fixExample,omitempty"`
 
 	// AppliesTo selects the subjects. Mandatory: see the type comment.
 	AppliesTo AppliesTo `json:"appliesTo"`
@@ -130,6 +182,39 @@ func (c Check) Validate() []error {
 	if c.Tier != 0 && c.Tier != Tier1 && c.Tier != Tier2 {
 		add("tier %d must be 1 or 2", c.Tier)
 	}
+	// Subcategory and Keywords are not required HERE, for the same reason
+	// Rationale is not: they are what the report needs to be usable, not what
+	// the check needs to be evaluable, and refusing to load a check over its
+	// metadata would make a finding vanish rather than read badly. The shipped
+	// pack is held to them by baseline/contract_test.go, and any pack should be
+	// - see docs/compliance/02-authoring-checks.md. An empty keyword is a
+	// different thing: it is a malformed value that would match every search.
+	for _, k := range c.Keywords {
+		if strings.TrimSpace(k) == "" {
+			add("keywords contains an empty term, which would match every search")
+		}
+	}
+	if !c.Confidence.Valid() {
+		add("confidence %q must be one of confirmed, probable, needs-review", c.Confidence)
+	}
+	if !c.WhenItBites.Valid() {
+		add("whenItBites %q must be one of install, upgrade, node-maintenance, under-load, on-failure, continuously", c.WhenItBites)
+	}
+	if !c.FixOwner.Valid() {
+		add("fixOwner %q must be one of chart-template, chart-values, application, build-pipeline, platform-team, needs-decision", c.FixOwner)
+	}
+	if !c.FixEffort.Valid() {
+		add("fixEffort %q must be one of low, medium, high", c.FixEffort)
+	}
+	// The severity rubric, mechanical. A check that says in its own metadata
+	// that somebody has to look at the workload before the finding means
+	// anything cannot also fail the release on its own - that combination is
+	// what produces the argument where a vendor is told their deliberate,
+	// correct design choice is a blocking defect, and one of those is enough to
+	// cost the whole report its credibility.
+	if c.Confidence == ConfidenceNeedsReview && c.Severity == SeverityBlock {
+		add("a check with confidence needs-review may not be severity block: it says itself that the finding may be correct for this workload, so it cannot decide the verdict alone")
+	}
 	if c.Deprecated {
 		// A retired check runs nothing, so the rest of the schema does not
 		// apply to it. It still has to explain itself, because the reason to
@@ -144,6 +229,9 @@ func (c Check) Validate() []error {
 	case EngineDeclarative:
 		if c.Assert.Empty() {
 			add("assert is required: a declarative check with no assertion would pass everything it applies to")
+		}
+		if c.Assert.ObserveOnPass && c.Assert.Observed == "" {
+			add("assert.observeOnPass records the observed value on a pass, and this check has no observed expression to record")
 		}
 	case EngineBuiltin:
 		if !c.Assert.Empty() {
@@ -390,6 +478,30 @@ type Assert struct {
 	// Expr is CEL, for everything the forms above cannot say. True means
 	// compliant.
 	Expr string `json:"expr,omitempty"`
+
+	// ObserveOnPass records the observed value on a PASS as well as on a
+	// failure.
+	//
+	// # Why a check would want that
+	//
+	// Some checks exist to report what is there rather than to reject it: which
+	// containers cap their processing power, which claims are shared, what a
+	// release runs outside the ordinary install. Without this, the only way to
+	// make such a check say anything is to make it FAIL on every subject - and
+	// that is how a pack ends up with three checks producing a third of the
+	// report's rows and close to none of its defects, which is the shape the
+	// audit in docs/compliance/compliance-report.md found.
+	//
+	// With it, the check passes on everything correct and still carries what it
+	// saw, so the inventory lives in the full record and the action report stays
+	// about defects.
+	//
+	// It applies only to the author-supplied `observed`, never to the
+	// shorthand's per-term one: a term's observed value describes the term that
+	// failed, and there is no failing term on a pass. An expression used this
+	// way has to read correctly in both cases - "runs at pre-upgrade,
+	// pre-install", not "runs at nothing Helm recognises".
+	ObserveOnPass bool `json:"observeOnPass,omitempty"`
 
 	// Observed, Expected, Locus and Message override what the shorthand would
 	// have derived. Observed and Message are CEL expressions returning a

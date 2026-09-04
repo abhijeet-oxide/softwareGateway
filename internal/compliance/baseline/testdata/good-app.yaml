@@ -154,6 +154,11 @@ spec:
         app.kubernetes.io/part-of: good-platform
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: 1.4.2
+      annotations:
+        # Derived from the ConfigMap this workload reads, so changing the
+        # settings changes the pod and the platform rolls it out. Without this,
+        # an upgrade changes the ConfigMap and nothing restarts.
+        checksum/config: "3a1f0c9d6b2e4857aa019f3c4d5e6b7089ac1d2e3f405162738495a6b7c8d9e0"
     spec:
       # The only tolerations a workload needs by default, and both bounded:
       # a kubelet missing one heartbeat should not evict, and five minutes of
@@ -219,6 +224,9 @@ spec:
               cpu: 250m
               memory: 512Mi
             limits:
+              # Four times the request: room for an ordinary burst without the
+              # platform pausing the container.
+              cpu: "1"
               memory: 1Gi
           readinessProbe:
             httpGet:
@@ -279,6 +287,8 @@ spec:
         app.kubernetes.io/part-of: good-platform
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: 1.4.2
+      annotations:
+        checksum/config: "3a1f0c9d6b2e4857aa019f3c4d5e6b7089ac1d2e3f405162738495a6b7c8d9e0"
     spec:
       serviceAccountName: good-app
       automountServiceAccountToken: false
@@ -470,6 +480,10 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: widgets.acme.example
+  annotations:
+    # Kept when the release is uninstalled. Deleting the definition would
+    # delete every Widget in the cluster, including other teams'.
+    helm.sh/resource-policy: keep
 spec:
   group: acme.example
   names:
@@ -728,10 +742,28 @@ spec:
         - {key: acme.example/dataplane, operator: Exists, effect: NoSchedule}
       securityContext:
         runAsNonRoot: true
+        # Access to the shared folder by group membership, rather than by owning
+        # its files - which is what keeps a start-up ownership rewrite from ever
+        # being needed.
+        supplementalGroups: [20001]
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile: {type: RuntimeDefault}
+      volumes:
+        # Memory-backed scratch, with a ceiling. Without one it is bounded only
+        # by the server's memory, and filling it evicts every other pod there.
+        - name: fastpath-scratch
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+        - name: shared-state
+          persistentVolumeClaim:
+            claimName: good-dataplane-shared
       containers:
         - name: dataplane
           image: registry.acme.example/good/dataplane@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+          volumeMounts:
+            - {name: fastpath-scratch, mountPath: /run/fastpath}
+            - {name: shared-state, mountPath: /var/shared}
           resources:
             requests:
               cpu: "2"
@@ -759,7 +791,12 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             seccompProfile: {type: RuntimeDefault}
-            capabilities: {drop: [ALL]}
+            # Everything given up, and one narrow permission taken back: binding
+            # a privileged port. Not one of the permissions that would let this
+            # container reach outside its own sandbox.
+            capabilities:
+              drop: [ALL]
+              add: [NET_BIND_SERVICE]
 ---
 # Source: good-app/templates/pvc.yaml
 apiVersion: v1
@@ -780,6 +817,53 @@ spec:
   resources:
     requests:
       storage: 20Gi
+---
+# Source: good-app/templates/shared-pvc.yaml
+# Shared-write storage, used the way the standard describes: one writer, a
+# non-root process, and access by group membership rather than by ownership.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: good-dataplane-shared
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-dataplane
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: dataplane
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: acme-nfs
+  resources:
+    requests:
+      storage: 50Gi
+---
+# Source: good-app/templates/db-secret.yaml
+# An empty shell. The release ships the object so that everything referring to
+# it resolves, and the platform's secret store fills it in at install time -
+# so no credential ever travels inside the chart.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: good-app-db
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+  annotations:
+    acme.example/populated-by: platform-vault
+type: Opaque
+stringData:
+  # The key is declared so everything referring to it resolves; the value is
+  # written at install time by the platform's secret store. Nothing sensitive
+  # travels inside the chart.
+  password: ""
 ---
 # Source: good-app/templates/dataplane-sa.yaml
 # A service account bound to nothing, so its pods have no use for a mounted

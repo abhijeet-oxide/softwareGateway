@@ -9,3 +9,10 @@ findings:
   # nothing, and still mounting a token.
   - {check: RBAC-02, kind: Deployment, name: silent}
   - {check: SEC-10, kind: RoleBinding, name: dataplane-scc}
+  # Logs written to a file inside the container, where they vanish on the
+  # restart that made them worth reading.
+  - {check: OBS-05, kind: Deployment, name: filelogger, container: app}
+  - {check: RBAC-02, kind: Deployment, name: filelogger}
+  # The relaxed security policy is granted to a group, so it applies to every
+  # workload installed in the namespace afterwards.
+  - {check: RBAC-10, kind: RoleBinding, name: dataplane-scc}

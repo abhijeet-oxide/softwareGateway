@@ -416,13 +416,34 @@ type Result struct {
 	CheckID string `json:"checkId"`
 	// The check's own metadata, copied at evaluation time so the row explains
 	// itself with nothing else loaded.
-	CheckTitle  string   `json:"checkTitle,omitempty"`
-	Severity    Severity `json:"severity"`
-	Tier        Tier     `json:"tier,omitempty"`
-	Category    string   `json:"category,omitempty"`
+	CheckTitle string   `json:"checkTitle,omitempty"`
+	Severity   Severity `json:"severity"`
+	Tier       Tier     `json:"tier,omitempty"`
+	Category   string   `json:"category,omitempty"`
+	// Subcategory is the mechanism this finding is about, in the words an
+	// engineer uses for it, and Keywords is the technical vocabulary it should
+	// be findable by. Both are carried on the result because the report's
+	// search is over results, and because the plain-language message
+	// deliberately does not contain any of those words.
+	Subcategory string   `json:"subcategory,omitempty"`
+	Keywords    []string `json:"keywords,omitempty"`
 	Pack        string   `json:"pack,omitempty"`
 	Remediation string   `json:"remediation,omitempty"`
 	Reference   string   `json:"reference,omitempty"`
+
+	// The triage block, copied from the check for the same reason the title
+	// and the remediation are: this row is read in a spreadsheet by somebody
+	// with nothing else loaded, and "who fixes this, how much work is it, and
+	// when does it bite" are the three questions they ask before anything else.
+	// See the Confidence, Timing, FixOwner and FixEffort types.
+	Confidence  Confidence `json:"confidence,omitempty"`
+	WhenItBites Timing     `json:"whenItBites,omitempty"`
+	FixOwner    FixOwner   `json:"fixOwner,omitempty"`
+	FixEffort   FixEffort  `json:"fixEffort,omitempty"`
+	// FixExample is the corrected configuration. Carried on the result rather
+	// than looked up, so a report exported today still shows the fix that was
+	// asked for today after the check has been edited.
+	FixExample string `json:"fixExample,omitempty"`
 
 	Outcome     Outcome     `json:"outcome"`
 	Determinacy Determinacy `json:"determinacy,omitempty"`

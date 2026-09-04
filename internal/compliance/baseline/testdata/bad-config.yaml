@@ -10,6 +10,12 @@ data:
   # namespace, which is a far wider set than can read a Secret.
   database.password: hunter2
   api_key: sk-live-8f3a9c2e1b4d
+  # None of these four has a key the old name-driven detector matched, and all
+  # four are unmistakable credentials. They are what it missed.
+  CONNECTION_STRING: postgresql://svcuser:hunter2@db.acme.example:5432/appdb
+  CLOUD_ACCESS_KEY: AKIAIOSFODNN7EXAMPLE
+  SESSION_JWT: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk
+  INITIAL_LOGIN: changeme
   # A reference is not a credential, and must not be reported as one.
   database.passwordSecretRef: leaky-db
   oidc.authorizationUrl: https://sso.acme.example/authorize
@@ -36,12 +42,19 @@ spec:
         - name: app
           image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
           # Container args are world-readable through the API and appear in ps.
-          args: ["--listen=:8080", "--password=hunter2"]
+          # The second one is the shape a prefix-blind pattern misses: the flag
+          # is not called "password", it is called "db-password".
+          args: ["--listen=:8080", "--password=hunter2", "--db-password=S3cr3t-Value",
+                 "--password-file=/etc/app/db.pass"]
           env:
             - name: LOG_LEVEL
               value: info
             # A private key in the environment is in the pod spec and in every
             # crash dump.
+            # A credential in the environment that is not TLS material, so it
+            # is CFG-13's rather than CFG-06's.
+            - name: DB_PASSWORD
+              value: S3cr3t-P@ssw0rd-Value
             - name: TLS_KEY
               value: |
                 -----BEGIN PRIVATE KEY-----
@@ -51,3 +64,45 @@ spec:
             # The container gets every key in the Secret, including the ones
             # added next release for a different component.
             - secretRef: {name: everything}
+---
+# Source: bad-config/templates/secret.yaml
+# A Secret shipped with material already in it. Everything in a chart is in
+# version control and in every mirror of the release, so this has to be treated
+# as exposed from the moment it was committed.
+apiVersion: v1
+kind: Secret
+metadata: {name: shipped-credentials, namespace: bad}
+type: Opaque
+data:
+  # base64 of "S3cr3t-P@ssw0rd-Value" - visible after a single decode, which is
+  # why the detector decodes before it looks.
+  password: UzNjcjN0LVBAc3N3MHJkLVZhbHVl
+  # base64 of "changeme"
+  admin-initial: Y2hhbmdlbWU=
+---
+# Source: bad-config/templates/secret-empty.yaml
+# An empty shell, filled in by the platform's secret store at install time.
+# It must NOT be reported: shipping the object is the correct pattern, and only
+# shipping the material is the defect.
+apiVersion: v1
+kind: Secret
+metadata: {name: filled-at-install, namespace: bad}
+type: Opaque
+stringData:
+  password: ""
+---
+# Source: bad-config/templates/configmap-parameters.yaml
+# Every key here NAMES a credential and none of them holds one. All six were
+# reported as leaked credentials by the name-driven detector this replaced, and
+# not one of them may fire now.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: credential-parameters, namespace: bad}
+immutable: true
+data:
+  SECRET_FETCH_RETRYCOUNT: "5"
+  SECRET_REFRESH_INTERVAL_SEC: "300"
+  TOKEN_CACHE_TTL_SECONDS: "900"
+  PASSWORD_MIN_LENGTH: "12"
+  KEYSTORE_PATH: /etc/tls/keystore.jks
+  CREDENTIAL_PROVIDER_CLASS: com.example.vault.Provider

@@ -1479,19 +1479,22 @@ export function usePackageCompliance(
     severity?: string[]
     chart?: string[]
     kind?: string[]
+    /** The mechanism a finding is about - "Taints & tolerations". */
+    subcategory?: string[]
     determinacy?: string[]
     search?: string
     limit?: number
   } = {},
 ) {
   const {
-    repository, enabled = true, all, outcome, severity, chart, kind, determinacy, search, limit,
+    repository, enabled = true, all, outcome, severity, chart, kind, subcategory,
+    determinacy, search, limit,
   } = opts
   const qc = useQueryClient()
 
   const result = useQuery({
     queryKey: ['package-compliance', product, ref, repository,
-      all, outcome, severity, chart, kind, determinacy, search, limit],
+      all, outcome, severity, chart, kind, subcategory, determinacy, search, limit],
     queryFn: () => {
       const { segment, query: q } = packageRef(ref!)
       const scoped = scopeQuery(q, repository)
@@ -1501,6 +1504,7 @@ export function usePackageCompliance(
         severity: severity?.join(','),
         chart: chart?.join(','),
         kind: kind?.join(','),
+        subcategory: subcategory?.join(','),
         determinacy: determinacy?.join(','),
         q: search,
         limit,

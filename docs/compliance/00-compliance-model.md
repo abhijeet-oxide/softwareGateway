@@ -216,10 +216,12 @@ The address is the feature. Everything else is text.
 ── identity ────────────────────────────────────────────────────────
 checkId          PDB-02
 pack             sgw-baseline            which rulebook this came from
-title            PDB must not forbid every voluntary eviction
+title            No rule makes maintenance impossible
 severity         block
 tier             1
 category         Disruption & Availability
+subcategory      PodDisruptionBudget     the mechanism, in an engineer's words
+keywords         PodDisruptionBudget PDB maxUnavailable minAvailable eviction
 
 ── where, from the outside in ───────────────────────────────────────
 product          vendor-a-platform
@@ -244,12 +246,19 @@ locus            spec.maxUnavailable     JSON path to the field judged
 ── what was found ───────────────────────────────────────────────────
 outcome          fail
 determinacy      fixed
-observed         0
-expected         >= 1, or use minAvailable < replicas
+observed         at most 0 copies may be unavailable
+expected         a rule that lets at least one copy be moved
 message          …one sentence, the thing a person reads first
 remediation      …what to change
-reference        https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+reference        source-standards.md - PDB-02
 reason           (empty; set for skip and error)
+
+── what to do about it ──────────────────────────────────────────────
+confidence       confirmed          what the tool knows vs. what it infers
+whenItBites      node-maintenance   when the consequence arrives
+fixOwner         chart-template     who changes something
+fixEffort        low                how much work
+fixExample       …the corrected YAML, not a description of it
 
 ── tracking ─────────────────────────────────────────────────────────
 fingerprint      sha256(checkId | chartName | kind | namespace | name | container | locus)
@@ -269,6 +278,25 @@ Three properties of that shape are deliberate:
 - **`fingerprint` excludes the chart version and the release tag** on purpose.
   It is what makes "the vendor fixed this in 4.3.0" and "this has been failing
   for six releases" answerable, and it is what a waiver is keyed on.
+
+`subcategory` and `keywords` are the technical index over a report written in
+plain language, and they exist because the plain language took something away.
+The title above says "no rule makes maintenance impossible" and contains the
+word "PodDisruptionBudget" nowhere - which is what makes it readable by somebody
+who is not a Kubernetes engineer, and what leaves the engineer who has to fix it
+with nothing to search for. Both fields are matched by the report's search
+alongside the resource, the chart, the file and the field path, so one box
+serves both readers. See [02](02-authoring-checks.md) §2.2.1.
+
+The triage block is the newest part of the shape and the one that was missing
+longest. A severity says how much this organization cares about the rule; it
+does not say who changes something, how much work it is, when the consequence
+arrives, or how firmly the tool knows what it is asserting - and a report
+without those is one that gets forwarded rather than acted on. It is copied from
+the check onto the result, like the title and the remediation, so a spreadsheet
+sent to a vendor still says what it said the day it was exported. See
+[02](02-authoring-checks.md) §2.1, and [04](04-audit-response.md) for the audit
+that established it was needed.
 
 ## 4. Tiers
 

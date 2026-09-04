@@ -104,3 +104,35 @@ spec:
           resources:
             requests: {cpu: 10m, memory: 16Mi}
             limits: {memory: 32Mi}
+---
+# Source: bad-network/templates/np-allow-all-namespaces.yaml
+# Names a source, so it satisfies any check that only asks whether one was
+# given - and admits every namespace in the cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: allow-all-namespaces, namespace: bad}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: api}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+# Source: bad-network/templates/service-wrong-portname.yaml
+# Selects a real workload, and sends traffic to a port name no container in it
+# declares. Same symptom as selecting nothing: green install, every request
+# failing.
+apiVersion: v1
+kind: Service
+metadata: {name: mistyped-port, namespace: bad}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: api
+  ports:
+    - name: http
+      port: 80
+      targetPort: htp

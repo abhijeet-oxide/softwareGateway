@@ -37,6 +37,19 @@ source catalog that can only be decided by a heuristic becomes a `warn` here: a
 heuristic that blocks a release will be switched off within a month, and a
 switched-off check finds nothing.
 
+**Every check carries a mechanism and a set of search terms.** The titles in
+this catalogue are written so that somebody who is not a Kubernetes engineer can
+read them, which means most of them do not contain the name of the thing they
+are about. `subcategory` and `keywords` carry that vocabulary, they are matched
+by the report's search, and about fifty terms are asserted to find the checks
+they belong to - see [02](02-authoring-checks.md) §2.2.1.
+
+**Rows marked `v2`** changed after the audit in
+[compliance-report.md](compliance-report.md): a severity recalibrated, a
+condition narrowed to remove a false positive, or a check split in two because
+it was describing two different defects in one sentence. What changed and why is
+in [04 - Response to the Audit](04-audit-response.md).
+
 **Rows marked `NEW`** are not in the source catalog. They are failure modes that
 recur in Helm-packaged CNF deliveries and that the artifact makes cheap to
 catch. They are proposed additions, kept visibly separate so the source catalog
@@ -50,9 +63,9 @@ stays recognisable.
 
 | ID | Tier | Ships | Sev | What the check inspects |
 |---|---|---|---|---|
-| SCH-01 | T1-R | v1 | block | Workloads with `replicas >= 2` carry `topologySpreadConstraints` covering `topology.kubernetes.io/zone` **and** `kubernetes.io/hostname`. Determinacy is usually `configurable` (replicas comes from values) - reported as "at chart defaults" unless the template hard-codes it. |
+| SCH-01 | T1-R | v2 | warn | Workloads with `replicas >= 2` carry `topologySpreadConstraints` covering `topology.kubernetes.io/zone` **and** `kubernetes.io/hostname`. Determinacy is usually `configurable` (replicas comes from values) - reported as "at chart defaults" unless the template hard-codes it. Source catalog says `BLOCK`; **lowered to `warn`** because the standard advises starting with SOFT spreading and warns about over-constraining more forcefully than about under-constraining. |
 | SCH-02 | T1-R | v1 | warn | Every zone/hostname spread constraint has `maxSkew: 1`. |
-| SCH-03 | T1-R | v1 | block | No pod carries all three of: `requiredDuringSchedulingIgnoredDuringExecution` node affinity, required pod anti-affinity, and a spread constraint with `whenUnsatisfiable: DoNotSchedule`. Three hard constraints is how a workload becomes unschedulable after one node is cordoned. |
+| SCH-03 | T1-R | v2 | warn | No pod carries all three of: `requiredDuringSchedulingIgnoredDuringExecution` node affinity, required pod anti-affinity, and a spread constraint with `whenUnsatisfiable: DoNotSchedule`. Three hard constraints is how a workload becomes unschedulable after one node is cordoned. **Lowered to `warn`**: it is a resilience gap rather than a prohibited configuration, and it needs a human to say whether the capacity exists. |
 | SCH-04 | T1-R | v1 | warn | Label **values** used in `topologySpreadConstraints.labelSelector` and `podAntiAffinity` selectors do not look generated: 7-40 hex characters, an RFC3339 timestamp, or a key in the unstable-key list (`app.kubernetes.io/version`, `helm.sh/chart`, `pod-template-hash`, `*build*`, `*commit*`, `*sha*`). Source catalog says `BLOCK`; **lowered to `warn` here** because the hex test is a heuristic and a genuine 40-character label value exists. |
 | SCH-05 | T1-R | v1 | warn | `requiredDuringScheduling` node affinity does not match on `topology.kubernetes.io/zone` with literal zone names. |
 | SCH-06 | T1-R | v1.1 | warn | A pod that targets a node pool (a `nodeSelector` or required node affinity on any key other than the well-known OS/arch keys) also declares at least one `toleration`. The *matching* of toleration to taint is a cluster fact and is `T2`; the absence of any toleration at all is not. |
@@ -69,13 +82,14 @@ wrong in vendor charts.
 |---|---|---|---|---|
 | PDB-01 | T1-C + T1-R | v1 | block | Every `Deployment`/`StatefulSet` is selected by some `PodDisruptionBudget` in the same release. See §3.1 - the selector matching is where naive implementations get this wrong. Structural: if the chart ships **no** PDB template at all, determinacy is `fixed` and it blocks regardless of the default replica count. |
 | PDB-02 | T1-R | v1 | block | No PDB forbids every eviction. See §3.2 - `maxUnavailable: 0`, `maxUnavailable: "0%"`, `minAvailable: <replicas>`, `minAvailable: "100%"` are four spellings of the same deadlock. |
-| PDB-03 | T1-R | v1 | warn | No PDB selects a single-replica workload, a `Job`, or a `CronJob`. A PDB over one replica blocks drains forever. |
+| PDB-03 | T1-R | v2 | block | No PDB selects a single-replica workload, a `Job`, or a `CronJob`. A PDB over one replica blocks drains forever - and a cluster upgrade stalls until somebody intervenes by hand, which is why this is **raised to `block`**. |
 | PDB-04 | EV | - | warn | Quorum math is prose. |
 | PDB-05 | T1-R | v1 | block | `RollingUpdate` strategy has `maxSurge > 0` **or** `maxUnavailable > 0`. Both zero is a rollout that cannot start. |
 | PDB-06 | T1-R | v1 | block | A workload selected by a `Service` does not use `strategy.type: Recreate`. |
 | PDB-07 | T1-R | v1 | warn | `Deployment.spec.progressDeadlineSeconds` is explicitly set. |
-| PDB-08 | T1-R | v1 | warn | `terminationGracePeriodSeconds` is explicitly set and `> 0`. Zero is SIGKILL at eviction. |
-| PDB-09 `NEW` | T1-X | v1 | warn | Every PDB **selects something**. An orphan PDB - one whose selector matches no pod template in the release - protects nothing and is invisible until a drain succeeds when it should not have. Cross-chart, because the PDB and its workload are often in different charts. |
+| PDB-08 | T1-R | v2 | info | `terminationGracePeriodSeconds` is explicitly set. **Lowered to `info` and split**: every finding this produced was an absent value, on ~8% of a real report's rows, and the platform's 30-second default is usually adequate. The observed value now says so rather than implying the pods are killed instantly. |
+| PDB-10 `NEW` | T1-R | v2 | warn | `terminationGracePeriodSeconds` is not `0`. Zero really is SIGKILL at eviction, and it is the other half of PDB-08 - a defect rather than a documentation gap. |
+| PDB-09 `NEW` | T1-X | v2 | warn | Every PDB **selects something**. An orphan PDB - one whose selector matches no pod template in the release - protects nothing and is invisible until a drain succeeds when it should not have. Cross-chart, because the PDB and its workload are often in different charts. |
 
 ### 2.3 Health Probes & Lifecycle (PRB)
 
@@ -84,26 +98,31 @@ wrong in vendor charts.
 | PRB-01 | T1-R | v1 | block | Every container whose port is a `Service` target has a `readinessProbe`. Applicability is narrowed to *traffic-receiving* containers deliberately: a sidecar with no service port failing this check is noise, and noise is what gets a check switched off. |
 | PRB-02 | T1-R | v1 | warn | A container with `livenessProbe.initialDelaySeconds > 30` has a `startupProbe`. The general form ("initialization is non-trivial") is not decidable; this is its observable signature. |
 | PRB-03 | T1-R | v1 | warn | Where both exist, liveness is **less** sensitive than readiness: `livenessProbe.periodSeconds >= readinessProbe.periodSeconds` and `failureThreshold >= readinessProbe.failureThreshold`. Note this contradicts [sample-policies/probes.rego](sample-policies/probes.rego), which warns on a *missing* liveness probe - see [03](03-sample-policy-review.md) §3.2. |
-| PRB-04 | T1-R | v1 | block | Liveness and readiness do not use an identical handler (same scheme, port and path, or the same exec command). Identical probes mean a slow dependency restarts the pod instead of removing it from the endpoint list. The wider assertion - "liveness has no external dependency calls" - is not decidable from a manifest. |
-| PRB-05 | T1-R | v1 | warn | `timeoutSeconds` within `[1,3]`, `periodSeconds` within `[5,10]`. Bounds configurable per deployment. |
-| PRB-06 | T1-R | v1 | block | A probe's `httpGet.port` / `tcpSocket.port` resolves to a port the **same container** declares - by number or by name. A probe pointing at a sidecar's port passes health checks the application never answers. |
+| PRB-04 | T1-R | v2 | warn | Liveness and readiness do not use an identical handler. The comparison is on the normalised HANDLER - `probeHandler()` - with the timings dropped and defaults filled in; comparing field by field rendered two different exec commands as the same empty string, and about a third of this check's findings were that bug. **Lowered to `warn`**: the standard offers guidance on endpoint semantics, it does not prohibit a shared handler. Identical probes mean a slow dependency restarts the pod instead of removing it from the endpoint list. The wider assertion - "liveness has no external dependency calls" - is not decidable from a manifest. |
+| PRB-05 | T1-R | v2 | warn | Bounds by check TYPE: a request-based check (HTTP, TCP, gRPC) gets `timeoutSeconds` in `[1,3]` and `periodSeconds` in `[5,10]`; a script-based one gets `[1,10]` and `[5,30]`, because starting a shell costs time before the check begins. Holding a script check to a local web request's budget misread ~89% of the checks it flagged. |
+| PRB-08 `NEW` | T1-R | v2 | warn | `timeoutSeconds` is below `periodSeconds` on every probe. Type-independent, and it catches the real defect the fixed band was reaching for: overlapping checks make failure-detection time unbounded. |
+| PRB-09 `NEW` | T1-R | v2 | warn | No `livenessProbe` or `readinessProbe` on an init container or on a `Job`/`CronJob` container. A restart check can kill a task just before it completes, and the install then fails in a way that does not reproduce. |
+| PRB-11 `NEW` | T1-R | v2 | warn | Where a `startupProbe` exists, `failureThreshold × periodSeconds >= 30`. An allowance shorter than the real start-up time looks like protection and still kills the container mid-start. |
+| PRB-06 | T1-R | v2 | block | A probe's **named** `httpGet.port` / `tcpSocket.port` resolves to a port the same container declares. Numeric ports are skipped: `containerPort` is documentation and opens nothing, so a probe aimed at 8443 reaches whatever is listening on 8443 whether or not the number appears in the list. Reporting one was a finding whose only fix was a line that changes nothing. A probe pointing at a sidecar's port passes health checks the application never answers. |
 | PRB-07 | T1-R | v1 | warn | Where a `preStop` hook exists it is not a bare `sleep` longer than `terminationGracePeriodSeconds`, which guarantees SIGKILL mid-shutdown. |
 
 ### 2.4 Container Security Posture (SEC)
 
 | ID | Tier | Ships | Sev | What the check inspects |
 |---|---|---|---|---|
-| SEC-01 | T1-R | v1 | block | `runAsNonRoot: true` at pod or container level, and `runAsUser != 0` wherever set. |
+| SEC-01 | T1-R | v2 | block | The EFFECTIVE user is not root: `runAsUser == 0`, or `runAsNonRoot` explicitly `false`, resolved container-then-pod the way the kubelet resolves it. **Narrowed**: "nothing is declared" is not root - on a cluster enforcing a restricted policy an unstated user is assigned a non-root one - and reporting the two identically made this check's own title untrue of nearly all of its findings. |
+| SEC-12 `NEW` | T1-R | v2 | warn | Something is declared: `runAsNonRoot` or `runAsUser`, on the container or the pod. The other half of SEC-01, at the severity the condition deserves. |
 | SEC-02 | T1-R | v1 | block | `allowPrivilegeEscalation: false` on every container. |
 | SEC-03 | T1-R | v1 | block | No container sets `privileged: true`. |
 | SEC-04 | T1-R | v1 | block | `capabilities.drop` contains `ALL`; every entry in `capabilities.add` is reported in the finding so the review is about a named list rather than a boolean. |
+| SEC-13 `NEW` | T1-R | v2 | block | Nothing high-risk is added back: `SYS_ADMIN`, `NET_ADMIN`, `SYS_PTRACE`, `SYS_MODULE`, `SYS_RAWIO`, `SYS_BOOT`, `DAC_OVERRIDE`, `DAC_READ_SEARCH`, `SETUID`, `SETGID`, `ALL`. Dropping everything and adding one back is the right shape; these particular ones reach outside the container in a way the other settings cannot contain. |
 | SEC-05 | T1-R | v1 | warn | `readOnlyRootFilesystem: true` on containers in workloads that mount no `persistentVolumeClaim`. |
 | SEC-06 | T1-R | v1 | warn | `seccompProfile.type` is `RuntimeDefault` or `Localhost`; `Unconfined` fails. |
 | SEC-07 | T1-R | v1 | block | No `hostNetwork`, `hostPID`, `hostIPC`, and no `containerPort.hostPort`. |
 | SEC-08 | T1-R | v1 | block | No `hostPath` volume. A `hostPath` whose path is a container-runtime socket (`/var/run/docker.sock`, `/run/containerd/containerd.sock`, `/run/crio/crio.sock`) is reported with a distinct message: it is cluster-admin equivalence, not a mount. |
 | SEC-09 | T2 | - | warn | "Runs under an arbitrary UID" needs the image config, which this platform does not fetch. Partially observable as a chart pinning a specific `runAsUser` with an `fsGroup` - too weak to ship as its own check. |
 | SEC-10 | T1-R | v1 | block | Where the chart ships a `SecurityContextConstraints`, `PodSecurityPolicy` or a binding granting one, its subjects are named ServiceAccounts - not `system:authenticated`, `system:serviceaccounts`, or a group. |
-| SEC-11 `NEW` | T1-R | v1 | warn | `emptyDir` with `medium: Memory` declares a `sizeLimit`. Without one the volume is bounded only by node memory, and filling it evicts every pod on the node, not just this one. |
+| SEC-11 `NEW` | T1-R | v2 | warn | `emptyDir` with `medium: Memory` declares a `sizeLimit`. Without one the volume is bounded only by node memory, and filling it evicts every pod on the node, not just this one. |
 
 ### 2.5 Identity & Access (RBAC)
 
@@ -114,6 +133,8 @@ wrong in vendor charts.
 | RBAC-03 | T1-R | v1 | block | No `*` in `rules[].verbs`, `resources`, or `apiGroups` of any Role or ClusterRole. |
 | RBAC-04 | T1-R | v1 | block | No `ClusterRole`/`ClusterRoleBinding` without a waiver. Bindings to the built-in `view`/`edit`/`admin`/`cluster-admin` roles are named explicitly in the message, because those are the ones that get copied between charts. |
 | RBAC-05 | T1-R | v1 | block | No rule grants `list` or `watch` on `secrets`; `get` on `secrets` carries a non-empty `resourceNames`. |
+| RBAC-09 `NEW` | T1-R | v2 | block | No rule grants `create`, `update`, `patch`, `delete` or `deletecollection` on `secrets`. Reading a credential and being able to overwrite it are different powers, and only the first was ever checked: a service that can rewrite a credential can lock out its owner or substitute one it controls. |
+| RBAC-10 `NEW` | T1-R | v2 | block | Every `RoleBinding`/`ClusterRoleBinding` subject is a named `ServiceAccount`, not a `Group` and not a `system:` name. SEC-10 covers this for security-policy grants only; a permission given to `system:authenticated` applies to every service installed in scope, including ones added months later by another team. |
 | RBAC-06 | T1-R | v1 | block | No write verb (`create`, `update`, `patch`, `delete`, `deletecollection`, `bind`, `escalate`) on `roles`, `rolebindings`, `clusterroles`, `clusterrolebindings`. |
 | RBAC-07 | T1-R | v1 | block | No `impersonate`, and no rule on `pods/exec`, `pods/attach` or `pods/portforward`. |
 | RBAC-08 | EV | - | warn | Requires knowing which identity the pipeline uses. |
@@ -122,17 +143,19 @@ wrong in vendor charts.
 
 | ID | Tier | Ships | Sev | What the check inspects |
 |---|---|---|---|---|
-| CFG-01 | T1-C + T1-R | v1 | block | Credential-shaped material in `ConfigMap.data`, `values.yaml`, or container `env[].value`. See §3.4 for the detection rule and its false-positive budget. |
+| CFG-01 | T1-R | v2 | block | Credential-shaped material in `ConfigMap.data`. See §3.4 - the rule is now value-first, and the previous key-name form produced four findings on a real chart of which all four were wrong. |
+| CFG-13 `NEW` | T1-R | v2 | block | The same detector on container `env[].value`. Split from CFG-01 because it is a different object, a different fix and a different owner. |
+| CFG-14 `NEW` | T1-R | v2 | block | No `Secret` in the release ships with material in `data` or `stringData`. Values are base64-decoded first. An empty shell, created for a secret store to fill in, passes - shipping the object is correct, shipping the material is not. This is the gap the audit found: the check written to catch credentials produced only false positives, while a private key, a database password and a default administrative credential passed through the same run with no finding at all. |
 | CFG-02 | T1-R | v1 | block | No `args`/`command` element matching `--?(password\|passwd\|token\|secret\|api[-_]?key)[= ]` with a literal value. Container args are world-readable through the API and appear in `ps`. |
 | CFG-03 | T1-R | v1 | warn | `ConfigMap`s consumed by a workload are `immutable: true` **and** carry a content-derived name suffix or a `checksum` annotation. |
-| CFG-04 | T1-C | v1 | block | A pod template that mounts or references a `ConfigMap`/`Secret` the same chart templates carries a `checksum/*` annotation over it. Without one, `helm upgrade` changes the config and never restarts the pod - the single most common "the change did not take effect" in Helm-packaged software. |
+| CFG-04 | T1-R | v2 | warn | A pod template that mounts or references a `ConfigMap`/`Secret` the same chart templates carries a `checksum/*` annotation over it. Without one, `helm upgrade` changes the config and never restarts the pod - the single most common "the change did not take effect" in Helm-packaged software. **Lowered to `warn`**, confidence `probable`: some workloads reload their configuration without restarting, and the manifest cannot show which. |
 | CFG-05 | T1-C | v1 | warn | Template text of any `checksum/*` or pod-template annotation does not call `now`, `randAlphaNum`, `randAscii`, `uuidv4` or `date`. A checksum built from a timestamp restarts every pod on every `helm upgrade`, including the no-op ones. |
 | CFG-06 | T1-R | v1 | warn | TLS material (`Secret` of type `kubernetes.io/tls`, or keys matching `*.crt`/`*.key`/`*.pem`) reaches the container as a read-only volume mount, not through `env`/`envFrom`. |
 | CFG-07 | T1-R | v1 | warn | `envFrom.secretRef` and whole-`Secret` volume mounts (no `items:`) are reported: the container gets every key, including the ones added later. |
 | CFG-08 | T2 | - | block | "Environment-specific values baked into the image" needs the image. |
 | CFG-09 | EV | - | warn | Rotation model is prose. |
 | CFG-10 | T1-C + T1-R | v1 | block | Two assertions with one implementation: every rendered document parses and validates against the Kubernetes schema for its `apiVersion`/`kind`, and **rendering twice produces identical output**. See §3.5. |
-| CFG-11 `NEW` | T1-X | v1 | block | Every `configMapRef`, `secretRef`, `configMapKeyRef`, `secretKeyRef`, `volumes[].configMap` and `volumes[].secret` resolves to an object the release ships, or is explicitly marked optional. A dangling reference is a `CreateContainerConfigError` at install time that no amount of reading the chart reveals. |
+| CFG-11 `NEW` | T1-X | v2 | block | Every `configMapRef`, `secretRef`, `configMapKeyRef`, `secretKeyRef`, `volumes[].configMap` and `volumes[].secret` resolves to an object the release ships, or is explicitly marked optional. A dangling reference is a `CreateContainerConfigError` at install time that no amount of reading the chart reveals. |
 | CFG-12 `NEW` | T1-C | v1.1 | info | The chart ships a `values.schema.json`. It is the only mechanism that makes a values mistake fail at `helm install` instead of at 03:00. |
 
 ### 2.7 Resources, Scaling & Performance (RES)
@@ -141,7 +164,9 @@ wrong in vendor charts.
 |---|---|---|---|---|
 | RES-01 | T1-R | v1 | block | `resources.requests.cpu` and `resources.requests.memory` on every container, **including `initContainers` and sidecars**. Init containers are the ones every implementation forgets, and an init container without requests is what makes a node's scheduling decision wrong. |
 | RES-02 | T1-R | v1 | block | `resources.limits.memory` set on every container. |
-| RES-03 | T1-R | v1 | info | Reports containers that set `limits.cpu`, so the throttling review the catalog asks for has a list to work from. Informational by construction - a CPU limit is not a defect. |
+| RES-03 | T1-R | v2 | info | A `limits.cpu` at least twice `requests.cpu`. **Narrowed**: the inventory form listed every container that caps CPU - about a fifth of a real report, describing no defect - and the condition worth reviewing is a cap with no headroom, where the container is paused during every ordinary burst. |
+| RES-10 `NEW` | T1-R | v2 | block | No `limits` value below its matching `requests` value. Not unwise - invalid: Kubernetes rejects the pod and the service never starts. |
+| RES-11 `NEW` | T1-R | v2 | info | `limits.memory` no more than four times `requests.memory`. A container that reserves a little and may grow a lot is placed where it cannot actually grow. |
 | RES-04 | T1-R | v1 | warn | Where an `HorizontalPodAutoscaler` exists its `minReplicas >= 2`; where a `Deployment` is selected by a `Service` and has no HPA, that is reported at `info`. |
 | RES-05 | T2 | - | warn | Needs cluster capacity. |
 | RES-06 | EV | - | info | Needs to know the bottleneck. |
@@ -155,13 +180,15 @@ adopting.
 
 | ID | Tier | Ships | Sev | What the check inspects |
 |---|---|---|---|---|
-| NET-01 | T1-C | v1 | block | The release ships at least one `NetworkPolicy` with an empty `podSelector` and `policyTypes: [Ingress]` - a default deny. |
+| NET-01 | T1-C | v2 | warn | The release ships at least one `NetworkPolicy` with an empty `podSelector` and `policyTypes: [Ingress]` - a default deny. **Lowered to `warn`**, confidence `probable`: many platforms apply this per namespace centrally, and a blocking finding against a vendor for something the platform team owns is the shape of dispute that costs a report its credibility. Reported with `fixOwner: platform-team` rather than suppressed - silence is worse than a correctly attributed finding. |
 | NET-02 | T1-R | v1 | block | No ingress rule is `from: []`-equivalent (an empty or absent `from` with an empty `podSelector`), and every rule names `ports`. |
 | NET-03 | T1-R | v1 | warn | Where `policyTypes` includes `Egress`, at least one rule enumerates destinations; an empty `to` is reported. |
 | NET-04 | T1-R | v1 | warn | `NetworkPolicy` selectors use the same stable-label test as SCH-04. |
 | NET-05 | T1-R | v1 | block | Every `Ingress` declares `tls`; every OpenShift `Route` declares `tls.termination`; a `Service` of type `LoadBalancer` exposing port 80 without a matching 443 is reported. |
 | NET-06 | T1-R | v1 | block | No `Ingress`/`Route` path matches `/metrics`, `/debug`, `/actuator`, `/admin`, `/-/`, and no `LoadBalancer` Service exposes a port named `metrics`, `debug`, `admin` or numbered 9090/9100/6060. Covers OBS-10, which is the same assertion from the other side. |
-| NET-07 | T1-X | v1 | block | Every `Service.spec.selector` matches at least one pod template in the release, and `targetPort` resolves to a declared `containerPort` (by name or number). A Service selecting nothing is a 100% error rate with a green rollout. |
+| NET-07 | T1-X | v2 | warn | Every `Service.spec.selector` matches at least one pod template in the release. Selector keys the PLATFORM supplies at pod creation - `statefulset.kubernetes.io/pod-name`, `pod-template-hash`, `controller-revision-hash`, the batch job labels - are skipped, because no chart can contain them and comparing against them reported every per-replica Service in a clustered database as routing into a void. **Lowered to `warn`**: whether an address has a live target is a runtime property, and a rendered chart cannot settle it. |
+| NET-11 `NEW` | T1-X | v2 | warn | Every named `targetPort` exists under that name in a container of the workload the Service routes to. Split out of NET-07 so a vendor can fix one without being told about the other. Port names cap at 15 characters, and a name trimmed to fit is the usual cause. |
+| NET-13 `NEW` | T1-R | v2 | warn | No ingress rule has an empty `namespaceSelector` or an `ipBlock` of `0.0.0.0/0`. Such a rule NAMES a source, so it satisfies NET-02 and reads as a control while admitting the whole cluster. |
 | NET-08 | T1-R | v1 | warn | Every `NetworkAttachmentDefinition` the release ships parses as JSON in `spec.config` and declares `type`, an `ipam` block, and - for `macvlan`/`ipvlan`/`sriov` types - `master` and `mtu`. Every `k8s.v1.cni.cncf.io/networks` annotation names an attachment the release ships or a documented cluster-provided one. |
 | NET-09 | T1-R | v1 | warn | A pod with a `k8s.v1.cni.cncf.io/networks` annotation is reported wherever the release also ships a `NetworkPolicy`: Kubernetes `NetworkPolicy` governs the cluster network only, and traffic on a secondary interface is not covered by it. The finding is the statement, and it asks for the compensating control. |
 | NET-10 | T1-R | v1 | warn | A container requesting an accelerated-networking resource - any resource name outside `cpu`/`memory`/`ephemeral-storage`/`hugepages-*`, e.g. `intel.com/*`, `openshift.io/*`, `nvidia.com/*` - declares it in **both** `requests` and `limits` (Kubernetes requires equality for extended resources) and the pod carries a `nodeSelector` or node affinity. Hugepages are checked the same way. |
@@ -172,7 +199,8 @@ adopting.
 | ID | Tier | Ships | Sev | What the check inspects |
 |---|---|---|---|---|
 | STO-01 | T1-R | v1 | warn | Every `PersistentVolumeClaim` and `volumeClaimTemplate` sets `storageClassName` explicitly. Relying on the cluster default makes the same chart behave differently in two clusters, which is exactly the failure that is hardest to diagnose. |
-| STO-02 | T1-R | v1 | warn | `ReadWriteMany` is reported with the workload that requested it, so the concurrent-mount claim gets reviewed. |
+| STO-02 | T1-R | v2 | block | No workload mounting a `ReadWriteMany` claim runs as root. **Redesigned**: the old rule reported the access mode itself and its remediation suggested abandoning shared storage, which contradicts §16.2 of the standard - that section legitimises shared-write storage and sets terms for it. This checks the terms: non-root execution, and access by group membership rather than ownership (with STO-07 and STO-08 covering the other two). |
+| STO-13 `NEW` | T1-R | v2 | info | A shared-write claim is mounted by more than one workload. Recorded, confidence `needs-review`: concurrent writers are a claim about the software, and somebody has to confirm it rather than inherit it. |
 | STO-03 | T1-R (conditional) | v1.1 | warn | Where the **chart ships a `StorageClass`**, its `volumeBindingMode` is `WaitForFirstConsumer`. Where it does not, the class is a cluster fact and the check is `skip`, reason `storage class is cluster-provided (tier 2)`. |
 | STO-04 | T1-R | v1 | block | Every claim declares `resources.requests.storage` as a parseable, non-zero quantity. `allowVolumeExpansion` and `reclaimPolicy` are checked only on a `StorageClass` the chart ships. |
 | STO-05 | T1-R | v1 | block | No `Deployment` with `replicas > 1` mounts a `persistentVolumeClaim`. Two replicas sharing one RWO claim is a scheduling deadlock; sharing one RWX claim is silent data corruption for anything not written for it. |
@@ -180,7 +208,7 @@ adopting.
 | STO-07 | T1-R | v1 | block | No `initContainer` command contains `chown` or `chmod` against a path that is also a `persistentVolumeClaim` mount. On shared and network-backed storage this is a startup that takes hours or fails outright, and it is the standard workaround for not knowing the UID model. |
 | STO-08 | T1-R | v1 | warn | A pod mounting a PVC declares `securityContext.fsGroup` or `fsGroupChangePolicy`. |
 | STO-09 | EV | - | block | "Do not disable root squash" is a statement in a document. |
-| STO-10 | T1-R | v1 | warn | `emptyDir`, `hostPath` and `local` volumes on a `StatefulSet` are reported. |
+| STO-10 | T1-R | v2 | block | `hostPath` and `local` volumes on a `StatefulSet`, and `emptyDir` where the StatefulSet declares no `volumeClaimTemplates` at all. **Narrowed and raised**: scratch space beside real storage is legitimate and is no longer reported; a stateful workload with nothing BUT scratch space loses its data on every restart, which is the case it was chosen to prevent. |
 | STO-11 | EV | - | block | Cross-zone failover expectation is a declaration. |
 | STO-12 `NEW` | T1-R | v1 | warn | A `StatefulSet`'s `volumeClaimTemplates` are never edited by an upgrade - Kubernetes forbids it. A chart that templates the claim size from `.Values` is offering a knob that works exactly once, and the finding says so. |
 
@@ -192,7 +220,8 @@ of it is about what the *running software emits*, which is a runtime property.
 | ID | Tier | Ships | Sev | What the check inspects |
 |---|---|---|---|---|
 | OBS-01 | T1-R | v1 | warn | A workload selected by a `Service` either declares a container port named `metrics`/`http-metrics`, or is covered by a `ServiceMonitor`/`PodMonitor` the release ships, or carries `prometheus.io/scrape: "true"`. Source catalog says `BLOCK`; **lowered to `warn`** because three conventions coexist and none is universal. |
-| OBS-02..08 | EV | - | - | Golden signals, label cardinality, log format, trace propagation, correlation IDs - runtime properties. A manifest cannot show them and a check that pretends to would be the exact gimmick this catalog is meant to avoid. |
+| OBS-05 | T1-R | v2 | warn | No container is CONFIGURED to write its logs to a file: an environment variable matching `LOG*(FILE\|PATH\|DIR\|DEST\|OUTPUT)` whose value is not a standard stream. What the running software actually emits is a runtime property; where the chart tells it to send them is not. |
+| OBS-02..04, 06..08 | EV | - | - | Golden signals, label cardinality, trace propagation, correlation IDs - runtime properties. A manifest cannot show them and a check that pretends to would be the exact gimmick this catalog is meant to avoid. |
 | OBS-09 | T1-C | v1 | warn | Where the release ships `PrometheusRule`s, every rule has a `runbook_url` (or configured equivalent) annotation and a `severity` label. Where it ships none, that is reported once at `info`. |
 | OBS-10 | - | - | block | Same assertion as NET-06; implemented there, aliased here so the ID resolves. |
 
@@ -200,7 +229,8 @@ of it is about what the *running software emits*, which is a runtime property.
 
 | ID | Tier | Ships | Sev | What the check inspects |
 |---|---|---|---|---|
-| MTA-01 | T1-R | v1 | block | `app.kubernetes.io/{name,instance,component,part-of,managed-by,version}` present on controllers, pod templates and Services. |
+| MTA-01 | T1-R | v2 | warn | `app.kubernetes.io/{name,instance}` present on controllers and Services. **Split and lowered**: these two appear in selectors, spread rules and maintenance rules, so their absence has consequences; the other four do not, and rating a cosmetic gap as blocking accounted for about a fifth of a real report's blocking findings. |
+| MTA-09 | T1-R | v2 | info | `app.kubernetes.io/{component,part-of,managed-by,version}`. Nothing breaks; the release is invisible to every dashboard and cost report, which is discovered during an incident. (This replaces the proposed Helm-adoption check under the same ID, which needs the release name the manifest stream does not carry.) |
 | MTA-02 | T1-R | v1 | warn | Label keys are DNS-safe (RFC 1123, optional DNS-subdomain prefix) and values are `<= 63` characters and syntactically valid. Invalid metadata is an install-time rejection, so this is cheap and absolute. |
 | MTA-03 | T1-R | v1 | block | No selector - `Deployment`, `StatefulSet`, `DaemonSet`, `Service`, `NetworkPolicy`, `PDB` - matches on `app.kubernetes.io/version`, `helm.sh/chart`, or a key in the unstable list. A `Deployment.spec.selector` is immutable after creation: a version in it means the next release cannot be upgraded, only deleted and recreated. |
 | MTA-04 | T1-R | v1 | warn | No annotation value exceeds 8 KiB, and none matches the credential patterns from CFG-01. |
@@ -219,7 +249,8 @@ answers on one screen.
 
 | ID | Tier | Ships | Sev | What the check inspects |
 |---|---|---|---|---|
-| SUP-01 | T1-R | v1 | block | Every image reference in every rendered manifest is `name@sha256:…`. A tag - any tag, including a semver one - fails. See §3.3 for how the reference is assembled from the three fields charts split it across. |
+| SUP-01 | T1-R | v2 | warn | Every image reference is `name@sha256:…`. See §3.3 for how the reference is assembled from the three fields charts split it across. **Lowered to `warn`**: this was the single largest blocking category in a real run - about a third of all blocking findings - and the standard's prohibitive language is on MOVING tags, which is SUP-11. Fingerprint pinning is also frequently the pipeline's to do rather than the chart author's: where images are relocated into a target registry on the way in, an author-time digest does not survive the rewrite. |
+| SUP-11 `NEW` | T1-R | v2 | block | No image uses a moving label - `latest`, `stable`, `main`, `master`, `edge`, `dev`, `test`, `nightly` - or no tag at all. This is the prohibited half, and separating it lets a vendor fix one without being told about the other. SUP-01 does not apply to an image SUP-11 reports: there is no specific version to pin yet, and two checks on one decision is a doubled row count and a halved credibility. |
 | SUP-02 | T1-R | v1 | block | Every image reference resolves to a registry in the configured allowlist. The allowlist is deployment configuration, not a policy constant. |
 | SUP-03 | T1-X | v1 | block | Integration: a security sync exists for this release, its coverage is complete, and it reports no unwaived critical findings. Reads [design/21](../design/21-security-posture.md)'s stored result; never re-scans. Outcome is `skip` with reason `no scan on record` when there is none - **not** a pass. |
 | SUP-04 | T1-X | v1 | warn | Integration: an SBOM document is on record for the release's images. |
@@ -234,12 +265,14 @@ answers on one screen.
 | ID | Tier | Ships | Sev | What the check inspects |
 |---|---|---|---|---|
 | UPG-01..04 | EV | - | block | Availability targets, statefulness model, drain and zone-evacuation rehearsals. Evidence, and the most valuable evidence in the catalog - tracked as a release checklist beside the automated results, never faked as a check. |
-| UPG-05 | T1-R | v1 | warn | No hook script, `Job` command, or documented procedure in the chart's own text uses `--force`, `--grace-period=0`, or `kubectl drain --disable-eviction`. The manifest half is covered by PDB-02 and PDB-05. |
+| UPG-05 | T1-R | v2 | warn | No hook script, `Job` command, or documented procedure in the chart's own text uses `--force`, `--grace-period=0`, or `kubectl drain --disable-eviction`. The manifest half is covered by PDB-02 and PDB-05. |
 | UPG-06 | T1-X | v1.1 | warn | Where the release ships an operator (a `Deployment` with an accompanying `CustomResourceDefinition`), objects of the operator's own managed kinds are not also templated directly. |
-| UPG-07 | T1-X | v1 | warn | Every custom resource the release ships has a matching `CustomResourceDefinition` in the same release, at a `version` the CRD serves. A CR whose CRD arrives later, or never, is an install that fails on ordering - and this is only decidable across the whole release, which is why it is `T1-X`. |
-| UPG-08..09 | EV | - | block | Migration and rollback procedures. |
+| UPG-07 | T1-X | v2 | warn | Every custom resource the release ships has a matching `CustomResourceDefinition` in the same release, OR belongs to a group named in `config.platformApiGroups`. **Narrowed**: built-in cluster APIs were being asked to ship a definition of themselves - a finding with no possible fix - and operator-supplied types are the platform team's, which §19.2.1 assigns away from application charts. A CR whose CRD arrives later, or never, is an install that fails on ordering - and this is only decidable across the whole release, which is why it is `T1-X`. |
+| UPG-08 `NEW` | T1-R | v2 | info | Every object carrying `helm.sh/hook` names moments Helm recognises. The observed value lists them, so the report carries an inventory of what the release runs OUTSIDE the ordinary install - which nothing else in a compliance report shows, because hooks do not appear among the deployed objects. It fails only for an unrecognised moment: `post-instal` is ignored, the task never runs, and the upgrade reports success. |
+| UPG-09 `NEW` | T1-R | v2 | warn | No object runs ONLY at `pre-rollback` or `post-rollback`. This platform reconciles a declared state forward and never issues `helm rollback`, so such a task never runs at all - not even when the release is moved to an earlier version, which arrives here as an ordinary upgrade. The repair or migration reversal it was written to perform silently does not happen. A hook that runs at a rollback and also at an upgrade is fine and is not reported. |
+| UPG-08..09 (source rows) | EV | - | block | The catalog's own UPG-08 and UPG-09 - migration and rollback PROCEDURES - remain evidence. The two rows above are additions that share the prefix, not implementations of them. |
 | UPG-10 | T2 | - | block | Cross-zone parity is a cluster fact. |
-| UPG-11 `NEW` | T1-C | v1 | warn | CRDs placed in a chart's `crds/` directory are installed once and **never upgraded or deleted by Helm**. A chart that ships CRDs there and also changes them between versions has an upgrade path that silently does nothing; one that ships them under `templates/` needs `helm.sh/resource-policy: keep`. The check reports which of the two shapes the chart uses, and what is missing for that shape. |
+| UPG-11 `NEW` | T1-R | v2 | warn | CRDs placed in a chart's `crds/` directory are installed once and **never upgraded or deleted by Helm**. A chart that ships CRDs there and also changes them between versions has an upgrade path that silently does nothing; one that ships them under `templates/` needs `helm.sh/resource-policy: keep`. The check reports which of the two shapes the chart uses, and what is missing for that shape. |
 
 ---
 
@@ -322,6 +355,12 @@ keep it accurate:
   with a digest is harmless; `IfNotPresent` with a mutable tag is how two nodes
   end up running different code. That pairing is worth its own `warn` and it
   belongs beside SUP-01 in the report.
+- **A MOVING tag and an unpinned fingerprint are two findings, not one.** SUP-11
+  is `latest`, `stable`, `main` or no tag at all - the prohibited case, and a
+  blocking one. SUP-01 is a specific version that is not a fingerprint, which is
+  a warning and is frequently the pipeline's to fix rather than the chart
+  author's. Rolling them together made this the largest blocking category in a
+  real report while the prohibited half was already satisfied everywhere.
 
 Image references appear in more places than `containers[].image`: `initContainers`,
 `ephemeralContainers`, `CronJob.spec.jobTemplate`, and CRs of operators that name
@@ -329,37 +368,81 @@ images in their spec. The traversal is over *every string field that parses as a
 image reference in a known image-bearing path*, and the check records the path it
 found it at - which is what makes a finding in an operator CR actionable.
 
-### 3.4 CFG-01 / SUP-10 - credential detection without crying wolf
+### 3.4 CFG-01 / CFG-13 / CFG-14 - credential detection without crying wolf
 
-The check that will be switched off first if it is careless, so its rule is
-stated precisely and its false-positive budget is explicit.
+The check that will be switched off first if it is careless, and the one the
+audit found had already earned it: on a real chart it produced four findings and
+every one of them was wrong, while four unmistakable credentials in the same
+chart went unreported.
 
-**A value is reported when it matches at least one of:**
+Both halves came from the same mistake. It asked whether the KEY looked like it
+held a password. `SECRET_FETCH_RETRYCOUNT` (a retry counter),
+`TOKEN_CACHE_TTL_SECONDS` (a cache lifetime), `PASSWORD_MIN_LENGTH` (a policy
+parameter) and `KEYSTORE_PATH` (a file path) all match that question and none of
+them is a credential - and they are the ordinary way to name a parameter about
+credential handling. Meanwhile `CONNECTION_STRING`, `CLOUD_ACCESS_KEY`,
+`SESSION_JWT` and `INITIAL_LOGIN` do not match it, and all four were real.
 
-1. **Key-name signal** - the key matches
-   `(?i)(pass(word|wd)?|secret|token|apikey|api_key|private_key|credential|auth)`
-   **and** the value is a non-empty literal that is not obviously a reference
-   (`{{`, `$(`, `${`, `valueFrom`, a path, or one of the known placeholder-but-empty
-   forms `""`, `null`).
-2. **Shape signal** - the value matches a known credential shape: a PEM block
-   header, a JWT (`eyJ` + two dot-separated base64 segments), an AWS access key
-   (`AKIA[0-9A-Z]{16}`), a GitHub token prefix, a Docker `config.json` `auth`
-   field, or a base64 blob that decodes to `user:password`.
-3. **Placeholder signal** (SUP-10 only) - the value is one of the known
-   placeholder credentials.
+**So the order is inverted. The value is examined first.**
 
-**Deliberately not used:** raw Shannon entropy on its own. It flags every
-checksum, UUID, generated hostname and base64-encoded certificate *chain* in a
-chart, and a check with a 60% false-positive rate teaches its readers to ignore
-it. Entropy is used only as a *tiebreaker* to raise the severity of a value that
-already matched signal 1.
+*1. Shape signals, conclusive whatever the field is called:*
 
-**A `Secret` template's `stringData` is not a finding by itself** - that is what
-Secrets are for. It is a finding when the value is a literal in the chart rather
-than a reference to something injected, which is signal 1 applied to a Secret.
+| Pattern | Class reported |
+|---|---|
+| `-----BEGIN … PRIVATE KEY-----` | a private key |
+| `eyJ…` with two dot-separated segments | a signed token (JWT) |
+| `AKIA`/`ASIA`/`AGPA`/`AIDA`/`AROA` + 16 uppercase | a cloud access key |
+| `scheme://user:pass@host` | a connection string with the password written into it |
+| `Bearer …` / `Basic …`, 16+ characters | a ready-made authorization header |
+| `ghp_`, `github_pat_`, `xox[baprs]-`, `sk-`, `glpat-`, `AIza…` | an API access token |
+| `changeme`, `passw0rd`, `letmein`, `qwerty`, `123456`, … | a placeholder somebody was meant to replace |
+
+*2. Exclusions, applied before the field name is trusted at all:*
+
+- **Reference-shaped keys** - `secretName`, `secretKeyRef`, `existingSecret`,
+  `authUrl`, `passwordPolicy`, `tokenTtl`. A reference to a credential is the
+  correct pattern and flagging it punishes the right answer.
+- **Operational-parameter keys** - anything ending in a unit, a count, a
+  location or a setting: `_COUNT`, `_INTERVAL`, `_SEC`, `_TTL`, `_TIMEOUT`,
+  `_PATH`, `_FILE`, `_URL`, `_HOST`, `_PORT`, `_CLASS`, `_PROVIDER`,
+  `_ALGORITHM`, `_POLICY`, `_LENGTH`, `_ENABLED`, and the rest.
+- **Values that cannot be the credential their key is named for** - integers,
+  durations, absolute paths, bare hostnames, URLs with no credentials in them,
+  class or package identifiers, UUIDs, digests, and single-word settings
+  (`none`, `oidc`, `true`).
+- **Public certificates.** A `BEGIN CERTIFICATE` block is long, base64 and
+  alarming-looking, and it is the single most common false positive in any
+  entropy-based detector. It is meant to be public.
+
+*3. Corroborated signal:* a field named for a credential holding a literal that
+survived every exclusion above.
+
+*4. Entropy is never a signal on its own.* It flags every checksum, UUID and
+base64-encoded certificate chain in a chart. It is used only to sharpen the
+WORDING of a finding that already matched on its key name - "an opaque
+high-entropy value" rather than "a literal value".
+
+**Secret values are base64-decoded before analysis.** Base64 is an encoding, not
+protection, and a detector reading the encoded form finds nothing at all. In the
+audited run a private key, a database password and a default administrative
+credential were all plainly readable after a single decode, and all three were
+reported as no finding.
+
+**A `Secret` shipping material is CFG-14, not CFG-01.** The defect is not that a
+credential is in a Secret - that is what Secrets are for - it is that the Secret
+travels inside the chart, into version control, into every mirror and into every
+archive anybody has taken. An empty Secret, created for a secret store to fill
+in at install time, passes.
+
+**No finding prints the value.** It names the object, the key and the class. A
+compliance report is itself something that gets forwarded into a ticket, an
+email and a shared drive; a report quoting the password it found has copied the
+exposure rather than described it.
 
 The pattern sets are configuration, not constants, so a deployment can add its
-own and suppress a false positive without a rebuild.
+own and suppress a false positive without a rebuild. The table above is asserted
+in `internal/compliance/cel/heuristics_test.go`, row by row, with the reason each
+row is there.
 
 ### 3.5 CFG-10 - schema validity and render determinism
 
@@ -397,47 +480,84 @@ Kubernetes reports it: a Service with no endpoints is a legal Service.
 
 1. For each `Service` with a non-empty `spec.selector`, find pod templates in the
    release whose labels are a superset of the selector, in the same namespace.
-   Zero matches is a `block` failure.
-2. For each `Service.spec.ports[]`, resolve `targetPort`:
-   - a number must appear as a `containerPort` on some matched container;
-   - a **string** must appear as a `containerPort.name` on some matched
-     container - and port names are limited to 15 characters, so a truncated
-     name is a real and common cause;
-   - absent `targetPort` defaults to `port`, and the same rules apply.
-3. A `Service` with no selector is skipped with reason
+   Zero matches is a failure.
+2. **Selector keys the platform supplies at pod creation are skipped.** This is
+   the correction the audit forced, and it was 100% of this check's findings on a
+   real chart. A headless Service addressing one member of a clustered database
+   selects on `statefulset.kubernetes.io/pod-name: db-0`; Kubernetes writes that
+   label when it creates the pod, and no chart contains it or ever will.
+   Comparing against it concluded the Service routed into a void, at blocking
+   severity, while the tool's own output printed the workload it pointed at. The
+   allowlist is `statefulset.kubernetes.io/pod-name`,
+   `apps.kubernetes.io/pod-index`, `controller-revision-hash`,
+   `pod-template-hash`, `pod-template-generation`,
+   `batch.kubernetes.io/job-name`, `batch.kubernetes.io/controller-uid`,
+   `job-name`, `controller-uid`.
+3. **`targetPort` resolution is NET-11**, not this check. They are different
+   defects with different fixes, and a vendor should be able to fix one without
+   being told about the other. A number always resolves; a name has to exist in
+   a container of a matched workload, and port names cap at 15 characters, so a
+   name trimmed to fit is a real and common cause.
+4. A `Service` with no selector is skipped with reason
    `headless or externally managed endpoints`, not failed - that is a legitimate
    shape (`ExternalName`, manually managed `EndpointSlice`).
+
+**Severity is `warn`, not `block`.** Whether an address has a live target is a
+runtime property. A rendered chart is strong evidence and not proof, and the
+audit's rule holds: a finding that is not decidable from the artifact alone does
+not decide a verdict on its own.
 
 ---
 
 ## 4. What ships, counted
 
-| Category | Rows | v1 | v1.1 | Tier 2 | Evidence | Other |
-|---|---|---|---|---|---|---|
-| SCH | 7 | 5 | 1 | 1 | 0 | 0 |
-| PDB | 9 | 8 | 0 | 0 | 1 | 0 |
-| PRB | 7 | 7 | 0 | 0 | 0 | 0 |
-| SEC | 11 | 10 | 0 | 1 | 0 | 0 |
-| RBAC | 8 | 7 | 0 | 0 | 1 | 0 |
-| CFG | 12 | 9 | 1 | 1 | 1 | 0 |
-| RES | 9 | 4 | 0 | 1 | 4 | 0 |
-| NET | 11 | 11 | 0 | 0 | 0 | 0 |
-| STO | 12 | 8 | 1 | 0 | 3 | 0 |
-| OBS | 10 | 2 | 0 | 0 | 7 | 1 |
-| MTA | 9 | 7 | 2 | 0 | 0 | 0 |
-| SUP | 10 | 7 | 0 | 0 | 2 | 1 |
-| UPG | 11 | 3 | 1 | 1 | 6 | 0 |
-| **Total** | **126** | **88** | **6** | **5** | **25** | **2** |
+| Category | Source rows | Shipping | v1.1 | Tier 2 | Evidence |
+|---|---|---|---|---|---|
+| SCH | 7 | 7 | 1 | 1 | 0 |
+| PDB | 8 | 9 | 0 | 0 | 1 |
+| PRB | 7 | 10 | 0 | 0 | 0 |
+| SEC | 10 | 12 | 0 | 1 | 0 |
+| RBAC | 8 | 9 | 0 | 0 | 1 |
+| CFG | 10 | 9 | 1 | 1 | 1 |
+| RES | 9 | 6 | 0 | 1 | 4 |
+| NET | 10 | 11 | 0 | 0 | 0 |
+| STO | 11 | 8 | 1 | 0 | 4 |
+| OBS | 10 | 3 | 0 | 0 | 6 |
+| MTA | 8 | 7 | 2 | 0 | 0 |
+| SUP | 10 | 3 | 0 | 0 | 2 |
+| UPG | 10 | 5 | 1 | 1 | 6 |
+| **Total** | **118** | **99** | **6** | **5** | **25** |
 
-`Other` is the two rows that are neither automated nor manual: OBS-10, which is
-the same assertion as NET-06 and is implemented there, and SUP-06, which this
-platform guarantees structurally by promoting digests.
+"Shipping" exceeds the source rows in five categories because a source
+assertion sometimes describes two defects with two different fixes and two
+different severities, and one check cannot honestly carry both. `SEC-01`
+described running as root and saying nothing about the user; `SUP-01` described
+a moving tag and an unpinned fingerprint; `PDB-08` described an absent shutdown
+time and a zero one. Each pair is now two checks, and a vendor can fix one
+without being told about the other.
 
-Of the 118 assertions in the source catalog plus 8 proposed additions:
-**88 ship as automated tier-1 checks**, 6 follow once their heuristics are tuned
+Of the 118 assertions in the source catalog plus the additions:
+**99 ship as automated tier-1 checks**, 6 follow once their heuristics are tuned
 against a real corpus, 5 are genuinely tier-2, and **25 are evidence** - document
 reviews that this feature tracks as a checklist beside the automated results and
 never reports as passed.
 
 That last number is the honest one. A tool claiming to automate 118 of 118 would
 be claiming to have read the vendor's restore-test report.
+
+### 4.1 What the audit changed about these numbers
+
+[04 - Response to the Audit](04-audit-response.md) has the full account. The
+short version, on a representative run:
+
+- Thirteen classes of false positive removed, each with the fixture that stops it
+  coming back.
+- The blocking set recalibrated by the rubric in
+  [02](02-authoring-checks.md) §2.3. Image digest pinning, identifying labels,
+  probe-handler comparison, spreading rules, Service selectors and default-deny
+  network policy leave it; the maintenance deadlocks, shared-storage-as-root and
+  scratch-space data loss join it. Between them those six accounted for the
+  large majority of a real report's blocking findings, and close to none of its
+  actionable defects.
+- Twenty-six checks added, of which the largest gap - a chart shipping
+  credentials inside it - was invisible to every check in the pack.

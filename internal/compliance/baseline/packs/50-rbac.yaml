@@ -3,29 +3,48 @@ kind: PolicyPack
 metadata:
   name: sgw-baseline-rbac
   prefix: RBAC
-  version: 1.0.0
+  version: 2.0.0
   description: >
-    Identity and access. What this release can do to the cluster it is
-    installed in.
+    What this release is allowed to do to the cluster it is installed in - which
+    identity each service runs as, and what that identity may ask the platform
+    for.
   maintainer: platform-sre
+  reference: docs/compliance/source-standards.md - 5. Identity & Access (RBAC)
 spec:
   checks:
     - id: RBAC-01
-      title: Workloads run under a service account the release ships
+      title: Every service runs under its own identity
       description: >
-        Every pod template names a serviceAccountName that is not "default" and
-        that the release ships as a ServiceAccount.
+        Every workload names a service account that is not the namespace's shared
+        default, and that the release itself ships.
       rationale: >
-        The default service account is shared by everything in the namespace,
-        so a permission granted to one workload is granted to all of them. A
-        name that the release does not ship is an install that fails, or worse,
-        silently falls back.
+        The default account is shared by everything in the namespace, so a
+        permission granted to one service is granted to all of them - including
+        software installed later by somebody else. Naming an account the release
+        does not ship is worse: the install either fails, or quietly falls back to
+        the shared one.
       severity: block
       tier: 1
       category: Identity & Access
+      subcategory: Service accounts
+      keywords: [serviceAccountName, ServiceAccount, "default account", identity]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - RBAC-01
       remediation: >
-        Template a ServiceAccount for this workload and name it in the pod
-        spec.
+        Ship a ServiceAccount for this workload and name it in the pod spec.
+      fixExample: |
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: my-service
+        ---
+        spec:
+          template:
+            spec:
+              serviceAccountName: my-service
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob]
         subject: podSpec
@@ -35,51 +54,89 @@ spec:
           text(self, "serviceAccountName") != "default" &&
           resourcesIn(["ServiceAccount"]).exists(sa, text(sa, "metadata.name") == text(self, "serviceAccountName"))
         locus: serviceAccountName
-        expected: a named ServiceAccount shipped by this release
+        expected: an identity of its own, shipped by this release
         observed: |
-          !present(self, "serviceAccountName") ? "(absent)" : text(self, "serviceAccountName")
+          !present(self, "serviceAccountName")
+            ? "none named, so it uses the namespace's shared default account"
+            : (text(self, "serviceAccountName") == "default"
+              ? "the namespace's shared default account"
+              : text(self, "serviceAccountName") + ", which this release does not ship")
         message: |
           !present(self, "serviceAccountName")
-            ? "names no serviceAccountName, so it runs under the namespace's default account - shared with everything else installed there"
+            ? "this workload names no identity, so it runs under the namespace's shared default account - the same one everything else installed there uses"
             : (text(self, "serviceAccountName") == "default"
-              ? "runs under the default service account, which is shared with everything else in the namespace"
-              : "names serviceAccountName " + text(self, "serviceAccountName") + ", which this release does not ship")
+              ? "this workload runs under the namespace's shared default account, so any permission it is given is given to everything else in the namespace too"
+              : "this workload runs as " + text(self, "serviceAccountName") + ", which this release does not ship. The install will either fail or fall back to the shared default account")
 
     - id: RBAC-02
-      title: Pods that need no API access do not mount a token
+      title: A service that never calls the platform is not given a key to it
       description: >
-        automountServiceAccountToken is false, unless the release binds this
-        service account to a Role or ClusterRole.
+        The platform access key is switched off, unless the release actually
+        grants this identity some permission.
       rationale: >
-        A mounted token is an API credential in the container filesystem. Most
-        workloads never call the API, so the token is pure attack surface. The
-        exemption is derived from the bindings the release actually ships,
-        which is what makes this precise rather than annoying.
+        A mounted key is a live credential sitting in the container's filesystem,
+        readable by anything that gets into the container. Most services never
+        call the platform at all, so the key is pure exposure with no upside. The
+        exemption here is worked out from the permissions the release actually
+        grants, rather than assumed - which is what makes this precise instead of
+        annoying.
       severity: warn
       tier: 1
       category: Identity & Access
-      remediation: "Set automountServiceAccountToken: false on the pod or its ServiceAccount."
+      subcategory: Service account tokens
+      keywords: [automountServiceAccountToken, token, "projected token", "API credential"]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - RBAC-02
+      remediation: >
+        Set automountServiceAccountToken to false on the pod, or on the
+        ServiceAccount it uses.
+      fixExample: |
+        spec:
+          template:
+            spec:
+              automountServiceAccountToken: false
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob]
         subject: podSpec
         where: '!boundToRole(text(address, "namespace"), text(self, "serviceAccountName"))'
       assert:
-        equals:
-          automountServiceAccountToken: false
+        expr: 'value(self, "automountServiceAccountToken") == false'
+        locus: automountServiceAccountToken
+        expected: the platform access key switched off
+        observed: |
+          !present(self, "automountServiceAccountToken")
+            ? "not declared, and it defaults to on - a platform key is mounted into the container"
+            : "on - a platform key is mounted into the container"
 
     - id: RBAC-03
-      title: No role grants a wildcard
+      title: Permission rules name what they allow, instead of allowing everything
       description: >
-        No rule in a Role or ClusterRole uses "*" in verbs, resources or
-        apiGroups.
+        No permission rule uses a wildcard in place of the actions, the resource
+        types, or the API groups it covers.
       rationale: >
-        A wildcard grants permissions that do not exist yet: every CRD
-        installed afterwards is included. A review of a wildcard rule cannot be
-        performed, because its meaning changes after the review.
+        A wildcard grants permissions that do not exist yet: every new resource
+        type installed afterwards is included automatically. A rule like that
+        cannot meaningfully be reviewed, because what it means changes after the
+        review.
       severity: block
       tier: 1
       category: Identity & Access
-      remediation: Enumerate the verbs, resources and API groups the workload uses.
+      subcategory: Role rules
+      keywords: [Role, ClusterRole, wildcard, verbs, resources, apiGroups, rules]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - RBAC-03
+      remediation: List the exact actions, resource types and API groups the workload uses.
+      fixExample: |
+        rules:
+          - apiGroups: [""]
+            resources: ["configmaps"]
+            verbs: ["get", "list", "watch"]
       appliesTo:
         kinds: [Role, ClusterRole]
         where: 'value(self, "rules") != null'
@@ -90,54 +147,86 @@ spec:
             (value(r, "resources") == null || !r.resources.exists(v, string(v) == "*")) &&
             (value(r, "apiGroups") == null || !r.apiGroups.exists(v, string(v) == "*")))
         locus: rules
-        expected: no "*" in verbs, resources or apiGroups
+        expected: every action, resource type and API group named
+        observed: '"a rule uses \"*\" for the actions, the resource types or the API groups"'
 
     - id: RBAC-04
-      title: The release does not grant cluster-wide permissions
+      title: Permissions stop at the edge of the release's own namespace
       description: >
-        The release ships no ClusterRole or ClusterRoleBinding. Bindings to the
-        built-in view, edit, admin and cluster-admin roles are named in the
-        finding.
+        The release ships no cluster-wide role or cluster-wide grant. Grants of
+        the platform's built-in view, edit, admin and cluster-admin roles are
+        named individually in the finding.
       rationale: >
-        A namespaced install that grants cluster-wide permissions is not a
-        namespaced install. The built-in roles are called out separately
-        because those are the ones copied between charts without being read.
+        A release installed into one namespace that grants itself cluster-wide
+        permissions is not installed into one namespace. The built-in roles are
+        called out separately because they are the ones copied between charts
+        without being read: cluster-admin in a chart is unrestricted access to
+        everything in the cluster.
       severity: block
       tier: 1
       category: Identity & Access
+      subcategory: Cluster-scoped RBAC
+      keywords: [ClusterRole, ClusterRoleBinding, cluster-admin, admin, edit, view, "cluster scope"]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - RBAC-04
       remediation: >
-        Use a Role and RoleBinding in the release's own namespace. If cluster
-        scope is genuinely required, it needs a waiver naming the role.
+        Use a Role and RoleBinding inside the release's own namespace. If
+        cluster-wide scope is genuinely required, it needs a waiver naming the
+        role.
+      fixExample: |
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role                   # not ClusterRole
+        metadata:
+          name: my-service
+          namespace: my-namespace
       appliesTo:
         kinds: [Role, RoleBinding, ClusterRole, ClusterRoleBinding]
       assert:
         expr: '!text(self, "kind").startsWith("Cluster")'
         locus: kind
-        expected: no cluster-scoped RBAC in this release
+        expected: permissions scoped to the release's own namespace
         observed: 'text(self, "kind") + " " + text(self, "metadata.name")'
         message: |
           text(self, "kind") == "ClusterRoleBinding" && (
             text(self, "roleRef.name") == "cluster-admin" || text(self, "roleRef.name") == "admin" ||
             text(self, "roleRef.name") == "edit" || text(self, "roleRef.name") == "view")
-          ? "binds the built-in " + text(self, "roleRef.name") + " ClusterRole, which grants far more than this release needs"
-          : "the release ships " + text(self, "kind") + " " + text(self, "metadata.name") + ", which grants permissions outside its own namespace"
+          ? "this release grants itself the platform's built-in " + text(self, "roleRef.name") +
+            " role across the whole cluster, which is far more than it needs"
+          : "this release ships " + text(self, "kind") + " " + text(self, "metadata.name") +
+            ", which grants permissions outside its own namespace"
 
     - id: RBAC-05
-      title: No role can enumerate secrets
+      title: No service can list the namespace's credentials
       description: >
-        No rule grants list or watch on secrets, and any rule granting get on
-        secrets names them in resourceNames.
+        No rule allows listing or watching secrets, and any rule allowing a
+        secret to be read names the specific secrets by name.
       rationale: >
-        list on secrets returns their contents, so it is read access to every
-        credential in the namespace - including ones belonging to other
-        software installed later. get with resourceNames is the same permission
-        scoped to the secrets this workload owns.
+        Listing secrets returns their contents, so it is read access to every
+        credential in the namespace - including credentials belonging to software
+        installed later by another team. Reading named secrets is the same
+        permission, limited to the ones this workload owns.
       severity: block
       tier: 1
       category: Identity & Access
+      subcategory: Secret access
+      keywords: [secrets, list, watch, get, resourceNames, Role, RBAC]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - RBAC-05
       remediation: >
-        Replace list/watch with get, and add resourceNames naming this
+        Replace list and watch with get, and add resourceNames naming this
         workload's own secrets.
+      fixExample: |
+        rules:
+          - apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames: ["my-service-db"]    # exactly this one
+            verbs: ["get"]
       appliesTo:
         kinds: [Role, ClusterRole]
         where: 'value(self, "rules") != null'
@@ -148,20 +237,76 @@ spec:
             (!ruleGrants(r, "secrets", ["get"]) ||
              (value(r, "resourceNames") != null && size(r.resourceNames) > 0)))
         locus: rules
-        expected: no list or watch on secrets, and get scoped by resourceNames
+        expected: no listing of secrets, and reading limited to named ones
+        observed: '"a rule can read every secret in the namespace"'
 
-    - id: RBAC-06
-      title: No role can grant permissions
+    - id: RBAC-09
+      title: No service can change the credentials it reads
       description: >
-        No rule grants a write verb on roles, rolebindings, clusterroles or
-        clusterrolebindings.
+        No rule allows creating, changing or deleting secrets.
       rationale: >
-        Permission to edit RBAC is permission to grant itself anything else, so
-        every other restriction in this section is advisory once it is present.
+        Reading a credential and being able to overwrite it are different powers.
+        A compromised service that can rewrite a credential can lock out its
+        legitimate owner, or replace it with one the attacker controls and
+        intercept everything that authenticates with it afterwards. The rules
+        that stop a service listing credentials do nothing about this.
       severity: block
       tier: 1
       category: Identity & Access
-      remediation: Remove the rule; RBAC objects are installed, not managed at runtime.
+      subcategory: Secret access
+      keywords: [secrets, create, update, patch, delete, deletecollection, RBAC, "write access"]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - RBAC-05 (write half)
+      remediation: >
+        Remove the write actions from the rule. If a component's documented job
+        is managing credentials, it needs a waiver naming it.
+      fixExample: |
+        rules:
+          - apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames: ["my-service-db"]
+            verbs: ["get"]                       # read only
+      appliesTo:
+        kinds: [Role, ClusterRole]
+        where: 'value(self, "rules") != null'
+      assert:
+        expr: |
+          self.rules.all(r, !ruleGrants(r, "secrets",
+            ["create", "update", "patch", "delete", "deletecollection"]))
+        locus: rules
+        expected: no creating, changing or deleting of secrets
+        observed: '"a rule can create, change or delete secrets"'
+
+    - id: RBAC-06
+      title: No service can hand itself more permissions
+      description: >
+        No rule allows creating or changing permission objects - roles, bindings,
+        cluster roles or cluster bindings.
+      rationale: >
+        Permission to edit permissions is permission to grant itself anything
+        else. Every other restriction in this section becomes advice rather than
+        a control the moment this one is present.
+      severity: block
+      tier: 1
+      category: Identity & Access
+      subcategory: Privilege escalation via RBAC
+      keywords: [roles, rolebindings, clusterroles, escalate, bind, RBAC]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - RBAC-06
+      remediation: >
+        Remove the rule. Permission objects are installed by the release, not
+        managed by the software at runtime.
+      fixExample: |
+        # Delete any rule of this shape:
+        # - apiGroups: ["rbac.authorization.k8s.io"]
+        #   resources: ["roles", "rolebindings"]
+        #   verbs: ["create", "update"]
       appliesTo:
         kinds: [Role, ClusterRole]
         where: 'value(self, "rules") != null'
@@ -171,21 +316,32 @@ spec:
             self.rules.all(r, !ruleGrants(r, res,
               ["create", "update", "patch", "delete", "deletecollection", "bind", "escalate"])))
         locus: rules
-        expected: no write verbs on RBAC resources
+        expected: no rule that changes permissions
+        observed: '"a rule can create or change permission objects"'
 
     - id: RBAC-07
-      title: No role can impersonate or enter a container
+      title: No service can act as somebody else or open a shell in a container
       description: >
-        No rule grants impersonate, nor any verb on pods/exec, pods/attach or
-        pods/portforward.
+        No rule allows acting as another identity, and none allows opening a
+        shell in, attaching to, or forwarding a port from a running container.
       rationale: >
-        impersonate is every permission any other identity has. pods/exec is a
-        shell in any container in scope, which bypasses every other control
-        this section describes.
+        Acting as another identity is every permission that identity has. A shell
+        in a container is direct access to whatever that container can reach,
+        which goes around every other control described here.
       severity: block
       tier: 1
       category: Identity & Access
+      subcategory: Impersonation & exec
+      keywords: [impersonate, pods/exec, pods/attach, pods/portforward, RBAC]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - RBAC-07
       remediation: Remove the rule.
+      fixExample: |
+        # Delete any rule granting "impersonate", or any rule naming
+        # pods/exec, pods/attach or pods/portforward.
       appliesTo:
         kinds: [Role, ClusterRole]
         where: 'value(self, "rules") != null'
@@ -195,4 +351,55 @@ spec:
           ["pods/exec", "pods/attach", "pods/portforward"].all(res,
             self.rules.all(r, !ruleGrants(r, res, ["*"])))
         locus: rules
-        expected: no impersonate, exec, attach or portforward
+        expected: no acting as another identity, and no shell access to containers
+        observed: '"a rule allows acting as another identity, or opening a shell in a container"'
+
+    - id: RBAC-10
+      title: Permissions are given to a named identity, not to everybody
+      description: >
+        Every grant names the service accounts it applies to. Grants to
+        "everyone authenticated", to "every account in this namespace", or to a
+        group fail.
+      rationale: >
+        A permission given to a broad group applies to every service in that
+        group, including ones installed months later by a different team. Nobody
+        can safely remove it afterwards, because nobody can tell what now depends
+        on it - so it becomes permanent by accident.
+      severity: block
+      tier: 1
+      category: Identity & Access
+      subcategory: Role bindings
+      keywords: [RoleBinding, ClusterRoleBinding, subjects, Group, "system:authenticated", "system:serviceaccounts"]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - RBAC-04 (subject half)
+      remediation: >
+        Name the specific ServiceAccount in the binding's subjects.
+      fixExample: |
+        subjects:
+          - kind: ServiceAccount
+            name: my-service
+            namespace: my-namespace
+      appliesTo:
+        kinds: [RoleBinding, ClusterRoleBinding]
+        where: 'value(self, "subjects") != null'
+      assert:
+        expr: |
+          self.subjects.all(s,
+            string(value(s, "kind")) == "ServiceAccount" &&
+            !string(value(s, "name")).startsWith("system:"))
+        locus: subjects
+        expected: named service accounts only
+        observed: |
+          self.subjects.filter(s, string(value(s, "kind")) != "ServiceAccount" ||
+                                  string(value(s, "name")).startsWith("system:"))
+            .map(s, string(value(s, "kind")) + " " + string(value(s, "name"))).join(", ")
+        message: |
+          "this grant applies to " +
+          self.subjects.filter(s, string(value(s, "kind")) != "ServiceAccount" ||
+                                  string(value(s, "name")).startsWith("system:"))
+            .map(s, string(value(s, "kind")) + " " + string(value(s, "name"))).join(", ") +
+          ", which covers every service in that group - including software installed later by " +
+          "somebody else."

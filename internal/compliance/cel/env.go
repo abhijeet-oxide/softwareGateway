@@ -94,6 +94,19 @@ const (
 	FnRuleGrants   = "ruleGrants"
 	FnAllLabels    = "allLabels"
 	FnAllAnnots    = "allAnnotations"
+
+	FnProbeHandler = "probeHandler"
+	FnPodField     = "podField"
+	FnSecValue     = "securityValue"
+	FnSecSource    = "securitySource"
+	FnRunsAsRoot   = "runsAsRoot"
+	FnMountersOf   = "mountersOf"
+	FnRuntimeKey   = "runtimeLabelKey"
+	FnBuiltinGroup = "builtinApiGroup"
+	FnDecode64     = "decodeBase64"
+	FnCredClass    = "credentialClass"
+	FnConfigRefs   = "configRefs"
+	FnSorted       = "sorted"
 )
 
 // costLimit bounds any single evaluation.
@@ -151,6 +164,9 @@ func newEnv(idx *compliance.Index) (*celgo.Env, error) {
 			impls[id] = fn
 		}
 		for id, fn := range bindings2(idx) {
+			impls[id] = fn
+		}
+		for id, fn := range bindings3(idx) {
 			impls[id] = fn
 		}
 	}
@@ -277,6 +293,57 @@ func newEnv(idx *compliance.Index) (*celgo.Env, error) {
 		// reject a declaration that is plainly there.
 		celgo.Function(FnAllAnnots,
 			overload("allannotations_dyn", []*celgo.Type{dyn}, celgo.MapType(str, str))),
+
+		// Probe comparison. A probe reduced to what it actually calls, with
+		// the timing fields dropped and the defaults filled in, so two
+		// probes are compared on the question the check is asking.
+		celgo.Function(FnProbeHandler,
+			overload("probehandler_dyn", []*celgo.Type{dyn}, str)),
+		// A value from a workload's pod spec, wherever that kind keeps it -
+		// two levels deeper on a CronJob than on everything else.
+		celgo.Function(FnPodField,
+			overload("podfield_dyn_string", []*celgo.Type{dyn, str}, dyn)),
+		// The kubelet's own resolution order for a securityContext field:
+		// container, then pod, then nothing. securitySource() names which of
+		// the three it was, because those are three different fixes.
+		celgo.Function(FnSecValue,
+			overload("securityvalue_dyn_dyn_string", []*celgo.Type{dyn, dyn, str}, str)),
+		celgo.Function(FnSecSource,
+			overload("securitysource_dyn_dyn_string", []*celgo.Type{dyn, dyn, str}, str)),
+		// Whether a whole workload runs anything as root. Undeclared is not
+		// root: on a restricted cluster it is an assigned non-root UID.
+		celgo.Function(FnRunsAsRoot,
+			overload("runsasroot_dyn", []*celgo.Type{dyn}, b)),
+		// The workloads that mount a claim, so a storage finding can name the
+		// software rather than the volume.
+		celgo.Function(FnMountersOf,
+			overload("mountersof_dyn", []*celgo.Type{dyn}, listDyn)),
+		// Labels Kubernetes adds itself at pod creation. A selector on one of
+		// them cannot be matched against a rendered chart, and treating that as
+		// "selects nothing" is a false finding on every per-replica Service.
+		celgo.Function(FnRuntimeKey,
+			overload("runtimelabelkey_string", []*celgo.Type{str}, b)),
+		// Whether an apiVersion is served by the cluster itself, so the
+		// custom-resource check stops asking for a definition of Deployment.
+		celgo.Function(FnBuiltinGroup,
+			overload("builtinapigroup_string", []*celgo.Type{str}, b)),
+		// Secret values are base64. That is an encoding, not protection, and a
+		// detector reading the encoded form finds nothing at all.
+		celgo.Function(FnDecode64,
+			overload("decodebase64_string", []*celgo.Type{str}, str)),
+		// What class of credential a value looks like, for a finding that names
+		// the material without reprinting it.
+		celgo.Function(FnCredClass,
+			overload("credentialclass_string_string", []*celgo.Type{str, str}, str)),
+		// Every ConfigMap and Secret a pod asks for, from all six places a pod
+		// spec can name one.
+		celgo.Function(FnConfigRefs,
+			overload("configrefs_dyn", []*celgo.Type{dyn}, listDyn)),
+		// A fixed order for a list built from a map. Map iteration is
+		// randomised, so a finding that lists offending keys comes out in a
+		// different order on every run without it.
+		celgo.Function(FnSorted,
+			overload("sorted_list", []*celgo.Type{listDyn}, listStr)),
 
 		// Version comparison, returning -1, 0 or 1. Semver rather than string
 		// order, because "1.10.0" sorts before "1.9.0" as a string and a check

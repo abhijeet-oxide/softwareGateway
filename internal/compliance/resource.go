@@ -258,7 +258,7 @@ type Release struct {
 //
 // The joins checks need - which PDB selects this workload, which Service
 // selects it, which CRD defines this custom resource - are O(n) scans each. A
-// 600-resource release with 88 checks would do that scan tens of thousands of
+// 600-resource release with 99 checks would do that scan tens of thousands of
 // times. Built once, it is a map lookup, and the cost estimate a check is
 // compiled against stays honest.
 type Index struct {

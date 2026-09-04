@@ -87,6 +87,7 @@ type ComplianceCounts struct {
 	UniqueBlocking int `json:"uniqueBlocking"`
 	UniqueWarning  int `json:"uniqueWarning"`
 	UniqueInfo     int `json:"uniqueInfo"`
+	UniquePassed   int `json:"uniquePassed"`
 }
 
 // ComplianceChartView is one chart's contribution - the run's denominator.

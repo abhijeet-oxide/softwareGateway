@@ -41,10 +41,11 @@ export interface ExportChoice {
   noun: string
 }
 
-export function ExportMenu({ choices, label = 'Export', disabled }: {
+export function ExportMenu({ choices, label = 'Export', disabled, icon }: {
   choices: ExportChoice[]
   label?: string
   disabled?: boolean
+  icon?: ReactNode
 }) {
   const [running, setRunning] = useState<string | null>(null)
   const { message } = App.useApp()
@@ -81,7 +82,7 @@ export function ExportMenu({ choices, label = 'Export', disabled }: {
 
   return (
     <Dropdown menu={{ items }} disabled={disabled || Boolean(running)} trigger={['click']}>
-      <Button icon={running ? <LoadingOutlined /> : <DownloadOutlined />} disabled={disabled}>
+      <Button icon={running ? <LoadingOutlined /> : icon ?? <DownloadOutlined />} disabled={disabled}>
         {running ? 'Preparing…' : label}
       </Button>
     </Dropdown>

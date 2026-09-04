@@ -130,19 +130,19 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 	}
 
 	if len(queryable) == 0 {
-		security.ReportStage(opts.Progress, security.StageFetching, 0, 0)
+		security.ReportStage(opts.Progress, security.StageScanning, 0, 0)
 		return reports, nil
 	}
 
 	sort.Ints(queryable)
-	security.ReportStage(opts.Progress, security.StageFetching, 0, len(queryable))
+	security.ReportStage(opts.Progress, security.StageScanning, 0, len(queryable))
 
 	// What is about to happen, in a sentence, at INFO.
 	//
 	// This was written at warning level, so a sync doing exactly what it should
 	// opened its transcript with an amber line - and a reader who learns that
 	// the normal case looks like a problem stops reading the ones that are.
-	opening := fmt.Sprintf("Asking JFrog Xray about %d images, %d per request.",
+	opening := fmt.Sprintf("Fetching JFrog Xray for %d images, %d per request.",
 		len(queryable), p.pace.Batch())
 	if skipped := len(refs) - len(queryable); skipped > 0 {
 		opening += fmt.Sprintf(
@@ -192,7 +192,7 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 		}
 		done += len(batch)
 		requests++
-		security.ReportStage(opts.Progress, security.StageFetching, done, len(queryable))
+		security.ReportStage(opts.Progress, security.StageScanning, done, len(queryable))
 		if failed > 0 {
 			security.ReportStage(opts.Progress, security.StageFailing, failed, len(queryable))
 		}
@@ -533,8 +533,8 @@ func (p *XrayProvider) fetchBatch(
 	// finish, and is anything being lost? Nothing is - the images are re-asked
 	// about - and the honest headline is that the requests got smaller.
 	security.ReportWarningUpdate(progress, fmt.Sprintf(
-		"JFrog Xray is answering slowly, so requests are being made smaller: "+
-			"%d images each, %d at a time. Nothing is lost - the images are asked about again.",
+		"JFrog Xray is responding slowly, reducing batch size to "+
+			"%d images from %d at a time. Failed ones are retried automatically.",
 		p.pace.Batch(), p.pace.InFlight()))
 	return batch[:half], batch[half:]
 }

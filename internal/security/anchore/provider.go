@@ -174,7 +174,7 @@ func (p *Provider) Scan(
 		}
 	}
 	if len(queryable) == 0 {
-		security.ReportStage(opts.Progress, security.StageFetching, 0, 0)
+		security.ReportStage(opts.Progress, security.StageScanning, 0, 0)
 		return reports, nil
 	}
 
@@ -253,7 +253,7 @@ func (p *Provider) readFindings(
 	known map[string]ImageRecord, reports []security.Report, now time.Time,
 	opts security.ScanOptions,
 ) {
-	security.ReportStage(opts.Progress, security.StageFetching, 0, len(pullable))
+	security.ReportStage(opts.Progress, security.StageScanning, 0, len(pullable))
 
 	var (
 		mu     sync.Mutex
@@ -277,7 +277,7 @@ func (p *Provider) readFindings(
 				failed++
 				security.ReportStage(opts.Progress, security.StageFailing, failed, len(pullable))
 			}
-			security.ReportStage(opts.Progress, security.StageFetching, done, len(pullable))
+			security.ReportStage(opts.Progress, security.StageScanning, done, len(pullable))
 			security.ReportProgress(opts.Progress, fmt.Sprintf(
 				"Retrieved Anchore results for %d of %d images.", done, len(pullable)))
 			return nil

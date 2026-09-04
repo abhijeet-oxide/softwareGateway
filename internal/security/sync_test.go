@@ -314,6 +314,21 @@ func TestNotesCollapseRetellings(t *testing.T) {
 	}
 }
 
+func TestStageUsesCurrentPhaseDenominator(t *testing.T) {
+	p := &SyncProgress{stages: map[string]stagePosition{}}
+
+	p.Stage("resolving", 252, 252)
+	p.Stage("scanning", 0, 298)
+	p.Stage("scanning", 0, 152)
+	p.Stage("scanning", 152, 152)
+	p.Stage("scanning", 0, 298)
+
+	stages, _, _, _ := p.Snapshot()
+	if len(stages) != 2 || stages[1].Done != 152 || stages[1].Total != 152 {
+		t.Fatalf("stages = %+v, want fetching at 152 of 152", stages)
+	}
+}
+
 // blockingProvider holds a scan open until its context ends, so a test can stop
 // one mid-flight.
 type blockingProvider struct{ started chan struct{} }

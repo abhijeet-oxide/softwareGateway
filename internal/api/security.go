@@ -1424,6 +1424,8 @@ func securityStageLabel(name string) string {
 		return "Resolving artifacts"
 	case security.StageFetching:
 		return "Retrieving scan results"
+	case security.StageScanning:
+		return "Scanning images"
 	case security.StageCached:
 		return "Reading stored results"
 	case security.StageCorrelating:

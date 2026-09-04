@@ -433,8 +433,7 @@ export function VulnerabilityCell({
   ].filter(Boolean)
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0 }}>
-      <SeverityMeter counts={summary.uniqueCveCounts} compact secondaryLabel="UNIQUE" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%', minWidth: 0 }}>
       {/*
         The exploited count, on the LISTING and not only on the release page.
 
@@ -461,12 +460,14 @@ export function VulnerabilityCell({
         >
           <Tag
             color={kevColour.fill}
-            style={{ marginInlineEnd: 0, flex: '0 0 auto', fontSize: 10.5, fontWeight: 600, lineHeight: '16px' }}
+            style={{ marginInlineEnd: 0, alignSelf: 'flex-start', fontSize: 10.5, fontWeight: 600, lineHeight: '16px' }}
           >
             {summary.kevs} KEV
           </Tag>
         </Tooltip>
       )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0 }}>
+        <SeverityMeter counts={summary.uniqueCveCounts} compact secondaryLabel="UNIQUE" />
       {caveats.length > 0 && (
         <Tooltip title={caveats.join(' ')}>
           <span style={{ display: 'inline-flex', flex: '0 0 auto' }}>
@@ -484,11 +485,14 @@ export function VulnerabilityCell({
       */}
       {(summary.providers?.length ?? 0) > 1 && (
         <Tooltip title={`Scanned by ${(summary.providers ?? []).map(scannerName).join(' and ')}.`}>
-          <Typography.Text type="secondary" style={{ fontSize: 10, flex: '0 0 auto' }}>
-            {summary.providers?.length}x
-          </Typography.Text>
+          <Space size={2} align="center" style={{ flex: '0 0 auto' }}>
+            {(summary.providers ?? []).map((provider) => (
+              <ScannerMark key={provider} provider={provider} size={14} />
+            ))}
+          </Space>
         </Tooltip>
       )}
+      </div>
     </div>
   )
 }
@@ -866,6 +870,7 @@ export function SecurityProgressPanel({ sync, onStop, stopping, starting }: {
   const log = sync.log ?? []
 
   const fetching = stages.find((st) => st.name === 'fetching')
+    const scanning = stages.find((st) => st.name === 'scanning')
   const failing = stages.find((st) => st.name === 'failing')
   const cached = stages.find((st) => st.name === 'cached')
   const resolving = stages.find((st) => st.name === 'resolving')
@@ -873,8 +878,8 @@ export function SecurityProgressPanel({ sync, onStop, stopping, starting }: {
   // The one bar worth drawing: artifacts answered for, out of artifacts asked
   // about. Everything else is a counter, because a second bar next to a first
   // one invites the reader to compare two things that are not comparable.
-  const total = fetching?.total ?? resolving?.total ?? 0
-  const done = fetching?.done ?? 0
+  const total = scanning?.total ?? fetching?.total ?? resolving?.total ?? 0
+  const done = scanning?.done ?? fetching?.done ?? 0
 
   /*
    * THIS sync's clock, not the last one's.
@@ -1142,9 +1147,13 @@ export function SyncButton({ sync, onSync, pending, size = 'middle', freshness, 
         icon={<SyncOutlined spin={running || pending} />}
         loading={pending}
         disabled={running}
-        onClick={() => onSync(false)}
+        onClick={() => onSync(sync.state !== '')}
       >
-        {running ? 'Syncing' : sync.state === '' ? 'Sync vulnerabilities' : 'Sync again'}
+        {running
+          ? 'Syncing'
+          : sync.state === ''
+            ? named.length > 1 ? 'Sync all scanners' : 'Sync vulnerabilities'
+            : named.length > 1 ? 'Sync all scanners' : 'Sync again'}
       </Button>
     </Tooltip>
   )
@@ -1201,7 +1210,7 @@ export function SyncButton({ sync, onSync, pending, size = 'middle', freshness, 
               onSync(true)
               return
             }
-            if (key.startsWith('only:')) onSync(false, key.slice(5))
+            if (key.startsWith('only:')) onSync(true, key.slice(5))
           },
         }}
       >

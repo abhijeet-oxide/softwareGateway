@@ -264,7 +264,7 @@ func (p *Packages) ComplianceRenderedAll(ctx context.Context, runID string) ([]C
 // Total is the count BEFORE the page is taken, because a reader needs to know
 // whether they are looking at 40 findings or the first 40 of 900. A page with
 // no total is a page that lies by omission.
-// ComplianceUniqueCounts is how many DISTINCT checks failed, by severity.
+// ComplianceUniqueCounts is how many DISTINCT checks exist, by outcome.
 //
 // # Why this is a number the server has to produce
 //
@@ -281,22 +281,24 @@ type ComplianceUniqueCounts struct {
 	Blocking int
 	Warning  int
 	Info     int
+	Passed   int
 }
 
 // Total is every distinct failing check.
 func (u ComplianceUniqueCounts) Total() int { return u.Blocking + u.Warning + u.Info }
 
-// ComplianceUniqueChecks counts the distinct checks a run failed, by severity.
+// ComplianceUniqueChecks counts distinct failed checks by severity and passed
+// checks by outcome.
 //
-// FAILURES only, like the severity counts it sits beside: a passing critical
-// check is not a critical anything, and counting it here would produce the
-// number nobody can interpret.
+// The severity breakdown is FAILURES only: a passing critical check is not a
+// critical anything, and counting it there would produce the number nobody can
+// interpret. Passes are counted whole, in one field, for the same reason.
 func (p *Packages) ComplianceUniqueChecks(ctx context.Context, runID string) (ComplianceUniqueCounts, error) {
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
-		SELECT severity, COUNT(DISTINCT check_id)
+		SELECT outcome, severity, COUNT(DISTINCT check_id)
 		  FROM compliance_results
-		 WHERE run_id = ? AND outcome = 'fail'
-		 GROUP BY severity`), runID)
+		 WHERE run_id = ? AND outcome IN ('fail', 'pass')
+		 GROUP BY outcome, severity`), runID)
 	if err != nil {
 		return ComplianceUniqueCounts{}, fmt.Errorf("count distinct compliance checks: %w", err)
 	}
@@ -305,11 +307,19 @@ func (p *Packages) ComplianceUniqueChecks(ctx context.Context, runID string) (Co
 	var out ComplianceUniqueCounts
 	for rows.Next() {
 		var (
+			outcome  string
 			severity string
 			n        int
 		)
-		if err := rows.Scan(&severity, &n); err != nil {
+		if err := rows.Scan(&outcome, &severity, &n); err != nil {
 			return ComplianceUniqueCounts{}, fmt.Errorf("scan distinct compliance checks: %w", err)
+		}
+		// Passes are counted whole, across every severity: "how many rules did
+		// this release satisfy" is one number, and splitting it by how much the
+		// organization would have cared answers a question nobody asked.
+		if outcome == "pass" {
+			out.Passed += n
+			continue
 		}
 		// Read through ParseSeverity: a row written before the vocabulary
 		// changed still says `block`, and counting it under nothing would make

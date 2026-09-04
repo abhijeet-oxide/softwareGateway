@@ -53,6 +53,7 @@ type fakeSyncer struct {
 	started       int
 	lastArtifacts []security.ArtifactRef
 	lastScope     security.Scope
+	lastProviders []string
 	// leaveRunning holds the row in `syncing` instead of completing it.
 	leaveRunning bool
 	// cancelled counts Stop requests.
@@ -73,6 +74,7 @@ func (f *fakeSyncer) Start(ctx context.Context, req security.SyncRequest) (secur
 	f.started++
 	f.lastArtifacts = req.Artifacts
 	f.lastScope = req.Scope
+	f.lastProviders = append([]string(nil), req.Providers...)
 	if f.leaveRunning {
 		return security.SyncStarted, nil
 	}
@@ -292,6 +294,19 @@ func TestSyncAsksTheTargetNotTheSource(t *testing.T) {
 	}
 	if len(h.syncer.lastArtifacts) == 0 {
 		t.Error("the sync was given no artifacts")
+	}
+}
+
+func TestUnscopedSyncUsesEveryConfiguredScanner(t *testing.T) {
+	target := securityTarget{Providers: []string{"jfrog-xray", "anchore"}}
+
+	got := providersFor(target, "")
+	if len(got) != 2 || got[0] != "jfrog-xray" || got[1] != "anchore" {
+		t.Fatalf("providers = %v, want both configured scanners", got)
+	}
+
+	if got := providersFor(target, "jfrog-xray"); len(got) != 1 || got[0] != "jfrog-xray" {
+		t.Fatalf("JFrog-only providers = %v, want only JFrog Xray", got)
 	}
 }
 

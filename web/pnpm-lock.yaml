@@ -11,6 +11,9 @@ importers:
       '@iconify-react/bxs':
         specifier: ^1.0.2
         version: 1.0.2(react@19.2.8)
+      '@iconify-react/carbon':
+        specifier: ^1.0.9
+        version: 1.0.9(react@19.2.8)
       '@tanstack/react-query':
         specifier: ^5.62.0
         version: 5.101.4(react@19.2.8)
@@ -372,6 +375,9 @@ packages:
 
   '@iconify-react/bxs@1.0.2':
     resolution: {integrity: sha512-L/VNWTawgkdLAqQHTxf4DdrkvHLQTlqrWkB6WqiadkJmPM0cngEevtS3wzvbdQq9NR9jOfI85e37Ol8fH/LQhQ==}
+
+  '@iconify-react/carbon@1.0.9':
+    resolution: {integrity: sha512-ht6LwOypVWkIVGdIoBloA26ATDwFFpqeBEMo0udkj31V4ylggxCYa3aFzPFA24FLTyT6gwpqZ1H1Sk20Q231xA==}
 
   '@iconify/css-react@1.0.2':
     resolution: {integrity: sha512-k33FKG4jGgd8odos+1HdSwCKZOQ5F1heQxwl/zDrA53tLg5IseDPMqsmQbcCEZ6E0Zgcrmfo4ceFSBmbuEvGtw==}
@@ -1615,6 +1621,12 @@ snapshots:
       '@iconify/types': 2.0.0
 
   '@iconify-react/bxs@1.0.2(react@19.2.8)':
+    dependencies:
+      '@iconify/css-react': 1.0.2(react@19.2.8)
+    transitivePeerDependencies:
+      - react
+
+  '@iconify-react/carbon@1.0.9(react@19.2.8)':
     dependencies:
       '@iconify/css-react': 1.0.2(react@19.2.8)
     transitivePeerDependencies:

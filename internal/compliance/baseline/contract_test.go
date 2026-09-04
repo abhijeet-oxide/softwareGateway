@@ -101,6 +101,48 @@ func TestFindingsCarryTheValueTheyJudged(t *testing.T) {
 	}
 }
 
+// An object that names no namespace is not an object in a different namespace.
+//
+// # The defect this exists for
+//
+// A validation run produced three findings saying "this workload has no
+// disruption policy" and four saying "this disruption policy protects no
+// workload" - about the same three object pairs. Both cannot be true. Each was
+// the mirror image of the other, and all seven followed from ONE broken join:
+// `helm template` emits `metadata.namespace` only where a chart hard-codes it,
+// real releases mix both conventions freely, and comparing the rendered strings
+// made every cross-object lookup fail.
+//
+// The reviewer's own diagnostic is worth stating here even though this test
+// cannot check it in general: two checks asserting contradictory things about
+// one pair of objects almost always means one broken join rather than two
+// broken rules. The fixture below is that pair, built deliberately - a policy
+// with no namespace protecting a workload that declares one - and the two
+// mirror checks must both stay silent on it.
+//
+// The assertion is scoped to the join-dependent checks on purpose. The fixture
+// workload fails plenty of unrelated checks, and demanding otherwise would make
+// this a second copy of the good fixture.
+func TestAnAbsentNamespaceDoesNotBreakAJoin(t *testing.T) {
+	joinDependent := map[string]bool{
+		"PDB-01": true, // "no policy protects this workload"
+		"PDB-09": true, // "this policy protects no workload"
+		"NET-07": true, // "this Service routes nowhere"
+		"OBS-01": true, // reached through servicesFor
+	}
+	for _, r := range runFixture(t, "bad-pdb.yaml") {
+		if r.Outcome != compliance.OutcomeFail || !joinDependent[r.CheckID] {
+			continue
+		}
+		if r.Address.Name == "implicit-namespace-pdb" || r.Address.Name == "namespaced" {
+			t.Errorf("%s fired on %s/%s. The rule declares no namespace and the workload "+
+				"it protects declares one, which is the ordinary shape of a real chart - "+
+				"and %s asserts the opposite of its mirror check about the same pair",
+				r.CheckID, r.Address.Kind, r.Address.Name, r.CheckID)
+		}
+	}
+}
+
 // A check that exists to REPORT something says it on a pass.
 //
 // The alternative is what the audit found: an inventory check has to fail on

@@ -219,3 +219,126 @@ spec:
       containers:
         - name: instant-kill
           image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
+---
+# Source: bad-pdb/templates/percent-deadlock.yaml
+# The spelling a literal comparison cannot see. 10% of one copy rounds DOWN to
+# zero, so this reads as the most permissive rule in the chart and is the one
+# that stops the drain.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: percent-deadlock, namespace: bad}
+spec:
+  maxUnavailable: 10%
+  selector:
+    matchLabels: {app.kubernetes.io/name: lonely}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: lonely, namespace: bad}
+spec:
+  replicas: 1
+  progressDeadlineSeconds: 600
+  selector: {matchLabels: {app.kubernetes.io/name: lonely}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: lonely}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: lonely
+          image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
+---
+# Source: bad-pdb/templates/no-op.yaml
+# A rule that permits exactly what it looks like it prevents. Worse than having
+# none, because a missing rule is visible and a useless one is not.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: protects-nothing-really, namespace: bad}
+spec:
+  minAvailable: 0
+  selector:
+    matchLabels: {app.kubernetes.io/name: pair}
+---
+# Source: bad-pdb/templates/recommended.yaml
+# THE CONFIGURATION THE STANDARD RECOMMENDS. Two copies, one may be moved.
+# Neither PDB-02 nor PDB-11 may fire on it - reporting this is worse than
+# reporting nothing, because a chart author who acts on the finding makes their
+# release less available.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: pair-pdb, namespace: bad}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: pair}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: pair, namespace: bad}
+spec:
+  replicas: 2
+  progressDeadlineSeconds: 600
+  selector: {matchLabels: {app.kubernetes.io/name: pair}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: pair}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: pair
+          image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
+---
+# Source: bad-pdb/templates/undeclared-namespace.yaml
+# THE JOIN. `helm template` emits metadata.namespace only where a chart
+# hard-codes it, and real releases mix both conventions - so this rule and the
+# workload it protects read as different namespaces to a string comparison.
+# Neither PDB-01 ("this workload has no rule") nor PDB-09 ("this rule protects
+# nothing") may fire: they are mirror images, and both firing on one pair is the
+# signature of a broken join rather than two broken rules.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: implicit-namespace-pdb}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: namespaced}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: namespaced, namespace: bad}
+spec:
+  replicas: 2
+  progressDeadlineSeconds: 600
+  selector: {matchLabels: {app.kubernetes.io/name: namespaced}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: namespaced}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: namespaced
+          image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
+---
+# Source: bad-pdb/templates/pointless.yaml
+# A rule over one copy that DOES let the copy move. Not a deadlock - PDB-02 must
+# stay silent - and not protection either: there is nothing to keep running
+# while the copy moves. It reads as though the service is covered.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: pointless-pdb, namespace: bad}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: solo}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: solo, namespace: bad}
+spec:
+  replicas: 1
+  progressDeadlineSeconds: 600
+  selector: {matchLabels: {app.kubernetes.io/name: solo}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: solo}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: solo
+          image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000

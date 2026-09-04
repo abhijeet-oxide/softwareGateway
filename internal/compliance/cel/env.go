@@ -107,6 +107,8 @@ const (
 	FnCredClass    = "credentialClass"
 	FnConfigRefs   = "configRefs"
 	FnSorted       = "sorted"
+	FnDisruptions  = "disruptionsAllowed"
+	FnShippedName  = "shippedObjectName"
 )
 
 // costLimit bounds any single evaluation.
@@ -344,6 +346,16 @@ func newEnv(idx *compliance.Index) (*celgo.Env, error) {
 		// different order on every run without it.
 		celgo.Function(FnSorted,
 			overload("sorted_list", []*celgo.Type{listDyn}, listStr)),
+		// How many copies a maintenance rule lets the platform move at once,
+		// computed rather than pattern-matched, and including the percentage
+		// forms where the rounding is what produces the deadlock. -1 when the
+		// rule states neither bound, -2 when it selects nothing.
+		celgo.Function(FnDisruptions,
+			overload("disruptionsallowed_dyn", []*celgo.Type{dyn}, i)),
+		// Whether a literal is the name of a Secret or ConfigMap this release
+		// ships - which makes it a reference rather than a credential.
+		celgo.Function(FnShippedName,
+			overload("shippedobjectname_string", []*celgo.Type{str}, b)),
 
 		// Version comparison, returning -1, 0 or 1. Semver rather than string
 		// order, because "1.10.0" sorts before "1.9.0" as a string and a check

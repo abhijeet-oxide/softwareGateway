@@ -15,7 +15,14 @@ findings:
   # minAvailable 1 over a one-replica workload is the same deadlock arrived at
   # from the other side, so PDB-02 fires here as well as PDB-03.
   - {check: PDB-02, kind: PodDisruptionBudget, name: over-singleton}
-  - {check: PDB-03, kind: PodDisruptionBudget, name: over-singleton}
+  # The spelling a literal comparison cannot see: 10% of one copy rounds down to
+  # zero, so the most permissive-looking rule in the chart is the one that stops
+  # the drain.
+  - {check: PDB-02, kind: PodDisruptionBudget, name: percent-deadlock}
+  # over-singleton is minAvailable 1 over a single copy, which leaves no copy
+  # movable - so it is PDB-02's deadlock, not PDB-03's pointless rule. One
+  # decision, one finding, one fix.
+  - {check: PDB-03, kind: PodDisruptionBudget, name: pointless-pdb}
 
   # maxSurge and maxUnavailable both zero: a rollout that cannot start.
   - {check: PDB-05, kind: Deployment, name: stuck}
@@ -35,3 +42,9 @@ findings:
   - {check: PDB-09, kind: PodDisruptionBudget, name: protects-nothing}
   # Killed instantly on shutdown, so whatever it was handling is dropped.
   - {check: PDB-10, kind: Deployment, name: instant-kill}
+  # A rule that permits exactly what it looks like it prevents.
+  - {check: PDB-11, kind: PodDisruptionBudget, name: protects-nothing-really}
+  # And nothing at all from pair-pdb - minAvailable 1 over two copies is what
+  # the standard recommends, and reporting it would make a chart author's
+  # release worse - nor from implicit-namespace-pdb, whose workload declares a
+  # namespace it does not.

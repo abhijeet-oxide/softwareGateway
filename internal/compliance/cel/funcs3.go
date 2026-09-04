@@ -1,7 +1,9 @@
 package cel
 
 import (
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"cel.dev/cel-go/common/types"
@@ -129,7 +131,7 @@ func bindings3(idx *compliance.Index) map[string]impl {
 		}
 		name := claim.Name()
 		for _, w := range idx.OfKind(compliance.WorkloadKinds...) {
-			if w.Namespace() != claim.Namespace() {
+			if !sameNamespace(w, claim) {
 				continue
 			}
 			if mountsClaim(w, name) {
@@ -188,6 +190,67 @@ func bindings3(idx *compliance.Index) map[string]impl {
 			out = append(out, v)
 		}
 		return types.DefaultTypeAdapter.NativeToValue(out)
+	})
+
+	// disruptionsAllowed() is how many copies a maintenance rule lets the
+	// platform move at once. -1 means the rule states neither bound, and -2
+	// means it selects nothing so there is no replica count to compute against.
+	add("disruptionsallowed_dyn", func(args ...ref.Val) ref.Val {
+		if len(args) != 1 {
+			return types.Int(-1)
+		}
+		pdb := resolve(idx, args)
+		if pdb == nil {
+			return types.Int(-1)
+		}
+		spec, ok := mapField(pdb.Object, "spec")
+		if !ok {
+			return types.Int(-1)
+		}
+		worst := -2
+		for _, w := range idx.OfKind(compliance.WorkloadKinds...) {
+			if !sameNamespace(w, pdb) {
+				continue
+			}
+			sel, _ := mapField(pdb.Object, "spec", "selector")
+			if !SelectorMatches(sel, w.PodLabels()) {
+				continue
+			}
+			n := disruptionsAllowed(spec, replicaCount(w.Object))
+			if n == -1 {
+				return types.Int(-1)
+			}
+			// The tightest workload decides: a rule covering two services
+			// deadlocks maintenance as soon as it deadlocks one of them.
+			if worst == -2 || n < worst {
+				worst = n
+			}
+		}
+		return types.Int(worst)
+	})
+
+	// shippedObjectName() reports whether a literal is the NAME of something
+	// this release ships.
+	//
+	// An environment variable set to "session-store-v1" in a field called
+	// APP_SESSION_SECRET is an opaque string in a field named for a credential,
+	// which is the shape the credential detector corroborates on. It is also
+	// exactly what a reference to a Secret object looks like - and a reference
+	// to a credential is the correct pattern, not a leak.
+	add("shippedobjectname_string", func(args ...ref.Val) ref.Val {
+		if len(args) != 1 {
+			return types.Bool(false)
+		}
+		want := strings.TrimSpace(scalarString(native(args[0])))
+		if want == "" {
+			return types.Bool(false)
+		}
+		for _, r := range idx.OfKind("Secret", "ConfigMap") {
+			if r.Name() == want {
+				return types.Bool(true)
+			}
+		}
+		return types.Bool(false)
 	})
 
 	unary := func(id string, fn func(string) bool) {
@@ -354,6 +417,111 @@ func mountsClaim(w *compliance.Resource, claim string) bool {
 		}
 	}
 	return false
+}
+
+// replicaCount reads a workload's copy count with the Kubernetes default of 1.
+func replicaCount(obj map[string]any) int {
+	v, found := compliance.Lookup(obj, "spec.replicas")
+	if !found || v == nil {
+		return 1
+	}
+	n, ok := intOrPercent(v, 0, math.Floor)
+	if !ok {
+		return 1
+	}
+	return n
+}
+
+// sameNamespace reports whether two rendered objects will land in the same
+// namespace.
+//
+// # Why an absent namespace matches anything
+//
+// `helm template` emits `metadata.namespace` only where a chart hard-codes it.
+// Where the chart says nothing, the object lands in the namespace the release is
+// installed into - which is also where the hard-coded ones land, whenever the
+// chart's author wrote the namespace they were installing to. Real charts mix
+// both conventions freely, often within one release and sometimes within one
+// pair of objects.
+//
+// Comparing the rendered strings therefore compares a namespace against an
+// empty string, and every cross-object join fails. In a validation run that
+// produced three "this workload has no disruption policy" findings and four
+// "this policy protects no workload" findings, about the SAME three pairs -
+// each check asserting the exact opposite of the other, and all seven wrong.
+//
+// The rule here is the one the manifest supports: an object that names no
+// namespace could be in any of them, so it is not evidence of a mismatch. The
+// cost is a false negative where a chart genuinely splits two related objects
+// across namespaces, which is rare, deliberate, and visible in the chart. The
+// cost of the other choice is a contradiction printed twice at blocking
+// severity.
+func sameNamespace(a, b *compliance.Resource) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	an, bn := a.Namespace(), b.Namespace()
+	return an == "" || bn == "" || an == bn
+}
+
+// disruptionsAllowed is how many copies a PodDisruptionBudget lets the platform
+// move at once, or -1 when the policy states neither bound.
+//
+// # Why this is arithmetic and not a string comparison
+//
+// A check that pattern-matches on the literal `minAvailable: 1` reports the
+// configuration this organization's own standard RECOMMENDS for a two-copy
+// service - "for replicas=2, a common safe setting is maxUnavailable: 1 (or
+// minAvailable: 1)" - as a blocking deadlock. A chart author who acts on that
+// finding makes their release worse, which is the most damaging thing a
+// compliance report can do.
+//
+// It also misses the real deadlock, because the dangerous forms are the
+// percentages: `maxUnavailable: 10%` over a single copy is floor(0.1) = 0, and
+// reads as permissive while being absolute.
+//
+// Kubernetes rounds minAvailable percentages UP and maxUnavailable percentages
+// DOWN, and both roundings are where quorum-sized workloads deadlock.
+func disruptionsAllowed(spec map[string]any, replicas int) int {
+	if v, ok := spec["minAvailable"]; ok && v != nil {
+		need, ok := intOrPercent(v, replicas, math.Ceil)
+		if !ok {
+			return -1
+		}
+		return replicas - need
+	}
+	if v, ok := spec["maxUnavailable"]; ok && v != nil {
+		allowed, ok := intOrPercent(v, replicas, math.Floor)
+		if !ok {
+			return -1
+		}
+		return allowed
+	}
+	return -1
+}
+
+// intOrPercent reads the IntOrString both disruption fields use.
+//
+// The percentage form is a STRING, so a numeric comparison skips it silently -
+// which is how an implementation catches one of the four spellings of a
+// deadlock and reports the other three as compliant.
+func intOrPercent(v any, of int, round func(float64) float64) (int, bool) {
+	s := strings.TrimSpace(scalarString(v))
+	if s == "" {
+		return 0, false
+	}
+	if pct, found := strings.CutSuffix(s, "%"); found {
+		f, err := strconv.ParseFloat(pct, 64)
+		if err != nil {
+			return 0, false
+		}
+		return int(round(float64(of) * f / 100)), true
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // configRefs collects every ConfigMap and Secret a pod spec names.

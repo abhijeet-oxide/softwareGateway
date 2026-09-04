@@ -139,3 +139,48 @@ func TestBuiltinAPIGroup(t *testing.T) {
 		t.Error("a vendor's own type is treated as built in")
 	}
 }
+
+// The disruption arithmetic, which is what separates the configuration this
+// organization's standard RECOMMENDS from the one that deadlocks maintenance.
+//
+// A check that pattern-matches on the literal `minAvailable: 1` reports the
+// standard's own baseline for a two-copy service as a blocking defect - "for
+// replicas=2, a common safe setting is maxUnavailable: 1 (or minAvailable: 1)" -
+// and a chart author who acts on that finding makes their release worse. The
+// same check, matching literals, misses `maxUnavailable: 10%` over a single
+// copy, which is a genuine deadlock that reads as permissive.
+func TestDisruptionsAllowed(t *testing.T) {
+	cases := []struct {
+		spec     map[string]any
+		replicas int
+		want     int
+		why      string
+	}{
+		// The standard's own recommendation for two copies. Must be allowed.
+		{map[string]any{"minAvailable": 1}, 2, 1, "minAvailable 1 of 2 spares one"},
+		{map[string]any{"maxUnavailable": 1}, 2, 1, "maxUnavailable 1 spares one"},
+		// The four spellings of a deadlock.
+		{map[string]any{"minAvailable": 2}, 2, 0, "minAvailable equal to the copy count"},
+		{map[string]any{"maxUnavailable": 0}, 3, 0, "no copy may be unavailable"},
+		{map[string]any{"maxUnavailable": "0%"}, 3, 0, "the string form of the same thing"},
+		{map[string]any{"minAvailable": "100%"}, 3, 0, "every copy must stay"},
+		// The one the literal comparison cannot see: 10% of one copy rounds
+		// DOWN to zero, so it reads as permissive and is absolute.
+		{map[string]any{"maxUnavailable": "10%"}, 1, 0, "floor(1 x 10%) is zero"},
+		{map[string]any{"maxUnavailable": "10%"}, 30, 3, "and is fine at thirty copies"},
+		// minAvailable percentages round UP, which is where quorum-sized
+		// workloads deadlock.
+		{map[string]any{"minAvailable": "51%"}, 2, 0, "ceil(2 x 51%) is 2 of 2"},
+		{map[string]any{"minAvailable": "50%"}, 4, 2, "ceil(4 x 50%) leaves two"},
+		// A policy that protects nothing at all.
+		{map[string]any{"minAvailable": 0}, 3, 3, "every copy may go at once"},
+		// Neither bound stated.
+		{map[string]any{}, 3, -1, "nothing to compute"},
+	}
+	for _, c := range cases {
+		if got := disruptionsAllowed(c.spec, c.replicas); got != c.want {
+			t.Errorf("disruptionsAllowed(%v, %d) = %d, want %d - %s",
+				c.spec, c.replicas, got, c.want, c.why)
+		}
+	}
+}

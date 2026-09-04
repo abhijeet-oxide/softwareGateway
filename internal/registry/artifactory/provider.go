@@ -533,9 +533,9 @@ func (p *XrayProvider) fetchBatch(
 	// finish, and is anything being lost? Nothing is - the images are re-asked
 	// about - and the honest headline is that the requests got smaller.
 	security.ReportWarningUpdate(progress, fmt.Sprintf(
-		"JFrog Xray is responding slowly, reducing batch size to "+
-			"%d images from %d at a time. Failed ones are retried automatically.",
-		p.pace.Batch(), p.pace.InFlight()))
+		"JFrog Xray is responding slowly, reducing batch size from "+
+			"%d images to %d at a time. Failed ones are retried automatically.",
+		p.pace.InFlight(), p.pace.Batch()))
 	return batch[:half], batch[half:]
 }
 

@@ -630,19 +630,6 @@ export function LoadingArt({ size = 132 }: { size?: number }) {
           strokeDasharray="64 194"
         />
       </g>
-      <g className="ill-orbit-counter" style={{ transformOrigin: "66px 62px" }}>
-        <circle
-          cx="66"
-          cy="62"
-          r="31"
-          fill="none"
-          stroke={BLUE}
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeDasharray="30 165"
-          opacity="0.42"
-        />
-      </g>
       {/* the page being assembled inside them */}
       <g className="ill-floaty" style={{ transformOrigin: "66px 62px" }}>
         <rect x="45" y="43" width="42" height="38" rx="8" fill={PAPER} stroke={BLUE} strokeWidth="2.5" />

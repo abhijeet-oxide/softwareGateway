@@ -244,12 +244,19 @@ locus            spec.maxUnavailable     JSON path to the field judged
 ── what was found ───────────────────────────────────────────────────
 outcome          fail
 determinacy      fixed
-observed         0
-expected         >= 1, or use minAvailable < replicas
+observed         at most 0 copies may be unavailable
+expected         a rule that lets at least one copy be moved
 message          …one sentence, the thing a person reads first
 remediation      …what to change
-reference        https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+reference        source-standards.md - PDB-02
 reason           (empty; set for skip and error)
+
+── what to do about it ──────────────────────────────────────────────
+confidence       confirmed          what the tool knows vs. what it infers
+whenItBites      node-maintenance   when the consequence arrives
+fixOwner         chart-template     who changes something
+fixEffort        low                how much work
+fixExample       …the corrected YAML, not a description of it
 
 ── tracking ─────────────────────────────────────────────────────────
 fingerprint      sha256(checkId | chartName | kind | namespace | name | container | locus)
@@ -269,6 +276,16 @@ Three properties of that shape are deliberate:
 - **`fingerprint` excludes the chart version and the release tag** on purpose.
   It is what makes "the vendor fixed this in 4.3.0" and "this has been failing
   for six releases" answerable, and it is what a waiver is keyed on.
+
+The triage block is the newest part of the shape and the one that was missing
+longest. A severity says how much this organization cares about the rule; it
+does not say who changes something, how much work it is, when the consequence
+arrives, or how firmly the tool knows what it is asserting - and a report
+without those is one that gets forwarded rather than acted on. It is copied from
+the check onto the result, like the title and the remediation, so a spreadsheet
+sent to a vendor still says what it said the day it was exported. See
+[02](02-authoring-checks.md) §2.1, and [04](04-audit-response.md) for the audit
+that established it was needed.
 
 ## 4. Tiers
 

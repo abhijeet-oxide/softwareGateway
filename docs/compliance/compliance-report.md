@@ -3,6 +3,10 @@
 
 **Document type:** Engineering specification and defect report
 **Audience:** Scanner development team; secondary audience: chart authors and reviewers
+**Status:** Answered. See [04 - Response to the Audit](04-audit-response.md) for
+what changed because of this document, what was implemented differently and why,
+and what remains open. This file is the audit as received, and is not edited.
+
 **Classification:** Generic. Every resource name, image, registry, namespace, credential and value in this document is synthetic. No customer, product or release data is included.
 
 ---

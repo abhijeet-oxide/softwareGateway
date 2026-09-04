@@ -220,15 +220,21 @@ spec:
         where: 'present(self, "args") || present(self, "command")'
       assert:
         expr: |
-          (!present(self, "args") ||
-            self.args.all(a, !string(a).matches("(?i)^--?(password|passwd|token|secret|api[-_]?key)=") &&
-                             credentialClass("commandline", string(a)) == "")) &&
-          (!present(self, "command") ||
-            self.command.all(a, !string(a).matches("(?i)^--?(password|passwd|token|secret|api[-_]?key)=") &&
-                                credentialClass("commandline", string(a)) == ""))
+          ((present(self, "args") ? self.args : []) +
+           (present(self, "command") ? self.command : []))
+            .all(a,
+              !string(a).matches("(?i)^--?[a-z0-9._-]*(password|passwd|token|secret|api[-_]?key|credential)=[^{$\\s]") &&
+              credentialClass("commandline", string(a)) == "")
         locus: args
         expected: no credential written into the start-up command
-        observed: '"a start-up argument carries a credential as a literal value"'
+        observed: |
+          "carries a credential: " +
+          sorted(((present(self, "args") ? self.args : []) +
+                  (present(self, "command") ? self.command : []))
+            .filter(a,
+              string(a).matches("(?i)^--?[a-z0-9._-]*(password|passwd|token|secret|api[-_]?key|credential)=[^{$\\s]") ||
+              credentialClass("commandline", string(a)) != "")
+            .map(a, string(a).split("=")[0] + "=…")).join(", ")
 
     - id: CFG-03
       title: Configuration that is in use cannot be edited in place

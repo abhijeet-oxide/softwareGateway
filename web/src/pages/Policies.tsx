@@ -349,6 +349,31 @@ function PolicyTable({
   )
 }
 
+/**
+ * The triage vocabulary in the words a reader uses.
+ *
+ * The wire carries the enum so it can be filtered and grouped; the label is
+ * what a person reads, and keeping the two apart is what stops a report saying
+ * "chart-template" to somebody deciding whether to ship a release.
+ */
+const FIX_OWNER_LABEL: Record<string, string> = {
+  'chart-template': "the chart's templates",
+  'chart-values': 'the values file',
+  'application': 'the application itself',
+  'build-pipeline': 'the build pipeline',
+  'platform-team': 'the platform team',
+  'needs-decision': 'a decision, first',
+}
+
+const WHEN_LABEL: Record<string, string> = {
+  'install': 'when the release is installed',
+  'upgrade': 'on the next upgrade',
+  'node-maintenance': 'when a server is taken out for maintenance',
+  'under-load': 'under load',
+  'on-failure': 'when something else has already failed',
+  'continuously': 'the whole time the release is running',
+}
+
 /** One check, in the words a vendor and a reviewer each need. */
 function CheckDetail({ check, onSourceClick }: { check: PolicyCheck; onSourceClick: (pack: string) => void }) {
   const [copied, setCopied] = useState(false)
@@ -359,7 +384,11 @@ function CheckDetail({ check, onSourceClick }: { check: PolicyCheck; onSourceCli
       check.description && `What it asserts\n${check.description}`,
       check.rationale && `Why we require it\n${check.rationale}`,
       check.remediation && `How to satisfy it\n${check.remediation}`,
+      check.fixExample && `Example\n${check.fixExample}`,
       check.appliesTo && `Applies to\n${check.appliesTo}`,
+      check.fixOwner && `Who fixes it\n${FIX_OWNER_LABEL[check.fixOwner] ?? check.fixOwner}`,
+      check.fixEffort && `Effort\n${check.fixEffort}`,
+      check.whenItBites && `When it bites\n${WHEN_LABEL[check.whenItBites] ?? check.whenItBites}`,
       check.category && `Category\n${check.category}`,
       check.severity && `Severity\n${check.severity}`,
       check.pack && `Pack\n${check.pack}`,
@@ -416,6 +445,22 @@ function CheckDetail({ check, onSourceClick }: { check: PolicyCheck; onSourceCli
           <Typography.Paragraph style={{ marginBottom: 0 }}>{check.remediation}</Typography.Paragraph>
         </div>
       )}
+      {/*
+        The corrected configuration, not a description of it. A vendor asked to
+        satisfy a rule copies this; prose about a fix is what they have to
+        translate first.
+      */}
+      {check.fixExample && (
+        <div className="slm-policy-detail-section">
+          <Typography.Text strong style={{ fontSize: 12 }}>Example</Typography.Text>
+          <pre style={{
+            fontFamily: mono, fontSize: 11, marginBottom: 0,
+            whiteSpace: 'pre-wrap', overflowX: 'auto',
+          }}>
+            {check.fixExample}
+          </pre>
+        </div>
+      )}
       </div>
       <Space className="slm-policy-detail-meta" size={16} wrap>
         {check.pack && (
@@ -426,6 +471,20 @@ function CheckDetail({ check, onSourceClick }: { check: PolicyCheck; onSourceCli
             </Typography.Link>
           </span>
         )}
+        {/*
+          How to read a finding from this check. A severity says how much this
+          organization cares; these say what somebody should do about it.
+        */}
+        {check.fixOwner && <span>fixed in {FIX_OWNER_LABEL[check.fixOwner] ?? check.fixOwner}</span>}
+        {check.fixEffort && <span>{check.fixEffort} effort</span>}
+        {check.whenItBites && <span>bites {WHEN_LABEL[check.whenItBites] ?? check.whenItBites}</span>}
+        {check.confidence && check.confidence !== 'confirmed' && (
+          <span style={{ color: c.review }}>
+            {check.confidence === 'needs-review'
+              ? 'needs someone who knows the workload'
+              : 'likely, unless the platform provides it'}
+          </span>
+        )}
         {check.tier ? <span>tier {check.tier}</span> : null}
         {check.engine && <span>{check.engine}</span>}
         {check.deprecated && (
@@ -434,10 +493,23 @@ function CheckDetail({ check, onSourceClick }: { check: PolicyCheck; onSourceCli
           </span>
         )}
       </Space>
+      {/*
+        Usually a clause of the source standard rather than a URL. Rendered as a
+        link only when it is one - a link that goes nowhere is worse than the
+        text it replaced.
+      */}
       {check.reference && (
-        <Typography.Link className="slm-policy-detail-reference" href={check.reference} target="_blank" rel="noreferrer">
-          The standard this comes from
-        </Typography.Link>
+        check.reference.startsWith('http')
+          ? (
+            <Typography.Link className="slm-policy-detail-reference" href={check.reference} target="_blank" rel="noreferrer">
+              The standard this comes from
+            </Typography.Link>
+          )
+          : (
+            <Typography.Text className="slm-policy-detail-reference" type="secondary" style={{ fontSize: 12 }}>
+              From the standard: {check.reference}
+            </Typography.Text>
+          )
       )}
     </div>
   )

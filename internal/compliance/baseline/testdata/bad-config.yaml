@@ -42,7 +42,10 @@ spec:
         - name: app
           image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
           # Container args are world-readable through the API and appear in ps.
-          args: ["--listen=:8080", "--password=hunter2"]
+          # The second one is the shape a prefix-blind pattern misses: the flag
+          # is not called "password", it is called "db-password".
+          args: ["--listen=:8080", "--password=hunter2", "--db-password=S3cr3t-Value",
+                 "--password-file=/etc/app/db.pass"]
           env:
             - name: LOG_LEVEL
               value: info

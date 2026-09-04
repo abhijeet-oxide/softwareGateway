@@ -24,6 +24,5 @@ findings:
   - {check: RES-02, kind: CronJob, name: nightly, container: worker}
   - {check: RES-02, kind: CronJob, name: nightly, container: prepare}
   - {check: SUP-01, kind: CronJob, name: nightly, container: worker}
-  - {check: SUP-01, kind: CronJob, name: nightly, container: prepare}
   - {check: SUP-02, kind: CronJob, name: nightly, container: worker}
   - {check: SUP-02, kind: CronJob, name: nightly, container: prepare}

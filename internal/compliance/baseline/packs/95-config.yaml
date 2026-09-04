@@ -107,17 +107,22 @@ spec:
         containers: all
         where: 'present(self, "env")'
       assert:
+        # Certificates and keys in the environment are CFG-06's: same line, same
+        # fix, and two checks reporting one decision is what makes a reader stop
+        # believing either of them.
         expr: |
           self.env.all(e,
             !present(e, "value") ||
+            string(value(e, "name")).matches("(?i)(tls|ssl)?_?(cert|certificate|key|pem|ca_?bundle)$") ||
             !looksLikeCredential(string(value(e, "name")), string(value(e, "value"))))
         locus: env
         expected: credentials referenced from a Secret, not written out
         observed: |
-          self.env.filter(e, present(e, "value") &&
+          sorted(self.env.filter(e, present(e, "value") &&
+                             !string(value(e, "name")).matches("(?i)(tls|ssl)?_?(cert|certificate|key|pem|ca_?bundle)$") &&
                              looksLikeCredential(string(value(e, "name")), string(value(e, "value"))))
             .map(e, string(value(e, "name")) + " holds " +
-                    credentialClass(string(value(e, "name")), string(value(e, "value")))).join(", ")
+                    credentialClass(string(value(e, "name")), string(value(e, "value"))))).join(", ")
 
     - id: CFG-14
       title: The chart does not carry credentials inside it

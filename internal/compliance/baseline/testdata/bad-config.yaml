@@ -51,6 +51,10 @@ spec:
               value: info
             # A private key in the environment is in the pod spec and in every
             # crash dump.
+            # A credential in the environment that is not TLS material, so it
+            # is CFG-13's rather than CFG-06's.
+            - name: DB_PASSWORD
+              value: S3cr3t-P@ssw0rd-Value
             - name: TLS_KEY
               value: |
                 -----BEGIN PRIVATE KEY-----

@@ -87,6 +87,14 @@ spec:
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: all
+        # Only where there IS a specific version to pin. An image on a moving
+        # label is SUP-11's, and reporting it here as well would penalise one
+        # decision twice - which doubles the row count on exactly the images a
+        # reader most needs to see and halves the credibility of both findings.
+        where: |
+          imageRef(text(self, "image")).hasDigest ||
+          !(imageRef(text(self, "image")).tag in
+            ["", "latest", "stable", "main", "master", "edge", "dev", "test", "nightly"])
       assert:
         expr: 'imageRef(text(self, "image")).hasDigest'
         locus: image

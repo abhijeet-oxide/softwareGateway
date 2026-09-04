@@ -68,6 +68,19 @@ func newEvidenceHarness(t *testing.T) *evidenceHarness {
 		// rendered - so there is nothing to show, and saying why matters.
 		{Seq: 2, CheckID: "SEC-01", Severity: "critical", Outcome: "error",
 			Chart: "beta", Message: "the chart did not render"},
+		// A check that RAN and found nothing wrong. Recorded here because a
+		// corpus of nothing but failures cannot tell a passing check from one
+		// that never executed - which is exactly the gap a validation round
+		// found in the report, on a check that correctly reported zero.
+		{Seq: 3, CheckID: "SEC-13", CheckTitle: "No container takes back a permission that reaches outside it",
+			Severity: "critical", Outcome: "pass", Determinacy: "fixed",
+			Chart: "alpha", ChartVersion: "1.0.0",
+			SourceFile: "alpha/templates/deployment.yaml", RenderedLine: 2,
+			Kind: "Deployment", Name: "api", Container: "main"},
+		// And one that did not apply to anything this release ships.
+		{Seq: 4, CheckID: "STO-01", CheckTitle: "Every claim names the storage it needs",
+			Severity: "warning", Outcome: "skip", Chart: "alpha", ChartVersion: "1.0.0",
+			Message: "no resources in this release are in scope for this check"},
 	}
 	rendered := []store.ComplianceRenderedRow{
 		{Seq: 0, Chart: "alpha", ChartVersion: "1.0.0", Content: evidenceChart,

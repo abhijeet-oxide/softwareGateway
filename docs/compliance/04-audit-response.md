@@ -7,7 +7,9 @@
 >
 > A second validation followed, in
 > [complaince-report_2.md](complaince-report_2.md), against a larger release.
-> §9 answers that one the same way.
+> §9 answers that one the same way, and
+> [compliance_report_3.md](compliance_report_3.md) - a rescan verifying that
+> round - is answered in §10.
 >
 > **Prerequisite:** [00 - The Compliance Model](00-compliance-model.md) · **See also:** [01 - Check Catalog](01-check-catalog.md), [02 - Authoring Checks](02-authoring-checks.md)
 
@@ -325,3 +327,130 @@ author has to remember to keep true.
 |---|---|
 | D3 - `root_cause_id` grouping | Wants findings arising from one manifest construct - a single over-broad RBAC rule producing four correct rows across three check families - grouped in the interface. All four are true and each names a different power the rule grants, so this is a presentation change over correct results rather than a defect, and it belongs with a wider look at how the findings table groups. `supersededBy` covers the case where the rows are not independent. |
 | The `Value is` coverage itself | The differential render establishes determinacy for scalar fields it can perturb, and the report is right that the inference degrades as chart complexity grows. Leaving the cell empty is honest about that; improving the probe's reach is separate work with its own measurement. |
+
+---
+
+## 10. Response to the rescan
+
+[compliance_report_3.md](compliance_report_3.md) is a rescan of the same
+release after §9's work. Nine of the eleven items were verified fixed, six
+check families were recomputed independently and matched exactly, and the
+rescan found two defects the fixes had introduced. Both are fixed here.
+
+### 10.1 N1 - the disruption allowance was computed against an invented count
+
+`PDB-02` reported a deadlock on `minAvailable: 50%` over a two-copy Deployment,
+and did not report it on an identically configured policy in the same release.
+The reviewer read that as two problems - `floor` where `ceil` belongs, and
+non-determinism. It was neither.
+
+The rounding was already right: `minAvailable` rounds the REQUIRED count up,
+`maxUnavailable` rounds the allowance down, and `ceil(2 x 0.50) = 1` leaves one
+copy movable. What was wrong was the **denominator**.
+
+The allowance was computed against every kind that carries a pod template, and
+three of those have no declared copy count:
+
+| Kind | What its copy count really is |
+|---|---|
+| `DaemonSet` | one per node - the size of a cluster this tool has never seen |
+| `Job` / `CronJob` | `parallelism`, a different field with different semantics |
+| `Pod` | one, and a bare Pod carrying a Deployment's labels is a hook or test pod beside it, not the thing the policy protects |
+
+Their absent `replicas` field defaulted to Kubernetes' 1, which is correct for a
+Deployment and meaningless for these. `ceil(1 x 0.50) = 1` of 1 left nothing
+movable, and the tightest match decided - so a policy was reported as
+deadlocked because of an object it was not protecting. Two policies with the
+same configuration disagreed because only one of them had such an object next
+to it. That is where the apparent non-determinism came from: not a random path,
+an invented denominator.
+
+`compliance.ReplicatedWorkloadKinds` is now the set the arithmetic runs over,
+and `declaresReplicas()` lets `PDB-02` and `PDB-03` leave out a workload that
+states no count rather than inventing one. `PDB-09`'s "this policy protects
+nothing" deliberately still uses the wider set: a policy over a DaemonSet
+protects something, and narrowing that too would have traded one false positive
+for another.
+
+The fixture carries the reviewer's own case - `minAvailable: 50%` over two
+copies, with a hook Pod and a DaemonSet sharing its labels, which must stay
+silent - and the acceptance case they asked for, the same threshold over one
+copy, which must fire.
+
+### 10.2 N2 - RBAC-05 and RBAC-11 counted one rule twice
+
+The split asked for in §9 was implemented and the two halves were not made
+exclusive. A rule granting `get, list, watch` together - the commonest shape in
+a real release - matched both, so 35 of 39 roles produced two blocking findings
+with one fix between them.
+
+Where a rule already permits enumeration, an unscoped `get` reaches nothing
+further, so `RBAC-05` owns it and `RBAC-11` stands aside. The test that holds
+this also asserts the other half: a Role with a `list` rule AND a separate
+unscoped-`get` rule still gets both findings, because those are two rules and
+two edits. Without that, the obvious fix would have been "RBAC-11 never fires
+on a role that also lists", which is a different bug.
+
+### 10.3 C3 - `In practice` was populated on 1% of rows
+
+`assert.effective` was added in §9 and supplied on nine checks, which covered 32
+of 1,701 rows - and none of the six highest-volume checks, which are exactly
+where the declared and effective values differ most. All six the reviewer named
+now carry one, except `MTA-09`:
+
+| Check | Observed | In practice |
+|---|---|---|
+| `RBAC-02` | not declared | `true` - Kubernetes fills the blank with "mount it", so a live platform credential sits in every container's filesystem |
+| `PDB-08` | not declared | 30 seconds - the Kubernetes default applies |
+| `CFG-03` | not declared | mutable - this ConfigMap can be changed in place while workloads are reading it |
+| `SUP-01` | tag `1.4.0` | whatever that tag points at in that registry at the moment each copy is pulled |
+| `RES-03` | asks for X, capped at Y | the container is paused at Y - less than twice what it asked for, so an ordinary burst is throttled while the node still has capacity |
+| `MTA-09` | four labels missing | **nothing.** A missing label is missing; no default fills it in, and the declared value IS the effective value |
+
+`MTA-09` is the point of the rule rather than an exception to it:
+`effective` is for the gap between what a manifest says and what happens, and a
+check with no gap must leave it empty rather than restate its observed value.
+`TestAPlatformDefaultIsNamedInTheFinding` holds the checks that DO have a gap to
+having one, so this does not quietly decay again.
+
+### 10.4 C2 and C1 - the pass records were there and could not be found
+
+The rescan reports "no pass records: all 1,701 rows are Outcome: Fail", and
+gives the concrete cost: `SEC-13` correctly found nothing, which is a real
+verified result the report appeared unable to express.
+
+It was expressing it. Passes, skips and not-applicable outcomes have been
+evaluated and stored since the feature shipped, and the **Rulebook** sheet has
+carried per-check counts - with `Evaluated`, `Passed` and `Rate` added in §9,
+which is the CSV the rescan asked for. The findings table is failures, which is
+what a findings table is, so its `Outcome` column is constant and a reader who
+opens it first has no reason to look for another sheet.
+
+So the fix here is not another column. It is:
+
+- that sheet now says, in its own note, that the denominator is on the Rulebook
+  sheet - one line, and the difference between a coverage table existing and a
+  coverage table being found;
+- `TestComplianceRulebookRecordsWhatPassed` asserts the whole path end to end.
+  The export harness had contained no passing row, so nothing exercised it -
+  which is the second reason this went three rounds without being noticed. It
+  now carries a passing check, a failing one and a not-applicable one, and
+  asserts that a check that decided nothing has a BLANK rate rather than 0% or
+  100%, either of which would be a claim about a check that judged nothing.
+
+The same answers C1. `SUP-01` was split in §9's round: `SUP-11` blocks on a
+moving label (`latest`, `stable`, `main`, `edge`, or no label at all) and
+`SUP-01` warns on "tagged but not pinned by digest" - exactly the `SUP-01a` /
+`SUP-01b` split proposed, with the same severities and the same owners.
+`SUP-11` emitted zero findings against this release and was invisible for the
+reason above. It shares `SUP-01`'s denominator, so the Rulebook now shows it as
+200 evaluated, 200 passed, 100.0% - which is the good result the rescan
+correctly said the report had no way to state.
+
+### 10.5 Still open
+
+| Item | Why |
+|---|---|
+| D3 - `root_cause_id` grouping | Unchanged from §9.5. The four RBAC rows it cites are each true and each names a different power one rule grants; grouping them is a presentation change over correct results. `supersededBy` covers the case where the rows are not independent, and N2 above removed the case where they were duplicates. |
+| `Waiver` empty on all rows | Correct: nothing in this release has been waived. The column is populated when a waiver applies to a finding, and an empty column on a release with no waivers is the honest reading. |
+| `Value is` coverage | The differential render establishes determinacy for the scalar fields it can perturb. Leaving the cell empty where it cannot is what §9.4 changed and what the rescan confirmed at 0% placeholders; widening the probe's reach is separate work with its own measurement. |

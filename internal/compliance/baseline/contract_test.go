@@ -1,7 +1,9 @@
 package baseline_test
 
 import (
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -29,6 +31,16 @@ import (
 //
 // Each is one assertion, and each would have caught its own defect before
 // release.
+
+// fixtureFiles is the whole violating corpus, in one place: several contract
+// tests sweep all of it, and a fixture added to only some of those lists is a
+// fixture that half the contract does not apply to.
+var fixtureFiles = []string{
+	"bad-config.yaml", "bad-cronjob.yaml", "bad-metadata.yaml", "bad-network.yaml",
+	"bad-observability.yaml", "bad-pdb.yaml", "bad-probes.yaml", "bad-rbac.yaml",
+	"bad-resources.yaml", "bad-scheduling.yaml", "bad-security.yaml",
+	"bad-storage.yaml", "bad-supply.yaml", "bad-upgrade.yaml",
+}
 
 // A pack that fails to load takes its checks with it. That must fail the build,
 // not the report.
@@ -59,12 +71,7 @@ func TestEveryShippedPackLoads(t *testing.T) {
 // chart to learn what the tool already knew, and a row containing a template
 // fragment tells them the tool is broken. Neither is worth emitting.
 func TestFindingsCarryTheValueTheyJudged(t *testing.T) {
-	fixtures := []string{
-		"bad-config.yaml", "bad-cronjob.yaml", "bad-metadata.yaml", "bad-network.yaml",
-		"bad-observability.yaml", "bad-pdb.yaml", "bad-probes.yaml", "bad-rbac.yaml",
-		"bad-resources.yaml", "bad-scheduling.yaml", "bad-security.yaml",
-		"bad-storage.yaml", "bad-supply.yaml", "bad-upgrade.yaml",
-	}
+	fixtures := fixtureFiles
 	// Fragments that mean a value never got substituted, or that a list was
 	// rendered through a conversion that produces nothing.
 	broken := []string{"{{", "}}", "<no value>", "%!", "(MISSING)"}
@@ -641,4 +648,69 @@ func keysOf(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// Where the platform fills a blank, the finding says what it filled it with.
+//
+// # Why this is a test and not a review note
+//
+// `assert.effective` was added and then supplied on nine checks, which covered
+// 32 of 1,701 rows in a real report - and none of the six highest-volume
+// checks, which are exactly the ones where the declared and effective values
+// differ most. A reader of RBAC-02 saw "not declared" against a field that
+// defaults to mounting a live credential, and had to know that themselves.
+//
+// The list is the checks whose finding IS a platform default - an absent field
+// that Kubernetes, or a registry, resolves to something the reader would not
+// guess. It is not every check: where the manifest's value is the effective
+// value, `effective` must stay empty rather than restate the observed one.
+// MTA-09 is the example - a missing label is missing, and nothing fills it in.
+func TestAPlatformDefaultIsNamedInTheFinding(t *testing.T) {
+	// check -> a word its effective value must contain, so this asserts the
+	// content and not merely that the field is non-empty.
+	want := map[string]string{
+		"RBAC-02": "credential", // absent -> a token is mounted
+		"PDB-08":  "30 seconds", // absent -> the platform's own grace period
+		"CFG-03":  "mutable",    // absent -> editable in place
+		"SEC-02":  "true",       // absent -> escalation permitted
+		"SEC-05":  "false",      // absent -> a writable root filesystem
+		"SUP-01":  "points at",  // a tag resolves at pull time
+		// RES-01 says one of two things depending on whether the container
+		// declared limits - "it reserves its limits instead" or "the scheduler
+		// treats it as needing nothing" - so only its presence is asserted.
+		"RES-01": "",
+	}
+
+	seen := map[string]bool{}
+	var bare []string
+	for _, f := range fixtureFiles {
+		for _, r := range runFixture(t, f) {
+			if r.Outcome != compliance.OutcomeFail {
+				continue
+			}
+			frag, ok := want[r.CheckID]
+			if !ok {
+				continue
+			}
+			seen[r.CheckID] = true
+			switch {
+			case strings.TrimSpace(r.Effective) == "":
+				bare = append(bare, r.CheckID+": no effective value, on a finding whose "+
+					"whole point is what the platform put there instead")
+			case frag != "" && !strings.Contains(strings.ToLower(r.Effective), strings.ToLower(frag)):
+				bare = append(bare, r.CheckID+": effective is "+
+					strconv.Quote(r.Effective)+", which does not say "+strconv.Quote(frag))
+			}
+		}
+	}
+	sort.Strings(bare)
+	for _, b := range slices.Compact(bare) {
+		t.Error(b)
+	}
+	for id := range want {
+		if !seen[id] {
+			t.Errorf("%s produced no finding in the corpus, so this assertion proves nothing "+
+				"about it", id)
+		}
+	}
 }

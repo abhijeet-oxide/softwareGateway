@@ -108,8 +108,13 @@ spec:
         expected: the platform access key switched off
         observed: |
           !present(self, "automountServiceAccountToken")
-            ? "not declared, and it defaults to on - a platform key is mounted into the container"
-            : "on - a platform key is mounted into the container"
+            ? "not declared"
+            : "on"
+        effective: |
+          !present(self, "automountServiceAccountToken")
+            ? "true - Kubernetes fills the blank with \"mount it\", so a live platform " +
+              "credential sits in every container's filesystem"
+            : "true - a live platform credential sits in every container's filesystem"
 
     - id: RBAC-03
       title: Permission rules name what they allow, instead of allowing everything

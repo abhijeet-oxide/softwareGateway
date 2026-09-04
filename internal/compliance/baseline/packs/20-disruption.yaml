@@ -385,7 +385,8 @@ spec:
         expr: 'present(self, "terminationGracePeriodSeconds")'
         locus: terminationGracePeriodSeconds
         expected: a stated shutdown time
-        observed: '"not declared, so the platform allows 30 seconds"'
+        observed: '"not declared"'
+        effective: '"30 seconds - the Kubernetes default applies"'
         message: |
           text(owner, "kind") + " " + text(owner, "metadata.name") +
           " does not say how long it needs to finish work in progress before being stopped. " +

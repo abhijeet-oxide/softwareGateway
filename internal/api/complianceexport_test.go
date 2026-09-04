@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -253,4 +254,95 @@ func workbookXMLOf(t *testing.T, body []byte) string {
 	}
 	t.Fatal("the workbook has no xl/workbook.xml")
 	return ""
+}
+
+// A check that ran and found nothing is in the report, and says so.
+//
+// # The gap this closes
+//
+// Three validation rounds reported "no pass records": every row of the findings
+// table carries Outcome: Fail, because that table is the findings. The pass
+// counts have been on the Rulebook sheet - but nothing asserted it end to end,
+// and the export harness itself contained no passing row, so the path was never
+// exercised by a test either.
+//
+// The concrete cost, in the reviewer's words: a check correctly reported zero
+// findings because no container in the release takes back a high-risk
+// capability. That is a real, verified good result, and in a failures-only view
+// it looks identical to a check that did not execute.
+func TestComplianceRulebookRecordsWhatPassed(t *testing.T) {
+	h := newEvidenceHarness(t)
+
+	body, _ := h.getRaw(exportBase + "?format=csv&table=rulebook")
+	rows, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(body, utf8BOM))).ReadAll()
+	if err != nil {
+		t.Fatalf("not a csv: %v", err)
+	}
+	if len(rows) < 2 {
+		t.Fatal("the rulebook table has no rows")
+	}
+
+	col := map[string]int{}
+	for i, name := range rows[0] {
+		col[name] = i
+	}
+	for _, want := range []string{"Check", "Evaluated", "Failed", "Passed", "Rate", "Not applicable"} {
+		if _, ok := col[want]; !ok {
+			t.Fatalf("the rulebook has no %q column; it has %v", want, rows[0])
+		}
+	}
+
+	byCheck := map[string][]string{}
+	for _, r := range rows[1:] {
+		byCheck[r[col["Check"]]] = r
+	}
+
+	// The check that ran and found nothing.
+	passed, ok := byCheck["SEC-13"]
+	if !ok {
+		t.Fatalf("SEC-13 passed and is absent from the rulebook, which is the one thing a "+
+			"coverage table must never do; it lists %v", keys(byCheck))
+	}
+	for field, want := range map[string]string{
+		"Evaluated": "1", "Passed": "1", "Failed": "0", "Rate": "100.0%",
+	} {
+		if got := passed[col[field]]; got != want {
+			t.Errorf("SEC-13 %s = %q, want %q", field, got, want)
+		}
+	}
+
+	// A failing check keeps its own arithmetic.
+	if failed, ok := byCheck["RES-02"]; ok {
+		if got := failed[col["Failed"]]; got != "1" {
+			t.Errorf("RES-02 Failed = %q, want 1", got)
+		}
+		if got := failed[col["Rate"]]; got != "0.0%" {
+			t.Errorf("RES-02 Rate = %q, want 0.0%%", got)
+		}
+	} else {
+		t.Error("RES-02 failed and is absent from the rulebook")
+	}
+
+	// A check that applied to nothing is NOT a pass and NOT a failure. Its
+	// rate is blank rather than 0% or 100%, either of which would be a claim
+	// about a check that judged nothing.
+	if skipped, ok := byCheck["STO-01"]; ok {
+		if got := skipped[col["Not applicable"]]; got != "1" {
+			t.Errorf("STO-01 Not applicable = %q, want 1", got)
+		}
+		if got := skipped[col["Rate"]]; got != "" {
+			t.Errorf("STO-01 Rate = %q; a check that decided nothing has no rate", got)
+		}
+	} else {
+		t.Error("STO-01 was not applicable and is absent from the rulebook")
+	}
+}
+
+func keys(m map[string][]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

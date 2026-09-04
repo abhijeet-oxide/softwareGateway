@@ -451,7 +451,19 @@ func complianceFindingsSheet(
 		rows = append(rows, complianceFindingRow(productName, release, releaseDigest, v))
 	}
 	return export.Sheet{
-		Name:    sheetAllFindings,
+		Name: sheetAllFindings,
+		// Where the denominator is.
+		//
+		// Three validation rounds reported "no pass records" against a report
+		// that has recorded them all along: this table is failures, its Outcome
+		// column is therefore constant, and a reader who opens it first has no
+		// reason to look for another sheet. Saying where the rest is costs one
+		// line and is the difference between a coverage table existing and a
+		// coverage table being found.
+		Note: "Every place a rule was broken. Failures and waivers only, which is what a " +
+			"findings table is - so the Outcome column reads Fail on nearly every row and says " +
+			"nothing about coverage. What PASSED, what was not applicable, and each check's " +
+			"compliance rate are on the Rulebook sheet.",
 		Headers: complianceFindingHeaders,
 		Rows:    rows,
 		Widths:  complianceFindingWidths,

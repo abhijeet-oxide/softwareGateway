@@ -368,6 +368,7 @@ implementations are Go, unit-tested once, and correct for every caller:
 | `pvcMountPaths(workload)` | Where a workload mounts persistent claims |
 | `mountersOf(claim)` | The workloads that mount a claim, so a storage finding can name the software |
 | `stateVolume(v)` / `volumeStateLabel(v)` | Whether a volume holds application state, and what it means for durability. A hugepage allocation and a `/sys` mount hold nothing |
+| `render.Cause(message)` (Go) | The clause of a helm failure that says what went wrong, with the frames it nests around it stripped. Used by the run log, the coverage table and the export, so the three cannot drift |
 | `disruptionsAllowed(pdb)` | How many copies a maintenance rule lets the platform move, computed - including the percentage forms and their rounding |
 | `configRefs(workload)` | Every ConfigMap and Secret a pod asks for, from all six places a pod spec can name one |
 | `crdFor(cr)` | The CustomResourceDefinition the release ships for a CR's `apiVersion`/`kind` |
@@ -378,6 +379,7 @@ implementations are Go, unit-tested once, and correct for every caller:
 | `imageRef(s)` | `{registry, repository, tag, digest, hasDigest}` from an image reference |
 | `resourcesIn(kinds)` | Release-wide lookup, for the few checks that need a set |
 | `replicas(workload)` | The copy count, with the Kubernetes default of 1 for an absent field |
+| `declaresReplicas(workload)` | Whether that default MEANS anything for this kind. A DaemonSet's count is the size of the cluster and a Job's is its `parallelism`, so reading 1 off either is an invented number - which is how a correct disruption policy became a reported deadlock |
 | `allLabels(obj)` / `allAnnotations(obj)` | The object's metadata merged with its pod template's |
 | `credentialClass(key, value)` | What class of credential a value looks like, or `""`. See §4.2.1 |
 | `credentialShape(value)` | The conclusive half of the same detector, with no reference to the field name - so a check can separate what it reads from what it infers |

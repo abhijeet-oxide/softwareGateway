@@ -6,9 +6,12 @@ metadata:
   version: 2.0.0
   description: >
     What a compromised process inside this release could reach. Every check here
-    is about limiting the damage of one bad day, and each one is resolved the way
-    the platform resolves it - a setting on the container wins, otherwise the
-    setting on the pod applies to every container in it.
+    is about limiting the damage of one bad day. Where Kubernetes allows a
+    setting on the pod as well as on the container - the user it runs as, the
+    system-call filter - it is resolved the way the platform resolves it: the
+    container's own value wins, otherwise the pod's applies to every container
+    in it. The rest are container settings with no pod-level equivalent, and
+    each container declares them for itself.
   maintainer: platform-sre
   reference: docs/compliance/source-standards.md - 4. Container Security Posture
 spec:
@@ -110,7 +113,9 @@ spec:
     - id: SEC-02
       title: A container cannot give itself more permissions while running
       description: >
-        Privilege escalation is switched off, on the container or on its pod.
+        Privilege escalation is switched off. This is a container setting -
+        Kubernetes has no pod-level equivalent - so every container declares it
+        for itself.
       rationale: >
         Left unset it defaults to on, so a program in the image that is marked to
         run with elevated rights regains everything the other settings gave up.
@@ -143,7 +148,8 @@ spec:
     - id: SEC-03
       title: No container is given full control of the server
       description: >
-        No container is marked privileged, on itself or on its pod.
+        No container is marked privileged. Like privilege escalation, this is a
+        container setting with no pod-level equivalent.
       rationale: >
         A privileged container has every permission and direct access to the
         server's devices. It is equivalent to being root on the machine, and it
@@ -267,7 +273,7 @@ spec:
       title: A container cannot rewrite its own program files
       description: >
         Containers in workloads that use no persistent storage run with their own
-        files read-only.
+        files read-only. A container setting, with no pod-level equivalent.
       rationale: >
         A writable program directory is where a compromised process drops
         something that survives a restart. Read-only means a restart always

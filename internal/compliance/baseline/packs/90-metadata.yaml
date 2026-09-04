@@ -22,7 +22,7 @@ spec:
         them, so a workload missing them cannot be targeted by any of those - and
         the failure is silent, because a rule that matches nothing looks exactly
         like a rule that is satisfied.
-      severity: warn
+      severity: warning
       tier: 1
       category: Metadata
       subcategory: Standard labels
@@ -58,7 +58,7 @@ spec:
         and estate-wide query groups by them, so a release without them is
         invisible to all of it - and that is discovered during an incident, by
         somebody trying to work out what this release even is.
-      severity: info
+      severity: inform
       tier: 1
       category: Metadata
       subcategory: Standard labels
@@ -95,7 +95,7 @@ spec:
         a failed installation in somebody else's cluster into a finding before it
         ships. There is no judgement in it: either the platform accepts the value
         or it refuses the whole object.
-      severity: warn
+      severity: warning
       tier: 1
       category: Metadata
       subcategory: Label syntax
@@ -144,7 +144,7 @@ spec:
         only be deleted and recreated, which for anything holding data means
         destroying its storage. This is discovered on the second release, in
         production, by whoever runs the upgrade.
-      severity: block
+      severity: critical
       tier: 1
       category: Metadata
       subcategory: Selector labels
@@ -187,7 +187,7 @@ spec:
         much wider group than can read a Secret. The size limit is not a
         preference: the platform caps the total size of an object's annotations,
         and an oversized one fails the installation.
-      severity: warn
+      severity: warning
       tier: 1
       category: Metadata
       subcategory: Annotations
@@ -234,7 +234,7 @@ spec:
         controller's label quietly becomes another's. Recorded rather than warned
         about, because the convention is not universal and several widely used
         charts predate it.
-      severity: info
+      severity: inform
       tier: 1
       category: Metadata
       subcategory: Custom labels
@@ -275,7 +275,7 @@ spec:
         and Helm cannot create an object that already exists - so the SECOND
         upgrade fails, long after anybody tested the first. With no retry limit a
         failing task retries indefinitely and the upgrade never returns at all.
-      severity: warn
+      severity: warning
       tier: 1
       category: Metadata
       subcategory: Helm hooks

@@ -77,7 +77,7 @@ spec:
         drain evicts one too many. Observed in lab during a rolling node update
         in 2026-02: three of five members evicted concurrently because the PDB
         allowed maxUnavailable 2.
-      severity: block            # block | warn | info
+      severity: critical            # critical | warning | inform
       tier: 1
       category: Disruption & Availability
       # THE MECHANISM, in the words an engineer uses for it, and the vocabulary
@@ -158,7 +158,7 @@ in the finding drawer.
 | `fixExample` | YAML | What does the corrected configuration look like? |
 
 **`confidence` carries a rule with teeth.** A check declaring `needs-review`
-may not be `severity: block`, and the loader refuses one that is - see
+may not be `severity: critical`, and the loader refuses one that is - see
 `Check.Validate`. The reason is the single largest category of unproductive
 argument about a compliance report: the tool asserts as a defect something a
 vendor chose deliberately and correctly for that workload, and one of those is
@@ -257,13 +257,13 @@ this decides where it lands after review.
 
 | Severity | Test | Response |
 |---|---|---|
-| `block` | The standard prohibits it, AND the condition is a security exposure, data loss, or an outage or blocked upgrade under a foreseeable event | Do not accept the release |
-| `warn` | The standard recommends it, AND its absence measurably degrades resilience, operability or security | Fix in the next release |
-| `info` | An observation, a documentation gap, or a condition where the platform default is adequate | Record; no action required |
+| `critical` | The standard prohibits it, AND the condition is a security exposure, data loss, or an outage or blocked upgrade under a foreseeable event | Do not accept the release |
+| `warning` | The standard recommends it, AND its absence measurably degrades resilience, operability or security | Fix in the next release |
+| `inform` | An observation, a documentation gap, or a condition where the platform default is adequate | Record; no action required |
 
 Two constraints on top:
 
-- A check whose `confidence` is `needs-review` may not be `block` (§2.1).
+- A check whose `confidence` is `needs-review` may not be `critical` (§2.1).
 - Where two checks would fire on one configuration choice, one of them is
   primary and the other narrows its applicability. Two checks independently
   penalising a single decision doubles the count and halves the credibility.
@@ -291,7 +291,7 @@ the same CEL, so there is exactly one evaluator:
 ```yaml
     - id: ACME-04
       title: Dataplane pods pin hugepages in requests and limits
-      severity: block
+      severity: critical
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, Job, CronJob]
         containers: all           # `self` is a container; `owner` is its workload
@@ -520,7 +520,7 @@ action report stays about defects.
 ```yaml
     - id: UPG-08
       title: Every task Helm runs is named and understood
-      severity: info
+      severity: inform
       assert:
         observeOnPass: true
         expr: |

@@ -22,7 +22,7 @@ spec:
         is removed, sometimes different sharing rules. It is the hardest kind of
         problem to diagnose, because nothing in the release changed between the
         cluster where it worked and the one where it did not.
-      severity: warn
+      severity: warning
       tier: 1
       category: Storage & Data
       subcategory: Storage class
@@ -59,7 +59,7 @@ spec:
         else can read back, it removes the protection the storage server applies
         to everybody else's data on the same share, and it usually leads to the
         start-up ownership rewrite that STO-07 exists to prevent.
-      severity: block
+      severity: critical
       tier: 1
       category: Storage & Data
       subcategory: Shared storage
@@ -112,7 +112,7 @@ spec:
         When it is not, the result is not an error message - it is corrupted data
         found weeks later. This finding is recorded so that the claim is
         confirmed by a person rather than inherited by assumption.
-      severity: info
+      severity: inform
       tier: 1
       category: Storage & Data
       subcategory: Shared storage
@@ -155,7 +155,7 @@ spec:
         release is installed or filled by whatever the storage system decides.
         Both are a surprise, and the second one is a surprise that arrives the
         day the volume fills up.
-      severity: block
+      severity: critical
       tier: 1
       category: Storage & Data
       subcategory: Volume sizing
@@ -189,7 +189,7 @@ spec:
         every copy writes over the others unless the software was specifically
         built for that. A service where each copy needs its own storage is a
         StatefulSet, which is the shape that gives each copy its own.
-      severity: block
+      severity: critical
       tier: 1
       category: Storage & Data
       subcategory: Stateful workloads
@@ -231,7 +231,7 @@ spec:
         restarting in a loop - and it does it on every single start, not just the
         first. It is the standard workaround for not knowing which user the image
         runs as, and it works perfectly on a laptop.
-      severity: block
+      severity: critical
       tier: 1
       category: Storage & Data
       subcategory: Volume permissions
@@ -275,7 +275,7 @@ spec:
         ownership rewrite STO-07 exists to prevent, so this check is the other
         half of the same problem: state the group and the rewrite is never
         needed.
-      severity: warn
+      severity: warning
       tier: 1
       category: Storage & Data
       subcategory: Volume permissions
@@ -324,7 +324,7 @@ spec:
         cannot move, so when the server is taken out for maintenance the service
         either cannot move with its data or moves and finds the data gone.
         Scratch space alongside real storage is fine and is not reported.
-      severity: block
+      severity: critical
       tier: 1
       category: Storage & Data
       subcategory: Stateful workloads

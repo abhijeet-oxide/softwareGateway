@@ -25,7 +25,7 @@ spec:
         Reported as a warning rather than a blocker because many platforms apply
         this centrally - if yours does, this is the platform team's to confirm,
         not the vendor's to fix.
-      severity: warn
+      severity: warning
       tier: 1
       category: Networking
       subcategory: Network policy
@@ -75,7 +75,7 @@ spec:
         rule a no-op that reads like a control. A rule with no stated port allows
         every port the selected services open, including the ones added in the
         next release that nobody has reviewed.
-      severity: block
+      severity: critical
       tier: 1
       category: Networking
       subcategory: Network policy rules
@@ -115,7 +115,7 @@ spec:
         none. It is usually added to get something working during testing and
         never narrowed afterwards, and because it satisfies every check that only
         asks whether a source was named, it survives review indefinitely.
-      severity: warn
+      severity: warning
       tier: 1
       category: Networking
       subcategory: Network policy rules
@@ -157,7 +157,7 @@ spec:
         An outgoing rule with no destination permits the entire internet, which
         is the opposite of what an outgoing rule is for and is indistinguishable
         from having none at all.
-      severity: warn
+      severity: warning
       tier: 1
       category: Networking
       subcategory: Network policy rules
@@ -196,7 +196,7 @@ spec:
         rollout, which is exactly when old and new are both running and the reach
         of a mistake is widest. Traffic that should be blocked is quietly allowed,
         or the reverse.
-      severity: warn
+      severity: warning
       tier: 1
       category: Networking
       subcategory: Network policy
@@ -230,7 +230,7 @@ spec:
         is usually missing because encryption was handled somewhere else in the
         environment the chart was developed in, and that somewhere else does not
         exist here.
-      severity: block
+      severity: critical
       tier: 1
       category: Networking
       subcategory: External exposure
@@ -269,7 +269,7 @@ spec:
         page is a live inventory of the deployment and its traffic, and a debug
         page is usually a profiler that will hand a memory dump to anyone who
         asks for it.
-      severity: block
+      severity: critical
       tier: 1
       category: Networking
       subcategory: External exposure
@@ -323,7 +323,7 @@ spec:
         running, and nothing anywhere is marked unhealthy. It is usually a
         one-character difference between a label and a selector, and it is
         invisible until real traffic arrives.
-      severity: warn
+      severity: warning
       tier: 1
       category: Networking
       subcategory: Service selectors
@@ -373,7 +373,7 @@ spec:
         installation, running copies, every request failing. Port names are
         capped at 15 characters, so a name trimmed to fit is a common and
         invisible cause.
-      severity: warn
+      severity: warning
       tier: 1
       category: Networking
       subcategory: Service ports
@@ -430,7 +430,7 @@ spec:
         of one, for a network function - is not covered by any rule in this
         release. This finding is a statement rather than an accusation: it asks
         for whatever else controls that traffic to be written down.
-      severity: warn
+      severity: warning
       tier: 1
       category: Networking
       subcategory: Secondary networks
@@ -472,7 +472,7 @@ spec:
         hardware, and rejects the pod when they are not. A chart that sets only
         one is an install that fails; one that sets them differently is the same
         failure with a more confusing message.
-      severity: warn
+      severity: warning
       tier: 1
       category: Networking
       subcategory: Extended resources

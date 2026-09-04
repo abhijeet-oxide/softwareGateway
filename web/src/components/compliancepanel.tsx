@@ -106,7 +106,7 @@ const VIEWS: Record<ResultView, {
     label: 'Critical',
     noun: 'critical findings',
     outcome: ['fail'],
-    severity: ['block'],
+    severity: ['critical'],
     count: (c) => c?.blocking ?? 0,
     unique: (c) => c?.uniqueBlocking ?? 0,
   },
@@ -114,7 +114,7 @@ const VIEWS: Record<ResultView, {
     label: 'Warning',
     noun: 'warnings',
     outcome: ['fail'],
-    severity: ['warn'],
+    severity: ['warning'],
     count: (c) => c?.warning ?? 0,
     unique: (c) => c?.uniqueWarning ?? 0,
   },
@@ -122,7 +122,7 @@ const VIEWS: Record<ResultView, {
     label: 'Info',
     noun: 'informational findings',
     outcome: ['fail'],
-    severity: ['info'],
+    severity: ['inform'],
     count: (c) => c?.info ?? 0,
     unique: (c) => c?.uniqueInfo ?? 0,
   },
@@ -1171,7 +1171,7 @@ function outcomeRank(outcome: string): number {
 }
 
 function severityRank(severity: string): number {
-  return { block: 0, warn: 1, info: 2 }[severity] ?? 3
+  return { critical: 0, warning: 1, inform: 2 }[severity] ?? 3
 }
 
 /**

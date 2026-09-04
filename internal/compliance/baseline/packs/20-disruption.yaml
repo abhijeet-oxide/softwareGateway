@@ -25,7 +25,7 @@ spec:
         the same moment. The service goes fully offline during what was meant to
         be routine, non-disruptive maintenance, and the maintenance itself
         reports success.
-      severity: block
+      severity: critical
       tier: 1
       category: Disruption & Availability
       subcategory: PodDisruptionBudget
@@ -75,7 +75,7 @@ spec:
         hosting this service waits for permission that can never be granted, so a
         cluster-wide patch stalls until an engineer intervenes by hand. It is
         almost always written by somebody protecting a service very carefully.
-      severity: block
+      severity: critical
       tier: 1
       category: Disruption & Availability
       subcategory: PodDisruptionBudget
@@ -120,7 +120,7 @@ spec:
         nothing to keep running while it moves. All it does is refuse every
         request to move it, so patching the server it is on hangs forever. The
         cause is one number away from where anybody thinks to look.
-      severity: block
+      severity: critical
       tier: 1
       category: Disruption & Availability
       subcategory: PodDisruptionBudget
@@ -164,7 +164,7 @@ spec:
         new copy without room for it, and it cannot stop an old one without
         breaking its own availability promise. The update reports that it is
         progressing, forever, and never progresses.
-      severity: block
+      severity: critical
       tier: 1
       category: Disruption & Availability
       subcategory: Rollout strategy
@@ -203,7 +203,7 @@ spec:
         single update, by design - not a risk, a certainty. It lasts from the
         moment the last old copy stops until the first new one is ready. It is
         usually copied from a chart for something that had no traffic.
-      severity: block
+      severity: critical
       tier: 1
       category: Disruption & Availability
       subcategory: Rollout strategy
@@ -241,7 +241,7 @@ spec:
         still in progress, and anything waiting on it waits forever rather than
         failing and telling somebody. The release appears to be mid-deployment
         for hours.
-      severity: warn
+      severity: warning
       tier: 1
       category: Disruption & Availability
       subcategory: Rollout strategy
@@ -273,7 +273,7 @@ spec:
         where requests can take longer than that: those requests are cut off part
         way through on every restart, update and maintenance event, and nothing
         in the chart records that the author had considered it.
-      severity: info
+      severity: inform
       tier: 1
       category: Disruption & Availability
       subcategory: Graceful shutdown
@@ -316,7 +316,7 @@ spec:
         most dangerous kind of failure, because everything about it looks
         correct. It is discovered when a drain succeeds that should have been
         refused.
-      severity: warn
+      severity: warning
       tier: 1
       category: Disruption & Availability
       subcategory: PodDisruptionBudget
@@ -358,7 +358,7 @@ spec:
         with no chance to finish the request it is handling, flush what it has
         buffered, or release a lock it holds. It is a common leftover from a
         debugging session, and it turns every ordinary restart into data loss.
-      severity: warn
+      severity: warning
       tier: 1
       category: Disruption & Availability
       subcategory: Graceful shutdown

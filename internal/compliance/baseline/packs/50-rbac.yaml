@@ -23,7 +23,7 @@ spec:
         software installed later by somebody else. Naming an account the release
         does not ship is worse: the install either fails, or quietly falls back to
         the shared one.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Service accounts
@@ -80,7 +80,7 @@ spec:
         exemption here is worked out from the permissions the release actually
         grants, rather than assumed - which is what makes this precise instead of
         annoying.
-      severity: warn
+      severity: warning
       tier: 1
       category: Identity & Access
       subcategory: Service account tokens
@@ -121,7 +121,7 @@ spec:
         type installed afterwards is included automatically. A rule like that
         cannot meaningfully be reviewed, because what it means changes after the
         review.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Role rules
@@ -162,7 +162,7 @@ spec:
         called out separately because they are the ones copied between charts
         without being read: cluster-admin in a chart is unrestricted access to
         everything in the cluster.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Cluster-scoped RBAC
@@ -208,7 +208,7 @@ spec:
         credential in the namespace - including credentials belonging to software
         installed later by another team. Reading named secrets is the same
         permission, limited to the ones this workload owns.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Secret access
@@ -250,7 +250,7 @@ spec:
         legitimate owner, or replace it with one the attacker controls and
         intercept everything that authenticates with it afterwards. The rules
         that stop a service listing credentials do nothing about this.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Secret access
@@ -289,7 +289,7 @@ spec:
         Permission to edit permissions is permission to grant itself anything
         else. Every other restriction in this section becomes advice rather than
         a control the moment this one is present.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Privilege escalation via RBAC
@@ -328,7 +328,7 @@ spec:
         Acting as another identity is every permission that identity has. A shell
         in a container is direct access to whatever that container can reach,
         which goes around every other control described here.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Impersonation & exec
@@ -365,7 +365,7 @@ spec:
         group, including ones installed months later by a different team. Nobody
         can safely remove it afterwards, because nobody can tell what now depends
         on it - so it becomes permanent by accident.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Role bindings

@@ -822,11 +822,11 @@ func tierLabel(tier int) string {
 // value this build has never seen cannot promote itself above a critical.
 func severityOrder(severity string) int {
 	switch compliance.Severity(severity) {
-	case compliance.SeverityBlock:
+	case compliance.SeverityCritical:
 		return 0
-	case compliance.SeverityWarn:
+	case compliance.SeverityWarning:
 		return 1
-	case compliance.SeverityInfo:
+	case compliance.SeverityInform:
 		return 2
 	default:
 		return 3

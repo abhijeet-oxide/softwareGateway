@@ -43,7 +43,7 @@ spec:
         far wider group than can read a Secret, and it appears in backups, in
         exports and in every copy of the release anybody has taken. A credential
         there has to be treated as compromised from the moment it was written.
-      severity: block
+      severity: critical
       tier: 1
       category: Configuration & Secrets
       subcategory: Credentials in configuration
@@ -89,7 +89,7 @@ spec:
         by ordinary troubleshooting commands, and it is captured in crash reports
         and by any code that logs its own environment on start-up. A reference to
         a Secret is not: only the running process ever sees the value.
-      severity: block
+      severity: critical
       tier: 1
       category: Configuration & Secrets
       subcategory: Credentials in the environment
@@ -142,7 +142,7 @@ spec:
         exposure that is easiest to miss, because a Secret is exactly where a
         credential is supposed to live - the problem is that it travels with the
         software.
-      severity: block
+      severity: critical
       tier: 1
       category: Configuration & Secrets
       subcategory: Credentials in the chart
@@ -208,7 +208,7 @@ spec:
         describes the pod, and they are captured in crash reports. A credential
         passed this way leaks to anything that gets a foothold anywhere in the
         pod, including a helper container from a different team.
-      severity: block
+      severity: critical
       tier: 1
       category: Configuration & Secrets
       subcategory: Credentials on the command line
@@ -260,7 +260,7 @@ spec:
         recording that they have. Marking it unchangeable forces a change to
         become a new object and a proper rollout, which is visible and
         reversible.
-      severity: warn
+      severity: warning
       tier: 1
       category: Configuration & Secrets
       subcategory: ConfigMap immutability
@@ -299,7 +299,7 @@ spec:
         intermittent behaviour that is extremely hard to reproduce, and it is the
         single most common "the change did not take effect" in Helm-packaged
         software.
-      severity: warn
+      severity: warning
       tier: 1
       category: Configuration & Secrets
       subcategory: Configuration rollout
@@ -341,7 +341,7 @@ spec:
         configuration error indefinitely. Nothing in the chart hints at which of
         the six places a pod can name a ConfigMap the name came from, so this is
         typically half an hour of reading templates to find one typo.
-      severity: block
+      severity: critical
       tier: 1
       category: Configuration & Secrets
       subcategory: Configuration references
@@ -393,7 +393,7 @@ spec:
         the pod, so it is in every crash report and in any log line that prints
         the environment. Mounted as a file it is readable only by the process
         that needs it, and it can be replaced without changing the workload.
-      severity: warn
+      severity: warning
       tier: 1
       category: Configuration & Secrets
       subcategory: TLS material
@@ -436,7 +436,7 @@ spec:
         next release for a different component. If that container is ever
         compromised, what leaks is everything the Secret happened to hold rather
         than the one value this workload needed.
-      severity: warn
+      severity: warning
       tier: 1
       category: Configuration & Secrets
       subcategory: Secret scoping

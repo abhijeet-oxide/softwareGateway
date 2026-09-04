@@ -92,19 +92,31 @@ export function OutcomePill({ outcome, label }: { outcome: ComplianceOutcome; la
  * sees two reds and wonders what the difference means, and the answer is that
  * there is none.
  *
- * `block` takes Security's critical and `warn` takes its high, because those
- * are the two it fills solid - the ones that are work. Info is blue: it is the
- * one step on this scale that is not a severity at all but a note, and the
- * shared scale's remaining steps (yellow, green) both read as verdicts about
- * how bad something is.
+ * `critical` takes Security's critical and `warning` takes its high, because
+ * those are the two it fills solid - the ones that are work. Inform is blue: it
+ * is the one step on this scale that is not a severity at all but a note, and
+ * the shared scale's remaining steps (yellow, green) both read as verdicts
+ * about how bad something is.
+ *
+ * The legacy keys are kept alongside so that a result served from a database
+ * restored before the vocabulary changed still draws in its own colour rather
+ * than falling through to grey. The server normalises on the way out, so they
+ * should never be reached - which is exactly why leaving them out would make
+ * the failure silent.
  */
 const SEVERITY_COLOUR: Record<string, string> = {
+  critical: severityColour.critical,
+  warning: severityColour.high,
+  inform: c.review,
   block: severityColour.critical,
   warn: severityColour.high,
   info: c.review,
 }
 
 const SEVERITY_SURFACE: Record<string, string> = {
+  critical: severitySurface.critical,
+  warning: severitySurface.high,
+  inform: c.reviewBg,
   block: severitySurface.critical,
   warn: severitySurface.high,
   info: c.reviewBg,
@@ -113,12 +125,15 @@ const SEVERITY_SURFACE: Record<string, string> = {
 /**
  * The word a severity is read as.
  *
- * `block` reads as "Critical". The wire value stays `block` - it is what every
- * policy pack, every stored result and every export already says - but
- * "Blocking" ranked the severity against nothing, where Critical, Warning and
- * Info are a scale a reader already knows the shape of.
+ * The value and the word are now the same three, which they were not: the value
+ * said `block` and the screen said "Critical", so a filter, an export column
+ * and a row each called one level something different and none of them matched
+ * what a reader could type into the search box.
  */
 const SEVERITY_WORD: Record<string, string> = {
+  critical: 'Critical',
+  warning: 'Warning',
+  inform: 'Info',
   block: 'Critical',
   warn: 'Warning',
   info: 'Info',
@@ -134,7 +149,7 @@ const SEVERITY_WORD: Record<string, string> = {
  */
 export function CheckSeverityTag({ severity }: { severity: string }) {
   const colour = SEVERITY_COLOUR[severity] ?? c.text3
-  const filled = severity === 'block' || severity === 'warn'
+  const filled = severity === 'critical' || severity === 'warning'
   return (
     <Space size={6}>
       <span
@@ -264,16 +279,16 @@ export function ComplianceSummary({
     colour: string
   }[] = [
     {
-      key: 'blocking', label: 'Critical', severity: 'block',
-      unique: counts.uniqueBlocking, total: counts.blocking, colour: SEVERITY_COLOUR.block!,
+      key: 'blocking', label: 'Critical', severity: 'critical',
+      unique: counts.uniqueBlocking, total: counts.blocking, colour: SEVERITY_COLOUR.critical!,
     },
     {
-      key: 'warning', label: 'Warning', severity: 'warn',
-      unique: counts.uniqueWarning, total: counts.warning, colour: SEVERITY_COLOUR.warn!,
+      key: 'warning', label: 'Warning', severity: 'warning',
+      unique: counts.uniqueWarning, total: counts.warning, colour: SEVERITY_COLOUR.warning!,
     },
     {
-      key: 'info', label: 'Info', severity: 'info',
-      unique: counts.uniqueInfo, total: counts.info, colour: SEVERITY_COLOUR.info!,
+      key: 'info', label: 'Info', severity: 'inform',
+      unique: counts.uniqueInfo, total: counts.info, colour: SEVERITY_COLOUR.inform!,
     },
   ]
 
@@ -320,7 +335,7 @@ export function ComplianceSummary({
               {unique > 0 && (
                 <div style={{ marginTop: 4, fontSize: 12.5 }}>
                   {counts.uniqueBlocking > 0 && (
-                    <span style={{ color: SEVERITY_COLOUR.block, fontWeight: 600 }}>
+                    <span style={{ color: SEVERITY_COLOUR.critical, fontWeight: 600 }}>
                       {counts.uniqueBlocking.toLocaleString()} critical
                     </span>
                   )}
@@ -328,7 +343,7 @@ export function ComplianceSummary({
                     <span style={{ color: c.text3 }}> · </span>
                   )}
                   {counts.uniqueWarning > 0 && (
-                    <span style={{ color: SEVERITY_COLOUR.warn, fontWeight: 600 }}>
+                    <span style={{ color: SEVERITY_COLOUR.warning, fontWeight: 600 }}>
                       {counts.uniqueWarning.toLocaleString()} warning
                     </span>
                   )}
@@ -529,8 +544,8 @@ function ComplianceSeverityBar({ counts }: { counts: ComplianceCounts }) {
   // is not work, and a release with four hundred notes must not draw wider
   // than one with four defects.
   const segments = [
-    { label: 'Critical', n: counts.blocking, colour: SEVERITY_COLOUR.block! },
-    { label: 'Warning', n: counts.warning, colour: SEVERITY_COLOUR.warn! },
+    { label: 'Critical', n: counts.blocking, colour: SEVERITY_COLOUR.critical! },
+    { label: 'Warning', n: counts.warning, colour: SEVERITY_COLOUR.warning! },
   ]
   return (
     <div

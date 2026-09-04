@@ -177,7 +177,7 @@ func (c Check) Validate() []error {
 		add("title is required: it is the line a vendor reads in the report")
 	}
 	if !c.Severity.Valid() {
-		add("severity %q must be one of block, warn, info", c.Severity)
+		add("severity %q must be one of critical, warning, inform", c.Severity)
 	}
 	if c.Tier != 0 && c.Tier != Tier1 && c.Tier != Tier2 {
 		add("tier %d must be 1 or 2", c.Tier)
@@ -212,8 +212,8 @@ func (c Check) Validate() []error {
 	// what produces the argument where a vendor is told their deliberate,
 	// correct design choice is a blocking defect, and one of those is enough to
 	// cost the whole report its credibility.
-	if c.Confidence == ConfidenceNeedsReview && c.Severity == SeverityBlock {
-		add("a check with confidence needs-review may not be severity block: it says itself that the finding may be correct for this workload, so it cannot decide the verdict alone")
+	if c.Confidence == ConfidenceNeedsReview && c.Severity == SeverityCritical {
+		add("a check with confidence needs-review may not be severity critical: it says itself that the finding may be correct for this workload, so it cannot decide the verdict alone")
 	}
 	if c.Deprecated {
 		// A retired check runs nothing, so the rest of the schema does not

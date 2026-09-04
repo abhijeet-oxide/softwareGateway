@@ -814,7 +814,7 @@ downloads:
       compliance: off        # off | warn | block
 ```
 
-`block` refuses to open a download whose release has an unwaived blocking failure
+`critical` refuses to open a download whose release has an unwaived blocking failure
 with determinacy `fixed`. It sits beside the verification gate that already exists
 in [20](20-download-rules.md), uses the same mechanism, and defaults to `off`:
 a gate that surprises an operator during an incident is a gate that gets removed.
@@ -1068,8 +1068,8 @@ It does that with things that CHANGE and things that have HAPPENED:
 - **The log is bounded and drops ordinary progress before it drops a failure**,
   so the lines that survive a long run are the ones worth scrolling back for.
   Its dots carry the four colours the vulnerability sync log uses. They did not:
-  `ok` was the body text colour and `info` the muted one, so on a run whose
-  lines are almost all `info` and `ok` - which is every run that works - the
+  `ok` was the body text colour and `inform` the muted one, so on a run whose
+  lines are almost all `inform` and `ok` - which is every run that works - the
   timeline was a column of grey dots, and the two colours that meant something
   were lost among fifty that meant nothing.
 - **The transcript is kept.** `compliance_runs.log` (§9.1) holds it, and the
@@ -1087,9 +1087,9 @@ against somebody's registry.
 
 | On screen | Wire value | Why |
 |---|---|---|
-| **Critical** | `severity: block` | "Blocking" ranked the severity against nothing. Critical, Warning and Info is a scale a reader already knows the shape of, and it is the one the severities already are. The wire value stays `block`: every policy pack, every stored result and every export written so far says it, and renaming a column to rename a word is how an export stops opening. |
-| **Warning** | `severity: warn` | |
-| **Info** | `severity: info` | Its own slice now. It used to be folded in with the warnings, so narrowing to warnings returned a list padded with rows nobody has to act on, and the info count was on no screen at all. |
+| **Critical** | `severity: critical` | "Blocking" ranked the severity against nothing. Critical, Warning and Info is a scale a reader already knows the shape of, and it is the one the severities already are. The wire value stays `critical`: every policy pack, every stored result and every export written so far says it, and renaming a column to rename a word is how an export stops opening. |
+| **Warning** | `severity: warning` | |
+| **Info** | `severity: inform` | Its own slice now. It used to be folded in with the warnings, so narrowing to warnings returned a list padded with rows nobody has to act on, and the info count was on no screen at all. |
 | **Unchecked** | `outcome: error` | What it means is that the check could not be decided, and "Undecided" invited the reading "we decided not to". The full sentence - "Could not be checked" - is still what the outcome pill on the row says; the slice is one word because it sits beside four other one-word slices. |
 
 **Every count on the card follows the grouping.** The view switch, the severity
@@ -1216,7 +1216,7 @@ determinacy model exists to keep.
 the STATUS palette - `danger` #d70015, `pending` #b25000 - which are a deeper red
 and a brown-orange than Security's `sev-critical` #f43f43 and `sev-high` #fb8c00:
 near enough to look like a mistake rather than a distinction, on two tabs one
-click apart. `block` takes Security's critical and `warn` takes its high, because
+click apart. `critical` takes Security's critical and `warning` takes its high, because
 those are the two it fills solid - the ones that are work - and Info is blue,
 because it is the one step on this scale that is not a severity at all but a
 note, and the shared scale's remaining steps (yellow, green) both read as
@@ -1364,7 +1364,7 @@ Three `depguard` rules, added to `.golangci.yml` beside the existing ones
 |---|---|---|---|
 | `helm` absent | Start-up probe | `T1-C` checks run; `T1-R` report `error` | inconclusive |
 | One chart will not render | Non-zero exit | That chart's `T1-R` → `error` with helm's stderr; others unaffected | inconclusive |
-| Chart dependencies not vendored | `Chart.yaml` vs `charts/` | SUP-07 fails; chart not rendered | fail (SUP-07 is `block`) |
+| Chart dependencies not vendored | `Chart.yaml` vs `charts/` | SUP-07 fails; chart not rendered | fail (SUP-07 is `critical`) |
 | Chart exceeds `maxArtifactBytes` | Descriptor size, before fetch | Not fetched; recorded as `too_large` | inconclusive |
 | Run exceeds `maxRunBytes` | Running total | Remaining artifacts skipped, loudly | inconclusive |
 | Render times out | Wall clock | `SIGKILL`, chart → `error` | inconclusive |
@@ -1511,7 +1511,7 @@ Consolidated; each is argued where it is made.
 | # | Question | Why it is open | What would settle it |
 |---|---|---|---|
 | Q1 | Does the determinacy probe hold up on a real 97-chart corpus? | Flipping booleans changes which resources render. The design handles that (a resource in one render only is `configurable`), but the *proportion* of `unknown` results is unknown until it is measured | Run it against a real orb in M11-A and count |
-| Q2 | Is 99 checks too many to ship at once? | A first report with 400 warnings on every vendor release is a report nobody reads | Measure against three real releases; if the warning volume is unusable, ship the `block` set first and stage the `warn` set |
+| Q2 | Is 99 checks too many to ship at once? | A first report with 400 warnings on every vendor release is a report nobody reads | Measure against three real releases; if the warning volume is unusable, ship the `critical` set first and stage the `warning` set |
 | Q3 | Should MTA-06/07 severities be organization-configurable after all? | §13 says one organization, one severity. Provenance and ownership annotations are the checks most likely to be right for one product family and wrong for another | Whether the waiver mechanism handles it. If waivers are being written in bulk for one check, the check's severity is wrong |
 | Q4 | Where do the evidence-only items (26 of them) live? | They are real requirements that no check can decide. Tracking them nowhere means they are not tracked | Probably a release checklist beside the automated results, sourced from the same catalogue - but that is a feature, not a footnote, and it needs its own design |
 | Q5 | How many of the 88 baseline checks are expressible declaratively? | The target is most of them; the ones that are not define how much `builtin/` has to carry, and how good the shorthand has to be | Counted in M11-A as the baseline pack is written. A baseline that is 80% Go means the extension point is decorative |

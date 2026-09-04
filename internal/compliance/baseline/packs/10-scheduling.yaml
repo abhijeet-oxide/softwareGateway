@@ -22,7 +22,7 @@ spec:
         With no spreading rule the platform is free to put every copy on one
         server, so the service costs twice as much and survives exactly as much
         as one copy did. Nobody finds out until that server fails.
-      severity: warn
+      severity: warning
       tier: 1
       category: Scheduling & Placement
       subcategory: Topology spread constraints
@@ -86,7 +86,7 @@ spec:
         The allowed difference is what makes a spreading rule mean anything. Set
         higher than one, the rule permits exactly the pile-up it was added to
         prevent: it is present, it passes review, and it does nothing.
-      severity: warn
+      severity: warning
       tier: 1
       category: Scheduling & Placement
       subcategory: Topology spread constraints
@@ -130,7 +130,7 @@ spec:
         place for a copy to run, so the moment one server is taken out for
         patching a copy is stuck waiting and never starts. The more rules were
         added to protect the service, the more thoroughly it is stuck.
-      severity: warn
+      severity: warning
       tier: 1
       category: Scheduling & Placement
       subcategory: Affinity & node selection
@@ -173,7 +173,7 @@ spec:
         both running and the risk is highest, the rule spreads the new copies
         against each other and ignores the old ones - so there is effectively no
         rule at exactly the moment it was needed.
-      severity: warn
+      severity: warning
       tier: 1
       category: Scheduling & Placement
       subcategory: Topology spread constraints
@@ -218,7 +218,7 @@ spec:
         them cannot be installed anywhere whose zones are called something else,
         and the failure happens at install time in somebody else's data centre,
         where the person running it cannot fix the chart.
-      severity: warn
+      severity: warning
       tier: 1
       category: Scheduling & Placement
       subcategory: Affinity & node selection
@@ -285,7 +285,7 @@ spec:
         a machine out of memory and goes down with it. Some workloads genuinely
         must run there, which is why this asks for a sentence rather than
         forbidding it outright.
-      severity: block
+      severity: critical
       tier: 1
       category: Scheduling & Placement
       subcategory: Taints & tolerations
@@ -363,7 +363,7 @@ spec:
         five-minute limit when a chart says nothing at all; writing the agreement
         without a limit REPLACES that five minutes with "forever", which is the
         opposite of what the author almost always meant.
-      severity: warn
+      severity: warning
       tier: 1
       category: Scheduling & Placement
       subcategory: Taints & tolerations

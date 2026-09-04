@@ -69,7 +69,7 @@ func run(t *testing.T, check compliance.Check, objs ...map[string]any) []complia
 // and a single row that says the same thing after three of four are fixed.
 func TestOneResultPerContainer(t *testing.T) {
 	check := compliance.Check{
-		ID: "RES-01", Title: "Containers declare memory limits", Severity: compliance.SeverityBlock,
+		ID: "RES-01", Title: "Containers declare memory limits", Severity: compliance.SeverityCritical,
 		AppliesTo: compliance.AppliesTo{Kinds: []string{"Deployment"}, Containers: compliance.ScopeAll},
 		Assert:    compliance.Assert{Required: []string{"resources.limits.memory"}},
 	}
@@ -130,7 +130,7 @@ func TestCronJobIsActuallyReached(t *testing.T) {
 		},
 	}
 	check := compliance.Check{
-		ID: "RES-01", Title: "Containers declare memory limits", Severity: compliance.SeverityBlock,
+		ID: "RES-01", Title: "Containers declare memory limits", Severity: compliance.SeverityCritical,
 		AppliesTo: compliance.AppliesTo{Kinds: []string{"Deployment", "CronJob"}, Containers: compliance.ScopeAll},
 		Assert:    compliance.Assert{Required: []string{"resources.limits.memory"}},
 	}
@@ -151,7 +151,7 @@ func TestCronJobIsActuallyReached(t *testing.T) {
 // the same.
 func TestNoSubjectsProducesASkip(t *testing.T) {
 	check := compliance.Check{
-		ID: "PDB-01", Title: "Workloads are covered by a PodDisruptionBudget", Severity: compliance.SeverityWarn,
+		ID: "PDB-01", Title: "Workloads are covered by a PodDisruptionBudget", Severity: compliance.SeverityWarning,
 		AppliesTo: compliance.AppliesTo{Kinds: []string{"StatefulSet"}},
 		Assert:    compliance.Assert{Expr: `pdbFor(self).spec.minAvailable >= 1`},
 	}
@@ -187,7 +187,7 @@ func TestPDBForUnderstandsMatchExpressions(t *testing.T) {
 		},
 	}
 	check := compliance.Check{
-		ID: "PDB-01", Title: "Quorum workloads keep a majority available", Severity: compliance.SeverityBlock,
+		ID: "PDB-01", Title: "Quorum workloads keep a majority available", Severity: compliance.SeverityCritical,
 		AppliesTo: compliance.AppliesTo{Kinds: []string{"StatefulSet"}},
 		Assert: compliance.Assert{
 			Expr:  `int(value(pdbFor(self), "spec.minAvailable")) >= 2`,
@@ -211,7 +211,7 @@ func TestNonBooleanAssertionIsALoadError(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = comp.Compile(compliance.Check{
-		ID: "BAD-01", Title: "x", Severity: compliance.SeverityInfo,
+		ID: "BAD-01", Title: "x", Severity: compliance.SeverityInform,
 		AppliesTo: compliance.AppliesTo{Kinds: []string{"Pod"}},
 		Assert:    compliance.Assert{Expr: `text(self, "metadata.name")`},
 	})
@@ -227,7 +227,7 @@ func TestUnknownFunctionIsALoadError(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = comp.Compile(compliance.Check{
-		ID: "BAD-02", Title: "x", Severity: compliance.SeverityInfo,
+		ID: "BAD-02", Title: "x", Severity: compliance.SeverityInform,
 		AppliesTo: compliance.AppliesTo{Kinds: []string{"Pod"}},
 		Assert:    compliance.Assert{Expr: `pdbForr(self) != null`},
 	})
@@ -240,7 +240,7 @@ func TestUnknownFunctionIsALoadError(t *testing.T) {
 // fail: it has shown nothing about the subject.
 func TestFaultingExpressionIsUndecidable(t *testing.T) {
 	check := compliance.Check{
-		ID: "ERR-01", Title: "x", Severity: compliance.SeverityBlock,
+		ID: "ERR-01", Title: "x", Severity: compliance.SeverityCritical,
 		AppliesTo: compliance.AppliesTo{Kinds: []string{"Deployment"}},
 		Assert:    compliance.Assert{Expr: `int(text(self, "metadata.name")) > 0`},
 	}

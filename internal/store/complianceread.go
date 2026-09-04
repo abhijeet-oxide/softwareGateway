@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
 )
 
 // Reading a compliance run back.
@@ -309,12 +311,15 @@ func (p *Packages) ComplianceUniqueChecks(ctx context.Context, runID string) (Co
 		if err := rows.Scan(&severity, &n); err != nil {
 			return ComplianceUniqueCounts{}, fmt.Errorf("scan distinct compliance checks: %w", err)
 		}
-		switch severity {
-		case "block":
+		// Read through ParseSeverity: a row written before the vocabulary
+		// changed still says `block`, and counting it under nothing would make
+		// an old run render as having no critical findings at all.
+		switch compliance.ParseSeverity(severity) {
+		case compliance.SeverityCritical:
 			out.Blocking = n
-		case "warn":
+		case compliance.SeverityWarning:
 			out.Warning = n
-		case "info":
+		case compliance.SeverityInform:
 			out.Info = n
 		}
 	}
@@ -399,6 +404,36 @@ func (p *Packages) ComplianceResults(ctx context.Context, runID string, f Compli
 // Every value is a placeholder. A filter arrives from a query string, and a
 // filter interpolated into SQL is the same mistake as a digest taken from a
 // URL - it is just harder to see because the values look like enum members.
+// normaliseSeverities maps whatever a caller asked for onto what is stored.
+//
+// Both spellings are matched, not just the current one: a run recorded before
+// the rename still holds the old value, and a filter that returned only the new
+// one would quietly hide every finding from every earlier run.
+func normaliseSeverities(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	legacy := map[compliance.Severity]string{
+		compliance.SeverityCritical: "block",
+		compliance.SeverityWarning:  "warn",
+		compliance.SeverityInform:   "info",
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in)*2)
+	add := func(v string) {
+		if v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	for _, s := range in {
+		sev := compliance.ParseSeverity(s)
+		add(string(sev))
+		add(legacy[sev])
+	}
+	return out
+}
+
 func complianceWhere(runID string, f ComplianceFilter) (string, []any) {
 	clauses := []string{"run_id = ?"}
 	args := []any{runID}
@@ -415,7 +450,10 @@ func complianceWhere(runID string, f ComplianceFilter) (string, []any) {
 		clauses = append(clauses, column+" IN ("+strings.Join(marks, ",")+")")
 	}
 	in("outcome", f.Outcomes)
-	in("severity", f.Severities)
+	// Severities are normalised rather than matched literally, so a link
+	// somebody saved when the value was `block` still narrows to the critical
+	// findings instead of returning an empty table.
+	in("severity", normaliseSeverities(f.Severities))
 	in("check_id", f.Checks)
 	in("chart", f.Charts)
 	in("kind", f.Kinds)

@@ -1,6 +1,9 @@
 package compliance
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 // The verdict ordering is the whole of Rule 2. A run that could not decide
 // something is not a run that found nothing wrong.
@@ -31,12 +34,12 @@ func TestDecide(t *testing.T) {
 
 func TestTallyCountsSeverityOfFailuresOnly(t *testing.T) {
 	got := Tally([]Result{
-		{Outcome: OutcomePass, Severity: SeverityBlock},
-		{Outcome: OutcomeFail, Severity: SeverityBlock},
-		{Outcome: OutcomeFail, Severity: SeverityWarn},
-		{Outcome: OutcomeSkip, Severity: SeverityBlock},
-		{Outcome: OutcomeError, Severity: SeverityBlock},
-		{Outcome: OutcomeWaived, Severity: SeverityBlock},
+		{Outcome: OutcomePass, Severity: SeverityCritical},
+		{Outcome: OutcomeFail, Severity: SeverityCritical},
+		{Outcome: OutcomeFail, Severity: SeverityWarning},
+		{Outcome: OutcomeSkip, Severity: SeverityCritical},
+		{Outcome: OutcomeError, Severity: SeverityCritical},
+		{Outcome: OutcomeWaived, Severity: SeverityCritical},
 	})
 	want := Counts{Pass: 1, Fail: 2, Skip: 1, Error: 1, Waived: 1, Blocking: 1, Warning: 1}
 	if got != want {
@@ -79,11 +82,11 @@ func TestSortIsTotalAndStable(t *testing.T) {
 			Address: Address{Chart: chart, Kind: "Deployment", Name: name}}
 	}
 	in := []Result{
-		mk(OutcomePass, SeverityBlock, "a", "x", "C-01"),
-		mk(OutcomeFail, SeverityWarn, "b", "y", "B-01"),
-		mk(OutcomeError, SeverityBlock, "a", "z", "A-01"),
-		mk(OutcomeFail, SeverityBlock, "c", "w", "D-01"),
-		mk(OutcomeSkip, SeverityInfo, "a", "v", "E-01"),
+		mk(OutcomePass, SeverityCritical, "a", "x", "C-01"),
+		mk(OutcomeFail, SeverityWarning, "b", "y", "B-01"),
+		mk(OutcomeError, SeverityCritical, "a", "z", "A-01"),
+		mk(OutcomeFail, SeverityCritical, "c", "w", "D-01"),
+		mk(OutcomeSkip, SeverityInform, "a", "v", "E-01"),
 	}
 	Sort(in)
 	want := []Outcome{OutcomeFail, OutcomeFail, OutcomeError, OutcomePass, OutcomeSkip}
@@ -93,7 +96,7 @@ func TestSortIsTotalAndStable(t *testing.T) {
 		}
 	}
 	// Within failures, blocking comes before warning.
-	if in[0].Severity != SeverityBlock {
+	if in[0].Severity != SeverityCritical {
 		t.Errorf("the first failure is %s, want the blocking one first", in[0].Severity)
 	}
 }
@@ -104,4 +107,55 @@ func outcomes(rs []Result) []Outcome {
 		out[i] = r.Outcome
 	}
 	return out
+}
+
+// The old spellings still read, and never write.
+//
+// `block`, `warn` and `info` are in every stored result, every exported
+// spreadsheet, every policy pack on disk - including ones this repository does
+// not contain - and in the query string of any filter somebody bookmarked.
+// Renaming the value without reading the old one turns a third-party pack into
+// a load error and a saved link into an empty table, over a change that is
+// entirely about the word.
+func TestLegacySeveritySpellingsAreRead(t *testing.T) {
+	for old, want := range map[string]Severity{
+		"block":    SeverityCritical,
+		"warn":     SeverityWarning,
+		"info":     SeverityInform,
+		"critical": SeverityCritical,
+		"warning":  SeverityWarning,
+		"inform":   SeverityInform,
+		"  Block ": SeverityCritical,
+	} {
+		if got := ParseSeverity(old); got != want {
+			t.Errorf("ParseSeverity(%q) = %q, want %q", old, got, want)
+		}
+	}
+	// Anything else is returned as itself, so an unknown value is visible as
+	// what it is rather than quietly becoming one of the three.
+	if got := ParseSeverity("catastrophic"); got != Severity("catastrophic") || got.Valid() {
+		t.Errorf("ParseSeverity(catastrophic) = %q, valid = %v", got, got.Valid())
+	}
+
+	// A pack written against the old vocabulary loads as the new one, because
+	// that is the only place the translation happens.
+	var c struct {
+		Severity Severity `json:"severity"`
+	}
+	if err := json.Unmarshal([]byte(`{"severity":"block"}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.Severity != SeverityCritical {
+		t.Errorf("a pack saying block loaded as %q, want %q", c.Severity, SeverityCritical)
+	}
+
+	// And the value written back out is the current one, so the old vocabulary
+	// drains rather than persisting.
+	out, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != `{"severity":"critical"}` {
+		t.Errorf("marshalled as %s, want the current spelling", out)
+	}
 }

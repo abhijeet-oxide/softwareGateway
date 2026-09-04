@@ -51,7 +51,7 @@ finding with a different fix and a lower severity.
 ### 2.2 Four severities became three, deliberately
 
 The audit proposes `Critical / High / Medium / Advisory`. This platform has
-three: `block`, `warn`, `info`, and they are not decoration - `block` decides
+three: `critical`, `warning`, `inform`, and they are not decoration - `critical` decides
 the run's verdict, and the verdict decides whether a release is accepted. A
 fourth level would have to answer "does this fail the release or not", and both
 answers make it a synonym for one of the three that already exist.
@@ -60,10 +60,10 @@ The mapping applied, per policy, from the audit's Appendix A:
 
 | Audit | Here | Meaning |
 |---|---|---|
-| Critical | `block` | Do not accept the release |
-| High | `block` | Do not accept the release |
-| Medium | `warn` | Fix in the next release |
-| Advisory | `info` | Recorded; no action required |
+| Critical | `critical` | Do not accept the release |
+| High | `critical` | Do not accept the release |
+| Medium | `warning` | Fix in the next release |
+| Advisory | `inform` | Recorded; no action required |
 
 The audit's headline effect survives the mapping, because most of its
 reclassifications are Critical → Medium rather than Critical → High. Image
@@ -79,7 +79,7 @@ are different claims.
 
 | Audit | What was wrong | What changed | Fixture |
 |---|---|---|---|
-| §5.1.1 | A Service selecting on a label the platform adds at pod creation was reported as routing into a void - at blocking severity, while the tool's own output named the workload it pointed at | `selectedBy` skips runtime-supplied selector keys; `NET-07` is `warn` | `good-app` per-replica Service |
+| §5.1.1 | A Service selecting on a label the platform adds at pod creation was reported as routing into a void - at blocking severity, while the tool's own output named the workload it pointed at | `selectedBy` skips runtime-supplied selector keys; `NET-07` is `warning` | `good-app` per-replica Service |
 | §5.1.2 | A pod's ordinal was classified as release-varying. It is the documented way to address one member of a clustered database, and it is stable for that member's whole life | `IsUnstableLabelKey` separates a stable runtime identity from a template hash | `cel/heuristics_test.go` |
 | §5.1.3 | Credential detection matched key NAMES. Four findings, four wrong: a retry counter, a cache lifetime, a minimum length, a file path. Four real credentials in the same chart went unreported | Rewritten value-first, with §4.2.1 of [02](02-authoring-checks.md) as its stated budget | `bad-config` `credential-parameters` - six keys that name a credential and hold none |
 | §5.1.4 | Two exec probes were compared by rendering their commands as the empty string, so any two shell health checks looked identical | `probeHandler()` normalises the handler and drops the timings | `bad-probes` `same-handler` |
@@ -87,7 +87,7 @@ are different claims.
 | §5.1.6 | Built-in and operator-supplied types were asked to ship a definition of themselves | `builtinApiGroup()`, plus a configured list of platform prerequisites | `cel/heuristics_test.go` |
 | §5.2.2 | Root detection did not resolve pod-to-container inheritance, so "runAsNonRoot not set" appeared on pods that had explicitly set it to `false` | `securityValue` / `securitySource` resolve it the way the kubelet does, and name the provenance | `bad-cronjob`, `bad-security` |
 | §5.3 | The shared-storage rule told teams to stop using shared storage, which is the opposite of what the standard says | `STO-02` now checks the terms the standard sets: not written by root; `STO-13` records more than one writer | `bad-storage` `shared-rwx` |
-| §5.4.1 | An absent shutdown time was described as zero, on ~8% of the report's rows | `PDB-08` is `info` and says "not declared, so the platform allows 30 seconds"; explicit zero is `PDB-10` at `warn` | `bad-pdb` `instant-kill` |
+| §5.4.1 | An absent shutdown time was described as zero, on ~8% of the report's rows | `PDB-08` is `inform` and says "not declared, so the platform allows 30 seconds"; explicit zero is `PDB-10` at `warning` | `bad-pdb` `instant-kill` |
 | §5.4.2 | Script-based health checks were held to a web request's latency budget | `PRB-05` bounds are per check type | `bad-probes` |
 | §5.4.3 | An absent token mount read as compliant beside an explicit `true`, though both mount a key | `RBAC-02` observed value says so | `bad-config` |
 | §5.4.4 | Two checks emitted findings with an empty observed value | Fixed, and asserted for every finding in every fixture | `contract_test.go` |

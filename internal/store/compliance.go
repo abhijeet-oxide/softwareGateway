@@ -616,12 +616,12 @@ func uniqueChecksIn(results []ComplianceResultRow) ComplianceUniqueCounts {
 			continue
 		}
 		seen[r.CheckID] = struct{}{}
-		switch r.Severity {
-		case "block":
+		switch compliance.ParseSeverity(r.Severity) {
+		case compliance.SeverityCritical:
 			out.Blocking++
-		case "warn":
+		case compliance.SeverityWarning:
 			out.Warning++
-		case "info":
+		case compliance.SeverityInform:
 			out.Info++
 		}
 	}

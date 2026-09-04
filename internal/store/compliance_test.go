@@ -63,15 +63,15 @@ func TestFinishWritesRunChartsAndResults(t *testing.T) {
 		{Name: "beta", Version: "2.0.0", Status: "failed", Error: "template: beta/x.yaml:3", Resources: 0},
 	}
 	results := []ComplianceResultRow{
-		{Seq: 0, CheckID: "SEC-01", Severity: "block", Outcome: "fail", Determinacy: "fixed",
+		{Seq: 0, CheckID: "SEC-01", Severity: "critical", Outcome: "fail", Determinacy: "fixed",
 			Chart: "alpha", SourceFile: "templates/d.yaml", Kind: "Deployment", Name: "app",
 			Container: "main", Locus: "securityContext.runAsNonRoot",
 			Message: "runs as root", Fingerprint: "fp-1"},
-		{Seq: 1, CheckID: "RES-01", Severity: "block", Outcome: "pass",
+		{Seq: 1, CheckID: "RES-01", Severity: "critical", Outcome: "pass",
 			Chart: "alpha", Kind: "Deployment", Name: "app", Container: "main"},
 		// A waived result, so the waiver's expiry goes through the same
 		// timestamp path a run's dates do.
-		{Seq: 2, CheckID: "SEC-05", Severity: "warn", Outcome: "waived",
+		{Seq: 2, CheckID: "SEC-05", Severity: "warning", Outcome: "waived",
 			Chart: "alpha", Kind: "Deployment", Name: "app",
 			Waiver: "WAIVER-1", WaiverExpires: &expires},
 	}
@@ -184,15 +184,15 @@ func TestComplianceFilters(t *testing.T) {
 	seedRun(t, p, pkg, "run-3")
 
 	results := []ComplianceResultRow{
-		{Seq: 0, CheckID: "SEC-01", Severity: "block", Outcome: "fail", Determinacy: "fixed",
+		{Seq: 0, CheckID: "SEC-01", Severity: "critical", Outcome: "fail", Determinacy: "fixed",
 			Chart: "alpha", Kind: "Deployment", Name: "api", Message: "runs as root",
 			Subcategory: "Run-as user", Keywords: "runAsUser runAsNonRoot securityContext",
 			Locus: "spec.template.spec.securityContext.runAsNonRoot"},
-		{Seq: 1, CheckID: "SEC-02", Severity: "warn", Outcome: "fail", Determinacy: "configurable",
+		{Seq: 1, CheckID: "SEC-02", Severity: "warning", Outcome: "fail", Determinacy: "configurable",
 			Chart: "beta", Kind: "StatefulSet", Name: "db", Message: "escalation allowed",
 			Subcategory: "Privilege escalation", Keywords: "allowPrivilegeEscalation setuid",
 			Locus: "spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation"},
-		{Seq: 2, CheckID: "RES-01", Severity: "block", Outcome: "pass",
+		{Seq: 2, CheckID: "RES-01", Severity: "critical", Outcome: "pass",
 			Chart: "alpha", Kind: "Deployment", Name: "api",
 			Subcategory: "Resource requests", Keywords: "resources.requests.cpu QoS"},
 	}
@@ -209,7 +209,12 @@ func TestComplianceFilters(t *testing.T) {
 	}{
 		{"everything", ComplianceFilter{}, 3},
 		{"failures only", ComplianceFilter{Outcomes: []string{"fail"}}, 2},
-		{"blocking only", ComplianceFilter{Severities: []string{"block"}}, 2},
+		{"critical only", ComplianceFilter{Severities: []string{"critical"}}, 2},
+		// The spelling this value used to have, from a link somebody saved or a
+		// script somebody wrote. It has to keep narrowing to the same rows: a
+		// rename that turns a bookmark into an empty table is a rename that
+		// gets reported as data loss.
+		{"critical, asked for by its old name", ComplianceFilter{Severities: []string{"block"}}, 2},
 		{"one chart", ComplianceFilter{Charts: []string{"alpha"}}, 2},
 		{"one check", ComplianceFilter{Checks: []string{"SEC-01"}}, 1},
 		{"one kind", ComplianceFilter{Kinds: []string{"StatefulSet"}}, 1},
@@ -239,6 +244,39 @@ func TestComplianceFilters(t *testing.T) {
 		}
 		if total != c.want || len(rows) != c.want {
 			t.Errorf("%s: total = %d, rows = %d, want %d", c.name, total, len(rows), c.want)
+		}
+	}
+
+	// A RESULT written before the rename - a run recorded by an older build, a
+	// database restored from an older backup - is still read as what it is. The
+	// migration rewrites the stored rows, and this is the belt for that brace:
+	// counting it under nothing would make an old run render as having no
+	// critical findings at all, which reads as a clean release.
+	legacy := []ComplianceResultRow{
+		{Seq: 0, CheckID: "SEC-03", Severity: "block", Outcome: "fail",
+			Chart: "alpha", Kind: "Deployment", Name: "api", Message: "privileged"},
+	}
+	seedRun(t, p, pkg, "run-legacy")
+	if err := p.FinishComplianceRun(t.Context(),
+		ComplianceRunRow{ID: "run-legacy", PackageID: pkg, State: ComplianceComplete, Verdict: "fail"},
+		nil, legacy, nil); err != nil {
+		t.Fatal(err)
+	}
+	unique, err := p.ComplianceUniqueChecks(t.Context(), "run-legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unique.Blocking != 1 {
+		t.Errorf("a result stored as %q counts %d critical checks, want 1", "block", unique.Blocking)
+	}
+	for _, asked := range []string{"critical", "block"} {
+		rows, _, err := p.ComplianceResults(t.Context(), "run-legacy",
+			ComplianceFilter{Severities: []string{asked}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 {
+			t.Errorf("filtering a legacy row by %q returned %d rows, want 1", asked, len(rows))
 		}
 	}
 

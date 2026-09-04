@@ -402,7 +402,7 @@ func TestEveryCheckIsTriageable(t *testing.T) {
 		if len(c.Keywords) < 3 {
 			miss("keywords - at least three technical terms it should be findable by")
 		}
-		if c.Severity == compliance.SeverityBlock && c.Confidence == compliance.ConfidenceNeedsReview {
+		if c.Severity == compliance.SeverityCritical && c.Confidence == compliance.ConfidenceNeedsReview {
 			t.Errorf("%s: blocks a release on a finding it says needs a human to judge", c.ID)
 		}
 	}

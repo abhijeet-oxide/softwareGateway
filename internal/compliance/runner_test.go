@@ -119,7 +119,7 @@ func tinyCatalog(t *testing.T) *compliance.Catalog {
 	}
 	check := compliance.Check{
 		ID: "TST-01", Title: "Containers declare a memory limit",
-		Severity: compliance.SeverityBlock, Tier: 1, Category: "Test",
+		Severity: compliance.SeverityCritical, Tier: 1, Category: "Test",
 		AppliesTo: compliance.AppliesTo{Kinds: []string{"Deployment"}, Containers: compliance.ScopeAll},
 		Assert:    compliance.Assert{Required: []string{"resources.limits.memory"}},
 	}

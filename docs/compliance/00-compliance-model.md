@@ -26,7 +26,7 @@ report a vendor can act on.
 **The output that matters is not a score.** It is a sentence a release engineer
 can paste into a vendor ticket:
 
-> `PDB-02` **FAIL** (block) - `PodDisruptionBudget/mysvc-pdb` in chart
+> `PDB-02` **FAIL** (critical) - `PodDisruptionBudget/mysvc-pdb` in chart
 > `mysvc 4.2.1` (`charts/mysvc`, rendered from `templates/pdb.yaml` line 9)
 > sets `spec.maxUnavailable: 0`, which permits zero voluntary evictions and
 > deadlocks every node drain that touches this workload. Expected
@@ -86,6 +86,15 @@ reported as **inconclusive** rather than as a pass with a footnote.
 
 ### Rule 3 - Severity belongs to the check; outcome belongs to the result
 
+> **The three levels are `critical`, `warning` and `inform`.** They were
+> `block`, `warn` and `info` while the report printed "Critical", "Warning" and
+> "Informational" beside them - so a filter, an export column and a screen each
+> called one level something different, and the value a reader saw in a saved
+> spreadsheet matched nothing they could type into the search box. The old
+> spellings are still READ, everywhere a value arrives: a policy pack on disk, a
+> stored result, a bookmarked filter. They are never written. See
+> `compliance.ParseSeverity` and migration `00050`.
+
 `BLOCK`/`WARN`/`INFO` is a property of the rule the organization wrote. It does
 not change per resource, per run, or per vendor. Mixing it into the outcome (as
 `severity: "fail" | "warn" | "info"`, which is what the sample policies do)
@@ -96,10 +105,10 @@ Two orthogonal fields:
 
 ```
 outcome   pass | fail | skip | error        established by this run
-severity  block | warn | info               declared by the check, fixed
+severity  critical | warning | inform               declared by the check, fixed
 ```
 
-A red screen is `outcome=fail AND severity=block`. An amber one is
+A red screen is `outcome=fail AND severity=critical`. An amber one is
 `outcome=fail AND severity=warn`. Nothing else changes.
 
 ### Rule 4 - Say what you actually know: fixed, configurable, or unknown
@@ -127,7 +136,7 @@ So every result carries a **determinacy**:
 
 | Determinacy | Means | Weight in the verdict |
 |---|---|---|
-| `fixed` | The observed value is the same however the chart is configured. The finding is a property of the shipped software. | Full. A `fixed` block failure fails the release. |
+| `fixed` | The observed value is the same however the chart is configured. The finding is a property of the shipped software. | Full. A `fixed` critical failure fails the release. |
 | `configurable` | The observed value came from a default a values file can override. The finding is about what the chart does out of the box. | Advisory at tier 1. Reported, not blocking, and worded "at chart defaults". |
 | `unknown` | Determinacy could not be established (the probe render failed, the chart could not be re-rendered). | Reported as `configurable` would be, and the run says the probe did not complete. |
 | `n/a` | The check does not read a value - it asserts the *existence* of a resource, file or template. | Full. |
@@ -217,7 +226,7 @@ The address is the feature. Everything else is text.
 checkId          PDB-02
 pack             sgw-baseline            which rulebook this came from
 title            No rule makes maintenance impossible
-severity         block
+severity         critical
 tier             1
 category         Disruption & Availability
 subcategory      PodDisruptionBudget     the mechanism, in an engineer's words
@@ -370,9 +379,9 @@ model, with `error` and determinacy folded in:
 | Verdict | Condition |
 |---|---|
 | **Inconclusive** | Any `error`, or coverage incomplete - a chart that would not render, an artifact that could not be fetched. **Checked first**, because a release nobody could examine is not a release that passed. |
-| **Fail** | No errors, and at least one unwaived `fail` at `block` severity with determinacy `fixed` or `n/a`. |
-| **Conditional** | No errors, no blocking `fixed` failures, and at least one of: an unwaived `warn`; a `block` failure whose determinacy is `configurable` (the defaults are wrong, a site can fix it). |
-| **Pass** | No errors, complete coverage, no unwaived failures at `block` or `warn`. |
+| **Fail** | No errors, and at least one unwaived `fail` at `critical` severity with determinacy `fixed` or `n/a`. |
+| **Conditional** | No errors, no blocking `fixed` failures, and at least one of: an unwaived `warning`; a `critical` failure whose determinacy is `configurable` (the defaults are wrong, a site can fix it). |
+| **Pass** | No errors, complete coverage, no unwaived failures at `critical` or `warning`. |
 
 **Coverage is reported beside the verdict, always** - charts rendered / charts
 failed / files parsed / files unreadable / resources examined / checks applied.

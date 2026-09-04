@@ -29,7 +29,7 @@ spec:
         says - a container that asserts nothing is a separate, lesser finding,
         because on a cluster enforcing a restricted policy an unstated user is
         assigned a non-root one rather than root.
-      severity: block
+      severity: critical
       tier: 1
       category: Container Security Posture
       subcategory: Run-as user
@@ -83,7 +83,7 @@ spec:
         breaks; on a cluster that does not, the image's own default applies, and
         that is frequently root. Stating it removes the dependence on which kind
         of cluster this lands in.
-      severity: warn
+      severity: warning
       tier: 1
       category: Container Security Posture
       subcategory: Run-as user
@@ -124,7 +124,7 @@ spec:
         Left unset it defaults to on, so a program in the image that is marked to
         run with elevated rights regains everything the other settings gave up.
         It is the setting that makes all the others hold.
-      severity: block
+      severity: critical
       tier: 1
       category: Container Security Posture
       subcategory: Privilege escalation
@@ -161,7 +161,7 @@ spec:
         server's devices. It is equivalent to being root on the machine, and it
         is almost always there because somebody needed one specific permission
         and reached for the switch that grants all of them.
-      severity: block
+      severity: critical
       tier: 1
       category: Container Security Posture
       subcategory: Privileged containers
@@ -199,7 +199,7 @@ spec:
         certainly does not need. Dropping all of them and adding back the one
         that is required turns "is this container safe?" from a judgement into a
         short list somebody can read.
-      severity: block
+      severity: critical
       tier: 1
       category: Container Security Posture
       subcategory: Linux capabilities
@@ -243,7 +243,7 @@ spec:
         outside its own container in a way the other settings cannot contain, so
         adding one is the same conversation as running privileged - it needs an
         approved exception, not a line in a template.
-      severity: block
+      severity: critical
       tier: 1
       category: Container Security Posture
       subcategory: Linux capabilities
@@ -292,7 +292,7 @@ spec:
         returns a known state. Workloads with persistent storage are left out,
         because this check would otherwise fire on every database - and a check
         that fires on every database gets switched off.
-      severity: warn
+      severity: warning
       tier: 1
       category: Container Security Posture
       subcategory: Read-only root filesystem
@@ -337,7 +337,7 @@ spec:
         compromised process. The standard filter blocks the calls a normal
         application never makes, at effectively no cost and with no application
         change.
-      severity: warn
+      severity: warning
       tier: 1
       category: Container Security Posture
       subcategory: Seccomp
@@ -382,7 +382,7 @@ spec:
         declares into a port open on the server, which is a listening service
         nobody declared and nothing is filtering. Claiming a fixed server port
         also caps the service at one copy per server, silently.
-      severity: block
+      severity: critical
       tier: 1
       category: Container Security Posture
       subcategory: Host namespaces
@@ -435,7 +435,7 @@ spec:
         the container runtime's control socket is not a mount at all - it is the
         ability to start a fully privileged container on that server, which is
         administrator access to the cluster by another route.
-      severity: block
+      severity: critical
       tier: 1
       category: Container Security Posture
       subcategory: Host path volumes
@@ -487,7 +487,7 @@ spec:
         Granting a relaxed policy to a group gives it to every workload in that
         group, including ones installed months later by a different team. The
         chart meant to exempt itself and exempted the namespace.
-      severity: block
+      severity: critical
       tier: 1
       category: Container Security Posture
       subcategory: Security policy grants
@@ -530,7 +530,7 @@ spec:
         filling it does not just fail this service - it exhausts the server and
         evicts every other workload on it. A single log file or a runaway
         temporary write becomes an outage for unrelated software.
-      severity: warn
+      severity: warning
       tier: 1
       category: Container Security Posture
       subcategory: Ephemeral storage

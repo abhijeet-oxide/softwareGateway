@@ -377,7 +377,12 @@ func complianceResultViews(rows []store.ComplianceResultRow) []ComplianceResultV
 	for _, r := range rows {
 		out = append(out, ComplianceResultView{
 			Seq:   r.Seq,
-			Check: r.CheckID, Title: r.CheckTitle, Severity: r.Severity,
+			Check: r.CheckID, Title: r.CheckTitle,
+			// Normalised on the way out, so a row stored before the vocabulary
+			// changed - a database restored from an older backup, a run the
+			// migration has not reached - never reaches a client that only
+			// knows the three current words and would draw it as unknown.
+			Severity: string(compliance.ParseSeverity(r.Severity)),
 			Category: r.Category, Subcategory: r.Subcategory,
 			Keywords: splitKeywords(r.Keywords),
 			Pack:     r.Pack, Tier: r.Tier,

@@ -399,11 +399,11 @@ func renderPolicies(w io.Writer, c policyCatalogue) error {
 
 func severityAbbrev(s compliance.Severity) string {
 	switch s {
-	case compliance.SeverityBlock:
+	case compliance.SeverityCritical:
 		return "BLOCK"
-	case compliance.SeverityWarn:
+	case compliance.SeverityWarning:
 		return "warn"
-	case compliance.SeverityInfo:
+	case compliance.SeverityInform:
 		return "info"
 	default:
 		return "-"

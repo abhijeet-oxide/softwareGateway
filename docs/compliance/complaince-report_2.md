@@ -1,451 +1,165 @@
-# Scanner Feedback Report — False Positives, Coverage Gaps, and Finding Wording
+# Compliance Scanner — Validation Feedback
 
-**Subject:** Helm chart compliance scanner
-**Basis:** One product scan — 855 rendered objects, 2,253 findings (481 Critical)
-**Method:** Every claim verified by independently re-implementing the check against the rendered manifest. No figure in this document is estimated.
+**From:** Platform compliance team
+**To:** Scanner engineering
+**Scan under review:** One product release — 855 rendered objects, 257 workload containers, 63 checks fired, 2,253 findings (481 Critical, 1,127 Warning, 645 Informational)
 
 ---
 
-## How to read this
+## What we did
 
-| Part | Contents |
+We ran the scanner against a production release, then independently re-implemented fourteen check families directly against the same rendered manifest and compared the results row by row.
+
+**Ten of fourteen matched your counts exactly.** Detection quality is good and materially better than the previous cycle. The items below are the remaining gaps, each with the manifest evidence needed to reproduce and fix them.
+
+| Outcome | Count |
 |---|---|
-| **1** | Finding-by-finding walkthrough — what each check is actually saying |
-| **2** | Confirmed false positives, with the manifest evidence |
-| **3** | Conditions present in the manifest that no check detects |
-| **4** | How to make finding text self-explanatory |
+| Checks verified accurate | 10 families, exact match |
+| Confirmed false positives | 9 findings (8 Critical) |
+| Findings needing re-tiering | ~42 (all Critical) |
+| Real conditions in our data with no check | 6 |
+| Genuine issue missed by an existing check | 1 (Critical) |
+
+**Naming.** All chart, workload, secret and namespace names below are substituted. Template paths, line numbers, field paths, field values and counts are reproduced exactly as your scanner emitted them, so every item is reproducible on your side.
 
 ---
 
-# Part 1 — What each finding is actually saying
+# Part A — False positives
 
-## 1.1 SEC-04 — capabilities not dropped
+## A1. `PDB-01` — workload-to-policy join fails on namespace
 
-**Your reading is correct.** The check wants:
+**Emitted (3 Critical):**
+```
+PDB-01 | Critical | Deployment controller-a
+  chart-a/templates/controller-a-deployment.yaml, line 1323
+  Observed: "no such rule matches this workload"
+  Finding:  "controller-a runs 2 copies, and the chart does not tell the
+             platform how many must stay running during maintenance."
+```
 
+**Manifest — the policy the scanner says does not exist:**
 ```yaml
-securityContext:
-  capabilities:
-    drop: ["ALL"]          # give everything up
-    add: ["NET_BIND_SERVICE"]   # take back only what is proven necessary
-```
-
-Without a `drop` block the container silently inherits the container runtime's **default capability set** — roughly 14 permissions including `CHOWN`, `SETUID`, `SETGID`, `NET_RAW` and `KILL`. Nothing in the chart asks for raw socket access, but the container gets it.
-
-**One caveat for `cafed` specifically.** The manifest is:
-
-```yaml
-securityContext:
-  privileged: true
-  readOnlyRootFilesystem: true
-```
-
-When `privileged: true` is set, the kernel grants the **full** capability set regardless of what `drop` says. So on this container, adding `drop: ["ALL"]` changes nothing until `privileged` is removed.
-
-**This matters because one root cause produces three Critical findings:**
-
-| Check | Fires because | Independent? |
-|---|---|---|
-| `SEC-03` | `privileged: true` | **Root cause** |
-| `SEC-04` | no `capabilities.drop` | Dependent — moot while privileged |
-| `SEC-02` | no `allowPrivilegeEscalation` | Dependent — forced true while privileged |
-
-**Verified:** 4 of 47 `SEC-02` findings and 4 of 67 `SEC-04` findings sit on containers that are also privileged. The other 43 and 63 are genuine standalone findings.
-
-**Ask:** when a container is privileged, mark the dependent findings as `Superseded by SEC-03` rather than issuing three separate Criticals for one decision.
-
----
-
-## 1.2 CFG-14 — "should the secrets come from values instead?"
-
-**This is the most important correction in the document, because the proposed fix would not fix anything.**
-
-Moving a certificate from `templates/zts-cbur-cert.yaml` into `values.yaml` does not remove it from the chart. `values.yaml` **ships inside the chart package**. It is in the same Git repository, the same `.tgz`, the same registry, and the same archive. The private key would be exactly as exposed, just in a different file.
-
-The problem is not *where in the chart* the key lives. It is that **the key is in the chart at all**.
-
-### What the finding is really saying
-
-```yaml
-# Source: cbur/templates/zts-cbur-cert.yaml
-kind: Secret
-metadata:
-  name: zts-cbur-cert
-data:
-  tls.key:         LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ...
-  server-key.pem:  LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ...
-```
-
-Verified contents of this secret:
-
-| Key | Contains |
-|---|---|
-| `ca.crt` | Certificate — public, fine |
-| `tls.crt` | Certificate — public, fine |
-| `server.pem` | Certificate — public, fine |
-| **`tls.key`** | **RSA PRIVATE KEY** |
-| **`server-key.pem`** | **RSA PRIVATE KEY** |
-
-Base64 is not encryption. `echo "LS0t..." | base64 -d` returns the private key in plain text. Anyone with read access to the repository, a registry mirror, or a release archive holds the key that authenticates this service.
-
-### The three real options
-
-| Option | Where the key lives | Verdict |
-|---|---|---|
-| In `templates/` | Chart package | Current state — exposed |
-| In `values.yaml` | Chart package | **No improvement** |
-| Generated at install by a Helm function | Cluster only | Better — but see below |
-| Issued by a certificate manager | Cluster only | **Correct** |
-| Pulled from a secret store at install | Cluster only | **Correct** |
-
-### A second issue worth flagging to the chart author
-
-This secret looks generated by Helm's `genCA` / `genSignedCert` template helpers. Those regenerate on **every** `helm upgrade` unless the existing secret is looked up and reused. That causes certificate churn — every upgrade issues new certificates and anything holding the old one fails until it reconnects.
-
-**Recommended check text:**
-
-> Secret `zts-cbur-cert` ships two RSA private keys inside the chart. Base64 encoding is not protection — anyone who can read the repository or any mirror of it can decode them. A private key in a chart must be treated as compromised from the moment it was committed, and rotating it means rebuilding and redistributing the release. Issue certificates from a certificate manager at install time instead.
-
----
-
-## 1.3 CFG-14 on `masterca-pre-install-xipki-datasource` — you were right, there is nothing wrong
-
-Your screenshot shows a finding where you could not see the problem. **There isn't one.** Two separate defects combine here.
-
-### Defect A — the evidence window does not show the offending line
-
-The pane displays lines **164–192**. The secret's content begins at line **186** (`stringData:`) and continues past the bottom of the window. The reader sees `metadata`, `labels` and `annotations` — none of which the finding is about.
-
-The footer even says *"data is not in this manifest, which is what the finding says"* — but the finding is about `stringData`, not `data`, so that note is misleading too.
-
-**Ask:** centre the evidence window on the field named in `Field`, not on the start of the object.
-
-### Defect B — the secret contains no credential
-
-Decoded content of both keys:
-
-```properties
-# ca-db.properties
-dataSource.user = <6-character username>
-dataSource.password =                      # <-- EMPTY
-```
-
-The password field is **empty**. This is a configuration template that expects the password to be injected at install time. There is no credential here to expose.
-
-### This is not isolated — classification of all 56 CFG-14 findings
-
-| Class | Count | Verdict |
-|---|---|---|
-| **A** — contains a PEM `PRIVATE KEY` | **12** | Genuine Critical |
-| **B** — contains a non-empty password | **2** | Genuine Critical |
-| **E** — short opaque value (usernames, hostnames, object names) | **32** | Needs value inspection |
-| **F** — config/properties files | **10** | Mostly false, like the one above |
-
-**14 of 56 are confirmed genuine.** The remaining 42 fire on the *existence* of `data`/`stringData`, not on its content.
-
-**Ask:** decode and inspect the value before rating. Sub-tier the check:
-
-| Sub-check | Condition | Severity |
-|---|---|---|
-| `CFG-14a` | Value contains a PEM private key | Critical |
-| `CFG-14b` | Value is a non-empty credential-shaped string | Critical |
-| `CFG-14c` | Secret carries inline data, contents not credential-shaped | **Advisory** |
-
----
-
-## 1.4 CFG-11 — the missing `casecret`, and why you have 52 of them
-
-```yaml
-kind: StatefulSet
-metadata:
-  name: cafed
-spec:
-  template:
-    spec:
-      volumes:
-        - name: casecret-username
-          secret:
-            secretName: casecret          # <-- not shipped
-            items: [{ key: username, path: username }]
-        - name: casecret-password
-          secret:
-            secretName: casecret          # <-- not shipped
-            items: [{ key: password, path: password }]
-```
-
-`Secret casecret` does not exist in any of the 855 rendered objects. If nothing creates it before `cafed` starts, the pod sits in `CreateContainerConfigError` indefinitely.
-
-### What makes this interesting
-
-The manifest **does** contain a secret with exactly the right shape under a different name:
-
-```
-Secret sbcvnf1casecret   keys: ["username", "password"]
-```
-
-`casecret` is referenced 20 times. `sbcvnf1casecret` is referenced **zero** times.
-
-That pattern — a secret that exists but is never referenced, alongside a reference to a name that does not exist — is the signature of a **name prefix supplied by values that was applied to the producer but not to the consumers**, or vice versa. Something like:
-
-```yaml
-# producer template
-name: {{ .Values.vnfName }}casecret        # renders: sbcvnf1casecret
-
-# consumer template
-secretName: casecret                        # prefix not applied
-```
-
-This is worth raising with the chart author regardless of how the check is tuned. Either the reference is wrong, or the secret is supplied externally and the shipped one is dead weight.
-
-### The scanner defect visible in your screenshot
-
-For the **same** missing secret (`casecret`), across sibling charts, the `Value is` column reads inconsistently:
-
-| Chart | Missing | `Value is` |
-|---|---|---|
-| `cafed` | `Secret casecret` | Could not be established |
-| `cbgc` | `Secret casecret` | **Overridable in values** |
-| `ccfed` | `Secret casecret` | **Overridable in values** |
-| `chfed` | `Secret casecret` | Could not be established |
-| `cimsliadm` | `Secret casecret` | Could not be established |
-
-Same secret, same reference pattern, three sibling charts — two different answers. Whatever infers this field is not deterministic. Verified split across all 52: **27 `Could not be established`, 25 `Overridable in values`.**
-
-### Severity
-
-All 52 carry confidence `Likely, unless the platform provides it` — which is **honest and correct**. But they are rated **Critical**. A finding the scanner itself flags as conditional should not be Critical.
-
-**Ask:** cap severity at High when confidence is not `Confirmed`. Also allowlist `kube-root-ca.crt` — Kubernetes auto-creates it in every namespace, and it accounts for 2 of the 52.
-
----
-
-## 1.5 RBAC-05 — no, `apiGroups: [""]` is not the problem
-
-```yaml
-rules:
-  - apiGroups: [""]        # <-- this is CORRECT
-    resources: ["secrets"]
-    verbs: ["get"]         # <-- this is the problem
-```
-
-`apiGroups: [""]` means the **core API group** — the one containing Pods, Services, ConfigMaps and Secrets. An empty string is how you reference it. This is required syntax, not an omission.
-
-The problem is that `get` on `secrets` carries **no `resourceNames`**. It looks narrow because the verb is `get` rather than `list`, but the scope is every secret in the namespace — the workload can fetch any of them by name.
-
-```yaml
-# Compliant
-rules:
-  - apiGroups: [""]
-    resources: ["secrets"]
-    resourceNames: ["clusmonitserver-tls"]   # <-- exactly which ones
-    verbs: ["get"]
-```
-
-### But the finding title is wrong for a third of the cases
-
-Title: *"No service can **list** the namespace's credentials"*
-
-Verified across all 49 findings:
-
-| Rule contains | Count |
-|---|---|
-| `list` or `watch` on secrets | 34 — title accurate |
-| **Only `get`, no `list`** | **15 — title inaccurate** |
-
-Your confusion is a direct consequence: you looked for `list`, saw `get`, and reasonably concluded the finding must be about something else.
-
-**Ask:** split the check, or make the text conditional.
-
-| Sub-check | Condition | Text |
-|---|---|---|
-| `RBAC-05a` | `list`/`watch` on secrets | "can enumerate every credential in the namespace" |
-| `RBAC-05b` | `get` with no `resourceNames` | "can fetch any credential in the namespace by name" |
-
----
-
-## 1.6 SEC-02 — the problem is not `privileged: true`, but they interact
-
-The finding is about a **different field**:
-
-```yaml
-securityContext:
-  privileged: true              # <-- SEC-03 reports this
-  readOnlyRootFilesystem: true
-  # allowPrivilegeEscalation NOT declared  <-- SEC-02 reports this
-```
-
-`allowPrivilegeEscalation` defaults to `true` when omitted. That means the `no_new_privs` kernel flag is not set, so a setuid binary inside the image can gain privileges the container was never granted.
-
-**On this container the finding is technically true but practically moot** — `privileged: true` forces privilege escalation on regardless. Setting `allowPrivilegeEscalation: false` alongside `privileged: true` changes nothing.
-
-**But this is the exception, not the rule.** 43 of 47 `SEC-02` findings are on containers that are **not** privileged. On those it is the highest-value security finding in the report, because the container looks properly hardened:
-
-```yaml
-securityContext:
-  runAsNonRoot: true
-  runAsUser: 10001
-  capabilities: { drop: ["ALL"] }
-  # allowPrivilegeEscalation missing -> defaults to true
-```
-
-Non-root, all capabilities dropped — and still able to escalate. One line to fix, and it breaks nothing unless the image genuinely relies on setuid.
-
----
-
-## 1.7 RBAC-09 — what is wrong with the `caserver` role
-
-```yaml
-rules:
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["get", "list", "watch"]                        # fine
-
-  - apiGroups: [""]
-    resources: ["pods", "secrets"]                         # <-- PROBLEM
-    verbs: ["get", "list", "delete", "watch", "patch"]     # <-- PROBLEM
-
-  - apiGroups: [""]
-    resources: ["pods/exec"]                               # <-- PROBLEM
-    verbs: ["create"]
-
-  - apiGroups: ["apps"]
-    resources: ["deployments", "deployments/scale"]
-    verbs: ["get", "list", "update", "patch"]              # fine-ish
-```
-
-### The second rule bundles two unrelated resources
-
-`pods` and `secrets` are listed together, so **every verb applies to both**. The workload almost certainly needs to manage pods. It does not need to delete and rewrite credentials — but the rule grants that too.
-
-| Verb | Effect on `secrets` | Reported by |
-|---|---|---|
-| `get` | Read any secret by name | `RBAC-05b` |
-| `list` | **Enumerate every secret in the namespace** | `RBAC-05a` |
-| `watch` | Stream every secret change in real time | `RBAC-05a` |
-| **`delete`** | **Destroy credentials — namespace-wide outage** | `RBAC-09` |
-| **`patch`** | **Overwrite a credential with one you control** | `RBAC-09` |
-
-`patch` is the dangerous one. An attacker who compromises this workload can rewrite a database credential to a value they control, then intercept everything that authenticates with it. The legitimate owner sees no error — the credential simply changes.
-
-### The third rule is separately serious
-
-`create` on `pods/exec` permits running arbitrary commands inside **any pod in the namespace**, inheriting that pod's identity, mounts and network access. This is a lateral-movement primitive. Reported as `RBAC-07`.
-
-### The fix
-
-Split the resources so verbs are scoped to what each actually needs:
-
-```yaml
-rules:
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list", "watch", "delete"]      # pod lifecycle
-
-  - apiGroups: [""]
-    resources: ["secrets"]
-    resourceNames: ["caserver-db", "caserver-tls"] # named, read-only
-    verbs: ["get"]
-```
-
-### One role, four Critical findings
-
-`caserver` triggers `RBAC-05`, `RBAC-07`, `RBAC-09` and a fourth from the unscoped `get`. All four are correct, but the reader has to reconstruct that they share one root cause: one over-broad rule.
-
-**Ask:** group findings by the rule that produced them, so the vendor sees "this rule causes 4 problems" rather than four separate rows across the report.
-
----
-
-# Part 2 — Confirmed false positives
-
-Nine findings are provably wrong. Each is shown with the manifest evidence.
-
----
-
-## FP-1 — `PDB-01` (3 Critical): policy exists, tool says it does not
-
-**Tool:** *"cnsba-controller runs 2 copies, and the chart does not tell the platform how many must stay running."*
-
-```yaml
+# chart-a/templates/controller-a-deployment.yaml, line 1323
 kind: Deployment
 metadata:
-  name: cnsba-controller
-  namespace: sgw-compliance          # <-- namespace present
+  name: controller-a
+  namespace: app-namespace           # <-- namespace declared
 spec:
   replicas: 2
   template:
     metadata:
       labels:
-        app: cnsba-controller
-        release: sgw-compliance
+        app: controller-a
+        release: app-release
 
 ---
+# chart-a/templates/pdb.yaml, line 2
 kind: PodDisruptionBudget
 metadata:
-  name: cnsba-controller-pdb
-                                     # <-- namespace ABSENT
+  name: controller-a-pdb
+                                     # <-- namespace NOT declared
 spec:
   maxUnavailable: 50%
   selector:
     matchLabels:
-      app: cnsba-controller          # matches
-      release: sgw-compliance        # matches
+      app: controller-a              # matches the pod labels
+      release: app-release           # matches the pod labels
 ```
 
-**Root cause.** The join requires `metadata.namespace` to be equal on both objects. `helm template` emits that field only where a chart hard-codes it. Absent means "the release namespace" — the same namespace. This chart mixes both conventions.
+**Issue.** The join requires `metadata.namespace` to be equal on both objects. `helm template` emits that field only where a chart hard-codes it — when absent, the object lands in the release namespace at install time. This release mixes both conventions, so one side reads `app-namespace` and the other reads nothing.
 
-Verified on all three pairs, and the direction reverses on `caserver` (workload absent, policy declared), which rules out a one-way rendering assumption.
+Confirmed on all three affected pairs. On the third pair the mismatch runs the **opposite** way (workload absent, policy declared), which rules out a one-directional rendering assumption.
 
-**Fix:**
+| Workload | Workload ns | Policy | Policy ns | Labels match | ns match |
+|---|---|---|---|---|---|
+| `controller-a` | `app-namespace` | `controller-a-pdb` | *absent* | Yes | No |
+| `controller-b` | `app-namespace` | `controller-b-pdb` | *absent* | Yes | No |
+| `ca-service` | *absent* | `ca-service-pdb` | `app-namespace` | Yes | No |
+
+**Fix.**
 ```
 effective_namespace(obj) = obj.metadata.namespace or RELEASE_NAMESPACE
 ```
 
-**Scope warning.** This is a join defect, not a rule defect. The same comparison is likely used for service→workload, binding→identity and claim→mount. Audit every cross-object lookup, not just this check.
+**Scope.** This is a join defect, not a rule defect. The same comparison is likely used wherever one object is related to another — service to workload, binding to identity, claim to mount. We recommend auditing every cross-object lookup rather than patching this check.
+
+**Acceptance test.** `PDB-01` must emit **0 findings** against a manifest where a PodDisruptionBudget declares no namespace and its selector matches a namespaced workload's pod labels.
 
 ---
 
-## FP-2 — `PDB-09` (4 Critical): mirror image of FP-1
+## A2. `PDB-09` — same defect, opposite assertion
 
-`PDB-01` says *"this workload has no policy"*. `PDB-09` says *"this policy protects no workload"* — **on the same three pairs**. Both cannot be true.
+**Emitted (4 Critical):**
+```
+PDB-09 | Critical | PodDisruptionBudget controller-a-pdb
+  chart-a/templates/pdb.yaml, line 2
+  Finding: "this rule protects no workload in the release"
+```
 
-The fourth, `ccs-seldon`, does match its Deployment. It has a real problem (`minAvailable: 0` protects nothing) but is reported for the wrong reason.
+**Issue.** `PDB-01` and `PDB-09` fire on the **same three object pairs**, asserting opposite things:
 
-**Verified: all 27 PodDisruptionBudgets in this release match at least one workload. `PDB-09` should produce zero findings.**
+| Check | Assertion |
+|---|---|
+| `PDB-01` | "this workload has no disruption policy" |
+| `PDB-09` | "this disruption policy protects no workload" |
 
-**Diagnostic worth building in:** two checks asserting contradictory things about the same object pair almost always indicates one broken join, not two broken rules.
+Both cannot be true. Each is the mirror image of the other, and both follow from the single failed namespace comparison in A1.
+
+The fourth finding (`ml-chart/charts/inference/templates/controller-manager-pdb.yaml`, line 55) *does* match its Deployment. It has a real problem — `minAvailable: 0`, see B2 — but is reported for the wrong reason.
+
+**Verified: all 27 PodDisruptionBudgets in this release match at least one workload. This check should emit zero findings.**
+
+**Suggested diagnostic.** Two checks asserting contradictory things about the same object pair almost always indicates one broken join rather than two broken rules. Worth adding as an internal consistency assertion in your test suite.
 
 ---
 
-## FP-3 — `PDB-02` (1 Critical): flags the standard's own recommendation
+## A3. `PDB-02` — flags the configuration the standard recommends, misses the real deadlock
 
+**Emitted (1 Critical):**
+```
+PDB-02 | Critical | PodDisruptionBudget agent-service-pdb
+  chart-b/templates/agent-service-pdb.yaml, line 2
+  Observed: "at least 1 copies must stay running"
+  Finding:  "the rule agent-service-pdb demands that every copy stays running,
+             so the platform can never get permission to move one. Patching any
+             server that hosts this service will wait indefinitely, and a cluster
+             upgrade stalls until somebody intervenes."
+```
+
+**Manifest:**
 ```yaml
+# chart-b/templates/agent-service-pdb.yaml, line 2
 kind: PodDisruptionBudget
 metadata:
-  name: ztsvaultagent-pdb
+  name: agent-service-pdb
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: ztsvaultagent
+      app: agent-service
 ```
 
-**`ztsvaultagent` is a Deployment with `replicas: 2`.**
+The covered workload is a **Deployment with `replicas: 2`**.
 
 ```
-disruptions_allowed = 2 − 1 = 1     -> maintenance proceeds normally
+disruptions_allowed = replicas − minAvailable = 2 − 1 = 1
 ```
 
-The governing standard, §4.2.5:
+One copy can be evicted. Maintenance proceeds normally. There is no deadlock.
+
+**Issue.** This is not only a false positive — it contradicts the governing standard. §4.2.5:
 
 > *"For replicas=2, a common safe setting is `maxUnavailable: 1` (or `minAvailable: 1`)"*
 
-The chart implemented exactly what the standard recommends. The tool calls it Critical with *"demands that every copy stays running… a cluster upgrade stalls until somebody intervenes."*
+And §4.4, baseline defaults:
 
-**This is the most damaging defect class**, because a vendor who follows the report makes their chart worse.
+> *"replicas = 2: PDB `maxUnavailable: 1` (or `minAvailable: 1`)"*
 
-**Root cause.** The rule appears to pattern-match `minAvailable: 1` rather than computing `replicas − minAvailable`, and does not evaluate percentage forms.
+The chart implemented exactly what the standard prescribes, and the scanner rates it Critical. A chart author who acts on this finding makes their release worse. Of all defect classes this is the most damaging to trust in the report.
 
-**Correct logic:**
+**Root cause.** The rule appears to pattern-match on the literal `minAvailable: 1` rather than computing the disruption allowance, and does not evaluate percentage forms at all.
+
+**Fix.**
 ```python
 def disruptions_allowed(pdb, replicas):
     if 'minAvailable' in pdb:
@@ -455,195 +169,365 @@ def disruptions_allowed(pdb, replicas):
     if 'maxUnavailable' in pdb:
         v = pdb['maxUnavailable']
         return math.floor(replicas * pct(v)) if is_pct(v) else v
+    return None
 
-fire = disruptions_allowed(...) is not None and disruptions_allowed(...) <= 0
+fire = (allowed := disruptions_allowed(...)) is not None and allowed <= 0
 ```
 
-**Acceptance test:** exactly 1 finding against this manifest — `cngss-pdb` (see GAP-1) — and **not** `ztsvaultagent-pdb`.
+**Acceptance test.** Against this release the check must emit **exactly one** finding — the percentage deadlock described in **B1** — and must not fire on `minAvailable: 1` where replicas ≥ 2.
 
 ---
 
-## FP-4 — `CFG-14` (~42 of 56): fires on existence, not on content
+## A4. `CFG-14` — fires on the presence of data, not on what the data is
 
-Covered in §1.3. The check does not decode and inspect the value.
+**Emitted: 56 Critical.** Verified genuine: **14**.
+
+### Correctly flagged
 
 ```yaml
-# GENUINE — Critical
+# chart-c/templates/service-tls-cert.yaml, line 2
 kind: Secret
-metadata: { name: zts-cbur-cert }
+metadata:
+  name: service-tls-cert
 data:
-  tls.key: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVk...    # RSA PRIVATE KEY
-
-# FALSE POSITIVE — currently also Critical
-kind: Secret
-metadata: { name: masterca-pre-install-xipki-datasource }
-stringData:
-  ca-db.properties: |
-    dataSource.user = <username>
-    dataSource.password =                            # EMPTY
+  ca.crt:         LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t...   # certificate
+  tls.crt:        LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t...   # certificate
+  server.pem:     LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t...   # certificate
+  tls.key:        LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVkt...   # RSA PRIVATE KEY
+  server-key.pem: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVkt...   # RSA PRIVATE KEY
 ```
 
-**14 of 56 verified genuine.** Sub-tier the check per §1.3.
+Two RSA private keys shipped in the chart. Correct Critical.
+
+### Incorrectly flagged
+
+```yaml
+# chart-d/templates/db-connection-properties.yaml, line 186
+kind: Secret
+metadata:
+  name: db-connection-properties
+stringData:
+  db.properties: |
+    dataSource.user = svcusr
+    dataSource.password =                    # <-- EMPTY
+  conf-db.properties: |
+    dataSource.user = svcusr
+    dataSource.password =                    # <-- EMPTY
+```
+
+This is a configuration template with **empty** credential fields, expecting values to be injected at install time. There is nothing exposed. It is rated Critical.
+
+### Classification of all 56
+
+| Class | Count | Assessment |
+|---|---|---|
+| Contains a PEM `PRIVATE KEY` block | **12** | Genuine Critical |
+| Contains a non-empty password value | **2** | Genuine Critical |
+| Short opaque value — usernames, hostnames, object names | 32 | Requires value inspection |
+| Configuration/properties file, credential fields empty | 10 | Mostly false, as above |
+
+**Fix.** Base64-decode `data`, read `stringData` directly, and classify on content:
+
+| Sub-check | Condition | Severity |
+|---|---|---|
+| `CFG-14a` | Decoded value contains `-----BEGIN ... PRIVATE KEY-----` | Critical |
+| `CFG-14b` | Decoded value is a non-empty credential-shaped string | Critical |
+| `CFG-14c` | Secret carries inline data, contents not credential-shaped | **Advisory** |
+
+Also treat an empty right-hand side (`password =`, `password:` with nothing after it) as an explicit non-finding rather than a match.
 
 ---
 
-## FP-5 — `CFG-13` (subset of 14): flags secret *names*, not secret *values*
+## A5. `CFG-14` — evidence pane does not show the field the finding is about
 
+**Emitted:**
+```
+CFG-14 | Critical | Secret db-connection-properties
+  chart-d/templates/db-connection-properties.yaml
+  Evidence window: lines 164–192 of 4,939
+  Footer: "data is not in this manifest, which is what the finding says"
+```
+
+**Issue.** The secret's content begins at line **186** (`stringData:`) and continues past the bottom of the pane. Lines 164–192 show `apiVersion`, `kind`, `metadata`, `labels` and `annotations` — none of which the finding concerns. A reviewer opening this finding sees no problem, because the problem is not on screen.
+
+The footer note compounds it: the finding is about `stringData`, but the note refers to `data`.
+
+**Fix.** Centre the evidence window on the line resolved from the `Field` column and highlight it. Where `Field` is `data` or `stringData`, resolve to the first key under it.
+
+---
+
+## A6. `CFG-13` — flags secret *names* as though they were secret *values*
+
+**Emitted (subset of 14 Critical):**
+```
+CFG-13 | Critical | StatefulSet workload-e, container workload-e
+  chart-e/templates/statefulset.yaml, line 127
+  Field: spec.template.spec.containers[0].env
+  Observed: "APP_SESSION_SECRET holds an opaque high-entropy value in a
+             field named for a credential"
+  Confidence: Confirmed from the chart
+```
+
+**Manifest:**
 ```yaml
+# chart-e/templates/statefulset.yaml, line 127
+env:
+  - name: APP_CA_PASSWORD
+    valueFrom:
+      secretKeyRef:                          # correct pattern, not flagged
+        name: ca-credential
+        key: password
+  - name: APP_SESSION_SECRET
+    value: "session-store-v1"                # flagged
+  - name: APP_SESSIONCLUSTER_SECRET
+    value: "cluster-session-store-v1"        # flagged
+  - name: APP_CACHE_SECRET
+    value: "cache-store-v1"                  # flagged
+```
+
+**Issue.** The flagged values follow the naming convention of other objects in the release, not the shape of credential material. They are most likely secret object names the application resolves at runtime.
+
+Your wording hedges correctly — *"holds an opaque high-entropy value in a field named for a credential"* — but the row is rated **Critical** with confidence **`Confirmed from the chart`**. A value-shape inference should not carry your highest severity and your highest confidence simultaneously.
+
+**Fix.** Cross-reference the literal against the names of Secrets and ConfigMaps shipped in the release. On match, downgrade to Medium with confidence `Needs someone who knows this workload`.
+
+---
+
+## A7. `STO-10` — correct finding, incorrect evidence
+
+**Emitted (17 Critical):**
+```
+STO-10 | Critical | StatefulSet workload-a
+  chart-f/templates/statefulset.yaml, line 66
+  Field: spec.template.spec.volumes
+  Observed: "config-mount (a folder on the server), hugepages (scratch space,
+             deleted with the copy), devices (a folder on the server),
+             drivers (a folder on the server)..."
+```
+
+**Manifest:**
+```yaml
+# chart-f/templates/statefulset.yaml, line 66
 kind: StatefulSet
-metadata: { name: camc }
+metadata:
+  name: workload-a
 spec:
+  volumeClaimTemplates: []                    # <-- the actual finding
   template:
     spec:
-      containers:
-        - name: camc
-          env:
-            - name: ZTS_CA_PASSWORD
-              valueFrom:
-                secretKeyRef: { ... }              # correct pattern
-            - name: APP_CRDBSESSION_SECRET
-              value: "crdb-session-v..."           # flagged
-            - name: APP_CRDBSESSIONCLUSTER_SECRET
-              value: "sbc-crdb-sessi..."           # flagged
+      volumes:
+        - name: hugepages
+          emptyDir: { medium: HugePages }     # memory allocation, not scratch
+        - name: devices
+          hostPath: { path: /sys/bus/pci/devices }   # device access, not state
+        - name: app-logs
+          emptyDir: {}                        # genuinely ephemeral
 ```
 
-The flagged values look like **secret object names**, not secret material — `crdb-session-...`, `sbc-crdb-session-...`. If the application uses them to look up a secret at runtime, they are identifiers.
+**Issue.** The underlying finding is correct — this is a StatefulSet with **no `volumeClaimTemplates`**, so anything it writes is lost on restart. But the evidence text miscategorises two volume types:
 
-The tool's own wording hedges correctly — *"holds an opaque high-entropy value in a field named for a credential"* — but it is rated **Critical** with confidence **`Confirmed from the chart`**. That combination is too strong for a value-shape inference.
+- `emptyDir` with `medium: HugePages` is a **hugepage memory allocation**, a standard mechanism for performance-sensitive workloads. It is not scratch storage and holds no state.
+- `hostPath` under `/sys` and `/dev` is **device access**. It is already reported by `SEC-08` and is not application state.
 
-**Fix:** cross-reference the value against the names of secrets shipped in the release. On match, downgrade to Medium with confidence `Needs someone who knows this workload`.
+A reviewer reading this evidence will conclude the check does not understand the workload, and will discount the genuine point buried inside it.
+
+**Fix.** Exclude from state analysis: `emptyDir` with `medium: HugePages` or `medium: Memory`; `hostPath` mounts under `/sys`, `/dev`, `/proc`. The finding then reduces to its accurate core:
+
+> *"`workload-a` is a StatefulSet — a workload type chosen for stable identity and durable storage — but declares no `volumeClaimTemplates`. Everything it writes is lost on restart."*
 
 ---
 
-## FP-6 — `STO-10` (17): correct finding, wrong evidence
+## A8. `RBAC-05` — title does not match the rule in 15 of 49 cases
 
-The core finding is right — `cafed` is a StatefulSet with **no `volumeClaimTemplates`**, so everything it writes is lost on restart.
-
-But the `Observed` text reads:
-
-> `etc-sbc (a folder on the server), hugepages (scratch space, deleted with the copy), devices (a folder on the server)...`
-
-```yaml
-volumes:
-  - name: hugepages
-    emptyDir: { medium: HugePages }        # NOT scratch space - this is
-                                           # hugepage memory allocation for DPDK
-  - name: devices
-    hostPath: { path: /sys/bus/pci/devices }   # device access, not state
+**Emitted (49 Critical):**
+```
+RBAC-05 | Critical | Role monitor-server-role
+  chart-g/charts/monitor-server/templates/monitor-server-rbac.yaml, line 1097
+  Title:   "No service can list the namespace's credentials"
+  Finding: "a rule can read every secret in the namespace"
 ```
 
-Two category errors: `medium: HugePages` is a memory allocation mechanism, and `hostPath` under `/sys` and `/dev` is device access already reported by `SEC-08`.
+**Manifest:**
+```yaml
+# chart-g/charts/monitor-server/templates/monitor-server-rbac.yaml, line 1097
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]              # <-- no 'list'. No resourceNames either.
+```
 
-**Fix:** exclude `emptyDir` with `medium: HugePages` or `medium: Memory`, and exclude `hostPath` under `/sys`, `/dev`, `/proc`. The finding then reduces to its genuine point.
+**Issue.** The finding is **correct** — `get` with no `resourceNames` permits fetching any secret in the namespace by name. But the title says *"can **list**"*, and this rule has no `list` verb. A reviewer checking the rule against the title concludes the finding is mistaken and moves on.
+
+Verified across all 49 findings:
+
+| Rule contains | Count | Title accurate |
+|---|---|---|
+| `list` or `watch` on secrets | 34 | Yes |
+| **Only `get`, no `list`** | **15** | **No** |
+
+**Fix.** Split the check so the text matches the rule.
+
+| Sub-check | Condition | Text |
+|---|---|---|
+| `RBAC-05a` | `list` or `watch` on secrets | "can enumerate every credential in the namespace" |
+| `RBAC-05b` | `get` on secrets with no `resourceNames` | "can fetch any credential in the namespace by name" |
 
 ---
 
-# Part 3 — Conditions present in the manifest that no check detects
+## A9. `SEC-02` / `SEC-04` — three Critical findings for one configuration decision
+
+**Emitted — three separate Critical rows on the same container:**
+```
+SEC-03 | Critical | chart-f/templates/statefulset.yaml, line 66
+         Field: ...containers[0].securityContext.privileged
+SEC-04 | Critical | chart-f/templates/statefulset.yaml, line 66
+         Field: ...containers[0].securityContext.capabilities.drop
+SEC-02 | Critical | chart-f/templates/statefulset.yaml, line 66
+         Field: ...containers[0].securityContext.allowPrivilegeEscalation
+```
+
+**Manifest:**
+```yaml
+# chart-f/templates/statefulset.yaml, line 66
+securityContext:
+  privileged: true
+  readOnlyRootFilesystem: true
+```
+
+**Issue.** `privileged: true` is the root cause of all three. When it is set:
+
+- the kernel grants the **full** capability set regardless of `capabilities.drop`, so `SEC-04` is unactionable until `privileged` is removed;
+- privilege escalation is permitted regardless of `allowPrivilegeEscalation`, so `SEC-02` is likewise unactionable.
+
+Setting `drop: ["ALL"]` and `allowPrivilegeEscalation: false` on this container changes nothing. The reader receives three Critical findings, fixes two of them, and the security posture is identical.
+
+Worth noting the same manifest sets `readOnlyRootFilesystem: true` — good practice, but largely negated by `privileged: true`, since a privileged process can remount the filesystem. Your report does not mention this interaction either.
+
+**Scale.** 4 of 47 `SEC-02` findings and 4 of 67 `SEC-04` findings sit on privileged containers. The remaining 43 and 63 are genuine standalone findings and should be preserved — `SEC-02` in particular is among the most valuable checks in the pack.
+
+**Fix.** When a container is privileged, emit dependent findings with outcome `Superseded by SEC-03` rather than Critical, and add a line to the `SEC-03` finding noting which other controls it nullifies.
 
 ---
 
-## GAP-1 — Percentage-based disruption deadlock
+# Part B — Conditions in our data that no check detected
+
+## B1. Percentage-based disruption deadlock
+
+**Present in the manifest. No finding emitted.**
 
 ```yaml
+# chart-h/templates/workload-d-pdb.yaml
 kind: PodDisruptionBudget
 metadata:
-  name: cngss-pdb
+  name: workload-d-pdb
 spec:
   maxUnavailable: 10%
   selector:
-    matchLabels: { app: cngss }
+    matchLabels:
+      app: workload-d
 ```
 
-**`cngss` is a Deployment with `replicas: 1`.**
+The covered workload is a **Deployment with `replicas: 1`**.
 
 ```
 floor(1 × 0.10) = 0 disruptions allowed
 ```
 
-**This is a genuine deadlock.** Drains on the hosting node hang indefinitely. `PDB-02` did not fire — it fired on the one healthy configuration instead (FP-3).
+**Issue.** This is a genuine deadlock. No eviction can ever be approved, so a drain of the hosting node hangs indefinitely and a cluster upgrade stalls until someone intervenes manually.
 
-**Check should:** compute `disruptions_allowed` including percentage forms, and fire when the result is ≤ 0. Severity Critical.
+This is precisely the condition `PDB-02` exists to detect. It did not fire here — it fired instead on the one healthy configuration in the release (A3).
+
+**Check should:** compute the disruption allowance including percentage forms and fire when the result is ≤ 0. Severity Critical.
 
 ---
 
-## GAP-2 — Disruption policies that protect nothing
+## B2. Disruption policies that permit unlimited eviction
+
+**Three present in the manifest. No finding emitted for this condition.**
 
 ```yaml
 kind: PodDisruptionBudget
-metadata: { name: ccs-argo-server }
+metadata:
+  name: helper-a-pdb
 spec:
-  minAvailable: 0            # permits unlimited eviction
+  minAvailable: 0                 # every copy may be evicted at once
+  selector:
+    matchLabels:
+      app: helper-a
 ```
 
-Three policies carry `minAvailable: 0`: `ccs-argo-server`, `ccs-argo-workflow-controller`, `ccs-seldon`.
+**Issue.** `minAvailable: 0` is a no-op. The policy exists in the chart, passes review, appears in inventories — and provides zero protection. This is a more dangerous failure mode than a missing policy, because a missing policy is visible and a useless one is not.
 
-A policy with `minAvailable: 0` is a **no-op**. It appears in the chart, passes review, and provides zero protection — the most dangerous kind of failure, because it looks correct.
+One of these three is currently reported under `PDB-09` for the wrong reason ("protects no workload" — it does match a workload).
 
-**Check should:** fire when `minAvailable: 0` or `maxUnavailable` ≥ replica count. Severity Medium.
+**Check should:** fire when `minAvailable: 0`, or when the computed allowance equals or exceeds the replica count. Severity Medium.
 
-> Suggested text: *"`ccs-argo-server` declares a disruption policy that allows every copy to be evicted at once. The policy exists but provides no protection — it will not prevent a drain from taking the service fully offline."*
+> Suggested text: *"`helper-a-pdb` declares a disruption policy that allows every copy to be evicted at once. The policy exists but provides no protection — it will not prevent a drain from taking the service fully offline."*
 
 ---
 
-## GAP-3 — `NET_RAW` granted with no finding
+## B3. `NET_RAW` granted with no finding from any check
+
+**Three containers in the manifest add capabilities and receive no finding at all.**
 
 ```yaml
+# chart-h/templates/upgrade-job.yaml
 kind: Job
-metadata: { name: cngss-preupgrade-job-0 }
+metadata:
+  name: upgrade-job-a
 spec:
   template:
     spec:
       containers:
-        - name: cngss-preupgrade-job-0
+        - name: upgrade-job-a
           securityContext:
             capabilities:
-              add: ["NET_RAW"]        # no finding produced
+              add: ["NET_RAW"]      # no finding produced
 ```
 
-Verified: 22 containers add capabilities, 19 are flagged. Three receive **no finding from any check**:
+**Issue.** We counted 22 containers adding capabilities across the release. `SEC-13` flagged 19. The three omitted add `NET_RAW` alone (two containers) and `SYS_NICE` alone (one container).
 
-| Workload | Capability |
-|---|---|
-| `cngss-preupgrade-job-0` | `NET_RAW` |
-| `cngss-postupgrade-job-0` | `NET_RAW` |
-| `camc` | `SYS_NICE` |
+`SEC-13` appears to key on `NET_ADMIN` and the `SETUID`/`SETGID`/`CHOWN` group. `NET_RAW` on its own is not matched — but it permits raw packet crafting and ARP/DNS spoofing from inside the pod, which is not a low-risk grant.
 
-`SEC-13` flags `NET_ADMIN` and `SETUID`/`SETGID` but not `NET_RAW` alone. `NET_RAW` permits raw packet crafting and ARP/DNS spoofing from inside the pod.
-
-**Check should:** add a Warning tier.
+**Check should:** introduce a middle tier so these surface without inflating Critical.
 
 | Tier | Capabilities | Severity |
 |---|---|---|
-| High-risk | `SYS_ADMIN`, `SYS_MODULE`, `SYS_PTRACE`, `DAC_*`, `NET_ADMIN` | Critical |
+| High-risk | `SYS_ADMIN`, `SYS_MODULE`, `SYS_PTRACE`, `DAC_READ_SEARCH`, `DAC_OVERRIDE`, `NET_ADMIN` | Critical |
 | Privilege-relevant | `SETUID`, `SETGID`, `CHOWN`, `FOWNER`, **`NET_RAW`**, `SYS_CHROOT` | **Warning** |
 | Low-risk | `AUDIT_WRITE`, `SYS_NICE`, `KILL` | Advisory |
 
 ---
 
-## GAP-4 — Writable container filesystem — no check exists at all
+## B4. Writable container root filesystem — no check exists
+
+**37 of 257 containers in this release. No check in the pack detects it.**
 
 ```yaml
-containers:
-  - name: app
-    securityContext:
-      allowPrivilegeEscalation: false
-      capabilities: { drop: ["ALL"] }
-      # readOnlyRootFilesystem not set -> defaults to false
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  # readOnlyRootFilesystem not set -> defaults to false
 ```
 
-**Verified: 37 of 257 containers do not set `readOnlyRootFilesystem: true`.** No check in the pack detects this.
+**Issue.** With a writable root filesystem, anything that achieves code execution inside the container can overwrite the application binary and persist across restarts. A read-only root filesystem means every restart returns a known-good image.
 
-If an attacker can write to a container's program files they can replace the binary and persist across restarts. A read-only root filesystem means every restart returns a known-good state.
+The check families present are `SEC-01`, `SEC-02`, `SEC-03`, `SEC-04`, `SEC-06`, `SEC-07`, `SEC-08`, `SEC-11`, `SEC-12`, `SEC-13`. None covers this.
 
-**Check should:** fire when `readOnlyRootFilesystem` is not `true`, resolved through pod-level inheritance. Severity Medium. Pair with an Advisory when it *is* set but no writable `emptyDir` is mounted for `/tmp`, which usually breaks at runtime.
+**Check should:** fire when `readOnlyRootFilesystem` is not `true`, resolved through pod-level inheritance. Severity Medium.
+
+Pair it with an Advisory for the inverse case — `readOnlyRootFilesystem: true` with no writable `emptyDir` mounted at `/tmp` — which commonly fails at runtime when the application writes temporary files.
 
 ---
 
-## GAP-5 — A regression to `:latest` would not be Critical
+## B5. A regression to a mutable image tag would not be Critical
 
-Verified: **0 of 257** images use `:latest` or an untagged reference. Every image carries an explicit version tag.
+**Verified: 0 of 257 images in this release use `:latest` or an untagged reference.** Every image carries an explicit version tag.
 
-But `SUP-01` is a single Warning-severity check covering "not digest-pinned". There is no separate rule for mutable tags, so if a future release introduced `image: app:latest`, it would surface at the same Warning level as the 257 existing findings and disappear into the noise.
+**Issue.** `SUP-01` is a single Warning-severity check covering "not pinned by digest", which fired 257 times. There is no separate rule for mutable tags. If a future release introduced `image: app:latest`, it would appear at the same Warning level as 257 existing rows and be invisible.
+
+The two conditions have different severity and different owners. Digest pinning is frequently resolved by the build pipeline at relocation time; a mutable tag is always a chart defect.
 
 **Check should:** split.
 
@@ -652,106 +536,216 @@ But `SUP-01` is a single Warning-severity check covering "not digest-pinned". Th
 | `SUP-01a` | `:latest`, or no tag and no digest | **Critical** | Chart template |
 | `SUP-01b` | Tagged but not digest-pinned | Warning | Build pipeline |
 
-Against this manifest `SUP-01a` produces **zero** findings — which is a result worth reporting, and currently cannot be.
+Against this release `SUP-01a` emits zero findings — a good result the current design has no way to express.
 
 ---
 
-## GAP-6 — No pass records
+## B6. No pass records
 
-Every one of the 2,253 rows is `Fail`. There is no denominator, no compliance percentage, and no way to distinguish "this check passed" from "this check never ran."
+**All 2,253 rows carry `Outcome: Fail`.**
 
-GAP-5 is the concrete cost: the chart does something well — 257 of 257 images correctly tagged — and the report cannot say so.
+**Issue.** Three consequences:
+
+1. **No denominator.** "2,253 findings" cannot be converted into a compliance percentage, and counts cannot be compared across releases of different sizes.
+2. **Correct configuration is invisible.** This release tags all 257 images correctly, ships 6 NetworkPolicies including 4 default-deny, and has zero containers with `allowPrivilegeEscalation: true` explicitly set. None of it is reportable.
+3. **A silent check and a passing check look identical.** Nine checks fired on this product that produced nothing on the previous one. With failure-only output there is no way to tell whether they passed or never ran — which also means a regression cannot be detected.
+
+**Check should:** emit a per-check summary alongside the findings.
+
+```csv
+Check,Evaluated,Passed,Failed,NotApplicable,ComplianceRate
+SUP-01a,257,257,0,0,100.0%
+SUP-01b,257,0,257,0,0.0%
+SEC-03,257,253,4,0,98.4%
+```
 
 ---
 
-# Part 4 — Making findings self-explanatory
+# Part C — Finding language
 
-You asked whether the tool can produce wording like:
+Several findings in this scan are already well written. The ones below are the model we would like applied across the pack, because our reviewers understood them without needing to consult anyone.
 
-> *"Backend port is 443, so it looks encrypted, but `spec.tls: null` means the ingress terminates plain HTTP externally."*
+## C1. What makes these work
 
-Yes. That sentence follows a repeatable four-part structure, and it can be templated per check.
+Every effective finding does the same four things in order:
 
-## 4.1 The structure
-
-| Part | Purpose | Example |
-|---|---|---|
-| **1. Literal** | What the manifest actually says | "Backend port is 443" |
-| **2. Appearance** | What a reader would reasonably assume | "so it looks encrypted" |
-| **3. Reality** | What actually happens at runtime | "but `spec.tls: null` means the ingress terminates plain HTTP" |
-| **4. Delta** | Why the gap matters | "externally — client traffic is unencrypted" |
-
-Part 2 is what makes it land. Most misconfigurations are not careless — they are **plausible-looking**. Naming the plausible reading tells the reader why they missed it, which is far more persuasive than restating the rule.
-
-## 4.2 Where the gap comes from
-
-Every high-value finding is a mismatch between a **declared value** and an **effective value**:
-
-| Source of gap | Example |
+| Step | Purpose |
 |---|---|
-| Kubernetes default fills the blank | `allowPrivilegeEscalation` absent → `true` |
+| **1. State the literal** | What the manifest says, quoted |
+| **2. Name the plausible reading** | What a competent reader would reasonably assume |
+| **3. Give the runtime reality** | What actually happens, and why it differs |
+| **4. State the consequence** | What breaks, when, and who notices |
+
+**Step 2 is the one usually missing, and it is the one that lands.** Most misconfigurations are not careless — they look correct. Naming the plausible reading tells the reader why they missed it, which is far more persuasive than restating the rule.
+
+## C2. Worked examples
+
+**Ingress without TLS.** The manifest is:
+```yaml
+spec:
+  tls: null
+  rules:
+    - http:
+        paths:
+          - backend:
+              servicePort: 443
+```
+
+> The backend port is 443, so it **looks** encrypted — but `spec.tls` is null, which means the ingress terminates **plain HTTP** on the outside. Traffic between the client and the ingress controller is unencrypted; only the hop from controller to pod is protected. The 443 backend is what makes this easy to miss in review.
+
+**Capabilities not dropped.**
+
+> Without a `drop` block the container silently inherits the container runtime's **default capability set** — roughly 14 permissions including `CHOWN`, `SETUID`, `SETGID`, `NET_RAW` and `KILL`. Nothing in the chart asks for raw network access, but the container receives it.
+
+**Private key shipped in a chart.**
+
+> Base64 is encoding, not encryption. `echo "LS0t..." | base64 -d` returns the private key in plain text. Anyone with read access to the repository, a registry mirror or a release archive holds the key that authenticates this service — and rotating it means rebuilding and redistributing the release.
+
+**Resource requests missing.**
+
+> CPU and memory **limits** are set but **requests** are not. Kubernetes copies the limit into the request when only a limit is given, so this container silently reserves 3 full CPUs and 6Gi on whatever node it lands on — far more than the author likely intended, and enough to prevent scheduling on a busy cluster.
+
+**Over-broad RBAC rule.**
+
+> One rule grants `pods` and `secrets` together, so every verb applies to both. The workload needs pod access — but the same rule lets it `patch` credentials, meaning a compromise could silently swap a database password for one the attacker controls. The legitimate owner sees no error; the credential simply changes.
+
+**Percentage deadlock.**
+
+> The policy allows 10% of copies to be unavailable, but the workload runs one copy, and 10% of 1 rounds down to zero. It reads as permissive and is absolute — no eviction can ever be approved, so any drain of the hosting node hangs.
+
+## C3. Where the language should come from
+
+Every one of the above is a mismatch between a **declared value** and an **effective value**:
+
+| Source of the gap | Example |
+|---|---|
+| A Kubernetes default fills the blank | `allowPrivilegeEscalation` absent → `true` |
 | One field overrides another | `privileged: true` overrides `drop: ALL` |
-| A value is inherited, not local | `runAsNonRoot: false` set on the pod |
+| The value is inherited, not local | `runAsNonRoot: false` set at pod level |
 | Arithmetic produces a surprise | `floor(1 × 10%)` = 0 |
 | A partial setting implies a full one | limits set, requests absent → request = limit |
-| Encoding looks like protection | base64 → not encryption |
+| Encoding resembles protection | base64 is not encryption |
 
-**This is the same `observed` vs `effective` distinction already recommended for the schema.** Once both values are computed, the wording writes itself:
+Once the scanner computes both values, most of this text can be templated:
 
 ```
 "{field} is {observed_state}, which {plausible_reading}.
  In practice {effective_value} applies, so {consequence}."
 ```
 
-## 4.3 Rewrites for the findings in this report
+## C4. Findings to rewrite
 
-| Check | Current | Proposed |
+| Check | Current | Suggested |
 |---|---|---|
-| `SEC-02` | *"allowPrivilegeEscalation — not declared, so it defaults to allowed; expected privilege escalation switched off"* | *"This container runs as a non-root user and drops every capability, so it looks well locked down. But `allowPrivilegeEscalation` is not declared, and Kubernetes defaults it to true — a setuid binary inside the image can still escalate to root. One line fixes it and it breaks nothing unless the image relies on setuid."* |
-| `SEC-04` on `cafed` | *"keeps the default set of special permissions; expected every special permission given up"* | *"No `capabilities.drop` is declared, so the container silently inherits the runtime's 14 default permissions — including raw network access. Note this container is also `privileged: true`, which grants the full set regardless. Fix `privileged` first; dropping capabilities changes nothing until then."* |
-| `CFG-14` | *"ships with material already in it"* | *"`tls.key` contains an RSA private key. Base64 is encoding, not encryption — anyone who can read the repository or any mirror can decode it. Moving it to `values.yaml` would not help; that file ships in the chart too. Issue the certificate at install time instead."* |
-| `CFG-11` | *"asks for Secret casecret, which this release does not ship"* | *"`cafed` mounts `Secret casecret`, which nothing in this release creates. A secret with matching keys exists as `sbcvnf1casecret` but is never referenced — suggesting a name prefix applied to the producer but not the consumer. If nothing creates `casecret` before startup, these pods will sit in `CreateContainerConfigError` with no other explanation."* |
-| `RBAC-09` | *"a rule can create, change or delete secrets"* | *"One rule grants `pods` and `secrets` together, so every verb applies to both. The workload needs pod access — but this also lets it `patch` credentials, meaning a compromise could silently swap a database password for one the attacker controls. Split the resources into separate rules."* |
-| `RES-01` | *"resources.requests.cpu — (absent)"* | *"CPU and memory limits are set but requests are not. Kubernetes copies the limit into the request when only a limit is given, so this container silently reserves 3 full CPUs and 6Gi on whatever node it lands on — far more than the author likely intended, and enough to prevent scheduling."* |
-| `PDB-02` (fixed) | *"demands that every copy stays running"* | *"`cngss-pdb` allows 10% of copies to be unavailable, but `cngss` runs one copy, and 10% of 1 rounds down to zero. The policy reads as permissive and is absolute — no eviction can ever be approved, so any drain of the hosting node hangs."* |
-| `STO-10` (fixed) | *"hugepages (scratch space, deleted with the copy)"* | *"`cafed` is a StatefulSet — a workload type chosen for stable identity and durable storage — but declares no `volumeClaimTemplates`. Everything it writes is lost on restart. If it holds no durable state, a Deployment would be the more accurate choice."* |
-
-## 4.4 Two low-cost changes that fix most of the confusion
-
-**Add an `effective_value` column.** Every case in §4.2 becomes explicit rather than requiring the reader to know Kubernetes defaults.
-
-| `observed_value` | `observed_source` | `effective_value` |
-|---|---|---|
-| `not declared` | `platform default` | `true (Kubernetes default)` |
-| `false` | `inherited from pod` | `false` |
-| `10%` | `explicit` | `0 pods (floor of 1 × 10%)` |
-
-**Show the evidence window centred on `Field`.** Your CFG-14 screenshot displays lines 164–192 for a finding about content at line 186+. The reader sees labels and annotations, not the problem. Centre on the offending line and highlight it.
+| `SEC-02` | *"allowPrivilegeEscalation — not declared, so it defaults to allowed"* | *"This container runs as a non-root user and drops every capability, so it looks well locked down. But `allowPrivilegeEscalation` is not declared, and Kubernetes defaults it to true — a setuid binary inside the image can still escalate to root. One line fixes it, and it breaks nothing unless the image relies on setuid."* |
+| `SEC-04` on a privileged container | *"keeps the default set of special permissions"* | *"No `capabilities.drop` is declared, so the container inherits the runtime's 14 default permissions including raw network access. Note this container is also `privileged: true`, which grants the full set regardless — fix that first, because dropping capabilities changes nothing until then."* |
+| `CFG-11` | *"asks for Secret app-credential, which this release does not ship"* | *"This workload mounts `Secret app-credential`, which nothing in this release creates. If nothing supplies it before startup, these pods will sit in `CreateContainerConfigError` with no other explanation — the event log will name the missing secret but not why it is expected."* |
+| `STO-10` | *"hugepages (scratch space, deleted with the copy)"* | *"This is a StatefulSet — a workload type chosen for stable identity and durable storage — but it declares no `volumeClaimTemplates`. Everything it writes is lost on restart. If it holds no durable state, a Deployment would be the more accurate choice."* |
+| `PDB-03` | *"protects a workload that runs a single copy"* | *"This policy protects a workload with one copy. There is no second copy to keep running, so the platform can never be given permission to move it — maintenance on its node will wait. Either run two copies and allow one to be unavailable, or remove the policy and accept a brief restart."* |
 
 ---
 
-# Part 5 — Summary of asks
+# Part D — Schema and presentation
 
-| ID | Item | Type | Priority |
-|---|---|---|---|
-| FP-1 | Namespace join — treat absent as release namespace. **Audit all cross-object lookups.** | False positive | **P1** |
-| FP-2 | `PDB-09` — resolves with FP-1 | False positive | **P1** |
-| FP-3 | `PDB-02` — compute `replicas − minAvailable`, handle percentages | False positive | **P1** |
-| FP-4 | `CFG-14` — decode and inspect value; sub-tier a/b/c | False positive | **P1** |
-| FP-5 | `CFG-13` — cross-reference against shipped secret names | False positive | P2 |
-| FP-6 | `STO-10` — exclude hugepages and `/sys` `/dev` hostPath | Evidence | P2 |
-| GAP-1 | Percentage deadlock (`cngss-pdb`) | Missed | **P1** |
-| GAP-2 | `minAvailable: 0` no-op policies (3 present) | Missed | P2 |
-| GAP-3 | `NET_RAW` tier (3 containers unreported) | Missed | P2 |
-| GAP-4 | `readOnlyRootFilesystem` (37 containers, no check) | Missed | P2 |
-| GAP-5 | Split `SUP-01` into mutable-tag / digest | Missed | P2 |
-| GAP-6 | Emit pass records | Structural | P2 |
-| — | Dependent findings: suppress `SEC-02`/`SEC-04` when privileged | Noise | P2 |
-| — | `RBAC-05` title says "list" on 15 rules that only have `get` | Wording | P2 |
-| — | `Value is` inconsistent for identical references (27/25 split) | Defect | P2 |
-| — | Evidence window does not centre on `Field` | UI | P2 |
-| — | Group RBAC findings by originating rule | Presentation | P3 |
-| — | Cap severity at High when confidence is not `Confirmed` | Calibration | P2 |
-| — | Adopt the four-part finding structure (§4.1) | Wording | P2 |
+## D1. `Value is` is not deterministic
 
-**Effect on this scan:** 481 Critical → approximately **396**, with 9 confirmed false findings removed, ~42 `CFG-14` findings re-tiered, and 1 genuine deadlock added.
+Across 52 `CFG-11` findings referencing the **same** missing secret, from sibling charts with identical reference patterns:
+
+| Chart | Missing reference | `Value is` |
+|---|---|---|
+| `chart-f` | `Secret app-credential` | Could not be established |
+| `chart-i` | `Secret app-credential` | Could not be established |
+| `chart-j` | `Secret app-credential` | **Overridable in values** |
+| `chart-k` | `Secret app-credential` | **Overridable in values** |
+| `chart-l` | `Secret app-credential` | Could not be established |
+
+Split across all 52: **27 `Could not be established`, 25 `Overridable in values`.** Across the whole scan the placeholder appears on **1,060 of 2,253 rows (47%)** — up from 32% on the previous product we scanned.
+
+**Why the column matters.** It answers the single most useful triage question: *can I fix this at install time, or does it need a new chart?* When it works, it separates the findings a platform team can resolve unaided from those that require the chart author. At 47% unresolved it cannot be used for that.
+
+**Why it is failing.** Rendering destroys the link. Once Helm has run, `replicas: 2` carries no record of whether it came from `.Values.replicaCount` or a literal. Recovering that from rendered output is inference, and the inference degrades as chart complexity grows.
+
+**Suggested fix — differential rendering:**
+```bash
+helm template rel ./chart                     > baseline.yaml
+helm template rel ./chart -f perturbed.yaml   > perturbed.yaml
+# field differs between the two -> "Overridable in values"
+# field identical               -> "Fixed by the chart"
+```
+One additional render, near-total accuracy for scalar fields. Where still undetermined, leave the cell empty rather than filling it with a placeholder — an empty cell is honest, and 47% placeholders trains readers to ignore the column.
+
+## D2. Add an `effective_value` column
+
+Most of the language improvements in Part C become mechanical once both values are available:
+
+| `observed_value` | `observed_source` | `effective_value` |
+|---|---|---|
+| `not declared` | platform default | `true (Kubernetes default)` |
+| `false` | inherited from pod | `false` |
+| `10%` | explicit | `0 pods (floor of 1 × 10%)` |
+| `not declared` | platform default | `30s (Kubernetes default)` |
+
+This also resolves a live inaccuracy: `SEC-01` findings currently report a container-level field path on pods where the value is inherited from the pod, sending the reader to the wrong line.
+
+## D3. Group findings by originating rule
+
+One over-broad RBAC rule in this scan produced four separate Critical rows across three check families:
+
+```yaml
+# chart-m/templates/ca-service-rbac.yaml, line 2775
+- apiGroups: [""]
+  resources: ["pods", "secrets"]
+  verbs: ["get", "list", "delete", "watch", "patch"]
+```
+
+| Verb | Effect on `secrets` | Reported as |
+|---|---|---|
+| `get` (unscoped) | read any secret by name | `RBAC-05b` |
+| `list` / `watch` | enumerate every secret in the namespace | `RBAC-05a` |
+| `delete` | destroy credentials | `RBAC-09` |
+| `patch` | overwrite a credential with one you control | `RBAC-09` |
+
+All four are correct. But they appear as unrelated rows in different sections of the report, and the reader must reconstruct that they share one root cause and one fix — splitting `pods` and `secrets` into separate rules with scoped verbs.
+
+**Suggested:** add a `root_cause_id` field so findings arising from the same manifest construct can be grouped in the UI.
+
+## D4. Severity should respect confidence
+
+All 52 `CFG-11` findings carry confidence `Likely, unless the platform provides it` — an honest and correct assessment, since these objects may well be supplied by an installer outside the chart. They are all rated **Critical**.
+
+Across the scan, **429 of 481 Critical findings** carry `Confirmed from the chart`, and only 6 findings in the entire report use `Needs someone who knows this workload`.
+
+**Suggested rule:** no finding may exceed High severity unless confidence is `Confirmed from the chart`. This single constraint removes most of the disputes we would otherwise have to arbitrate.
+
+Related: `kube-root-ca.crt` should be allowlisted in `CFG-11`. Kubernetes auto-creates it in every namespace, and it accounts for 2 of the 52.
+
+---
+
+# Part E — Consolidated list
+
+| ID | Item | Type | Findings affected | Priority |
+|---|---|---|---|---|
+| A1 | `PDB-01` namespace join — **audit all cross-object lookups** | False positive | 3 Critical | **P1** |
+| A2 | `PDB-09` — resolves with A1 | False positive | 4 Critical | **P1** |
+| A3 | `PDB-02` — compute allowance, handle percentages | False positive | 1 Critical | **P1** |
+| A4 | `CFG-14` — decode and classify content; sub-tier a/b/c | False positive | ~42 Critical | **P1** |
+| A5 | `CFG-14` evidence pane does not centre on `Field` | Presentation | all 56 | P2 |
+| A6 | `CFG-13` — cross-reference against shipped object names | False positive | subset of 14 | P2 |
+| A7 | `STO-10` — exclude hugepages and `/sys` `/dev` hostPath | Evidence | 17 | P2 |
+| A8 | `RBAC-05` — title says "list" on 15 rules that only have `get` | Wording | 15 of 49 | P2 |
+| A9 | `SEC-02`/`SEC-04` — supersede when container is privileged | Noise | 8 | P2 |
+| B1 | Percentage-based deadlock not detected | Missed | 1 Critical | **P1** |
+| B2 | `minAvailable: 0` no-op policies | Missed | 3 | P2 |
+| B3 | `NET_RAW` tier | Missed | 3 containers | P2 |
+| B4 | `readOnlyRootFilesystem` — no check exists | Missed | 37 containers | P2 |
+| B5 | Split `SUP-01` into mutable-tag / digest | Missed | — | P2 |
+| B6 | Emit pass records | Structural | all | P2 |
+| C | Adopt the four-part finding structure | Wording | pack-wide | P2 |
+| D1 | `Value is` non-deterministic (47% unresolved) | Defect | 1,060 rows | P2 |
+| D2 | Add `effective_value` column | Schema | pack-wide | P2 |
+| D3 | Group findings by originating rule | Presentation | — | P3 |
+| D4 | Cap severity at High unless confidence is `Confirmed` | Calibration | 52+ | P2 |
+
+**Effect on this scan.** 481 Critical becomes approximately **396** — 9 confirmed false findings removed, ~42 `CFG-14` findings re-tiered to Advisory, and 1 genuine deadlock added that the pack currently misses.
+
+**What we would need to re-validate.** A rescan of the same release with A1–A4 and B1 addressed. We will re-run our independent verification against it and report the delta.

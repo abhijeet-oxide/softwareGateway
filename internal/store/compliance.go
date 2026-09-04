@@ -227,6 +227,10 @@ type ComplianceResultRow struct {
 
 	Outcome     string
 	Determinacy string
+	// SupersededBy names the check that owns this subject's root cause, on a
+	// result recorded as a skip because acting on it would change nothing
+	// until that one is fixed.
+	SupersededBy string
 
 	Chart          string
 	ChartVersion   string
@@ -244,9 +248,14 @@ type ComplianceResultRow struct {
 	Locus          string
 
 	Observed string
-	Expected string
-	Message  string
-	Error    string
+	// Effective is what actually applies at run time where that differs from
+	// what the manifest says - the platform default that filled the blank, the
+	// arithmetic that rounded a percentage to zero, the limit copied into the
+	// request. Empty on most rows, because on most rows they are the same.
+	Effective string
+	Expected  string
+	Message   string
+	Error     string
 
 	Waiver        string
 	WaiverExpires *time.Time
@@ -375,13 +384,14 @@ func (p *Packages) FinishComplianceRun(
 		INSERT INTO compliance_results (
 			run_id, seq, check_id, check_title, severity, tier, category,
 			subcategory, keywords, pack,
-			remediation, reference, outcome, determinacy,
+			remediation, reference, outcome, determinacy, superseded_by,
 			confidence, when_it_bites, fix_owner, fix_effort, fix_example,
 			chart, chart_version, subchart_path, artifact_digest, artifact_ref,
 			source_file, rendered_line, api_version, kind, namespace, name,
 			container, container_type, locus,
-			observed, expected, message, error, waiver, waiver_expires, fingerprint)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+			observed, effective_value, expected, message, error,
+			waiver, waiver_expires, fingerprint)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
 	if err != nil {
 		return fmt.Errorf("prepare compliance result insert: %w", err)
 	}
@@ -391,12 +401,12 @@ func (p *Packages) FinishComplianceRun(
 		if _, err := stmt.ExecContext(ctx,
 			run.ID, r.Seq, r.CheckID, r.CheckTitle, r.Severity, r.Tier, r.Category,
 			r.Subcategory, r.Keywords, r.Pack,
-			r.Remediation, r.Reference, r.Outcome, r.Determinacy,
+			r.Remediation, r.Reference, r.Outcome, r.Determinacy, r.SupersededBy,
 			r.Confidence, r.WhenItBites, r.FixOwner, r.FixEffort, r.FixExample,
 			r.Chart, r.ChartVersion, r.SubchartPath, r.ArtifactDigest, r.ArtifactRef,
 			r.SourceFile, r.RenderedLine, r.APIVersion, r.Kind, r.Namespace, r.Name,
 			r.Container, r.ContainerType, r.Locus,
-			r.Observed, r.Expected, r.Message, r.Error,
+			r.Observed, r.Effective, r.Expected, r.Message, r.Error,
 			r.Waiver, timeOrNil(r.WaiverExpires), r.Fingerprint); err != nil {
 			return fmt.Errorf("insert compliance result %d (%s): %w", r.Seq, r.CheckID, err)
 		}
@@ -539,24 +549,25 @@ func (p *Packages) RecordComplianceRun(ctx context.Context, runID string, packag
 			// undecidable, then passes - so a page read back by seq is the
 			// page a person was shown. Reconstructing that order in SQL would
 			// approximate it differently.
-			Seq:         i,
-			CheckID:     r.CheckID,
-			CheckTitle:  r.CheckTitle,
-			Severity:    string(r.Severity),
-			Tier:        int(r.Tier),
-			Category:    r.Category,
-			Subcategory: r.Subcategory,
-			Keywords:    strings.Join(r.Keywords, " "),
-			Pack:        r.Pack,
-			Remediation: r.Remediation,
-			Reference:   r.Reference,
-			Confidence:  string(r.Confidence),
-			WhenItBites: string(r.WhenItBites),
-			FixOwner:    string(r.FixOwner),
-			FixEffort:   string(r.FixEffort),
-			FixExample:  r.FixExample,
-			Outcome:     string(r.Outcome),
-			Determinacy: string(r.Determinacy),
+			Seq:          i,
+			CheckID:      r.CheckID,
+			CheckTitle:   r.CheckTitle,
+			Severity:     string(r.Severity),
+			Tier:         int(r.Tier),
+			Category:     r.Category,
+			Subcategory:  r.Subcategory,
+			Keywords:     strings.Join(r.Keywords, " "),
+			Pack:         r.Pack,
+			Remediation:  r.Remediation,
+			Reference:    r.Reference,
+			Confidence:   string(r.Confidence),
+			WhenItBites:  string(r.WhenItBites),
+			FixOwner:     string(r.FixOwner),
+			FixEffort:    string(r.FixEffort),
+			FixExample:   r.FixExample,
+			Outcome:      string(r.Outcome),
+			Determinacy:  string(r.Determinacy),
+			SupersededBy: r.SupersededBy,
 
 			Chart: a.Chart, ChartVersion: a.ChartVersion, SubchartPath: a.SubchartPath,
 			ArtifactDigest: a.ArtifactDigest, ArtifactRef: a.ArtifactRef,
@@ -564,7 +575,8 @@ func (p *Packages) RecordComplianceRun(ctx context.Context, runID string, packag
 			APIVersion: a.APIVersion, Kind: a.Kind, Namespace: a.Namespace, Name: a.Name,
 			Container: a.Container, ContainerType: a.ContainerType, Locus: a.Locus,
 
-			Observed: r.Observed, Expected: r.Expected, Message: r.Message, Error: r.Error,
+			Observed: r.Observed, Effective: r.Effective,
+			Expected: r.Expected, Message: r.Message, Error: r.Error,
 			Waiver: r.Waiver, WaiverExpires: r.WaiverExpires,
 			Fingerprint: r.Fingerprint(),
 		})
@@ -616,12 +628,12 @@ func uniqueChecksIn(results []ComplianceResultRow) ComplianceUniqueCounts {
 			continue
 		}
 		seen[r.CheckID] = struct{}{}
-		switch r.Severity {
-		case "block":
+		switch compliance.ParseSeverity(r.Severity) {
+		case compliance.SeverityCritical:
 			out.Blocking++
-		case "warn":
+		case compliance.SeverityWarning:
 			out.Warning++
-		case "info":
+		case compliance.SeverityInform:
 			out.Info++
 		}
 	}

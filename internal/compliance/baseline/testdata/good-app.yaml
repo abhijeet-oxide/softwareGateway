@@ -176,6 +176,12 @@ spec:
             name: good-app-config
             items:
               - {key: log.level, path: log.level}
+        # Read-only program files with somewhere to write. Without this the
+        # first temporary file the program creates fails at run time, which is
+        # the reason teams turn readOnlyRootFilesystem back off again.
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -211,6 +217,8 @@ spec:
               type: RuntimeDefault
             capabilities:
               drop: [ALL]
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
       containers:
         - name: api
           image: registry.acme.example/good/api@sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809
@@ -257,6 +265,9 @@ spec:
               type: RuntimeDefault
             capabilities:
               drop: [ALL]
+          volumeMounts:
+            - {name: config, mountPath: /etc/good-app, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
 ---
 # Source: good-app/templates/statefulset.yaml
 apiVersion: apps/v1
@@ -360,6 +371,10 @@ spec:
             runAsNonRoot: true
             runAsUser: 10002
             allowPrivilegeEscalation: false
+            # A data volume and read-only program files are independent: the
+            # database writes to /var/lib/db, which is a mount, not its own
+            # root filesystem.
+            readOnlyRootFilesystem: true
             seccompProfile:
               type: RuntimeDefault
             capabilities:
@@ -456,6 +471,10 @@ spec:
             runAsNonRoot: true
             seccompProfile:
               type: RuntimeDefault
+          volumes:
+            - name: tmp
+              emptyDir:
+                sizeLimit: 256Mi
           containers:
             - name: backup
               image: registry.acme.example/good/backup@sha256:0011223344556677889900aabbccddeeff00112233445566778899aabbccddee
@@ -474,6 +493,8 @@ spec:
                   type: RuntimeDefault
                 capabilities:
                   drop: [ALL]
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
 ---
 # Source: good-app/templates/crd.yaml
 apiVersion: apiextensions.k8s.io/v1
@@ -674,6 +695,9 @@ spec:
       securityContext:
         runAsNonRoot: true
         seccompProfile: {type: RuntimeDefault}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
       containers:
         - name: precheck
           image: registry.acme.example/good/precheck@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
@@ -696,6 +720,8 @@ spec:
             readOnlyRootFilesystem: true
             seccompProfile: {type: RuntimeDefault}
             capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
 ---
 # Source: good-app/templates/dataplane.yaml
 # A CNF dataplane: hugepages and an SR-IOV interface, requested and limited

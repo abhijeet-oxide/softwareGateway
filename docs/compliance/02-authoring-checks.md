@@ -77,7 +77,7 @@ spec:
         drain evicts one too many. Observed in lab during a rolling node update
         in 2026-02: three of five members evicted concurrently because the PDB
         allowed maxUnavailable 2.
-      severity: block            # block | warn | info
+      severity: critical            # critical | warning | inform
       tier: 1
       category: Disruption & Availability
       # THE MECHANISM, in the words an engineer uses for it, and the vocabulary
@@ -158,7 +158,7 @@ in the finding drawer.
 | `fixExample` | YAML | What does the corrected configuration look like? |
 
 **`confidence` carries a rule with teeth.** A check declaring `needs-review`
-may not be `severity: block`, and the loader refuses one that is - see
+may not be `severity: critical`, and the loader refuses one that is - see
 `Check.Validate`. The reason is the single largest category of unproductive
 argument about a compliance report: the tool asserts as a defect something a
 vendor chose deliberately and correctly for that workload, and one of those is
@@ -257,16 +257,23 @@ this decides where it lands after review.
 
 | Severity | Test | Response |
 |---|---|---|
-| `block` | The standard prohibits it, AND the condition is a security exposure, data loss, or an outage or blocked upgrade under a foreseeable event | Do not accept the release |
-| `warn` | The standard recommends it, AND its absence measurably degrades resilience, operability or security | Fix in the next release |
-| `info` | An observation, a documentation gap, or a condition where the platform default is adequate | Record; no action required |
+| `critical` | The standard prohibits it, AND the condition is a security exposure, data loss, or an outage or blocked upgrade under a foreseeable event | Do not accept the release |
+| `warning` | The standard recommends it, AND its absence measurably degrades resilience, operability or security | Fix in the next release |
+| `inform` | An observation, a documentation gap, or a condition where the platform default is adequate | Record; no action required |
 
-Two constraints on top:
+Two constraints on top, both enforced at load:
 
-- A check whose `confidence` is `needs-review` may not be `block` (§2.1).
+- **A check may not be `critical` unless its `confidence` is `confirmed`.** Only
+  a finding read directly from the chart can fail a release on its own. The
+  second validation put a number on this: 429 of 481 blocking findings were
+  confirmed, and one check accounted for 52 of the rest - every one of them a
+  reference the platform might well supply itself. Its own metadata said
+  `probable`, and it was blocking anyway.
 - Where two checks would fire on one configuration choice, one of them is
   primary and the other narrows its applicability. Two checks independently
   penalising a single decision doubles the count and halves the credibility.
+  Where the second check cannot simply be narrowed - because it is right in
+  general and merely unactionable here - use `assert.supersededBy` (§5.3).
 
 ## 3. The three layers
 
@@ -291,7 +298,7 @@ the same CEL, so there is exactly one evaluator:
 ```yaml
     - id: ACME-04
       title: Dataplane pods pin hugepages in requests and limits
-      severity: block
+      severity: critical
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, Job, CronJob]
         containers: all           # `self` is a container; `owner` is its workload
@@ -348,6 +355,7 @@ implementations are Go, unit-tested once, and correct for every caller:
 | `podField(workload, path)` | A value from the workload's pod spec, wherever that kind keeps it - two levels deeper on a CronJob |
 | `securityValue(container, owner, field)` | A securityContext field resolved the way the kubelet resolves it: container, then pod, then nothing |
 | `securitySource(container, owner, field)` | Which of those three it came from, so a finding names the line to edit |
+| `securityLocus(container, owner, field)` | The path that value actually came from - the pod's, absolute, when the pod is where it is set. See §5.1.2 |
 | `runsAsRoot(workload)` | Whether anything in a workload runs as root. Undeclared is not root |
 | `pdbFor(workload)` | The PodDisruptionBudget selecting it, or a null-safe empty object |
 | `covers(obj)` | The reverse: the workloads an object's own selector matches |
@@ -359,6 +367,8 @@ implementations are Go, unit-tested once, and correct for every caller:
 | `probeHandler(probe)` | A probe reduced to what it actually calls, timings dropped and defaults filled in |
 | `pvcMountPaths(workload)` | Where a workload mounts persistent claims |
 | `mountersOf(claim)` | The workloads that mount a claim, so a storage finding can name the software |
+| `stateVolume(v)` / `volumeStateLabel(v)` | Whether a volume holds application state, and what it means for durability. A hugepage allocation and a `/sys` mount hold nothing |
+| `disruptionsAllowed(pdb)` | How many copies a maintenance rule lets the platform move, computed - including the percentage forms and their rounding |
 | `configRefs(workload)` | Every ConfigMap and Secret a pod asks for, from all six places a pod spec can name one |
 | `crdFor(cr)` | The CustomResourceDefinition the release ships for a CR's `apiVersion`/`kind` |
 | `builtinApiGroup(apiVersion)` | Whether the cluster serves that group itself, so nothing is asked to ship a definition of `Deployment` |
@@ -370,6 +380,9 @@ implementations are Go, unit-tested once, and correct for every caller:
 | `replicas(workload)` | The copy count, with the Kubernetes default of 1 for an absent field |
 | `allLabels(obj)` / `allAnnotations(obj)` | The object's metadata merged with its pod template's |
 | `credentialClass(key, value)` | What class of credential a value looks like, or `""`. See §4.2.1 |
+| `credentialShape(value)` | The conclusive half of the same detector, with no reference to the field name - so a check can separate what it reads from what it infers |
+| `secretMaterialClass(key, value)` | What is inside one Secret value, including the credential fields of a configuration file shipped as one |
+| `shippedObjectName(v)` | Whether a literal is the name of a Secret or ConfigMap this release ships - a reference, not a leak |
 | `looksLikeCredential(key, value)` | The same, as a boolean |
 | `decodeBase64(v)` | A Secret value decoded, or the value unchanged when it is not base64 |
 | `unstableLabelKey(k)` | Whether a label's value changes between releases |
@@ -520,7 +533,7 @@ action report stays about defects.
 ```yaml
     - id: UPG-08
       title: Every task Helm runs is named and understood
-      severity: info
+      severity: inform
       assert:
         observeOnPass: true
         expr: |
@@ -539,6 +552,60 @@ leave `observeOnPass` off. It applies to the author-supplied `observed` alone,
 never to the shorthand's per-term one - a term's observed value describes the
 term that failed, and on a pass there is no failing term.
 
+### 5.1.1 Saying what actually applies: `assert.effective`
+
+Nearly every finding worth writing is a gap between a **declared** value and an
+**effective** one:
+
+| Source of the gap | Example |
+|---|---|
+| A platform default fills the blank | `allowPrivilegeEscalation` absent → permitted |
+| One field overrides another | `privileged: true` overrides `capabilities.drop` |
+| The value is inherited, not local | `runAsNonRoot` set on the pod |
+| Arithmetic produces a surprise | 10% of 1 copy, rounded down, is 0 |
+| A partial setting implies a full one | limits set, requests absent → request = limit |
+| Encoding resembles protection | base64 is not encryption |
+
+Naming only the declared value asks the reader to know the resolution rule.
+`assert.effective` is a CEL string expression carrying the other half; it is
+stored on the result, exported as **In practice**, and shown on the finding only
+where it is set - which should be only where the two actually differ.
+
+```yaml
+      assert:
+        expr: 'securityValue(self, owner, "allowPrivilegeEscalation") == "false"'
+        observed: 'not declared'
+        effective: 'true - Kubernetes fills the blank with allowed'
+```
+
+It is evaluated on a failure, and on a pass when `observeOnPass` is set - so the
+same rule about reading correctly in both cases applies.
+
+### 5.1.2 Pointing at the line that exists: `assert.locusExpr`
+
+`assert.locus` states the field. Where the field the finding is really about
+depends on what the manifest says, `assert.locusExpr` computes it instead.
+
+Two cases, both from the second validation:
+
+- A container that inherits `runAsNonRoot` from its pod was reported at
+  `spec.template.spec.containers[0].securityContext.runAsNonRoot` - a line the
+  manifest does not have. `securityLocus(self, owner, field)` returns the pod's
+  path when the pod is where the value is set.
+- A Secret keeping its material under `stringData` was reported at `data`, so
+  the path resolved to nothing, the evidence window fell back to leading with
+  the object, and a reviewer saw `apiVersion`, `kind` and `metadata` - none of
+  which the finding concerned.
+
+A result that starts at the object's root - `spec…` or `metadata…` - is taken as
+**absolute** and is not prefixed with the container's own path. Anything else is
+relative to the subject, exactly like `locus`. A key containing a dot goes in
+brackets: `stringData[db.properties]`, `metadata.annotations[helm.sh/hook]`.
+
+The computed locus is resolved after the per-term one, so it wins: a term's
+locus describes the term that failed, and this describes the field the value
+came from.
+
 ### 5.2 Determinism, and the one way to lose it
 
 A finding that lists the offending keys renders them from a map comprehension,
@@ -553,6 +620,42 @@ engine function are already ordered; lists that come from a map are not. The
 determinism test runs every fixture twice and compares the TEXT, which is what
 makes this catchable rather than a thing somebody notices in a diff six months
 later.
+
+### 5.3 A finding that stands down: `assert.supersededBy`
+
+A container with `privileged: true` used to get three blocking findings. Two of
+them could not be acted on at all: the kernel grants a privileged container the
+full capability set whatever `capabilities.drop` says, and permits escalation
+whatever `allowPrivilegeEscalation` says. A reader fixes two of the three, the
+container's actual powers are unchanged, and the next report says exactly what
+this one said.
+
+```yaml
+      assert:
+        expr: 'securityValue(self, owner, "allowPrivilegeEscalation") == "false"'
+        supersededBy:
+          check: SEC-03
+          when: 'securityValue(self, owner, "privileged") == "true"'
+          because: >-
+            a privileged container is permitted to escalate whatever this
+            setting says
+```
+
+When `when` holds **and the assertion failed**, the result is recorded as a
+**skip** naming the other check, with a sentence built from `because`. It is not
+dropped: a missing row and a passing row look the same on the screen a release
+manager reads, and neither is true here.
+
+Three rules:
+
+- The check named must own the root cause and must itself fire on that subject.
+  A supersession that points at a check which is silent hides the finding
+  entirely.
+- The other check should say what it nullifies. `SEC-03`'s message names all
+  three controls it cancels, so a reader who notices the missing rows knows why.
+- It is for the case where the finding is **correct and unactionable**, never
+  for narrowing scope. If the check simply should not apply, that is
+  `appliesTo.where`.
 
 ### 6.1 The output contract
 

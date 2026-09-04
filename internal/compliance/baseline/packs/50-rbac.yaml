@@ -23,7 +23,7 @@ spec:
         software installed later by somebody else. Naming an account the release
         does not ship is worse: the install either fails, or quietly falls back to
         the shared one.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Service accounts
@@ -80,7 +80,7 @@ spec:
         exemption here is worked out from the permissions the release actually
         grants, rather than assumed - which is what makes this precise instead of
         annoying.
-      severity: warn
+      severity: warning
       tier: 1
       category: Identity & Access
       subcategory: Service account tokens
@@ -121,7 +121,7 @@ spec:
         type installed afterwards is included automatically. A rule like that
         cannot meaningfully be reviewed, because what it means changes after the
         review.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Role rules
@@ -162,7 +162,7 @@ spec:
         called out separately because they are the ones copied between charts
         without being read: cluster-admin in a chart is unrestricted access to
         everything in the cluster.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Cluster-scoped RBAC
@@ -201,23 +201,23 @@ spec:
     - id: RBAC-05
       title: No service can list the namespace's credentials
       description: >
-        No rule allows listing or watching secrets, and any rule allowing a
-        secret to be read names the specific secrets by name.
+        No rule allows listing or watching secrets. Reading one named secret is
+        judged separately, by RBAC-11.
       rationale: >
         Listing secrets returns their contents, so it is read access to every
-        credential in the namespace - including credentials belonging to software
-        installed later by another team. Reading named secrets is the same
-        permission, limited to the ones this workload owns.
-      severity: block
+        credential in the namespace at once - including credentials belonging to
+        software installed later by another team, which nobody reviewed this
+        grant against. Watching is listing that keeps arriving.
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Secret access
-      keywords: [secrets, list, watch, get, resourceNames, Role, RBAC]
+      keywords: [secrets, list, watch, Role, ClusterRole, RBAC, enumerate]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
       fixEffort: low
-      reference: source-standards.md - RBAC-05
+      reference: source-standards.md - RBAC-05 (enumeration half)
       remediation: >
         Replace list and watch with get, and add resourceNames naming this
         workload's own secrets.
@@ -232,13 +232,62 @@ spec:
         where: 'value(self, "rules") != null'
       assert:
         expr: |
-          self.rules.all(r,
-            !ruleGrants(r, "secrets", ["list", "watch"]) &&
-            (!ruleGrants(r, "secrets", ["get"]) ||
-             (value(r, "resourceNames") != null && size(r.resourceNames) > 0)))
+          self.rules.all(r, !ruleGrants(r, "secrets", ["list", "watch"]))
         locus: rules
-        expected: no listing of secrets, and reading limited to named ones
-        observed: '"a rule can read every secret in the namespace"'
+        expected: no listing or watching of secrets
+        observed: |
+          sorted(self.rules.filter(r, ruleGrants(r, "secrets", ["list", "watch"]))
+            .map(r, "verbs " + sorted(r.verbs.map(v, string(v))).join("/"))).join("; ")
+        message: |
+          "a rule here can enumerate every credential in the namespace: " +
+          sorted(self.rules.filter(r, ruleGrants(r, "secrets", ["list", "watch"]))
+            .map(r, "verbs " + sorted(r.verbs.map(v, string(v))).join("/"))).join("; ") +
+          " on secrets. Listing returns the contents, so this is read access to every " +
+          "credential that is in the namespace now and every one put there later."
+
+    - id: RBAC-11
+      title: A service that reads a credential names which credential
+      description: >
+        Any rule allowing a secret to be read - the get verb - names the
+        specific secrets it applies to under resourceNames.
+      rationale: >
+        A get with no resourceNames does not limit anything: the caller can
+        fetch any secret in the namespace, one at a time, as long as it knows or
+        guesses the name. Names in a release are predictable, so this is
+        materially the same access as listing - it just leaves no single call in
+        the audit log that shows the whole namespace being read.
+      severity: critical
+      tier: 1
+      category: Identity & Access
+      subcategory: Secret access
+      keywords: [secrets, get, resourceNames, Role, ClusterRole, RBAC, unscoped]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - RBAC-05 (scoping half)
+      remediation: >
+        Add resourceNames to the rule, naming this workload's own secrets.
+      fixExample: |
+        rules:
+          - apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames: ["my-service-db", "my-service-api"]
+            verbs: ["get"]
+      appliesTo:
+        kinds: [Role, ClusterRole]
+        where: 'value(self, "rules") != null'
+      assert:
+        expr: |
+          self.rules.all(r,
+            !ruleGrants(r, "secrets", ["get"]) ||
+            (value(r, "resourceNames") != null && size(r.resourceNames) > 0))
+        locus: rules
+        expected: reading limited to secrets named in the rule
+        observed: '"a rule grants get on secrets with no resourceNames"'
+        message: |
+          "a rule here can fetch any credential in the namespace by name: it grants get on " +
+          "secrets and names none of them, so nothing limits which secret it reads."
 
     - id: RBAC-09
       title: No service can change the credentials it reads
@@ -250,7 +299,7 @@ spec:
         legitimate owner, or replace it with one the attacker controls and
         intercept everything that authenticates with it afterwards. The rules
         that stop a service listing credentials do nothing about this.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Secret access
@@ -289,7 +338,7 @@ spec:
         Permission to edit permissions is permission to grant itself anything
         else. Every other restriction in this section becomes advice rather than
         a control the moment this one is present.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Privilege escalation via RBAC
@@ -328,7 +377,7 @@ spec:
         Acting as another identity is every permission that identity has. A shell
         in a container is direct access to whatever that container can reach,
         which goes around every other control described here.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Impersonation & exec
@@ -365,7 +414,7 @@ spec:
         group, including ones installed months later by a different team. Nobody
         can safely remove it afterwards, because nobody can tell what now depends
         on it - so it becomes permanent by accident.
-      severity: block
+      severity: critical
       tier: 1
       category: Identity & Access
       subcategory: Role bindings

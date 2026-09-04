@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
 )
 
 // Reading a compliance run back.
@@ -288,9 +290,9 @@ func (u ComplianceUniqueCounts) Total() int { return u.Blocking + u.Warning + u.
 // ComplianceUniqueChecks counts distinct failed checks by severity and passed
 // checks by outcome.
 //
-// FAILURES only, like the severity counts it sits beside: a passing critical
-// check is not a critical anything, and counting it here would produce the
-// number nobody can interpret.
+// The severity breakdown is FAILURES only: a passing critical check is not a
+// critical anything, and counting it there would produce the number nobody can
+// interpret. Passes are counted whole, in one field, for the same reason.
 func (p *Packages) ComplianceUniqueChecks(ctx context.Context, runID string) (ComplianceUniqueCounts, error) {
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
 		SELECT outcome, severity, COUNT(DISTINCT check_id)
@@ -312,16 +314,22 @@ func (p *Packages) ComplianceUniqueChecks(ctx context.Context, runID string) (Co
 		if err := rows.Scan(&outcome, &severity, &n); err != nil {
 			return ComplianceUniqueCounts{}, fmt.Errorf("scan distinct compliance checks: %w", err)
 		}
+		// Passes are counted whole, across every severity: "how many rules did
+		// this release satisfy" is one number, and splitting it by how much the
+		// organization would have cared answers a question nobody asked.
 		if outcome == "pass" {
 			out.Passed += n
 			continue
 		}
-		switch severity {
-		case "block":
+		// Read through ParseSeverity: a row written before the vocabulary
+		// changed still says `block`, and counting it under nothing would make
+		// an old run render as having no critical findings at all.
+		switch compliance.ParseSeverity(severity) {
+		case compliance.SeverityCritical:
 			out.Blocking = n
-		case "warn":
+		case compliance.SeverityWarning:
 			out.Warning = n
-		case "info":
+		case compliance.SeverityInform:
 			out.Info = n
 		}
 	}
@@ -362,12 +370,12 @@ func (p *Packages) ComplianceResults(ctx context.Context, runID string, f Compli
 	query := p.dialect.Rewrite(`
 		SELECT seq, check_id, check_title, severity, tier, category,
 		       subcategory, keywords, pack,
-		       remediation, reference, outcome, determinacy,
+		       remediation, reference, outcome, determinacy, superseded_by,
 		       confidence, when_it_bites, fix_owner, fix_effort, fix_example,
 		       chart, chart_version, subchart_path, artifact_digest, artifact_ref,
 		       source_file, rendered_line, api_version, kind, namespace, name,
 		       container, container_type, locus,
-		       observed, expected, message, error, waiver, ` +
+		       observed, effective_value, expected, message, error, waiver, ` +
 		p.dialect.TimestampText("waiver_expires") + `, fingerprint
 		  FROM compliance_results ` + where + `
 		 ORDER BY seq
@@ -386,12 +394,12 @@ func (p *Packages) ComplianceResults(ctx context.Context, runID string, f Compli
 			expires string
 		)
 		if err := rows.Scan(&r.Seq, &r.CheckID, &r.CheckTitle, &r.Severity, &r.Tier,
-			&r.Category, &r.Subcategory, &r.Keywords, &r.Pack, &r.Remediation, &r.Reference, &r.Outcome, &r.Determinacy,
+			&r.Category, &r.Subcategory, &r.Keywords, &r.Pack, &r.Remediation, &r.Reference, &r.Outcome, &r.Determinacy, &r.SupersededBy,
 			&r.Confidence, &r.WhenItBites, &r.FixOwner, &r.FixEffort, &r.FixExample,
 			&r.Chart, &r.ChartVersion, &r.SubchartPath, &r.ArtifactDigest, &r.ArtifactRef,
 			&r.SourceFile, &r.RenderedLine, &r.APIVersion, &r.Kind, &r.Namespace, &r.Name,
 			&r.Container, &r.ContainerType, &r.Locus,
-			&r.Observed, &r.Expected, &r.Message, &r.Error,
+			&r.Observed, &r.Effective, &r.Expected, &r.Message, &r.Error,
 			&r.Waiver, &expires, &r.Fingerprint); err != nil {
 			return nil, 0, fmt.Errorf("scan compliance result: %w", err)
 		}
@@ -406,6 +414,36 @@ func (p *Packages) ComplianceResults(ctx context.Context, runID string, f Compli
 // Every value is a placeholder. A filter arrives from a query string, and a
 // filter interpolated into SQL is the same mistake as a digest taken from a
 // URL - it is just harder to see because the values look like enum members.
+// normaliseSeverities maps whatever a caller asked for onto what is stored.
+//
+// Both spellings are matched, not just the current one: a run recorded before
+// the rename still holds the old value, and a filter that returned only the new
+// one would quietly hide every finding from every earlier run.
+func normaliseSeverities(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	legacy := map[compliance.Severity]string{
+		compliance.SeverityCritical: "block",
+		compliance.SeverityWarning:  "warn",
+		compliance.SeverityInform:   "info",
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in)*2)
+	add := func(v string) {
+		if v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	for _, s := range in {
+		sev := compliance.ParseSeverity(s)
+		add(string(sev))
+		add(legacy[sev])
+	}
+	return out
+}
+
 func complianceWhere(runID string, f ComplianceFilter) (string, []any) {
 	clauses := []string{"run_id = ?"}
 	args := []any{runID}
@@ -422,7 +460,10 @@ func complianceWhere(runID string, f ComplianceFilter) (string, []any) {
 		clauses = append(clauses, column+" IN ("+strings.Join(marks, ",")+")")
 	}
 	in("outcome", f.Outcomes)
-	in("severity", f.Severities)
+	// Severities are normalised rather than matched literally, so a link
+	// somebody saved when the value was `block` still narrows to the critical
+	// findings instead of returning an empty table.
+	in("severity", normaliseSeverities(f.Severities))
 	in("check_id", f.Checks)
 	in("chart", f.Charts)
 	in("kind", f.Kinds)

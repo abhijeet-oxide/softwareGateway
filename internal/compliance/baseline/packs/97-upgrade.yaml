@@ -24,7 +24,7 @@ spec:
         have shipped it. Types the cluster provides itself, and types installed
         by an operator the platform team owns, are not the vendor's to ship - so
         neither is reported here.
-      severity: warn
+      severity: warning
       tier: 1
       category: Upgrade & Maintenance Readiness
       subcategory: Custom resource definitions
@@ -76,7 +76,7 @@ spec:
         was doing; skipping the maintenance rules defeats the entire mechanism
         the disruption checks in this pack are about. All three usually appear in
         a task written to get around a problem that has since been fixed.
-      severity: warn
+      severity: warning
       tier: 1
       category: Upgrade & Maintenance Readiness
       subcategory: Forced operations
@@ -145,7 +145,7 @@ spec:
         opening the chart. It fails only for a moment Helm does not recognise -
         a misspelling there is silent, the task never runs, and the upgrade
         reports success while the work it was supposed to do never happened.
-      severity: info
+      severity: inform
       tier: 1
       category: Upgrade & Maintenance Readiness
       subcategory: Helm hooks
@@ -212,7 +212,7 @@ spec:
         release comes back up in a state nobody has tested. It is also a
         deployment style that assumes somebody is running commands by hand,
         which is the opposite of how this release is installed.
-      severity: warn
+      severity: warning
       tier: 1
       category: Upgrade & Maintenance Readiness
       subcategory: Helm hooks
@@ -267,7 +267,7 @@ spec:
         belonging to other releases and other teams. An uninstall meant to remove
         one release can therefore delete another team's data, and there is no
         undo.
-      severity: warn
+      severity: warning
       tier: 1
       category: Upgrade & Maintenance Readiness
       subcategory: Custom resource definitions

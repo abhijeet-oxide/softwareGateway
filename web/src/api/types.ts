@@ -2444,7 +2444,13 @@ export interface ComplianceResult {
   seq: number
   check: string
   title?: string
-  severity: 'block' | 'warn' | 'info'
+  /**
+   * The three levels, in the words the whole report uses. `block`, `warn` and
+   * `info` were the values until the report started printing "Critical",
+   * "Warning" and "Informational" beside them; the server normalises the old
+   * spellings on the way out, so nothing here has to know them.
+   */
+  severity: ComplianceSeverity
   category?: string
   /**
    * The mechanism this finding is about, in the words an engineer uses for it -
@@ -2482,6 +2488,12 @@ export interface ComplianceResult {
   outcomeLabel: string
   determinacy?: ComplianceDeterminacy
   determinacyLabel?: string
+  /**
+   * The check that owns this subject's root cause, on a result skipped because
+   * acting on it would change nothing until that one is fixed - a privileged
+   * container, whose missing capability drop the kernel overrides anyway.
+   */
+  supersededBy?: string
 
   chart?: string
   chartVersion?: string
@@ -2499,6 +2511,14 @@ export interface ComplianceResult {
   locus?: string
 
   observed?: string
+  /**
+   * What actually applies at run time, where that differs from what the
+   * manifest says: the platform default that filled the blank, the percentage
+   * that rounded down to zero copies, the limit Kubernetes copied into the
+   * request. Absent on most rows, because on most rows the two are the same -
+   * and the rows where they differ are the ones a reader misjudges.
+   */
+  effective?: string
   expected?: string
   message?: string
   error?: string
@@ -2517,6 +2537,9 @@ export type ComplianceTiming =
 export type ComplianceFixOwner =
   | 'chart-template' | 'chart-values' | 'application'
   | 'build-pipeline' | 'platform-team' | 'needs-decision'
+
+/** How much this organization cares about a rule being broken. */
+export type ComplianceSeverity = 'critical' | 'warning' | 'inform'
 
 /** What a run reports while it is working. */
 export type ComplianceStage =
@@ -2640,7 +2663,13 @@ export interface PolicyCheck {
   description?: string
   /** WHY the organization requires it. What stops a check being cargo-culted. */
   rationale?: string
-  severity: 'block' | 'warn' | 'info'
+  /**
+   * The three levels, in the words the whole report uses. `block`, `warn` and
+   * `info` were the values until the report started printing "Critical",
+   * "Warning" and "Informational" beside them; the server normalises the old
+   * spellings on the way out, so nothing here has to know them.
+   */
+  severity: ComplianceSeverity
   tier?: number
   category?: string
   /** The mechanism, in an engineer's words - see ComplianceResult. */

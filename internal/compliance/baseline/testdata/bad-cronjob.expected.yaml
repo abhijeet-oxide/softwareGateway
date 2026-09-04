@@ -14,10 +14,11 @@ findings:
   # lesser finding (SEC-12) - reporting the two identically is what made this
   # check's own title untrue of most of its findings.
   - {check: SEC-01, kind: CronJob, name: nightly, container: worker}
-  - {check: SEC-02, kind: CronJob, name: nightly, container: worker}
   - {check: SEC-02, kind: CronJob, name: nightly, container: prepare}
   - {check: SEC-03, kind: CronJob, name: nightly, container: worker}
-  - {check: SEC-04, kind: CronJob, name: nightly, container: worker}
+  # worker is privileged, so SEC-02 and SEC-04 stand down in favour of SEC-03.
+  # prepare is not, and both still fire on it - the standalone case has to keep
+  # working, because it is the great majority of both checks' findings.
   - {check: SEC-04, kind: CronJob, name: nightly, container: prepare}
   - {check: RES-01, kind: CronJob, name: nightly, container: worker}
   - {check: RES-01, kind: CronJob, name: nightly, container: prepare}

@@ -25,7 +25,7 @@ spec:
         the same moment. The service goes fully offline during what was meant to
         be routine, non-disruptive maintenance, and the maintenance itself
         reports success.
-      severity: block
+      severity: critical
       tier: 1
       category: Disruption & Availability
       subcategory: PodDisruptionBudget
@@ -66,61 +66,134 @@ spec:
     - id: PDB-02
       title: No rule makes maintenance impossible
       description: >
-        A maintenance rule never demands that every copy stays running. All four
-        ways of writing that are covered: maxUnavailable 0, maxUnavailable "0%",
-        minAvailable "100%", and minAvailable equal to the number of copies.
+        A maintenance rule always leaves the platform at least one copy it may
+        move. The allowance is computed from the rule and the copy count, so the
+        percentage forms are covered as well as the plain numbers.
       rationale: >
-        A rule demanding that every copy stays running can never be satisfied,
-        because moving a copy means stopping it first. Maintenance on any server
-        hosting this service waits for permission that can never be granted, so a
-        cluster-wide patch stalls until an engineer intervenes by hand. It is
-        almost always written by somebody protecting a service very carefully.
-      severity: block
+        A rule that leaves no copy movable can never be satisfied, because
+        moving a copy means stopping it first. Maintenance on any server hosting
+        this service waits for permission that will never be granted, so a
+        cluster-wide patch stalls until an engineer intervenes by hand.
+
+        The percentages are where this actually happens. "At most 10% may be
+        unavailable" reads as generous, and on a service running one copy it
+        rounds down to none at all - so the rule that looks the most permissive
+        in the chart is the one that stops the drain. Kubernetes rounds the
+        minimum up and the maximum down, and both roundings land on zero for
+        small services.
+      severity: critical
       tier: 1
       category: Disruption & Availability
       subcategory: PodDisruptionBudget
-      keywords: [PodDisruptionBudget, PDB, maxUnavailable, minAvailable, eviction, "node drain", deadlock]
+      keywords: [PodDisruptionBudget, PDB, maxUnavailable, minAvailable, eviction, "node drain", deadlock, percentage]
       confidence: confirmed
       whenItBites: node-maintenance
       fixOwner: chart-template
       fixEffort: low
       reference: source-standards.md - PDB-02
       remediation: >
-        Set minAvailable below the number of copies, or set maxUnavailable to at
-        least 1.
+        Set the rule so that at least one copy can be moved: maxUnavailable 1,
+        or a minimum below the copy count. Check the arithmetic on a percentage -
+        10% of one copy is none.
       fixExample: |
         spec:
           maxUnavailable: 1     # one copy may be moved at a time
       appliesTo:
         kinds: [PodDisruptionBudget]
       assert:
-        expr: |
-          text(self, "spec.maxUnavailable") != "0" &&
-          text(self, "spec.maxUnavailable") != "0%" &&
-          text(self, "spec.minAvailable") != "100%" &&
-          covers(self).all(w, text(self, "spec.minAvailable") == "" || string(replicas(w)) != text(self, "spec.minAvailable"))
+        # Computed, not pattern-matched. Matching the literal `minAvailable: 1`
+        # reports the configuration this organization's own standard recommends
+        # for a two-copy service, and misses `maxUnavailable: 10%` over one copy,
+        # which is a real deadlock.
+        expr: 'disruptionsAllowed(self) != 0'
         locus: spec
-        expected: a rule that lets at least one copy be moved
+        expected: a rule that leaves at least one copy movable
         observed: |
-          present(self, "spec.maxUnavailable")
-            ? "at most " + text(self, "spec.maxUnavailable") + " copies may be unavailable"
-            : "at least " + text(self, "spec.minAvailable") + " copies must stay running"
+          "allows " + string(disruptionsAllowed(self)) + " of the covered copies to be moved: " +
+          (present(self, "spec.maxUnavailable")
+            ? "at most " + text(self, "spec.maxUnavailable") + " may be unavailable"
+            : "at least " + text(self, "spec.minAvailable") + " must stay running")
+        effective: |
+          "0 copies may be moved" +
+          (text(self, "spec.maxUnavailable").endsWith("%") || text(self, "spec.minAvailable").endsWith("%")
+            ? " - the percentage rounds down to zero against the number of copies this service runs"
+            : "")
         message: |
-          "the rule " + text(self, "metadata.name") + " demands that every copy stays running, so " +
-          "the platform can never get permission to move one. Patching any server that hosts this " +
-          "service will wait indefinitely, and a cluster upgrade stalls until somebody intervenes."
+          "the rule " + text(self, "metadata.name") + " leaves no copy the platform may move" +
+          (text(self, "spec.maxUnavailable").endsWith("%") || text(self, "spec.minAvailable").endsWith("%")
+            ? " - the percentage rounds to zero against the number of copies this service runs, so it " +
+              "reads as permissive and is absolute"
+            : "") +
+          ". Patching any server that hosts this service will wait for permission that can never be " +
+          "granted, and a cluster upgrade stalls until somebody intervenes."
+
+    - id: PDB-11
+      title: A maintenance rule actually protects something
+      description: >
+        A maintenance rule does not allow every copy to be moved at once -
+        a minimum of zero, or an allowance that reaches the whole copy count.
+      rationale: >
+        A rule like this is a no-op. It is in the chart, it appears in
+        inventories, it passes review - and it permits exactly what it looks
+        like it prevents. That is more dangerous than having no rule at all,
+        because a missing rule is visible and a useless one is not: the drain
+        that takes the service fully offline is approved by a policy somebody
+        wrote to stop it.
+      severity: warning
+      tier: 1
+      category: Disruption & Availability
+      subcategory: PodDisruptionBudget
+      keywords: [PodDisruptionBudget, PDB, minAvailable, maxUnavailable, "node drain", eviction, no-op]
+      confidence: confirmed
+      whenItBites: node-maintenance
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - PDB-02 (the other end of the same range)
+      remediation: >
+        Set the minimum to the number of copies that must keep serving, or the
+        maximum to the number that may go at once. On a service running three
+        copies, minAvailable 2 or maxUnavailable 1.
+      fixExample: |
+        spec:
+          minAvailable: 2       # of three copies, two keep serving
+      appliesTo:
+        kinds: [PodDisruptionBudget]
+        # -1 is a rule stating neither bound and -2 one that selects nothing;
+        # both are other checks' to report. A rule over a single copy is
+        # PDB-03's: there is nothing to protect either way, and reporting it
+        # twice with one fix between the two is the pattern this pack removed
+        # everywhere else.
+        where: |
+          disruptionsAllowed(self) >= 0 && covers(self).exists(w, replicas(w) >= 2)
+      assert:
+        expr: 'covers(self).all(w, disruptionsAllowed(self) < replicas(w))'
+        locus: spec
+        expected: a rule that keeps at least one copy running
+        observed: |
+          "allows every copy to be moved at once: " +
+          (present(self, "spec.minAvailable")
+            ? "at least " + text(self, "spec.minAvailable") + " must stay running"
+            : "at most " + text(self, "spec.maxUnavailable") + " may be unavailable")
+        message: |
+          "the rule " + text(self, "metadata.name") + " allows every copy of " +
+          covers(self).map(w, string(value(w, "metadata.name"))).join(", ") +
+          " to be moved at the same time. It exists, it appears in inventories and it passes review, " +
+          "and it will not stop a drain from taking the service fully offline."
 
     - id: PDB-03
-      title: A single copy is not protected in a way that blocks maintenance
+      title: A single copy is not given a rule that cannot help it
       description: >
-        A maintenance rule does not cover a service that runs only one copy, nor
-        a one-off task.
+        A maintenance rule does not cover a service that runs only one copy,
+        where the rule still permits that copy to be moved. Where it does NOT
+        permit it, that is a deadlock and PDB-02 reports it instead.
       rationale: >
-        Protecting a single copy does not make it more available - there is
-        nothing to keep running while it moves. All it does is refuse every
-        request to move it, so patching the server it is on hangs forever. The
-        cause is one number away from where anybody thinks to look.
-      severity: block
+        A rule over a single copy has no availability to protect: there is
+        nothing to keep running while the copy moves. At best it is a rule that
+        does nothing, in a chart where somebody believed it did something; at
+        worst - a minimum of one, a percentage that rounds up - it refuses every
+        move and stalls maintenance, which is the more serious finding and is
+        reported separately.
+      severity: warning
       tier: 1
       category: Disruption & Availability
       subcategory: PodDisruptionBudget
@@ -131,8 +204,8 @@ spec:
       fixEffort: low
       reference: source-standards.md - PDB-03
       remediation: >
-        Either run two or more copies and allow one to be unavailable, or drop
-        the rule and accept a brief restart during maintenance.
+        Either run two or more copies, so the rule has something to protect, or
+        drop the rule and accept a brief restart during maintenance.
       fixExample: |
         # Either raise the copy count...
         spec:
@@ -140,18 +213,29 @@ spec:
         # ...or drop the PodDisruptionBudget for this workload entirely.
       appliesTo:
         kinds: [PodDisruptionBudget]
+        # A rule that leaves no copy movable is a deadlock, and PDB-02 owns it.
+        # Two findings on one decision, with one fix between them, is how a
+        # report doubles its count and halves its credibility.
+        where: 'disruptionsAllowed(self) != 0'
       assert:
         expr: 'covers(self).all(w, replicas(w) >= 2)'
         locus: spec.selector
         expected: covering only services that run two or more copies
-        observed: 'covers(self).map(w, string(value(w, "metadata.name")) + " runs " + string(replicas(w)) + " copy/copies").join(", ")'
+        observed: 'sorted(covers(self).filter(w, replicas(w) < 2).map(w, string(value(w, "metadata.name")) + " runs a single copy")).join(", ")'
+        effective: |
+          "no eviction can ever be approved for " +
+          sorted(covers(self).filter(w, replicas(w) < 2)
+                      .map(w, string(value(w, "metadata.name")))).join(", ") +
+          ", because there is no second copy to keep running"
         message: |
           "the rule " + text(self, "metadata.name") + " protects " +
-          covers(self).filter(w, replicas(w) < 2)
-                      .map(w, string(value(w, "metadata.name")))
-                      .join(", ") +
-          ", which runs a single copy. There is no second copy to keep running, so the platform " +
-          "will never be allowed to move it and maintenance on its server will hang."
+          sorted(covers(self).filter(w, replicas(w) < 2)
+                      .map(w, string(value(w, "metadata.name")))).join(", ") +
+          ", which runs a single copy. It reads as a guarantee that the service stays up during " +
+          "maintenance. In practice there is no second copy to keep running, so the platform can " +
+          "never be given permission to move the one that exists - maintenance on its node waits " +
+          "for somebody to intervene. Either run two copies and allow one to be unavailable, or " +
+          "remove the rule and accept a brief restart."
 
     - id: PDB-05
       title: An update can always get started
@@ -164,7 +248,7 @@ spec:
         new copy without room for it, and it cannot stop an old one without
         breaking its own availability promise. The update reports that it is
         progressing, forever, and never progresses.
-      severity: block
+      severity: critical
       tier: 1
       category: Disruption & Availability
       subcategory: Rollout strategy
@@ -203,7 +287,7 @@ spec:
         single update, by design - not a risk, a certainty. It lasts from the
         moment the last old copy stops until the first new one is ready. It is
         usually copied from a chart for something that had no traffic.
-      severity: block
+      severity: critical
       tier: 1
       category: Disruption & Availability
       subcategory: Rollout strategy
@@ -241,7 +325,7 @@ spec:
         still in progress, and anything waiting on it waits forever rather than
         failing and telling somebody. The release appears to be mid-deployment
         for hours.
-      severity: warn
+      severity: warning
       tier: 1
       category: Disruption & Availability
       subcategory: Rollout strategy
@@ -273,7 +357,7 @@ spec:
         where requests can take longer than that: those requests are cut off part
         way through on every restart, update and maintenance event, and nothing
         in the chart records that the author had considered it.
-      severity: info
+      severity: inform
       tier: 1
       category: Disruption & Availability
       subcategory: Graceful shutdown
@@ -316,7 +400,7 @@ spec:
         most dangerous kind of failure, because everything about it looks
         correct. It is discovered when a drain succeeds that should have been
         refused.
-      severity: warn
+      severity: warning
       tier: 1
       category: Disruption & Availability
       subcategory: PodDisruptionBudget
@@ -358,7 +442,7 @@ spec:
         with no chance to finish the request it is handling, flush what it has
         buffered, or release a lock it holds. It is a common leftover from a
         debugging session, and it turns every ordinary restart into data loss.
-      severity: warn
+      severity: warning
       tier: 1
       category: Disruption & Availability
       subcategory: Graceful shutdown

@@ -87,6 +87,21 @@ func (c *Compiler) Compile(check compliance.Check) (compliance.Program, error) {
 			return nil, fmt.Errorf("message: %w", err)
 		}
 	}
+	if check.Assert.Effective != "" {
+		if p.effective, err = c.compileString(check.Assert.Effective); err != nil {
+			return nil, fmt.Errorf("effective: %w", err)
+		}
+	}
+	if check.Assert.LocusExpr != "" {
+		if p.locusExpr, err = c.compileString(check.Assert.LocusExpr); err != nil {
+			return nil, fmt.Errorf("locusExpr: %w", err)
+		}
+	}
+	if sup := check.Assert.SupersededBy; sup != nil {
+		if p.superseded, err = c.compileBool(sup.When); err != nil {
+			return nil, fmt.Errorf("supersededBy.when: %w", err)
+		}
+	}
 	return p, nil
 }
 
@@ -161,11 +176,14 @@ type program struct {
 	check compliance.Check
 	env   *celgo.Env
 
-	applies  *celgo.Ast
-	assert   *celgo.Ast
-	observed *celgo.Ast
-	message  *celgo.Ast
-	terms    []compiledTerm
+	applies    *celgo.Ast
+	assert     *celgo.Ast
+	observed   *celgo.Ast
+	message    *celgo.Ast
+	effective  *celgo.Ast
+	locusExpr  *celgo.Ast
+	superseded *celgo.Ast
+	terms      []compiledTerm
 
 	source   string
 	expected string
@@ -177,11 +195,14 @@ type program struct {
 }
 
 type plannedPrograms struct {
-	applies  celgo.Program
-	assert   celgo.Program
-	observed celgo.Program
-	message  celgo.Program
-	terms    []plannedTerm
+	applies    celgo.Program
+	assert     celgo.Program
+	observed   celgo.Program
+	message    celgo.Program
+	effective  celgo.Program
+	locusExpr  celgo.Program
+	superseded celgo.Program
+	terms      []plannedTerm
 }
 
 type plannedTerm struct {
@@ -223,6 +244,15 @@ func (p *program) plan(idx *compliance.Index) (*plannedPrograms, error) {
 		return nil, err
 	}
 	if out.message, err = mk(p.message); err != nil {
+		return nil, err
+	}
+	if out.effective, err = mk(p.effective); err != nil {
+		return nil, err
+	}
+	if out.locusExpr, err = mk(p.locusExpr); err != nil {
+		return nil, err
+	}
+	if out.superseded, err = mk(p.superseded); err != nil {
 		return nil, err
 	}
 	for _, t := range p.terms {
@@ -277,7 +307,28 @@ func (p *program) Evaluate(ctx context.Context, subj compliance.Subject, idx *co
 	}
 
 	j := compliance.Judgement{Compliant: ok, Expected: p.expected, Locus: p.locus}
+	if planned.effective != nil && (!ok || p.check.Assert.ObserveOnPass) {
+		if ev, _, eerr := planned.effective.ContextEval(ctx, act); eerr == nil {
+			j.Effective = str(ev.Value())
+		}
+	}
+	// The locus a check COMPUTES wins over the one the shorthand derived, in
+	// both directions: it is evaluated after the per-term loop below, because a
+	// term's locus describes the term that failed and this describes the field
+	// the value actually came from.
+	resolveLocus := func() {
+		if planned.locusExpr == nil {
+			return
+		}
+		if lv, _, lerr := planned.locusExpr.ContextEval(ctx, act); lerr == nil {
+			if l := str(lv.Value()); l != "" {
+				j.Locus = l
+			}
+		}
+	}
+
 	if ok {
+		resolveLocus()
 		// A check that exists to report what is there, rather than to reject
 		// it, says so on a pass as well. See Assert.ObserveOnPass.
 		if p.check.Assert.ObserveOnPass && planned.observed != nil {
@@ -286,6 +337,21 @@ func (p *program) Evaluate(ctx context.Context, subj compliance.Subject, idx *co
 			}
 		}
 		return j, nil
+	}
+
+	// A failure another check already owns is stood down here rather than
+	// reported: acting on it would change nothing until that one is fixed. The
+	// engine records it as a skip naming the other check, so it stays in the
+	// full record and out of the list of things to do.
+	if planned.superseded != nil {
+		sv, _, serr := planned.superseded.ContextEval(ctx, act)
+		if serr == nil {
+			if b, berr := asBool(sv.Value()); berr == nil && b {
+				j.SupersededBy = p.check.Assert.SupersededBy.Check
+				j.SupersededBecause = p.check.Assert.SupersededBy.Because
+				return j, nil
+			}
+		}
 	}
 
 	// Find the term that actually failed, so a check with four required paths
@@ -311,6 +377,8 @@ func (p *program) Evaluate(ctx context.Context, subj compliance.Subject, idx *co
 		}
 		break
 	}
+
+	resolveLocus()
 
 	// An author-supplied observed or message wins: they know what matters about
 	// their own check.

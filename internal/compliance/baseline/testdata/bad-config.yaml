@@ -49,10 +49,13 @@ spec:
           env:
             - name: LOG_LEVEL
               value: info
-            # A private key in the environment is in the pod spec and in every
-            # crash dump.
-            # A credential in the environment that is not TLS material, so it
-            # is CFG-13's rather than CFG-06's.
+            # A signed token is credential material by its shape, whatever the
+            # variable is called, so CFG-13 reads it rather than inferring it.
+            - name: API_TOKEN
+              value: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcHAifQ.0hK4a2Ck1H3xJ7Uu8bWc2mQFPkzq1sPz8t7d2c9uV0A
+            # Named for a credential, opaque, and not the name of anything this
+            # release ships. Nobody outside this workload can say whether it is
+            # a password or a lookup key, which is CFG-16's whole point.
             - name: DB_PASSWORD
               value: S3cr3t-P@ssw0rd-Value
             - name: TLS_KEY
@@ -80,6 +83,51 @@ data:
   # base64 of "changeme"
   admin-initial: Y2hhbmdlbWU=
 ---
+# Source: bad-config/templates/shipped-stringdata.yaml
+# The same exposure written under stringData rather than data. The finding used
+# to name `data` whatever the Secret used, so on this one the path resolved to
+# nothing and the evidence window showed apiVersion, kind and metadata - none of
+# which the finding is about.
+apiVersion: v1
+kind: Secret
+metadata: {name: shipped-signing-key, namespace: bad}
+type: Opaque
+stringData:
+  service.hostname: db.acme.example
+  signing.key: |
+    -----BEGIN PRIVATE KEY-----
+    notarealkeyeither
+    -----END PRIVATE KEY-----
+---
+# Source: bad-config/templates/db-connection-properties.yaml
+# A configuration template shipped as one Secret value, with its credential
+# fields deliberately EMPTY - the values arrive at install time. Nothing is
+# exposed. A check that fires on the presence of data rates this Critical, which
+# tells a team to fix something that is already correct.
+apiVersion: v1
+kind: Secret
+metadata: {name: db-connection-properties, namespace: bad}
+type: Opaque
+stringData:
+  db.properties: |
+    dataSource.url = jdbc:postgresql://db.acme.example:5432/appdb
+    dataSource.user = svcusr
+    dataSource.password =
+  conf-db.properties: |
+    dataSource.user = svcusr
+    dataSource.password =
+---
+# Source: bad-config/templates/service-endpoints.yaml
+# Values that are shipped and are not credentials: a hostname and a username.
+# Recorded by CFG-15, never reported by CFG-14.
+apiVersion: v1
+kind: Secret
+metadata: {name: service-endpoints, namespace: bad}
+type: Opaque
+stringData:
+  upstream.host: db.acme.example
+  upstream.user: svcusr
+---
 # Source: bad-config/templates/secret-empty.yaml
 # An empty shell, filled in by the platform's secret store at install time.
 # It must NOT be reported: shipping the object is the correct pattern, and only
@@ -106,3 +154,28 @@ data:
   PASSWORD_MIN_LENGTH: "12"
   KEYSTORE_PATH: /etc/tls/keystore.jks
   CREDENTIAL_PROVIDER_CLASS: com.example.vault.Provider
+---
+# Source: bad-config/templates/deployment-platform-ca.yaml
+# Mounts kube-root-ca.crt, which Kubernetes creates in every namespace itself.
+# No chart ships it and no chart could, so CFG-11 must be silent here - it used
+# to report every such mount as a workload that would never start.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: uses-platform-ca, namespace: bad}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: uses-platform-ca}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: uses-platform-ca}
+      annotations:
+        checksum/config: "d0f1e2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f"
+    spec:
+      volumes:
+        - name: platform-ca
+          configMap: {name: kube-root-ca.crt}
+      containers:
+        - name: app
+          image: registry.acme.example/bad/app@sha256:8888000088880000888800008888000088880000888800008888000088880000
+          volumeMounts:
+            - {name: platform-ca, mountPath: /etc/ssl/platform, readOnly: true}

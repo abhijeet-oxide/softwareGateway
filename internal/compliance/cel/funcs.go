@@ -101,7 +101,7 @@ func bindings(idx *compliance.Index) map[string]impl {
 			return types.DefaultTypeAdapter.NativeToValue(map[string]any{})
 		}
 		for _, pdb := range idx.OfKind("PodDisruptionBudget") {
-			if pdb.Namespace() != r.Namespace() {
+			if !sameNamespace(pdb, r) {
 				continue
 			}
 			sel, _ := mapField(pdb.Object, "spec", "selector")
@@ -118,7 +118,7 @@ func bindings(idx *compliance.Index) map[string]impl {
 		if r != nil {
 			labels := r.PodLabels()
 			for _, svc := range idx.OfKind("Service") {
-				if svc.Namespace() != r.Namespace() {
+				if !sameNamespace(svc, r) {
 					continue
 				}
 				sel := stringMapField(svc.Object, "spec", "selector")
@@ -167,7 +167,7 @@ func bindings(idx *compliance.Index) map[string]impl {
 			}
 			if len(sel) > 0 {
 				for _, w := range idx.OfKind(compliance.WorkloadKinds...) {
-					if w.Namespace() != svc.Namespace() {
+					if !sameNamespace(w, svc) {
 						continue
 					}
 					if matchLabels(sel, w.PodLabels()) {

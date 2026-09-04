@@ -51,14 +51,14 @@ func newEvidenceHarness(t *testing.T) *evidenceHarness {
 	// that is not there - which is half of every real run.
 	results := []store.ComplianceResultRow{
 		{Seq: 0, CheckID: "SEC-01", CheckTitle: "Containers do not run as root",
-			Severity: "block", Outcome: "fail", Determinacy: "fixed",
+			Severity: "critical", Outcome: "fail", Determinacy: "fixed",
 			Chart: "alpha", ChartVersion: "1.0.0",
 			SourceFile: "alpha/templates/deployment.yaml", RenderedLine: 2,
 			Kind: "Deployment", Name: "api", Container: "main",
 			Locus:   "spec.template.spec.containers[0].securityContext.runAsUser",
 			Message: "runs as root"},
 		{Seq: 1, CheckID: "RES-02", CheckTitle: "Every container declares a memory limit",
-			Severity: "block", Outcome: "fail", Determinacy: "fixed",
+			Severity: "critical", Outcome: "fail", Determinacy: "fixed",
 			Chart: "alpha", ChartVersion: "1.0.0",
 			SourceFile: "alpha/templates/deployment.yaml", RenderedLine: 2,
 			Kind: "Deployment", Name: "api", Container: "main",
@@ -66,7 +66,7 @@ func newEvidenceHarness(t *testing.T) *evidenceHarness {
 			Message: "no memory limit"},
 		// A check that could not be decided, addressed to a chart that never
 		// rendered - so there is nothing to show, and saying why matters.
-		{Seq: 2, CheckID: "SEC-01", Severity: "block", Outcome: "error",
+		{Seq: 2, CheckID: "SEC-01", Severity: "critical", Outcome: "error",
 			Chart: "beta", Message: "the chart did not render"},
 	}
 	rendered := []store.ComplianceRenderedRow{

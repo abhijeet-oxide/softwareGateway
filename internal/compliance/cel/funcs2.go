@@ -36,7 +36,7 @@ func bindings2(idx *compliance.Index) map[string]impl {
 		// reach here, and reading only one of them is how a check silently
 		// applies to half the objects it names.
 		for _, w := range idx.OfKind(compliance.WorkloadKinds...) {
-			if w.Namespace() != obj.Namespace() {
+			if !sameNamespace(w, obj) {
 				continue
 			}
 			labels := w.PodLabels()

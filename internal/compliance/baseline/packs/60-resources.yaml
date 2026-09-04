@@ -26,7 +26,7 @@ spec:
         Containers that run before the main one are the ones every
         implementation forgets, and what they ask for counts towards the whole
         pod.
-      severity: block
+      severity: critical
       tier: 1
       category: Resources, Scaling & Performance
       subcategory: Resource requests
@@ -49,6 +49,21 @@ spec:
         containers: all
       assert:
         required: [resources.requests.cpu, resources.requests.memory]
+        # A missing request is not a blank. Kubernetes copies the limit into it,
+        # so a container that states only a ceiling silently RESERVES that
+        # ceiling on whatever node it lands on - typically several times what
+        # the author intended, and enough to stop the pod scheduling at all on a
+        # busy cluster. Saying only "requests are missing" leaves the reader to
+        # know that rule; saying what it reserves is the finding.
+        effective: |
+          value(self, "resources.limits.cpu") != null || value(self, "resources.limits.memory") != null
+            ? "it reserves its limits instead - " +
+              (value(self, "resources.limits.cpu") != null
+                ? text(self, "resources.limits.cpu") + " of CPU" : "no CPU") + " and " +
+              (value(self, "resources.limits.memory") != null
+                ? text(self, "resources.limits.memory") + " of memory" : "no memory") +
+              ", because Kubernetes copies a limit into the request when only the limit is given"
+            : "the scheduler treats it as needing nothing, and places it anywhere"
 
     - id: RES-02
       title: Every container has a memory ceiling
@@ -59,7 +74,7 @@ spec:
         picks is decided by an algorithm, not by anybody's intent, and the thing
         that dies is usually not the thing that leaked. A ceiling turns one
         service's bug into one service's outage.
-      severity: block
+      severity: critical
       tier: 1
       category: Resources, Scaling & Performance
       subcategory: Memory limits
@@ -90,7 +105,7 @@ spec:
         rejects the pod outright and the service never starts at all - an install
         that fails with an error about quantities, in somebody else's cluster,
         for a reason nothing in the chart hints at.
-      severity: block
+      severity: critical
       tier: 1
       category: Resources, Scaling & Performance
       subcategory: Resource limits
@@ -135,7 +150,7 @@ spec:
         either it or a neighbouring service is killed for memory the server never
         had. Recorded rather than warned about, because a wide gap is sometimes
         the right answer for a bursty workload.
-      severity: info
+      severity: inform
       tier: 1
       category: Resources, Scaling & Performance
       subcategory: Memory limits
@@ -178,7 +193,7 @@ spec:
         means the service is paused during every ordinary burst. This is a
         decision with a consequence rather than a defect, so it is recorded for
         the throttling review rather than warned about.
-      severity: info
+      severity: inform
       tier: 1
       category: Resources, Scaling & Performance
       subcategory: CPU limits
@@ -223,7 +238,7 @@ spec:
         single point of failure - and the scaler does it during quiet hours,
         which is exactly when nobody is watching and when a failure takes longest
         to notice.
-      severity: warn
+      severity: warning
       tier: 1
       category: Resources, Scaling & Performance
       subcategory: Autoscaling

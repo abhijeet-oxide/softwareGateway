@@ -164,7 +164,7 @@ func complianceBook(
 	chartViews := complianceChartViews(charts)
 
 	book := export.Book{Sheets: []export.Sheet{
-		complianceSummarySheet(productName, release, pkg, run, unique, chartViews, helm),
+		complianceSummarySheet(productName, release, pkg, run, unique, chartViews, views, helm),
 		complianceUniqueSheet(productName, release, views),
 		complianceFindingsSheet(productName, release, pkg.ManifestDigest, views),
 	}}
@@ -194,7 +194,8 @@ func complianceBook(
 // in the order somebody wrote them makes a reader read all thirty to find one.
 func complianceSummarySheet(
 	productName, release string, pkg store.PackageRow, run store.ComplianceRunRow,
-	unique store.ComplianceUniqueCounts, charts []ComplianceChartView, helm ComplianceHelmView,
+	unique store.ComplianceUniqueCounts, charts []ComplianceChartView,
+	views []ComplianceResultView, helm ComplianceHelmView,
 ) export.Sheet {
 	rendered, failed, skipped := 0, 0, 0
 	objects := 0
@@ -259,6 +260,23 @@ func complianceSummarySheet(
 	add("Checks evaluated", strconv.Itoa(total))
 	add("Checks decided", strconv.Itoa(decided))
 	add("Checks not decided", strconv.Itoa(run.Errors))
+
+	// The coverage of the "Value is" column, said once.
+	//
+	// That column answers the triage question - can the site fix this at
+	// install time, or does it need a new chart? - and the differential render
+	// cannot always settle it. The rows it could not settle are left BLANK,
+	// because on the validation run 47% of them read "Could not be
+	// established" and a column that says nothing on half its rows stops being
+	// read on the other half. The share it does cover belongs here, where a
+	// reader can see how much of the report the column speaks for, rather than
+	// on every row it qualifies.
+	if failed := failedFindings(views); failed > 0 {
+		settled := determinacySettled(views)
+		add("Findings with \"Value is\" established",
+			strconv.Itoa(settled)+" of "+strconv.Itoa(failed)+
+				" ("+complianceRate(settled, failed-settled)+")")
+	}
 
 	// Rules first, then places. "Five rules are broken" is what a vendor gets a
 	// meeting about; "171 places" is what they work through afterwards, and one
@@ -498,7 +516,7 @@ var complianceFindingHeaders = []string{
 	"Mechanism", "Search terms",
 	"Chart", "Chart version", "Template file", "Line",
 	"API version", "Kind", "Namespace", "Resource", "Container", "Container type",
-	"Field", "Observed", "Expected", "Finding",
+	"Field", "Observed", "In practice", "Expected", "Finding",
 	"Remediation", "Example fix", "Reference", "Category", "Pack", "Tier",
 	"Chart digest", "Chart reference", "Product", "Release", "Release digest",
 	"Waiver", "Fingerprint",
@@ -510,7 +528,7 @@ var complianceFindingWidths = []int{
 	26, 52,
 	24, 14, 40, 7,
 	16, 18, 16, 26, 16, 14,
-	40, 26, 26, 64,
+	40, 26, 34, 26, 64,
 	60, 46, 34, 20, 16, 10,
 	26, 40, 20, 20, 26,
 	16, 20,
@@ -556,6 +574,10 @@ func complianceFindingRow(
 
 		v.Locus,
 		v.Observed,
+		// What actually applies, where that differs from what the manifest
+		// says. Empty on most rows, because on most rows they are the same -
+		// and it is exactly the rows where they differ that a reader misjudges.
+		v.Effective,
 		v.Expected,
 		firstNonEmpty(v.Message, v.Error),
 
@@ -715,8 +737,10 @@ func complianceRulebookSheet(views []ComplianceResultView) export.Sheet {
 			t.view.Category,
 			t.view.Pack,
 			tierLabel(t.view.Tier),
+			strconv.Itoa(t.pass + t.fail + t.waiv + t.undecided + t.skip),
 			strconv.Itoa(t.fail),
 			strconv.Itoa(t.pass),
+			complianceRate(t.pass, t.fail),
 			strconv.Itoa(t.undecided),
 			strconv.Itoa(t.waiv),
 			strconv.Itoa(t.skip),
@@ -726,15 +750,62 @@ func complianceRulebookSheet(views []ComplianceResultView) export.Sheet {
 		Name: sheetRulebook,
 		Note: "Every check this run evaluated, and how it went. A rule with no failures and " +
 			"a large pass count is evidence; a rule with no results at all was not applicable " +
-			"to anything this release ships.",
+			"to anything this release ships. The rate is passes over the subjects the check " +
+			"actually decided, so it does not move when a chart fails to render.",
 		Headers: []string{
 			"Check", "Title", "Severity", "Category", "Pack", "Tier",
-			"Failed", "Passed", "Not decided", "Waived", "Not applicable",
+			"Evaluated", "Failed", "Passed", "Rate", "Not decided", "Waived", "Not applicable",
 		},
 		Rows:   rows,
-		Widths: []int{12, 46, 11, 20, 16, 10, 10, 10, 13, 10, 15},
+		Widths: []int{12, 46, 11, 20, 16, 10, 11, 10, 10, 9, 13, 10, 15},
 		Wrap:   []int{1},
 	}
+}
+
+// failedFindings and determinacySettled are the denominator and numerator of
+// the "Value is" column's coverage: how many findings there are, and on how
+// many of them the differential render could say whether the site can change
+// the value.
+func failedFindings(views []ComplianceResultView) int {
+	n := 0
+	for _, v := range views {
+		if v.Outcome == string(compliance.OutcomeFail) {
+			n++
+		}
+	}
+	return n
+}
+
+func determinacySettled(views []ComplianceResultView) int {
+	n := 0
+	for _, v := range views {
+		if v.Outcome != string(compliance.OutcomeFail) {
+			continue
+		}
+		switch v.Determinacy {
+		case string(compliance.DeterminacyFixed), string(compliance.DeterminacyConfigurable):
+			n++
+		}
+	}
+	return n
+}
+
+// complianceRate is passes over the subjects the check decided.
+//
+// # Why the denominator is not everything it looked at
+//
+// A check that could not be decided on forty subjects because their chart did
+// not render has not passed on them and has not failed on them either.
+// Counting those as failures would make a rendering problem look like a
+// compliance one; counting them as passes would hide it. They are excluded,
+// and the "Not decided" column beside this one carries them, because a rate
+// with no visible denominator is the number people quote.
+func complianceRate(pass, fail int) string {
+	decided := pass + fail
+	if decided == 0 {
+		return ""
+	}
+	return strconv.FormatFloat(100*float64(pass)/float64(decided), 'f', 1, 64) + "%"
 }
 
 // ---------------------------------------------------------------------------
@@ -801,8 +872,21 @@ func whenItBites(v ComplianceResultView) string {
 	return "Bites " + v.WhenItBitesLabel
 }
 
+// determinacyOrBlank writes the determinacy, and writes NOTHING where it was
+// not established.
+//
+// # Why an empty cell rather than "Could not be established"
+//
+// The column answers one triage question: can the site fix this at install
+// time, or does it need a new chart? On the validation run 1,060 of 2,253 rows
+// read "Could not be established" - 47% - and a column that says nothing on
+// half its rows does not get read on the other half either. An empty cell is
+// the same fact with none of the noise, and the summary sheet states the
+// undetermined count once, where a reader can see what share of the report the
+// column covers.
 func determinacyOrBlank(v ComplianceResultView) string {
-	if v.Determinacy == "" || v.Determinacy == string(compliance.DeterminacyNA) {
+	switch v.Determinacy {
+	case "", string(compliance.DeterminacyNA), string(compliance.DeterminacyUnknown):
 		return ""
 	}
 	return v.DeterminacyLabel
@@ -822,11 +906,11 @@ func tierLabel(tier int) string {
 // value this build has never seen cannot promote itself above a critical.
 func severityOrder(severity string) int {
 	switch compliance.Severity(severity) {
-	case compliance.SeverityBlock:
+	case compliance.SeverityCritical:
 		return 0
-	case compliance.SeverityWarn:
+	case compliance.SeverityWarning:
 		return 1
-	case compliance.SeverityInfo:
+	case compliance.SeverityInform:
 		return 2
 	default:
 		return 3

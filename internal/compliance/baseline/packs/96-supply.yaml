@@ -23,7 +23,7 @@ spec:
         differ. Two copies of the same service started a week apart can be
         running different code, which makes an incident impossible to reason
         about.
-      severity: block
+      severity: critical
       tier: 1
       category: Supply Chain & Release Integrity
       subcategory: Image tags
@@ -72,7 +72,7 @@ spec:
         is covered separately by SUP-11; and where images are copied into a
         different registry on the way in, the fingerprint is a property of the
         pipeline that copies them rather than of the chart the vendor wrote.
-      severity: warn
+      severity: warning
       tier: 1
       category: Supply Chain & Release Integrity
       subcategory: Image digests
@@ -117,7 +117,7 @@ spec:
         incident, when the image cannot be fetched. The approved list is
         deployment configuration rather than a fixed rule, because which
         registries an organization runs is a fact about the organization.
-      severity: block
+      severity: critical
       tier: 1
       category: Supply Chain & Release Integrity
       subcategory: Image registries

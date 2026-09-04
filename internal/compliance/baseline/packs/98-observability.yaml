@@ -22,7 +22,7 @@ spec:
         by a user rather than by an alert. Three conventions for publishing exist
         side by side and none is universal, so any of the three satisfies this -
         which is also why it is a warning rather than a blocker.
-      severity: warn
+      severity: warning
       tier: 1
       category: Observability
       subcategory: Metrics
@@ -63,7 +63,7 @@ spec:
         restarts - which is exactly the moment they are most needed. They are
         also invisible to central log search, so investigating an incident means
         reaching into individual containers one at a time, if they still exist.
-      severity: warn
+      severity: warning
       tier: 1
       category: Observability
       subcategory: Logging
@@ -109,7 +109,7 @@ spec:
         an alert somebody silences. The severity label is what decides who it
         goes to, so without one it goes to the default destination, which is
         usually nobody.
-      severity: warn
+      severity: warning
       tier: 1
       category: Observability
       subcategory: Alerting

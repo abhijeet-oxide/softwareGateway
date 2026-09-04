@@ -99,6 +99,7 @@ const (
 	FnPodField     = "podField"
 	FnSecValue     = "securityValue"
 	FnSecSource    = "securitySource"
+	FnSecLocus     = "securityLocus"
 	FnRunsAsRoot   = "runsAsRoot"
 	FnMountersOf   = "mountersOf"
 	FnRuntimeKey   = "runtimeLabelKey"
@@ -107,6 +108,12 @@ const (
 	FnCredClass    = "credentialClass"
 	FnConfigRefs   = "configRefs"
 	FnSorted       = "sorted"
+	FnDisruptions  = "disruptionsAllowed"
+	FnShippedName  = "shippedObjectName"
+	FnSecretClass  = "secretMaterialClass"
+	FnCredShape    = "credentialShape"
+	FnVolumeState  = "volumeStateLabel"
+	FnStateVolume  = "stateVolume"
 )
 
 // costLimit bounds any single evaluation.
@@ -310,6 +317,11 @@ func newEnv(idx *compliance.Index) (*celgo.Env, error) {
 			overload("securityvalue_dyn_dyn_string", []*celgo.Type{dyn, dyn, str}, str)),
 		celgo.Function(FnSecSource,
 			overload("securitysource_dyn_dyn_string", []*celgo.Type{dyn, dyn, str}, str)),
+		// The path the effective value actually came from. Pod-level answers
+		// are absolute, so a finding does not send a reader to a container
+		// field that is not in the manifest.
+		celgo.Function(FnSecLocus,
+			overload("securitylocus_dyn_dyn_string", []*celgo.Type{dyn, dyn, str}, str)),
 		// Whether a whole workload runs anything as root. Undeclared is not
 		// root: on a restricted cluster it is an assigned non-root UID.
 		celgo.Function(FnRunsAsRoot,
@@ -344,6 +356,33 @@ func newEnv(idx *compliance.Index) (*celgo.Env, error) {
 		// different order on every run without it.
 		celgo.Function(FnSorted,
 			overload("sorted_list", []*celgo.Type{listDyn}, listStr)),
+		// How many copies a maintenance rule lets the platform move at once,
+		// computed rather than pattern-matched, and including the percentage
+		// forms where the rounding is what produces the deadlock. -1 when the
+		// rule states neither bound, -2 when it selects nothing.
+		celgo.Function(FnDisruptions,
+			overload("disruptionsallowed_dyn", []*celgo.Type{dyn}, i)),
+		// Whether a literal is the name of a Secret or ConfigMap this release
+		// ships - which makes it a reference rather than a credential.
+		celgo.Function(FnShippedName,
+			overload("shippedobjectname_string", []*celgo.Type{str}, b)),
+		// What is inside one Secret value, including the credential fields of a
+		// configuration file shipped as one value - which is where the
+		// deliberately EMPTY password lives.
+		celgo.Function(FnSecretClass,
+			overload("secretmaterialclass_string_string", []*celgo.Type{str, str}, str)),
+		// The conclusive half of the credential detector: what a value IS,
+		// with no reference to what the field is called. Lets a check separate
+		// what it reads from what it infers, and rate them differently.
+		celgo.Function(FnCredShape,
+			overload("credentialshape_string", []*celgo.Type{str}, str)),
+		// What a volume means for the workload's data, and whether it means
+		// anything at all: a hugepage allocation and a /sys mount are neither
+		// scratch space nor a folder anybody stores data in.
+		celgo.Function(FnVolumeState,
+			overload("volumestatelabel_dyn", []*celgo.Type{dyn}, str)),
+		celgo.Function(FnStateVolume,
+			overload("statevolume_dyn", []*celgo.Type{dyn}, b)),
 
 		// Version comparison, returning -1, 0 or 1. Semver rather than string
 		// order, because "1.10.0" sorts before "1.9.0" as a string and a check

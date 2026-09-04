@@ -139,3 +139,91 @@ func TestBuiltinAPIGroup(t *testing.T) {
 		t.Error("a vendor's own type is treated as built in")
 	}
 }
+
+// The disruption arithmetic, which is what separates the configuration this
+// organization's standard RECOMMENDS from the one that deadlocks maintenance.
+//
+// A check that pattern-matches on the literal `minAvailable: 1` reports the
+// standard's own baseline for a two-copy service as a blocking defect - "for
+// replicas=2, a common safe setting is maxUnavailable: 1 (or minAvailable: 1)" -
+// and a chart author who acts on that finding makes their release worse. The
+// same check, matching literals, misses `maxUnavailable: 10%` over a single
+// copy, which is a genuine deadlock that reads as permissive.
+func TestDisruptionsAllowed(t *testing.T) {
+	cases := []struct {
+		spec     map[string]any
+		replicas int
+		want     int
+		why      string
+	}{
+		// The standard's own recommendation for two copies. Must be allowed.
+		{map[string]any{"minAvailable": 1}, 2, 1, "minAvailable 1 of 2 spares one"},
+		{map[string]any{"maxUnavailable": 1}, 2, 1, "maxUnavailable 1 spares one"},
+		// The four spellings of a deadlock.
+		{map[string]any{"minAvailable": 2}, 2, 0, "minAvailable equal to the copy count"},
+		{map[string]any{"maxUnavailable": 0}, 3, 0, "no copy may be unavailable"},
+		{map[string]any{"maxUnavailable": "0%"}, 3, 0, "the string form of the same thing"},
+		{map[string]any{"minAvailable": "100%"}, 3, 0, "every copy must stay"},
+		// The one the literal comparison cannot see: 10% of one copy rounds
+		// DOWN to zero, so it reads as permissive and is absolute.
+		{map[string]any{"maxUnavailable": "10%"}, 1, 0, "floor(1 x 10%) is zero"},
+		{map[string]any{"maxUnavailable": "10%"}, 30, 3, "and is fine at thirty copies"},
+		// minAvailable percentages round UP, which is where quorum-sized
+		// workloads deadlock.
+		{map[string]any{"minAvailable": "51%"}, 2, 0, "ceil(2 x 51%) is 2 of 2"},
+		{map[string]any{"minAvailable": "50%"}, 4, 2, "ceil(4 x 50%) leaves two"},
+		// A policy that protects nothing at all.
+		{map[string]any{"minAvailable": 0}, 3, 3, "every copy may go at once"},
+		// Neither bound stated.
+		{map[string]any{}, 3, -1, "nothing to compute"},
+	}
+	for _, c := range cases {
+		if got := disruptionsAllowed(c.spec, c.replicas); got != c.want {
+			t.Errorf("disruptionsAllowed(%v, %d) = %d, want %d - %s",
+				c.spec, c.replicas, got, c.want, c.why)
+		}
+	}
+}
+
+// What is inside a Secret decides, not that there is something inside it.
+//
+// The check that reports credentials travelling inside a chart fired on the
+// PRESENCE of inline data. On a real release that was 56 findings of which 14
+// were genuine - the rest usernames, hostnames, object names, and configuration
+// templates whose credential fields are deliberately empty because the values
+// arrive at install time. Rating those Critical tells a team to fix something
+// that is already correct, which is the single most damaging thing a compliance
+// report can do.
+func TestSecretMaterialClass(t *testing.T) {
+	cases := []struct {
+		key, value string
+		want       bool
+		why        string
+	}{
+		// Genuine, and the reason the check exists.
+		{"tls.key", "-----BEGIN RSA PRIVATE KEY-----\nMIIEow...", true, "a private key"},
+		{"password", "S3cr3t-P@ssw0rd-Value", true, "a password in a field named for one"},
+		{"db.properties", "dataSource.user = svcusr\ndataSource.password = hunter2",
+			true, "a credential inside a shipped configuration file"},
+
+		// The false positives. Every one of these was rated Critical.
+		{"db.properties", "dataSource.user = svcusr\ndataSource.password =",
+			false, "a template with the credential field left empty for install time"},
+		{"conf.properties", "url: jdbc:postgresql://db.example:5432/appdb\npassword:",
+			false, "the same shape with the other separator"},
+		{"username", "svcusr", false, "a username is not a credential"},
+		{"host", "db.acme.example", false, "a hostname"},
+		{"upstream", "service-b", false, "an object name"},
+		{"password", "", false, "an empty value is a placeholder for a credential"},
+		{"password", "   ", false, "and so is a blank one"},
+		{"ca.crt", "-----BEGIN CERTIFICATE-----\nMIIB...", false, "a certificate is public"},
+	}
+	for _, c := range cases {
+		got := SecretMaterialClass(c.key, c.value) != ""
+		if got != c.want {
+			t.Errorf("SecretMaterialClass(%q, %q) = %v, want %v - %s (class %q)",
+				c.key, truncate(c.value), got, c.want, c.why,
+				SecretMaterialClass(c.key, c.value))
+		}
+	}
+}

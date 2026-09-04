@@ -127,3 +127,33 @@ spec:
           image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
           volumeMounts:
             - {name: shared, mountPath: /var/shared}
+---
+# Source: bad-storage/templates/statefulset-hugepages.yaml
+# A StatefulSet with no volumeClaimTemplates whose only volumes hold no data at
+# all: a hugepage allocation and the kernel's device tree. STO-10 must be silent
+# here. It used to report both as lost application state, which made a reader
+# conclude the check did not understand the workload.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: hugepages-only, namespace: bad}
+spec:
+  replicas: 3
+  serviceName: hugepages-only
+  selector: {matchLabels: {app.kubernetes.io/name: hugepages-only}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: hugepages-only}}
+    spec:
+      volumes:
+        - name: hugepage-backing
+          emptyDir: {medium: HugePages-2Mi}
+        - name: shared-memory
+          emptyDir: {medium: Memory}
+        - name: devices
+          hostPath: {path: /sys/bus/pci/devices}
+      containers:
+        - name: app
+          image: registry.acme.example/bad/app@sha256:6666000066660000666600006666000066660000666600006666000066660000
+          volumeMounts:
+            - {name: hugepage-backing, mountPath: /dev/hugepages}
+            - {name: shared-memory, mountPath: /dev/shm}
+            - {name: devices, mountPath: /sys/bus/pci/devices}

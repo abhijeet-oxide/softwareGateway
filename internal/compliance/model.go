@@ -27,6 +27,7 @@
 package compliance
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -111,25 +112,73 @@ func (o Outcome) Valid() bool {
 type Severity string
 
 const (
-	// SeverityBlock is a violation the organization will not accept. It decides
-	// the verdict.
-	SeverityBlock Severity = "block"
-	// SeverityWarn is a violation worth a conversation with the vendor. It does
-	// not fail the release on its own.
-	SeverityWarn Severity = "warn"
-	// SeverityInfo is an observation. It never fails anything, and exists so a
-	// check can be introduced and measured before it is given teeth.
-	SeverityInfo Severity = "info"
+	// SeverityCritical is a violation the organization will not accept. It
+	// decides the verdict.
+	SeverityCritical Severity = "critical"
+	// SeverityWarning is a violation worth a conversation with the vendor. It
+	// does not fail the release on its own.
+	SeverityWarning Severity = "warning"
+	// SeverityInform is an observation. It never fails anything, and exists so a
+	// check can be introduced and measured before it is given teeth, and so a
+	// check whose job is to report an inventory has somewhere to sit.
+	SeverityInform Severity = "inform"
 )
+
+// The spellings these three used to have.
+//
+// # Why they are still read
+//
+// The value is written into every stored result, every exported spreadsheet,
+// every policy pack on disk - including ones this repository does not contain -
+// and the query string of any filter somebody bookmarked. Renaming it without
+// reading the old spelling would turn a third-party pack into a load error and
+// a saved link into an empty table, for a change that is entirely about the
+// word.
+//
+// They are accepted on the way IN and never written on the way out, so the
+// old vocabulary drains rather than persisting.
+const (
+	legacyBlock = "block"
+	legacyWarn  = "warn"
+	legacyInfo  = "info"
+)
+
+// ParseSeverity reads a severity, accepting the spellings it used to have.
+func ParseSeverity(s string) Severity {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case legacyBlock, string(SeverityCritical):
+		return SeverityCritical
+	case legacyWarn, string(SeverityWarning):
+		return SeverityWarning
+	case legacyInfo, string(SeverityInform):
+		return SeverityInform
+	default:
+		return Severity(s)
+	}
+}
+
+// UnmarshalJSON normalises a severity as it is read.
+//
+// Policy packs are YAML decoded through JSON, so this is the one place a pack
+// written against the old vocabulary is translated - once, at load, rather than
+// at every comparison afterwards.
+func (s *Severity) UnmarshalJSON(b []byte) error {
+	var raw string
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return fmt.Errorf("severity must be a string: %w", err)
+	}
+	*s = ParseSeverity(raw)
+	return nil
+}
 
 // Rank orders severities for sorting, most consequential first.
 func (s Severity) Rank() int {
 	switch s {
-	case SeverityBlock:
+	case SeverityCritical:
 		return 0
-	case SeverityWarn:
+	case SeverityWarning:
 		return 1
-	case SeverityInfo:
+	case SeverityInform:
 		return 2
 	default:
 		return 3
@@ -138,17 +187,18 @@ func (s Severity) Rank() int {
 
 // Label is the severity as the interface writes it.
 //
-// `block` reads as "Critical". The wire value stays `block` because it is what
-// every policy pack, every stored result and every export written so far says;
-// the word a reader sees is the one that ranks it against the severities beside
-// it, and "Blocking" ranked it against nothing.
+// The stored value and the printed word are now the same three words, which
+// they were not: the value said `block` and the report said "Critical", so a
+// filter, an export column and a screen disagreed about what to call one thing.
+// The wire value was kept for a while because it was what every pack and every
+// stored result said - ParseSeverity is what makes changing it safe now.
 func (s Severity) Label() string {
 	switch s {
-	case SeverityBlock:
+	case SeverityCritical:
 		return "Critical"
-	case SeverityWarn:
+	case SeverityWarning:
 		return "Warning"
-	case SeverityInfo:
+	case SeverityInform:
 		return "Informational"
 	default:
 		return "Unknown"
@@ -158,7 +208,7 @@ func (s Severity) Label() string {
 // Valid reports whether s is one of the three severities.
 func (s Severity) Valid() bool {
 	switch s {
-	case SeverityBlock, SeverityWarn, SeverityInfo:
+	case SeverityCritical, SeverityWarning, SeverityInform:
 		return true
 	}
 	return false
@@ -246,11 +296,12 @@ type Verdict string
 
 const (
 	// VerdictPass means every applicable check was decided and none of the
-	// blocking ones failed.
+	// critical ones failed.
 	VerdictPass Verdict = "pass"
-	// VerdictConditional means blocking checks all passed but warnings stand.
+	// VerdictConditional means the critical checks all passed but warnings
+	// stand.
 	VerdictConditional Verdict = "conditional"
-	// VerdictFail means at least one blocking check failed unwaived.
+	// VerdictFail means at least one critical check failed unwaived.
 	VerdictFail Verdict = "fail"
 	// VerdictInconclusive means something could not be decided. It outranks
 	// pass and conditional deliberately: a run that could not render 40 charts
@@ -447,6 +498,16 @@ type Result struct {
 
 	Outcome     Outcome     `json:"outcome"`
 	Determinacy Determinacy `json:"determinacy,omitempty"`
+	// SupersededBy names the check that owns this subject's root cause, on a
+	// skip that happened because acting on this finding would change nothing
+	// until that one is fixed. See Supersession.
+	SupersededBy string `json:"supersededBy,omitempty"`
+	// Effective is what actually applies at run time, where that differs from
+	// what the manifest says: "true (the platform's default)", "0 copies (10%
+	// of 1, rounded down)", "3 CPUs (Kubernetes copies the limit into the
+	// request)". Empty when the declared value is the effective one, which is
+	// most rows. See Assert.Effective.
+	Effective string `json:"effective,omitempty"`
 	Address     Address     `json:"address"`
 
 	// Observed and Expected are what the check saw and what it required, in the
@@ -513,9 +574,9 @@ func (r Result) String() string {
 
 // Counts is the tally of a run, by outcome and by severity.
 //
-// Severity counts are of FAILURES only. A passing blocking check is not a
-// blocking anything, and counting it under "block" produces the number nobody
-// can interpret.
+// Severity counts are of FAILURES only. A passing critical check is not a
+// critical anything, and counting it under "critical" produces the number
+// nobody can interpret.
 type Counts struct {
 	Pass   int `json:"pass"`
 	Fail   int `json:"fail"`
@@ -523,6 +584,10 @@ type Counts struct {
 	Error  int `json:"error"`
 	Waived int `json:"waived"`
 
+	// Blocking is the count of failed CRITICAL checks. It keeps that name
+	// because it says what the number DOES - it is the one that fails the
+	// release, and Decide reads it - rather than repeating the severity's name
+	// beside it.
 	Blocking int `json:"blocking"`
 	Warning  int `json:"warning"`
 	Info     int `json:"info"`
@@ -551,11 +616,11 @@ func Tally(results []Result) Counts {
 			continue
 		}
 		switch r.Severity {
-		case SeverityBlock:
+		case SeverityCritical:
 			c.Blocking++
-		case SeverityWarn:
+		case SeverityWarning:
 			c.Warning++
-		case SeverityInfo:
+		case SeverityInform:
 			c.Info++
 		}
 	}
@@ -564,7 +629,7 @@ func Tally(results []Result) Counts {
 
 // Decide is the run's verdict.
 //
-// # Why inconclusive outranks everything except a blocking failure
+// # Why inconclusive outranks everything except a critical failure
 //
 // An undecided check is not a passed check, and the order here is the whole
 // point of Rule 2. A release whose charts would not render has not been shown
@@ -572,7 +637,7 @@ func Tally(results []Result) Counts {
 // damaging thing this package could do, because it is indistinguishable from a
 // clean result and it is wrong in the direction that ships.
 //
-// A blocking failure still wins over inconclusive: something definite is known
+// A critical failure still wins over inconclusive: something definite is known
 // to be wrong, and that is more actionable than "some of it could not be read".
 func Decide(c Counts) Verdict {
 	switch {

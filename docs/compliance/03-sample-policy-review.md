@@ -168,12 +168,12 @@ a stanza copied into every file.
   without a readiness probe - a CNI agent, a node exporter, exactly the
   workloads where readiness matters most in a CNF estate - is never checked.
 - **The fourth rule fires on every container that has a liveness probe with
-  `initialDelaySeconds <= 30` and no startup probe**, at `info`, with the
+  `initialDelaySeconds <= 30` and no startup probe**, at `inform`, with the
   comment "This is purely informational for awareness". That is one finding per
   container across the whole release for a condition that is not a defect. The
   third and fourth rules together cover the complete space of "has liveness, no
   startup", so every such container produces a finding no matter what.
-- **A missing `livenessProbe` is a `warn`.** [source-standards.md](source-standards.md)
+- **A missing `livenessProbe` is a `warning`.** [source-standards.md](source-standards.md)
   does not require a liveness probe at all; PRB-03 requires that *if* one
   exists, it is less sensitive than readiness. The policy asks for the opposite
   of the organization's own standard, and following it makes clusters less
@@ -182,7 +182,7 @@ a stanza copied into every file.
 
 **Becomes:** PRB-01 (narrowed to traffic-receiving containers, `DaemonSet`
 included), PRB-03 (the sensitivity comparison, as the catalog actually states
-it), PRB-02 (the `initialDelaySeconds > 30` signal only). The `info`-on-everything
+it), PRB-02 (the `initialDelaySeconds > 30` signal only). The `inform`-on-everything
 rule is dropped.
 
 ### 3.3 `pdb.rego` - the matching rule is wrong in three ways
@@ -231,7 +231,7 @@ Three further problems:
   replica. This is precisely the problem determinacy solves
   ([00](00-compliance-model.md) Rule 4), and without it the policy's central
   rule is close to inert on real charts.
-- **Severity contradicts the catalog.** HA workload without a PDB is `warn`
+- **Severity contradicts the catalog.** HA workload without a PDB is `warning`
   here and `BLOCK` in [source-standards.md](source-standards.md).
 
 **Becomes:** PDB-01, PDB-02, PDB-03, PDB-09, specified in
@@ -286,7 +286,7 @@ thing.
 **Becomes:** dropped as a tier-1 check. The genuinely artifact-level part -
 "resources hard-code a `metadata.namespace`, so this chart cannot be installed
 into a namespace of the operator's choosing" - is the inverse assertion and is
-worth `warn`; it is folded into the CFG group as a portability finding.
+worth `warning`; it is folded into the CFG group as a portability finding.
 
 ### 3.6 `labels.rego` - right list, wrong subjects
 
@@ -349,7 +349,7 @@ for rule 4 in [02](02-authoring-checks.md) §6 in one table.
 | `probes.rego` | **Rewrite** - contradicts the catalog, misses DaemonSets, emits noise (§3.2) | PRB-01, PRB-02, PRB-03 |
 | `pdb.rego` | **Rewrite** - selector matching wrong in three ways, deadlock check incomplete (§3.3) | PDB-01, PDB-02, PDB-03, PDB-09 |
 | `network_policy.rego` | **Rewrite** - checks existence, not policy (§3.4) | NET-01, NET-02, NET-03 |
-| `default_namespace.rego` | **Drop** at tier 1; keep the inverse assertion (§3.5) | a portability `warn` under CFG |
+| `default_namespace.rego` | **Drop** at tier 1; keep the inverse assertion (§3.5) | a portability `warning` under CFG |
 
 ## 6. Why the baseline is not these files
 

@@ -248,7 +248,7 @@ export default function Policies() {
   )
 }
 
-  const severityOrder: Record<PolicyCheck['severity'], number> = { block: 0, warn: 1, info: 2 }
+  const severityOrder: Record<PolicyCheck['severity'], number> = { critical: 0, warning: 1, inform: 2 }
 
   function sortBySeverity(checks: PolicyCheck[]) {
     return [...checks].sort((left, right) => severityOrder[left.severity] - severityOrder[right.severity])
@@ -303,9 +303,12 @@ export default function Policies() {
           value={severity}
           onChange={onSeverityChange}
           options={[
-            { label: 'Blocking', value: 'block' },
-            { label: 'Warning', value: 'warn' },
-            { label: 'Info', value: 'info' },
+            // The words the value now IS, rather than a label that differed
+            // from it: a reader filtering for "Critical" and a reader reading a
+            // finding that says `critical` are looking at one thing.
+            { label: 'Critical', value: 'critical' },
+            { label: 'Warning', value: 'warning' },
+            { label: 'Info', value: 'inform' },
           ]}
         />
       </Space>

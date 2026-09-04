@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // Judgement is what one evaluation concluded about one subject.
@@ -22,6 +23,11 @@ type Judgement struct {
 	// value offended.
 	Observed string
 	Expected string
+	// Effective is what actually applies at run time, where that differs from
+	// what the manifest says - the platform default that filled the blank, the
+	// setting that overrode this one, the arithmetic that produced a surprise.
+	// See Assert.Effective.
+	Effective string
 	// Locus is the field judged, relative to the subject. The engine prefixes
 	// it with the container path when the subject is a container, so an author
 	// writes "resources.limits.memory" and the report says
@@ -29,6 +35,14 @@ type Judgement struct {
 	Locus string
 	// Message is one sentence for somebody who does not have this screen open.
 	Message string
+	// SupersededBy names the check that owns this subject's root cause. Set
+	// only when the assertion FAILED and the check's supersededBy condition
+	// held, in which case the result is recorded as a skip rather than a
+	// finding. See Supersession.
+	SupersededBy string
+	// SupersededBecause is the clause explaining why this finding cannot be
+	// acted on while the other holds.
+	SupersededBecause string
 	// Err makes the result undecidable rather than failed. An expression that
 	// faulted on a field a custom resource does not have has not shown
 	// non-compliance, and recording it as a failure would send a vendor after a
@@ -376,6 +390,7 @@ func (e *Engine) result(check Check, subj Subject, j Judgement) Result {
 		FixExample:  check.FixExample,
 		Address:     addr,
 		Observed:    j.Observed,
+		Effective:   j.Effective,
 		Expected:    j.Expected,
 		Message:     j.Message,
 		Determinacy: DeterminacyNA,
@@ -390,6 +405,14 @@ func (e *Engine) result(check Check, subj Subject, j Judgement) Result {
 		}
 	case j.Compliant:
 		r.Outcome = OutcomePass
+	case j.SupersededBy != "":
+		// The assertion failed, and acting on it would change nothing while
+		// another check's finding stands. Recorded, so the row is in the full
+		// record and out of the list of things to do.
+		r.Outcome = OutcomeSkip
+		r.SupersededBy = j.SupersededBy
+		r.Message = check.Title + " is not reported for " + subj.Describe() +
+			": " + j.SupersededBecause + ", so this is settled by " + j.SupersededBy + " first."
 	default:
 		r.Outcome = OutcomeFail
 		if e.Determiner != nil {
@@ -409,6 +432,14 @@ func (e *Engine) result(check Check, subj Subject, j Judgement) Result {
 func (e *Engine) locus(subj Subject, locus string) string {
 	if locus == "" {
 		return subj.Address.Locus
+	}
+	// A locus that already starts at the object's root is absolute: the check
+	// computed it because the value it judged is not where the subject is. A
+	// container inheriting runAsNonRoot from its pod is the case - prefixing
+	// that with the container's path names a field the manifest does not have.
+	// See Assert.LocusExpr.
+	if locus == "spec" || strings.HasPrefix(locus, "spec.") || strings.HasPrefix(locus, "metadata.") {
+		return locus
 	}
 	if subj.Container != nil {
 		return subj.Container.Path() + "." + locus

@@ -43,7 +43,7 @@ spec:
         far wider group than can read a Secret, and it appears in backups, in
         exports and in every copy of the release anybody has taken. A credential
         there has to be treated as compromised from the moment it was written.
-      severity: block
+      severity: critical
       tier: 1
       category: Configuration & Secrets
       subcategory: Credentials in configuration
@@ -82,14 +82,18 @@ spec:
       title: No credential is written into a container's environment
       description: >
         No environment variable is given a password, token, key or connection
-        string as a literal value.
+        string as a literal value. Only values that are recognisably credential
+        material are reported here - a private key, a signed token, a cloud
+        access key, a connection string with the password in it, or a well-known
+        placeholder.
       rationale: >
         A literal in the environment is part of the object that describes the
         pod, so it is visible to anybody who can read that object, it is printed
-        by ordinary troubleshooting commands, and it is captured in crash reports
-        and by any code that logs its own environment on start-up. A reference to
-        a Secret is not: only the running process ever sees the value.
-      severity: block
+        by ordinary troubleshooting commands, and it is captured in crash
+        reports and by any code that logs its own environment on start-up. A
+        reference to a Secret is not: only the running process ever sees the
+        value.
+      severity: critical
       tier: 1
       category: Configuration & Secrets
       subcategory: Credentials in the environment
@@ -111,42 +115,111 @@ spec:
         containers: all
         where: 'present(self, "env")'
       assert:
-        # Certificates and keys in the environment are CFG-06's: same line, same
-        # fix, and two checks reporting one decision is what makes a reader stop
-        # believing either of them.
         expr: |
           self.env.all(e,
             !present(e, "value") ||
             string(value(e, "name")).matches("(?i)(tls|ssl)?_?(cert|certificate|key|pem|ca_?bundle)$") ||
-            !looksLikeCredential(string(value(e, "name")), string(value(e, "value"))))
+            credentialShape(string(value(e, "value"))) == "")
         locus: env
         expected: credentials referenced from a Secret, not written out
         observed: |
           sorted(self.env.filter(e, present(e, "value") &&
                              !string(value(e, "name")).matches("(?i)(tls|ssl)?_?(cert|certificate|key|pem|ca_?bundle)$") &&
-                             looksLikeCredential(string(value(e, "name")), string(value(e, "value"))))
+                             credentialShape(string(value(e, "value"))) != "")
             .map(e, string(value(e, "name")) + " holds " +
-                    credentialClass(string(value(e, "name")), string(value(e, "value"))))).join(", ")
+                    credentialShape(string(value(e, "value"))))).join(", ")
+
+    - id: CFG-16
+      title: An opaque value in a credential-named variable is what it looks like
+      description: >
+        Where an environment variable is named for a credential and holds an
+        opaque literal that is not recognisably credential material, it is
+        reported for review. Values that match the name of a Secret or ConfigMap
+        the release ships are treated as references and are not reported.
+      rationale: >
+        This is an inference about a value, not a reading of one, so it is
+        separated from CFG-13 and rated for what it is. A variable called
+        APP_SESSION_SECRET holding "session-store-v1" follows the naming
+        convention of the other objects in the release rather than the shape of
+        credential material - it is almost certainly the name of something the
+        application resolves at run time. Reporting that at the highest severity
+        AND the highest confidence at once is how a report loses an argument it
+        should not have started.
+      severity: warning
+      tier: 1
+      category: Configuration & Secrets
+      subcategory: Credentials in the environment
+      keywords: [env, value, secretKeyRef, password, token, credential, entropy, reference]
+      confidence: needs-review
+      whenItBites: continuously
+      fixOwner: needs-decision
+      fixEffort: low
+      reference: source-standards.md - CFG-01 (the inferred half)
+      remediation: >
+        Confirm what the value is. If it is a credential, move it into a Secret
+        and reference it with secretKeyRef; if it names something the
+        application looks up, no change is needed.
+      fixExample: |
+        env:
+          # A reference, which is what this usually turns out to be:
+          - name: APP_SESSION_STORE
+            value: session-store-v1
+          # A credential, which is not:
+          - name: APP_SESSION_SECRET
+            valueFrom:
+              secretKeyRef: {name: session-signing, key: secret}
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: 'present(self, "env")'
+      assert:
+        expr: |
+          self.env.all(e,
+            !present(e, "value") ||
+            credentialShape(string(value(e, "value"))) != "" ||
+            shippedObjectName(string(value(e, "value"))) ||
+            !looksLikeCredential(string(value(e, "name")), string(value(e, "value"))))
+        locus: env
+        expected: a credential-named variable holding something identifiable
+        observed: |
+          sorted(self.env.filter(e, present(e, "value") &&
+                             credentialShape(string(value(e, "value"))) == "" &&
+                             !shippedObjectName(string(value(e, "value"))) &&
+                             looksLikeCredential(string(value(e, "name")), string(value(e, "value"))))
+            .map(e, string(value(e, "name")) + " holds an opaque literal")).join(", ")
+        message: |
+          "in this container, " +
+          sorted(self.env.filter(e, present(e, "value") &&
+                             credentialShape(string(value(e, "value"))) == "" &&
+                             !shippedObjectName(string(value(e, "value"))) &&
+                             looksLikeCredential(string(value(e, "name")), string(value(e, "value"))))
+            .map(e, string(value(e, "name")))).join(", ") +
+          " is named for a credential and holds a literal. It does not have the shape of credential " +
+          "material and it does not name anything this release ships, so somebody who knows this " +
+          "workload has to say which it is."
 
     - id: CFG-14
       title: The chart does not carry credentials inside it
       description: >
-        No Secret in the release ships with material already in it. An empty
-        Secret, created for something else to fill in, passes.
+        No Secret in the release ships with credential material already in it.
+        Values are decoded first, and a configuration file shipped as one value
+        is read field by field - so a template whose password fields are empty,
+        waiting to be filled in at install time, passes.
       rationale: >
         Anything inside a chart is in version control, in every mirror, in every
         archive anybody has taken, and readable by everyone who can read the
         repository. A credential shipped this way has to be assumed compromised
         from the moment it was committed, and rotating it means rebuilding and
-        redistributing the chart rather than changing one value. This is the
-        exposure that is easiest to miss, because a Secret is exactly where a
-        credential is supposed to live - the problem is that it travels with the
-        software.
-      severity: block
+        redistributing the chart rather than changing one value.
+
+        Base64 is encoding, not encryption: decoding it is one command, so a
+        value that looks opaque in the manifest is plain text to anybody who
+        wants it.
+      severity: critical
       tier: 1
       category: Configuration & Secrets
       subcategory: Credentials in the chart
-      keywords: [Secret, data, stringData, base64, ExternalSecret, GitOps, credential]
+      keywords: [Secret, data, stringData, base64, ExternalSecret, GitOps, credential, "private key"]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -171,31 +244,130 @@ spec:
         kinds: [Secret]
         where: 'value(self, "data") != null || value(self, "stringData") != null'
       assert:
+        # On the CONTENTS, not on the presence of contents. Firing on presence
+        # produced 56 findings on a real release of which 14 were genuine: the
+        # rest were usernames, hostnames, object names, and configuration
+        # templates whose credential fields are deliberately empty. Rating those
+        # Critical tells a team to fix something that is already correct.
+        expr: |
+          (value(self, "data") == null ||
+            self.data.all(k, secretMaterialClass(k, decodeBase64(string(self.data[k]))) == "")) &&
+          (value(self, "stringData") == null ||
+            self.stringData.all(k, secretMaterialClass(k, string(self.stringData[k])) == ""))
+        locus: data
+        # The field the finding is ACTUALLY about, down to the key.
+        #
+        # A Secret whose content is under `stringData` was reported at `data`,
+        # so the path did not resolve, the evidence window fell back to leading
+        # with the object, and a reviewer opening the finding saw apiVersion,
+        # kind and metadata - none of which the finding concerns. The footer
+        # then said "data is not in this manifest", about a finding whose
+        # subject was stringData. Naming the first offending key puts the
+        # window on the line and the note on the right field.
+        locusExpr: |
+          (value(self, "data") != null &&
+           self.data.exists(k, secretMaterialClass(k, decodeBase64(string(self.data[k]))) != ""))
+            ? "data[" + sorted(self.data
+                .filter(k, secretMaterialClass(k, decodeBase64(string(self.data[k]))) != ""))[0] + "]"
+            : ((value(self, "stringData") != null &&
+                self.stringData.exists(k, secretMaterialClass(k, string(self.stringData[k])) != ""))
+              ? "stringData[" + sorted(self.stringData
+                  .filter(k, secretMaterialClass(k, string(self.stringData[k])) != ""))[0] + "]"
+              : (value(self, "data") != null ? "data" : "stringData"))
+        expected: no credential material travelling inside the chart
+        observed: |
+          sorted(
+            (value(self, "data") == null ? [] :
+              self.data.filter(k, secretMaterialClass(k, decodeBase64(string(self.data[k]))) != "")
+                .map(k, k + ": " + secretMaterialClass(k, decodeBase64(string(self.data[k]))))) +
+            (value(self, "stringData") == null ? [] :
+              self.stringData.filter(k, secretMaterialClass(k, string(self.stringData[k])) != "")
+                .map(k, k + ": " + secretMaterialClass(k, string(self.stringData[k]))))
+          ).join(", ")
+        message: |
+          "Secret " + text(self, "metadata.name") + " ships with " +
+          sorted(
+            (value(self, "data") == null ? [] :
+              self.data.filter(k, secretMaterialClass(k, decodeBase64(string(self.data[k]))) != "")
+                .map(k, secretMaterialClass(k, decodeBase64(string(self.data[k]))) + " under \"" + k + "\"")) +
+            (value(self, "stringData") == null ? [] :
+              self.stringData.filter(k, secretMaterialClass(k, string(self.stringData[k])) != "")
+                .map(k, secretMaterialClass(k, string(self.stringData[k])) + " under \"" + k + "\""))
+          ).join(", ") +
+          ". Base64 is encoding, not encryption - decoding it is one command. Everything in a chart is " +
+          "in version control and in every mirror and archive of the release, so this has to be treated " +
+          "as exposed from the moment it was committed, and changing it means rebuilding and " +
+          "redistributing the chart."
+
+    - id: CFG-15
+      title: A Secret that ships values says what they are
+      description: >
+        A Secret carrying inline values that are not recognisably credentials is
+        recorded, so somebody confirms what is travelling in the chart. Recorded
+        on a pass as well, so the report lists every Secret that ships contents
+        rather than only the ones that alarm it.
+      rationale: >
+        Not everything in a Secret is a credential - service names, hostnames
+        and usernames all appear there legitimately, and none of them is worth
+        blocking a release over. But something IS being shipped inside the
+        chart, and the only way to know it is harmless is for a person to look.
+        This is the inventory that makes that possible, at the severity the
+        condition deserves.
+      severity: inform
+      tier: 1
+      category: Configuration & Secrets
+      subcategory: Credentials in the chart
+      keywords: [Secret, data, stringData, base64, inventory, inline]
+      confidence: needs-review
+      whenItBites: continuously
+      fixOwner: needs-decision
+      fixEffort: low
+      reference: source-standards.md - CFG-01 (the remainder)
+      remediation: >
+        Confirm the values are not sensitive. If any of them is, move it into
+        the platform's secret store; if none is, consider a ConfigMap, which
+        says plainly that the contents are not secret.
+      fixExample: |
+        # If the values are not sensitive, say so by where you put them:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: my-service-endpoints
+        data:
+          upstream.host: db.internal.example
+      appliesTo:
+        kinds: [Secret]
+        # Not the ones CFG-14 already reports. A Secret shipping a private key
+        # is a critical finding, not an inventory entry, and two rows on one
+        # object with one fix between them is the pattern this pack removed
+        # everywhere else.
+        where: |
+          (value(self, "data") != null || value(self, "stringData") != null) &&
+          (value(self, "data") == null ||
+            self.data.all(k, secretMaterialClass(k, decodeBase64(string(self.data[k]))) == "")) &&
+          (value(self, "stringData") == null ||
+            self.stringData.all(k, secretMaterialClass(k, string(self.stringData[k])) == ""))
+      assert:
+        observeOnPass: true
         expr: |
           (value(self, "data") == null ||
             self.data.all(k, decodeBase64(string(self.data[k])).trim() == "")) &&
           (value(self, "stringData") == null ||
             self.stringData.all(k, string(self.stringData[k]).trim() == ""))
         locus: data
-        expected: no credential material travelling inside the chart
+        expected: an empty Secret, filled in at install time
         observed: |
+          "ships values for: " +
           sorted(
             (value(self, "data") == null ? [] :
-              self.data.filter(k, decodeBase64(string(self.data[k])).trim() != "")
-                .map(k, k + ": " + (credentialClass(k, decodeBase64(string(self.data[k]))) == ""
-                                    ? "a value shipped in the chart"
-                                    : credentialClass(k, decodeBase64(string(self.data[k])))))) +
+              self.data.filter(k, decodeBase64(string(self.data[k])).trim() != "").map(k, k)) +
             (value(self, "stringData") == null ? [] :
-              self.stringData.filter(k, string(self.stringData[k]).trim() != "")
-                .map(k, k + ": " + (credentialClass(k, string(self.stringData[k])) == ""
-                                    ? "a value shipped in the chart"
-                                    : credentialClass(k, string(self.stringData[k])))))
+              self.stringData.filter(k, string(self.stringData[k]).trim() != "").map(k, k))
           ).join(", ")
         message: |
-          "Secret " + text(self, "metadata.name") + " ships with material already in it. " +
-          "Everything in a chart is in version control and in every mirror and archive of the " +
-          "release, so this has to be treated as exposed from the moment it was committed - and " +
-          "changing it means rebuilding and redistributing the chart."
+          "Secret " + text(self, "metadata.name") + " ships values inside the chart. None of them looks " +
+          "like a credential, so this is recorded rather than reported - but something is travelling in " +
+          "version control and somebody should confirm it is meant to."
 
     - id: CFG-02
       title: No credential is passed on a command line
@@ -208,7 +380,7 @@ spec:
         describes the pod, and they are captured in crash reports. A credential
         passed this way leaks to anything that gets a foothold anywhere in the
         pod, including a helper container from a different team.
-      severity: block
+      severity: critical
       tier: 1
       category: Configuration & Secrets
       subcategory: Credentials on the command line
@@ -260,7 +432,7 @@ spec:
         recording that they have. Marking it unchangeable forces a change to
         become a new object and a proper rollout, which is visible and
         reversible.
-      severity: warn
+      severity: warning
       tier: 1
       category: Configuration & Secrets
       subcategory: ConfigMap immutability
@@ -299,7 +471,7 @@ spec:
         intermittent behaviour that is extremely hard to reproduce, and it is the
         single most common "the change did not take effect" in Helm-packaged
         software.
-      severity: warn
+      severity: warning
       tier: 1
       category: Configuration & Secrets
       subcategory: Configuration rollout
@@ -341,7 +513,15 @@ spec:
         configuration error indefinitely. Nothing in the chart hints at which of
         the six places a pod can name a ConfigMap the name came from, so this is
         typically half an hour of reading templates to find one typo.
-      severity: block
+
+        It is a warning rather than a blocking finding because the chart is not
+        the only thing that can put an object in the namespace: an installer,
+        an operator or a platform team may supply it, and this tool sees only
+        what the chart renders. Objects the cluster creates in every namespace
+        by itself - kube-root-ca.crt among them - are excluded outright, since
+        no chart could ship those and reporting them sends somebody looking for
+        a template that will never exist.
+      severity: warning
       tier: 1
       category: Configuration & Secrets
       subcategory: Configuration references
@@ -374,14 +554,23 @@ spec:
             .filter(r, !r.optional &&
                        !resourcesIn([string(r.kind)]).exists(o, text(o, "metadata.name") == string(r.name)))
             .map(r, string(r.kind) + " " + string(r.name)).join(", ")
+        effective: |
+          "the pods stay in CreateContainerConfigError until something else supplies " +
+          configRefs(self)
+            .filter(r, !r.optional &&
+                       !resourcesIn([string(r.kind)]).exists(o, text(o, "metadata.name") == string(r.name)))
+            .map(r, string(r.kind) + " " + string(r.name)).join(", ")
         message: |
           text(self, "kind") + " " + text(self, "metadata.name") + " asks for " +
           configRefs(self)
             .filter(r, !r.optional &&
                        !resourcesIn([string(r.kind)]).exists(o, text(o, "metadata.name") == string(r.name)))
             .map(r, string(r.kind) + " " + string(r.name)).join(", ") +
-          ", which this release does not ship. Its copies will never start; they will sit in a " +
-          "configuration error with no other explanation."
+          ", which nothing in this release creates. If an installer or a platform team supplies it " +
+          "before start-up this is fine; if nothing does, its copies will never start. They will sit " +
+          "in CreateContainerConfigError indefinitely - the event log names the missing object but " +
+          "not why it was expected, and nothing in the chart says which of the six places a pod can " +
+          "name one the reference came from."
 
     - id: CFG-06
       title: Certificates and keys arrive as files, not environment variables
@@ -393,7 +582,7 @@ spec:
         the pod, so it is in every crash report and in any log line that prints
         the environment. Mounted as a file it is readable only by the process
         that needs it, and it can be replaced without changing the workload.
-      severity: warn
+      severity: warning
       tier: 1
       category: Configuration & Secrets
       subcategory: TLS material
@@ -436,7 +625,7 @@ spec:
         next release for a different component. If that container is ever
         compromised, what leaks is everything the Secret happened to hold rather
         than the one value this workload needed.
-      severity: warn
+      severity: warning
       tier: 1
       category: Configuration & Secrets
       subcategory: Secret scoping

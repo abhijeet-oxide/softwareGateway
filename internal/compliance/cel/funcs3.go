@@ -1,7 +1,9 @@
 package cel
 
 import (
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"cel.dev/cel-go/common/types"
@@ -96,6 +98,38 @@ func bindings3(idx *compliance.Index) map[string]impl {
 		return types.String(src)
 	})
 
+	// securityLocus() is the FIELD PATH the effective value actually came from.
+	//
+	// A container that inherits runAsNonRoot from its pod used to be reported
+	// at spec.template.spec.containers[0].securityContext.runAsNonRoot - a line
+	// that does not exist in the manifest. The reader opens the evidence, sees
+	// no such field, and either concludes the tool is wrong or goes looking for
+	// the real one by hand. Returning the pod's path when the pod is where the
+	// value is set costs nothing and sends them to the line they have to edit.
+	//
+	// The pod-level answer is absolute (it starts with "spec"), which is how
+	// the engine knows not to prefix it with the container's own path.
+	add("securitylocus_dyn_dyn_string", func(args ...ref.Val) ref.Val {
+		if len(args) != 3 {
+			return types.String("")
+		}
+		field := scalarString(native(args[2]))
+		container, owner := native(args[0]), native(args[1])
+		if c, ok := container.(map[string]any); ok {
+			if v, found := compliance.Lookup(c, "securityContext."+field); found && v != nil {
+				return types.String("securityContext." + field)
+			}
+		}
+		if spec, ok := podSpecOf(owner); ok {
+			if v, found := compliance.Lookup(spec, "securityContext."+field); found && v != nil {
+				return types.String(podSpecPrefixOf(owner) + "securityContext." + field)
+			}
+		}
+		// Nothing declares it anywhere. The container is where it would be
+		// added, so that is where the reader is sent.
+		return types.String("securityContext." + field)
+	})
+
 	// runsAsRoot() answers, for a whole workload, whether anything in it will
 	// run as the root user - either because a UID of 0 is set, or because
 	// running as non-root is explicitly switched off.
@@ -129,7 +163,7 @@ func bindings3(idx *compliance.Index) map[string]impl {
 		}
 		name := claim.Name()
 		for _, w := range idx.OfKind(compliance.WorkloadKinds...) {
-			if w.Namespace() != claim.Namespace() {
+			if !sameNamespace(w, claim) {
 				continue
 			}
 			if mountsClaim(w, name) {
@@ -190,6 +224,67 @@ func bindings3(idx *compliance.Index) map[string]impl {
 		return types.DefaultTypeAdapter.NativeToValue(out)
 	})
 
+	// disruptionsAllowed() is how many copies a maintenance rule lets the
+	// platform move at once. -1 means the rule states neither bound, and -2
+	// means it selects nothing so there is no replica count to compute against.
+	add("disruptionsallowed_dyn", func(args ...ref.Val) ref.Val {
+		if len(args) != 1 {
+			return types.Int(-1)
+		}
+		pdb := resolve(idx, args)
+		if pdb == nil {
+			return types.Int(-1)
+		}
+		spec, ok := mapField(pdb.Object, "spec")
+		if !ok {
+			return types.Int(-1)
+		}
+		worst := -2
+		for _, w := range idx.OfKind(compliance.WorkloadKinds...) {
+			if !sameNamespace(w, pdb) {
+				continue
+			}
+			sel, _ := mapField(pdb.Object, "spec", "selector")
+			if !SelectorMatches(sel, w.PodLabels()) {
+				continue
+			}
+			n := disruptionsAllowed(spec, replicaCount(w.Object))
+			if n == -1 {
+				return types.Int(-1)
+			}
+			// The tightest workload decides: a rule covering two services
+			// deadlocks maintenance as soon as it deadlocks one of them.
+			if worst == -2 || n < worst {
+				worst = n
+			}
+		}
+		return types.Int(worst)
+	})
+
+	// shippedObjectName() reports whether a literal is the NAME of something
+	// this release ships.
+	//
+	// An environment variable set to "session-store-v1" in a field called
+	// APP_SESSION_SECRET is an opaque string in a field named for a credential,
+	// which is the shape the credential detector corroborates on. It is also
+	// exactly what a reference to a Secret object looks like - and a reference
+	// to a credential is the correct pattern, not a leak.
+	add("shippedobjectname_string", func(args ...ref.Val) ref.Val {
+		if len(args) != 1 {
+			return types.Bool(false)
+		}
+		want := strings.TrimSpace(scalarString(native(args[0])))
+		if want == "" {
+			return types.Bool(false)
+		}
+		for _, r := range idx.OfKind("Secret", "ConfigMap") {
+			if r.Name() == want {
+				return types.Bool(true)
+			}
+		}
+		return types.Bool(false)
+	})
+
 	unary := func(id string, fn func(string) bool) {
 		add(id, func(args ...ref.Val) ref.Val {
 			if len(args) != 1 {
@@ -206,6 +301,56 @@ func bindings3(idx *compliance.Index) map[string]impl {
 			return types.String("")
 		}
 		return types.String(DecodeBase64(scalarString(native(args[0]))))
+	})
+
+	// secretMaterialClass() classifies what is inside one Secret value,
+	// including the credential fields of a configuration file shipped as one.
+	add("secretmaterialclass_string_string", func(args ...ref.Val) ref.Val {
+		if len(args) != 2 {
+			return types.String("")
+		}
+		return types.String(SecretMaterialClass(
+			scalarString(native(args[0])), scalarString(native(args[1]))))
+	})
+
+	add("credentialshape_string", func(args ...ref.Val) ref.Val {
+		if len(args) != 1 {
+			return types.String("")
+		}
+		return types.String(CredentialShape(scalarString(native(args[0]))))
+	})
+
+	// volumeStateLabel() names what a volume means for a workload's data, and
+	// returns "" for volumes that hold no application state at all.
+	//
+	// The stateful-storage check used to read every emptyDir as scratch space
+	// and every hostPath as a folder on the server. Two very common volumes are
+	// neither: an emptyDir with medium HugePages or Memory is a memory
+	// allocation, not a directory anything is written to, and a hostPath under
+	// /sys, /dev or /proc is device access - already reported by the check that
+	// exists for it, and not somewhere an application keeps its data. Listing
+	// them as lost state made a correct finding read as though the tool did not
+	// understand the workload, which is how a reader learns to discount it.
+	add("volumestatelabel_dyn", func(args ...ref.Val) ref.Val {
+		if len(args) != 1 {
+			return types.String("")
+		}
+		v, ok := native(args[0]).(map[string]any)
+		if !ok {
+			return types.String("")
+		}
+		return types.String(volumeStateLabel(v))
+	})
+
+	add("statevolume_dyn", func(args ...ref.Val) ref.Val {
+		if len(args) != 1 {
+			return types.Bool(false)
+		}
+		v, ok := native(args[0]).(map[string]any)
+		if !ok {
+			return types.Bool(false)
+		}
+		return types.Bool(volumeStateLabel(v) != "")
 	})
 
 	add("credentialclass_string_string", func(args ...ref.Val) ref.Val {
@@ -284,6 +429,21 @@ func effectiveSecurity(container, owner any, field string) (any, string) {
 	return nil, "not declared"
 }
 
+// podSpecPrefixOf is the dotted path from an object to its pod spec, with a
+// trailing dot, or "" for something that has no pod template.
+func podSpecPrefixOf(owner any) string {
+	obj, ok := owner.(map[string]any)
+	if !ok {
+		return ""
+	}
+	kind := scalarString(compliance.Resource{Object: obj}.Kind())
+	p := compliance.PodSpecPath(kind)
+	if p == nil {
+		return ""
+	}
+	return strings.Join(p, ".") + "."
+}
+
 // workloadRunsAsRoot reports whether a workload will run anything as root.
 func workloadRunsAsRoot(obj map[string]any) bool {
 	spec, ok := podSpecOf(obj)
@@ -354,6 +514,111 @@ func mountsClaim(w *compliance.Resource, claim string) bool {
 		}
 	}
 	return false
+}
+
+// replicaCount reads a workload's copy count with the Kubernetes default of 1.
+func replicaCount(obj map[string]any) int {
+	v, found := compliance.Lookup(obj, "spec.replicas")
+	if !found || v == nil {
+		return 1
+	}
+	n, ok := intOrPercent(v, 0, math.Floor)
+	if !ok {
+		return 1
+	}
+	return n
+}
+
+// sameNamespace reports whether two rendered objects will land in the same
+// namespace.
+//
+// # Why an absent namespace matches anything
+//
+// `helm template` emits `metadata.namespace` only where a chart hard-codes it.
+// Where the chart says nothing, the object lands in the namespace the release is
+// installed into - which is also where the hard-coded ones land, whenever the
+// chart's author wrote the namespace they were installing to. Real charts mix
+// both conventions freely, often within one release and sometimes within one
+// pair of objects.
+//
+// Comparing the rendered strings therefore compares a namespace against an
+// empty string, and every cross-object join fails. In a validation run that
+// produced three "this workload has no disruption policy" findings and four
+// "this policy protects no workload" findings, about the SAME three pairs -
+// each check asserting the exact opposite of the other, and all seven wrong.
+//
+// The rule here is the one the manifest supports: an object that names no
+// namespace could be in any of them, so it is not evidence of a mismatch. The
+// cost is a false negative where a chart genuinely splits two related objects
+// across namespaces, which is rare, deliberate, and visible in the chart. The
+// cost of the other choice is a contradiction printed twice at blocking
+// severity.
+func sameNamespace(a, b *compliance.Resource) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	an, bn := a.Namespace(), b.Namespace()
+	return an == "" || bn == "" || an == bn
+}
+
+// disruptionsAllowed is how many copies a PodDisruptionBudget lets the platform
+// move at once, or -1 when the policy states neither bound.
+//
+// # Why this is arithmetic and not a string comparison
+//
+// A check that pattern-matches on the literal `minAvailable: 1` reports the
+// configuration this organization's own standard RECOMMENDS for a two-copy
+// service - "for replicas=2, a common safe setting is maxUnavailable: 1 (or
+// minAvailable: 1)" - as a blocking deadlock. A chart author who acts on that
+// finding makes their release worse, which is the most damaging thing a
+// compliance report can do.
+//
+// It also misses the real deadlock, because the dangerous forms are the
+// percentages: `maxUnavailable: 10%` over a single copy is floor(0.1) = 0, and
+// reads as permissive while being absolute.
+//
+// Kubernetes rounds minAvailable percentages UP and maxUnavailable percentages
+// DOWN, and both roundings are where quorum-sized workloads deadlock.
+func disruptionsAllowed(spec map[string]any, replicas int) int {
+	if v, ok := spec["minAvailable"]; ok && v != nil {
+		need, ok := intOrPercent(v, replicas, math.Ceil)
+		if !ok {
+			return -1
+		}
+		return replicas - need
+	}
+	if v, ok := spec["maxUnavailable"]; ok && v != nil {
+		allowed, ok := intOrPercent(v, replicas, math.Floor)
+		if !ok {
+			return -1
+		}
+		return allowed
+	}
+	return -1
+}
+
+// intOrPercent reads the IntOrString both disruption fields use.
+//
+// The percentage form is a STRING, so a numeric comparison skips it silently -
+// which is how an implementation catches one of the four spellings of a
+// deadlock and reports the other three as compliant.
+func intOrPercent(v any, of int, round func(float64) float64) (int, bool) {
+	s := strings.TrimSpace(scalarString(v))
+	if s == "" {
+		return 0, false
+	}
+	if pct, found := strings.CutSuffix(s, "%"); found {
+		f, err := strconv.ParseFloat(pct, 64)
+		if err != nil {
+			return 0, false
+		}
+		return int(round(float64(of) * f / 100)), true
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // configRefs collects every ConfigMap and Secret a pod spec names.
@@ -463,6 +728,12 @@ func configRefs(spec map[string]any) []any {
 	})
 	out := make([]any, 0, len(keys))
 	for _, k := range keys {
+		if platformSuppliedConfig[k.name] {
+			// Kubernetes creates this in every namespace itself. A chart cannot
+			// ship it, and reporting its absence sends somebody to look for a
+			// template that will never exist.
+			continue
+		}
 		out = append(out, map[string]any{
 			"kind": k.kind, "name": k.name, "optional": optional[k],
 		})
@@ -470,7 +741,61 @@ func configRefs(spec map[string]any) []any {
 	return out
 }
 
+// platformSuppliedConfig are ConfigMaps and Secrets the cluster puts in every
+// namespace without any chart shipping them.
+//
+// kube-root-ca.crt holds the API server's CA bundle and is created by the
+// controller manager in each namespace at creation time. A chart that mounts it
+// is doing the standard thing, and the reference-resolution check reported every
+// such mount as a workload that would never start.
+var platformSuppliedConfig = map[string]bool{
+	"kube-root-ca.crt":         true,
+	"openshift-service-ca.crt": true,
+}
+
 func asList(v any) []any {
 	l, _ := v.([]any)
 	return l
+}
+
+// deviceHostPaths are the roots under which a hostPath is the kernel's view of
+// the machine rather than a place an application stores anything.
+var deviceHostPaths = []string{"/sys", "/dev", "/proc"}
+
+// memoryBackedMedia are the emptyDir media that allocate memory rather than
+// provide a directory. HugePages appears both bare and sized -
+// "HugePages-2Mi", "HugePages-1Gi" - so it is matched by prefix.
+func memoryBackedMedium(medium string) bool {
+	m := strings.TrimSpace(medium)
+	return strings.EqualFold(m, "Memory") || strings.HasPrefix(strings.ToLower(m), "hugepages")
+}
+
+// volumeStateLabel names, in a sentence a reader can act on, what a volume
+// means for the durability of a workload's data - and returns "" when the
+// volume holds no application state, so a check can leave it out of both the
+// verdict and the evidence.
+func volumeStateLabel(v map[string]any) string {
+	if hp, ok := v["hostPath"].(map[string]any); ok {
+		path := scalarString(hp["path"])
+		for _, root := range deviceHostPaths {
+			if path == root || strings.HasPrefix(path, root+"/") {
+				// Device access. SEC-08 reports it, and nothing is stored here.
+				return ""
+			}
+		}
+		return "a folder on the server"
+	}
+	if _, ok := v["local"]; ok {
+		return "storage tied to one server"
+	}
+	if ed, ok := v["emptyDir"]; ok {
+		m, _ := ed.(map[string]any)
+		if m != nil && memoryBackedMedium(scalarString(m["medium"])) {
+			// A memory allocation. Nothing is written to it that a restart
+			// could lose, because nothing is written to it at all.
+			return ""
+		}
+		return "scratch space, deleted with the copy"
+	}
+	return ""
 }

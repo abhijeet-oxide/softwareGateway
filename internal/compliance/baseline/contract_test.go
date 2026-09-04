@@ -101,6 +101,48 @@ func TestFindingsCarryTheValueTheyJudged(t *testing.T) {
 	}
 }
 
+// An object that names no namespace is not an object in a different namespace.
+//
+// # The defect this exists for
+//
+// A validation run produced three findings saying "this workload has no
+// disruption policy" and four saying "this disruption policy protects no
+// workload" - about the same three object pairs. Both cannot be true. Each was
+// the mirror image of the other, and all seven followed from ONE broken join:
+// `helm template` emits `metadata.namespace` only where a chart hard-codes it,
+// real releases mix both conventions freely, and comparing the rendered strings
+// made every cross-object lookup fail.
+//
+// The reviewer's own diagnostic is worth stating here even though this test
+// cannot check it in general: two checks asserting contradictory things about
+// one pair of objects almost always means one broken join rather than two
+// broken rules. The fixture below is that pair, built deliberately - a policy
+// with no namespace protecting a workload that declares one - and the two
+// mirror checks must both stay silent on it.
+//
+// The assertion is scoped to the join-dependent checks on purpose. The fixture
+// workload fails plenty of unrelated checks, and demanding otherwise would make
+// this a second copy of the good fixture.
+func TestAnAbsentNamespaceDoesNotBreakAJoin(t *testing.T) {
+	joinDependent := map[string]bool{
+		"PDB-01": true, // "no policy protects this workload"
+		"PDB-09": true, // "this policy protects no workload"
+		"NET-07": true, // "this Service routes nowhere"
+		"OBS-01": true, // reached through servicesFor
+	}
+	for _, r := range runFixture(t, "bad-pdb.yaml") {
+		if r.Outcome != compliance.OutcomeFail || !joinDependent[r.CheckID] {
+			continue
+		}
+		if r.Address.Name == "implicit-namespace-pdb" || r.Address.Name == "namespaced" {
+			t.Errorf("%s fired on %s/%s. The rule declares no namespace and the workload "+
+				"it protects declares one, which is the ordinary shape of a real chart - "+
+				"and %s asserts the opposite of its mirror check about the same pair",
+				r.CheckID, r.Address.Kind, r.Address.Name, r.CheckID)
+		}
+	}
+}
+
 // A check that exists to REPORT something says it on a pass.
 //
 // The alternative is what the audit found: an inventory check has to fail on
@@ -177,7 +219,7 @@ func TestTechnicalTermsFindTheirChecks(t *testing.T) {
 		"automountserviceaccounttoken": {"RBAC-02"},
 		"clusterrolebinding":           {"RBAC-04", "RBAC-10"},
 		"impersonate":                  {"RBAC-07"},
-		"resourcenames":                {"RBAC-05"},
+		"resourcenames":                {"RBAC-11"},
 		"hpa":                          {"RES-04"},
 		"oomkilled":                    {"RES-02"},
 		"throttling":                   {"RES-03"},
@@ -402,8 +444,131 @@ func TestEveryCheckIsTriageable(t *testing.T) {
 		if len(c.Keywords) < 3 {
 			miss("keywords - at least three technical terms it should be findable by")
 		}
-		if c.Severity == compliance.SeverityBlock && c.Confidence == compliance.ConfidenceNeedsReview {
+		if c.Severity == compliance.SeverityCritical && c.Confidence == compliance.ConfidenceNeedsReview {
 			t.Errorf("%s: blocks a release on a finding it says needs a human to judge", c.ID)
+		}
+	}
+}
+
+// A privileged container gets one finding, and the ones it cancels say so.
+//
+// # The defect this exists for
+//
+// The audit found three blocking findings on one container: privileged, the
+// missing capability drop, and the permitted privilege escalation. The kernel
+// grants a privileged container the full capability set whatever
+// `capabilities.drop` says, and permits escalation whatever
+// `allowPrivilegeEscalation` says - so two of the three cannot be acted on. A
+// reader fixes them, the container's actual powers are unchanged, and the next
+// report says exactly what this one said.
+//
+// The two dependent checks stand down (see compliance.Supersession) and are
+// recorded as SKIPS naming SEC-03, not dropped: a missing row and a passing row
+// look the same, and neither is true here.
+func TestAPrivilegedContainerGetsOneFinding(t *testing.T) {
+	dependents := map[string]bool{"SEC-02": true, "SEC-04": true}
+	stoodDown := map[string]bool{}
+	sawRootCause := false
+
+	for _, r := range runFixture(t, "bad-security.yaml") {
+		if r.Address.Name != "loose" || r.Address.Container != "loose" {
+			continue
+		}
+		switch {
+		case r.CheckID == "SEC-03":
+			if r.Outcome != compliance.OutcomeFail {
+				t.Errorf("SEC-03 is the root cause here and reported %s", r.Outcome)
+			}
+			sawRootCause = true
+			// The root cause has to name what it cancels, or a reader who
+			// notices the two missing rows concludes the tool missed them.
+			for _, want := range []string{"capabilities.drop", "allowPrivilegeEscalation"} {
+				if !strings.Contains(r.Message, want) {
+					t.Errorf("SEC-03's message does not say it nullifies %s: %s", want, r.Message)
+				}
+			}
+		case dependents[r.CheckID]:
+			if r.Outcome != compliance.OutcomeSkip {
+				t.Errorf("%s reported %s on a privileged container; fixing it would change "+
+					"nothing until SEC-03 is fixed", r.CheckID, r.Outcome)
+			}
+			if r.SupersededBy != "SEC-03" {
+				t.Errorf("%s stood down and named %q rather than SEC-03", r.CheckID, r.SupersededBy)
+			}
+			if strings.TrimSpace(r.Message) == "" {
+				t.Errorf("%s stood down silently, which reads as the check not having run", r.CheckID)
+			}
+			stoodDown[r.CheckID] = true
+		}
+	}
+	if !sawRootCause {
+		t.Error("SEC-03 produced no result on the privileged container")
+	}
+	for id := range dependents {
+		if !stoodDown[id] {
+			t.Errorf("%s produced no result at all on the privileged container", id)
+		}
+	}
+
+	// And the standalone case is untouched: an ordinary container missing these
+	// settings is still a finding, which is the great majority of both checks.
+	standalone := map[string]bool{}
+	for _, r := range runFixture(t, "bad-security.yaml") {
+		if r.Address.Name == "unbounded-scratch" && dependents[r.CheckID] &&
+			r.Outcome == compliance.OutcomeFail {
+			standalone[r.CheckID] = true
+		}
+	}
+	for id := range dependents {
+		if !standalone[id] {
+			t.Errorf("%s stopped firing on a container that is not privileged", id)
+		}
+	}
+}
+
+// A finding points at the field it is about, not at the block above it.
+//
+// # The defect this exists for
+//
+// CFG-14 named `data` on every finding. A Secret that keeps its content under
+// `stringData` therefore had a locus that resolved to nothing: the evidence
+// window fell back to leading with the object, so a reviewer opening the
+// finding saw apiVersion, kind, metadata and labels - and the footer said
+// "data is not in this manifest" about a finding whose whole subject was
+// stringData. Both halves read as a tool that had not looked at the file.
+func TestAFindingNamesTheFieldItJudged(t *testing.T) {
+	want := map[string]string{
+		// One Secret keeps its material under data, the other under stringData.
+		// The check has to name whichever it actually read.
+		"shipped-credentials": "data[",
+		"shipped-signing-key": "stringData[",
+	}
+	seen := map[string]bool{}
+	for _, r := range runFixture(t, "bad-config.yaml") {
+		if r.CheckID != "CFG-14" || r.Outcome != compliance.OutcomeFail {
+			continue
+		}
+		prefix, ok := want[r.Address.Name]
+		if !ok {
+			continue
+		}
+		seen[r.Address.Name] = true
+		if !strings.HasPrefix(r.Address.Locus, prefix) {
+			t.Errorf("CFG-14 on Secret %s points at %q; the material is under %s, and a locus "+
+				"that does not resolve leaves the evidence window on the object's metadata",
+				r.Address.Name, r.Address.Locus, strings.TrimSuffix(prefix, "["))
+		}
+		// And it names the key, not just the block: the window centres on the
+		// line, which for a Secret whose content runs past the bottom of the
+		// pane is the difference between showing the finding and not.
+		if strings.TrimSuffix(strings.TrimPrefix(r.Address.Locus, prefix), "]") == "" {
+			t.Errorf("CFG-14 on Secret %s names the block and not the key it objected to",
+				r.Address.Name)
+		}
+	}
+	for name := range want {
+		if !seen[name] {
+			t.Errorf("CFG-14 produced no finding on Secret %s", name)
 		}
 	}
 }

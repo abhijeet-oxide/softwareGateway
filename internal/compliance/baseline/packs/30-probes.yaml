@@ -23,7 +23,7 @@ spec:
         that arrive in that window. Helper containers are deliberately left out
         of this check: a finding on a sidecar is noise, and noise is what gets a
         check switched off.
-      severity: block
+      severity: critical
       tier: 1
       category: Health Probes & Lifecycle
       subcategory: Readiness probe
@@ -58,7 +58,7 @@ spec:
         the restart check blind for the first minute. A startup check says the
         same thing without leaving the container unwatched, and without killing
         it if start-up takes longer than the delay somebody guessed.
-      severity: warn
+      severity: warning
       tier: 1
       category: Health Probes & Lifecycle
       subcategory: Startup probe
@@ -98,7 +98,7 @@ spec:
         process instead of quietly removing it from rotation - and because every
         copy depends on the same slow thing, they all restart together. A
         degraded service becomes a crash loop.
-      severity: warn
+      severity: warning
       tier: 1
       category: Health Probes & Lifecycle
       subcategory: Probe timing
@@ -148,7 +148,7 @@ spec:
         copy does it at once because they all depend on the same slow thing. The
         fix is that the restart check should test only whether this process is
         alive, and the traffic check whether it can serve.
-      severity: warn
+      severity: warning
       tier: 1
       category: Health Probes & Lifecycle
       subcategory: Probe handlers
@@ -196,7 +196,7 @@ spec:
         holding a script-based check to the latency budget of a local web request
         misreads what the check is doing, and reporting it would be wrong about
         roughly nine out of ten script checks.
-      severity: warn
+      severity: warning
       tier: 1
       category: Health Probes & Lifecycle
       subcategory: Probe timing
@@ -251,7 +251,7 @@ spec:
         error. Numeric ports are not checked, because a number always resolves:
         the port list is documentation, and a check aimed at 8443 reaches
         whatever is listening on 8443.
-      severity: block
+      severity: critical
       tier: 1
       category: Health Probes & Lifecycle
       subcategory: Probe target port
@@ -299,7 +299,7 @@ spec:
         A wait longer than the allowed shutdown time guarantees the service is
         killed part way through shutting down, every single time. The pause was
         added to make shutdown graceful and is the thing making it abrupt.
-      severity: warn
+      severity: warning
       tier: 1
       category: Health Probes & Lifecycle
       subcategory: Lifecycle hooks
@@ -347,7 +347,7 @@ spec:
         overlap and pile up against a service that is already slow. How long it
         takes to notice a failure then has no upper bound at all, which defeats
         the point of having the check.
-      severity: warn
+      severity: warning
       tier: 1
       category: Health Probes & Lifecycle
       subcategory: Probe timing
@@ -394,7 +394,7 @@ spec:
         task designed to finish and exit, a restart check can kill it just before
         it completes, so the installation fails in a way that looks random and
         does not reproduce.
-      severity: warn
+      severity: warning
       tier: 1
       category: Health Probes & Lifecycle
       subcategory: Probe applicability
@@ -438,7 +438,7 @@ spec:
         none at all: it looks like protection while still killing the service
         part way through starting, which presents as a crash loop nobody can
         explain. Cover the worst start-up you have seen, with room on top.
-      severity: warn
+      severity: warning
       tier: 1
       category: Health Probes & Lifecycle
       subcategory: Startup probe

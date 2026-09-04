@@ -335,10 +335,12 @@ spec:
           selectorKeys(self).all(k, runtimeLabelKey(k))
         locus: spec.selector
         expected: a selector matching at least one workload in this release
-        observed: '"looks for " + self.spec.selector.map(k, k + "=" + string(self.spec.selector[k])).join(", ") + ", which matches nothing here"'
+        observed: |
+          "looks for " + sorted(self.spec.selector.map(k, k + "=" + string(self.spec.selector[k]))).join(", ") +
+          ", which matches nothing here"
         message: |
           "Service " + text(self, "metadata.name") + " looks for " +
-          self.spec.selector.map(k, k + "=" + string(self.spec.selector[k])).join(", ") +
+          sorted(self.spec.selector.map(k, k + "=" + string(self.spec.selector[k]))).join(", ") +
           ", and no workload in this release carries those labels. It will have nowhere to send " +
           "traffic and every request to it will fail, while the installation reports success."
 
@@ -483,7 +485,7 @@ spec:
         locus: resources
         expected: the same quantity asked for and capped, for every special resource
         observed: |
-          self.resources.requests.filter(k, extendedResource(k)).map(k,
+          sorted(self.resources.requests.filter(k, extendedResource(k)).map(k,
             k + ": asks for " + string(self.resources.requests[k]) +
             ", capped at " + (value(self, "resources.limits") != null && k in self.resources.limits
-                              ? string(self.resources.limits[k]) : "nothing")).join("; ")
+                              ? string(self.resources.limits[k]) : "nothing"))).join("; ")

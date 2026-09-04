@@ -106,6 +106,7 @@ const (
 	FnDecode64     = "decodeBase64"
 	FnCredClass    = "credentialClass"
 	FnConfigRefs   = "configRefs"
+	FnSorted       = "sorted"
 )
 
 // costLimit bounds any single evaluation.
@@ -338,6 +339,11 @@ func newEnv(idx *compliance.Index) (*celgo.Env, error) {
 		// spec can name one.
 		celgo.Function(FnConfigRefs,
 			overload("configrefs_dyn", []*celgo.Type{dyn}, listDyn)),
+		// A fixed order for a list built from a map. Map iteration is
+		// randomised, so a finding that lists offending keys comes out in a
+		// different order on every run without it.
+		celgo.Function(FnSorted,
+			overload("sorted_list", []*celgo.Type{listDyn}, listStr)),
 
 		// Version comparison, returning -1, 0 or 1. Semver rather than string
 		// order, because "1.10.0" sorts before "1.9.0" as a string and a check

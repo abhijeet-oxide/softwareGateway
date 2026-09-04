@@ -130,6 +130,9 @@ spec:
         kinds: [PersistentVolumeClaim]
         where: 'value(self, "spec.accessModes") != null && self.spec.accessModes.exists(m, string(m) == "ReadWriteMany")'
       assert:
+        # Recorded on a pass too, so the report says who writes to every shared
+        # folder rather than only naming the ones with several writers.
+        observeOnPass: true
         expr: 'size(mountersOf(self)) <= 1'
         locus: spec.accessModes
         expected: one workload writing to this shared folder, or a confirmed design that allows more

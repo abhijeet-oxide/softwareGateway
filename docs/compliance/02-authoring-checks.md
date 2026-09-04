@@ -452,6 +452,57 @@ Four rules turn that into a real gate:
 
 Rules 3 and 4 are what separate this from a policy directory that accumulates.
 
+### 5.1 Checks that report rather than reject
+
+Some checks exist to say what is there: which containers cap their processing
+power, which claims several workloads write to, what a release runs outside the
+ordinary install. Written the obvious way, such a check has to FAIL on every
+subject in order to say anything - and that is how a pack ends up with three
+checks producing a third of the report's rows and close to none of its defects,
+which is what the audit found.
+
+`assert.observeOnPass: true` records the author-supplied `observed` value on a
+pass as well as on a failure. The check then passes on everything correct and
+still carries what it saw, so the inventory lives in the full record and the
+action report stays about defects.
+
+```yaml
+    - id: UPG-08
+      title: Every task Helm runs is named and understood
+      severity: info
+      assert:
+        observeOnPass: true
+        expr: |
+          text(self, "metadata.annotations[helm.sh/hook]").split(",").all(h,
+            h.trim() in ["pre-install", "post-install", …])
+        observed: |
+          "Helm runs this " + text(self, "kind") + " at: " +
+          sorted(text(self, "metadata.annotations[helm.sh/hook]").split(",")
+                 .map(h, h.trim())).join(", ")
+```
+
+One rule comes with it: **the expression has to read correctly in both cases.**
+"runs at pre-upgrade, pre-install" does; "runs at nothing Helm recognises" does
+not, and a check whose observed value is written for the failure only should
+leave `observeOnPass` off. It applies to the author-supplied `observed` alone,
+never to the shorthand's per-term one - a term's observed value describes the
+term that failed, and on a pass there is no failing term.
+
+### 5.2 Determinism, and the one way to lose it
+
+A finding that lists the offending keys renders them from a map comprehension,
+and **map iteration order is randomised**. The check is correct, the finding is
+correct, and the words come out in a different order on every run - so the same
+release checked twice produces different text, and a release-over-release
+comparison reports the finding as fixed and reintroduced with nothing having
+changed.
+
+Wrap it: `sorted(map.filter(…).map(…)).join(", ")`. Lists that come from an
+engine function are already ordered; lists that come from a map are not. The
+determinism test runs every fixture twice and compares the TEXT, which is what
+makes this catchable rather than a thing somebody notices in a diff six months
+later.
+
 ### 6.1 The output contract
 
 Three more assertions, in `baseline/contract_test.go`, each written for a

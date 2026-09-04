@@ -67,12 +67,12 @@ spec:
         locus: data
         expected: no credential material in ordinary configuration
         observed: |
-          self.data.filter(k, looksLikeCredential(k, string(self.data[k])))
-            .map(k, k + " holds " + credentialClass(k, string(self.data[k]))).join(", ")
+          sorted(self.data.filter(k, looksLikeCredential(k, string(self.data[k])))
+            .map(k, k + " holds " + credentialClass(k, string(self.data[k])))).join(", ")
         message: |
           "ConfigMap " + text(self, "metadata.name") + " holds " +
-          self.data.filter(k, looksLikeCredential(k, string(self.data[k])))
-            .map(k, credentialClass(k, string(self.data[k])) + " under the key \"" + k + "\"").join(", ") +
+          sorted(self.data.filter(k, looksLikeCredential(k, string(self.data[k])))
+            .map(k, credentialClass(k, string(self.data[k])) + " under the key \"" + k + "\"")).join(", ") +
           ". Anybody who can read this namespace can read it, and it is in every copy and backup of " +
           "this release. Treat it as already exposed."
 
@@ -168,17 +168,18 @@ spec:
         locus: data
         expected: no credential material travelling inside the chart
         observed: |
-          ((value(self, "data") == null ? [] :
-            self.data.filter(k, decodeBase64(string(self.data[k])).trim() != "")
-              .map(k, k + ": " + (credentialClass(k, decodeBase64(string(self.data[k]))) == ""
-                                  ? "a value shipped in the chart"
-                                  : credentialClass(k, decodeBase64(string(self.data[k])))))) +
-           (value(self, "stringData") == null ? [] :
-            self.stringData.filter(k, string(self.stringData[k]).trim() != "")
-              .map(k, k + ": " + (credentialClass(k, string(self.stringData[k])) == ""
-                                  ? "a value shipped in the chart"
-                                  : credentialClass(k, string(self.stringData[k]))))))
-          .join(", ")
+          sorted(
+            (value(self, "data") == null ? [] :
+              self.data.filter(k, decodeBase64(string(self.data[k])).trim() != "")
+                .map(k, k + ": " + (credentialClass(k, decodeBase64(string(self.data[k]))) == ""
+                                    ? "a value shipped in the chart"
+                                    : credentialClass(k, decodeBase64(string(self.data[k])))))) +
+            (value(self, "stringData") == null ? [] :
+              self.stringData.filter(k, string(self.stringData[k]).trim() != "")
+                .map(k, k + ": " + (credentialClass(k, string(self.stringData[k])) == ""
+                                    ? "a value shipped in the chart"
+                                    : credentialClass(k, string(self.stringData[k])))))
+          ).join(", ")
         message: |
           "Secret " + text(self, "metadata.name") + " ships with material already in it. " +
           "Everything in a chart is in version control and in every mirror and archive of the " +

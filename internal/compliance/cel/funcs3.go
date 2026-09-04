@@ -159,6 +159,37 @@ func bindings3(idx *compliance.Index) map[string]impl {
 		return types.DefaultTypeAdapter.NativeToValue(configRefs(spec))
 	})
 
+	// sorted() puts a list of strings in a fixed order.
+	//
+	// # Why a check cannot do without it
+	//
+	// A finding that lists the offending keys renders them from a map
+	// comprehension, and map iteration order is randomised. The check is
+	// correct, the finding is correct, and the WORDS come out in a different
+	// order on every run - so the same release checked twice produces different
+	// text, and a release-over-release comparison reports the finding as fixed
+	// and reintroduced with nothing having changed. "The same release checked
+	// twice is identical" is a merge gate in this package, not a preference.
+	add("sorted_list", func(args ...ref.Val) ref.Val {
+		out := []any{}
+		if len(args) != 1 {
+			return types.DefaultTypeAdapter.NativeToValue(out)
+		}
+		list, ok := native(args[0]).([]any)
+		if !ok {
+			return types.DefaultTypeAdapter.NativeToValue(out)
+		}
+		strs := make([]string, 0, len(list))
+		for _, v := range list {
+			strs = append(strs, scalarString(v))
+		}
+		sort.Strings(strs)
+		for _, v := range strs {
+			out = append(out, v)
+		}
+		return types.DefaultTypeAdapter.NativeToValue(out)
+	})
+
 	unary := func(id string, fn func(string) bool) {
 		add(id, func(args ...ref.Val) ref.Val {
 			if len(args) != 1 {

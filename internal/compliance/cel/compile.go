@@ -278,6 +278,13 @@ func (p *program) Evaluate(ctx context.Context, subj compliance.Subject, idx *co
 
 	j := compliance.Judgement{Compliant: ok, Expected: p.expected, Locus: p.locus}
 	if ok {
+		// A check that exists to report what is there, rather than to reject
+		// it, says so on a pass as well. See Assert.ObserveOnPass.
+		if p.check.Assert.ObserveOnPass && planned.observed != nil {
+			if ov, _, oerr := planned.observed.ContextEval(ctx, act); oerr == nil {
+				j.Observed = str(ov.Value())
+			}
+		}
 		return j, nil
 	}
 

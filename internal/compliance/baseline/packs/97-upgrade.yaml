@@ -166,6 +166,11 @@ spec:
         annotations:
           helm.sh/hook: "*"
       assert:
+        # Recorded on a pass as well, which is the whole point of this check:
+        # a hook that is perfectly well formed still needs to appear in the
+        # report, because nothing else in it shows what a release runs outside
+        # the ordinary install.
+        observeOnPass: true
         expr: |
           text(self, "metadata.annotations[helm.sh/hook]").split(",").all(h,
             h.trim() in ["pre-install", "post-install", "pre-upgrade", "post-upgrade",
@@ -175,7 +180,7 @@ spec:
         expected: moments Helm recognises
         observed: |
           "Helm runs this " + text(self, "kind") + " at: " +
-          text(self, "metadata.annotations[helm.sh/hook]").split(",").map(h, h.trim()).join(", ")
+          sorted(text(self, "metadata.annotations[helm.sh/hook]").split(",").map(h, h.trim())).join(", ")
         message: |
           "this " + text(self, "kind") + " is marked to run at " +
           text(self, "metadata.annotations[helm.sh/hook]").split(",")

@@ -90,15 +90,33 @@ func TestGoodFixtureIsClean(t *testing.T) {
 // Two runs of the same release must be byte-identical. This is what makes a
 // finding reproducible and a comparison between releases meaningful.
 func TestRunsAreDeterministic(t *testing.T) {
-	a := runFixture(t, "good-app.yaml")
-	b := runFixture(t, "good-app.yaml")
-	if len(a) != len(b) {
-		t.Fatalf("two runs produced %d and %d results", len(a), len(b))
-	}
-	for i := range a {
-		if a[i].CheckID != b[i].CheckID || a[i].Outcome != b[i].Outcome ||
-			a[i].Address.Where() != b[i].Address.Where() || a[i].Message != b[i].Message {
-			t.Fatalf("result %d differs between runs:\n  %+v\n  %+v", i, a[i], b[i])
+	// Every fixture, not only the clean one, and comparing the TEXT rather than
+	// the outcome. A finding that lists the offending keys renders them from a
+	// map comprehension, and map iteration order is randomised - so a check
+	// written the obvious way produces the same finding with the words in a
+	// different order on every run, and a release-over-release comparison
+	// reports it as fixed and reintroduced. That is exactly the kind of flap
+	// "the same release checked twice is identical" exists to forbid, and it is
+	// invisible on a fixture whose findings happen to name one key.
+	for _, fx := range []string{
+		"good-app.yaml", "bad-config.yaml", "bad-metadata.yaml", "bad-network.yaml",
+		"bad-security.yaml", "bad-storage.yaml", "bad-scheduling.yaml",
+		"bad-observability.yaml", "bad-pdb.yaml", "bad-probes.yaml",
+		"bad-resources.yaml", "bad-supply.yaml", "bad-upgrade.yaml", "bad-cronjob.yaml",
+	} {
+		a := runFixture(t, fx)
+		b := runFixture(t, fx)
+		if len(a) != len(b) {
+			t.Fatalf("%s: two runs produced %d and %d results", fx, len(a), len(b))
+		}
+		for i := range a {
+			if a[i].CheckID != b[i].CheckID || a[i].Outcome != b[i].Outcome ||
+				a[i].Address.Where() != b[i].Address.Where() ||
+				a[i].Message != b[i].Message || a[i].Observed != b[i].Observed ||
+				a[i].Expected != b[i].Expected {
+				t.Fatalf("%s: result %d differs between two runs of the same release:\n  %+v\n  %+v",
+					fx, i, a[i], b[i])
+			}
 		}
 	}
 }

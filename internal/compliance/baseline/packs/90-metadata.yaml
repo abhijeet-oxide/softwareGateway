@@ -120,10 +120,10 @@ spec:
         locus: metadata.labels
         expected: values of at most 63 characters, letters and digits with dashes, underscores and dots
         observed: |
-          allLabels(self).filter(k, size(allLabels(self)[k]) > 63 ||
+          sorted(allLabels(self).filter(k, size(allLabels(self)[k]) > 63 ||
             (allLabels(self)[k] != "" &&
              !allLabels(self)[k].matches("^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$")))
-            .map(k, k + "=" + allLabels(self)[k]).join(", ")
+            .map(k, k + "=" + allLabels(self)[k])).join(", ")
 
     - id: MTA-03
       title: Addressing uses names that do not change between releases
@@ -205,12 +205,12 @@ spec:
         locus: metadata.annotations
         expected: no credential in an annotation, and none over 8 kilobytes
         observed: |
-          self.metadata.annotations.filter(k,
+          sorted(self.metadata.annotations.filter(k,
             size(string(self.metadata.annotations[k])) > 8192 ||
             looksLikeCredential(k, string(self.metadata.annotations[k])))
             .map(k, size(string(self.metadata.annotations[k])) > 8192
                     ? k + " is " + string(size(string(self.metadata.annotations[k]))) + " bytes"
-                    : k + " holds " + credentialClass(k, string(self.metadata.annotations[k])))
+                    : k + " holds " + credentialClass(k, string(self.metadata.annotations[k]))))
             .join(", ")
 
     - id: MTA-05
@@ -249,8 +249,8 @@ spec:
         locus: metadata.labels
         expected: a domain prefix on custom keys
         observed: |
-          "unprefixed: " + allLabels(self).filter(k, !k.contains("/") &&
-            k != "app" && k != "chart" && k != "release" && k != "heritage" && k != "component").join(", ")
+          "unprefixed: " + sorted(allLabels(self).filter(k, !k.contains("/") &&
+            k != "app" && k != "chart" && k != "release" && k != "heritage" && k != "component")).join(", ")
 
     - id: MTA-08
       title: One-off Helm tasks clean up after themselves and cannot run forever

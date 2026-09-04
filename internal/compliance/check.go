@@ -194,6 +194,9 @@ func (c Check) Validate() []error {
 		if c.Assert.Empty() {
 			add("assert is required: a declarative check with no assertion would pass everything it applies to")
 		}
+		if c.Assert.ObserveOnPass && c.Assert.Observed == "" {
+			add("assert.observeOnPass records the observed value on a pass, and this check has no observed expression to record")
+		}
 	case EngineBuiltin:
 		if !c.Assert.Empty() {
 			add("a builtin check must not carry an assert block: the Go implementation is the assertion, and two sources of truth is one too many")
@@ -439,6 +442,30 @@ type Assert struct {
 	// Expr is CEL, for everything the forms above cannot say. True means
 	// compliant.
 	Expr string `json:"expr,omitempty"`
+
+	// ObserveOnPass records the observed value on a PASS as well as on a
+	// failure.
+	//
+	// # Why a check would want that
+	//
+	// Some checks exist to report what is there rather than to reject it: which
+	// containers cap their processing power, which claims are shared, what a
+	// release runs outside the ordinary install. Without this, the only way to
+	// make such a check say anything is to make it FAIL on every subject - and
+	// that is how a pack ends up with three checks producing a third of the
+	// report's rows and close to none of its defects, which is the shape the
+	// audit in docs/compliance/compliance-report.md found.
+	//
+	// With it, the check passes on everything correct and still carries what it
+	// saw, so the inventory lives in the full record and the action report stays
+	// about defects.
+	//
+	// It applies only to the author-supplied `observed`, never to the
+	// shorthand's per-term one: a term's observed value describes the term that
+	// failed, and there is no failing term on a pass. An expression used this
+	// way has to read correctly in both cases - "runs at pre-upgrade,
+	// pre-install", not "runs at nothing Helm recognises".
+	ObserveOnPass bool `json:"observeOnPass,omitempty"`
 
 	// Observed, Expected, Locus and Message override what the shorthand would
 	// have derived. Observed and Message are CEL expressions returning a

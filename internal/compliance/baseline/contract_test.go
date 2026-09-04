@@ -101,6 +101,41 @@ func TestFindingsCarryTheValueTheyJudged(t *testing.T) {
 	}
 }
 
+// A check that exists to REPORT something says it on a pass.
+//
+// The alternative is what the audit found: an inventory check has to fail on
+// every subject in order to say anything, so three checks produced roughly a
+// third of a report's rows and close to none of its defects. `observeOnPass`
+// is the mechanism that separates the two, and this asserts it works - because
+// a silent pass row is indistinguishable from the check not existing.
+func TestInventoryChecksSayWhatTheySawOnAPass(t *testing.T) {
+	want := map[string]string{
+		// The tasks Helm runs outside the ordinary install. Nothing else in a
+		// compliance report shows them: hooks do not appear among the deployed
+		// objects.
+		"UPG-08": "Helm runs this Job at: pre-install, pre-upgrade",
+	}
+	seen := map[string]bool{}
+	for _, r := range runFixture(t, "good-app.yaml") {
+		if r.Outcome != compliance.OutcomePass {
+			continue
+		}
+		expect, ok := want[r.CheckID]
+		if !ok {
+			continue
+		}
+		seen[r.CheckID] = true
+		if r.Observed != expect {
+			t.Errorf("%s passed and recorded %q, want %q", r.CheckID, r.Observed, expect)
+		}
+	}
+	for id := range want {
+		if !seen[id] {
+			t.Errorf("%s produced no passing result on the good fixture", id)
+		}
+	}
+}
+
 // Every check has to carry the fields a non-specialist reader needs, and the
 // severity rubric has to hold. Both are cheap to state and impossible to keep
 // by convention across a hundred checks in thirteen files.

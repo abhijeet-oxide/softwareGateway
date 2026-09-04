@@ -190,6 +190,11 @@ spec:
         containers: all
         where: 'present(self, "resources.limits.cpu") && present(self, "resources.requests.cpu")'
       assert:
+        # Recorded on a pass too: the throttling review the source catalogue
+        # asks for wants the list of containers that cap CPU, and making the
+        # check FAIL to produce that list is what turned it into a fifth of a
+        # real report describing no defect at all.
+        observeOnPass: true
         expr: |
           quantity(text(self, "resources.limits.cpu")) >=
             2.0 * quantity(text(self, "resources.requests.cpu"))

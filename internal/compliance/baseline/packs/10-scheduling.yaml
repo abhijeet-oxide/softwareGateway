@@ -197,7 +197,7 @@ spec:
           self.spec.template.spec.topologySpreadConstraints
             .filter(c, value(c, "labelSelector.matchLabels") != null &&
                        c.labelSelector.matchLabels.exists(k, unstableLabelKey(k)))
-            .map(c, c.labelSelector.matchLabels.filter(k, unstableLabelKey(k)).join(", "))
+            .map(c, sorted(c.labelSelector.matchLabels.filter(k, unstableLabelKey(k))).join(", "))
             .join("; ")
 
     - id: SCH-05

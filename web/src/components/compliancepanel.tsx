@@ -191,6 +191,7 @@ export function ComplianceTab({ product, reference, repository }: {
   const [chart, setChart] = useState<string | undefined>()
   const [determinacy, setDeterminacy] = useState<string | undefined>()
   const [kind, setKind] = useState<string | undefined>()
+  const [subcategory, setSubcategory] = useState<string | undefined>()
   const [sort, setSort] = useState<ResultSort>('severity')
   /*
    * TWO PIECES OF SEARCH STATE, and the second is not redundant.
@@ -227,6 +228,7 @@ export function ComplianceTab({ product, reference, repository }: {
     chart: chart ? [chart] : undefined,
     determinacy: determinacy ? [determinacy] : undefined,
     kind: kind ? [kind] : undefined,
+    subcategory: subcategory ? [subcategory] : undefined,
     search: search.trim() || undefined,
     /*
      * ENOUGH ROWS TO GROUP, which the default page is not.
@@ -661,7 +663,7 @@ export function ComplianceTab({ product, reference, repository }: {
                 allowClear
                 style={{ width: 260 }}
                 prefix={<SearchOutlined style={{ color: c.text3 }} />}
-                placeholder="Check, resource, chart or file"
+                placeholder="Resource, chart, file, or a term like toleration or RWX"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
               />
@@ -729,6 +731,23 @@ export function ComplianceTab({ product, reference, repository }: {
                 optionFilterProp="label"
                 options={kindOptions(results)}
               />
+              {/*
+                THE MECHANISM. The split an engineer makes first, and the one
+                the category is too coarse for: "Disruption & Availability"
+                holds the budget checks, the rollout checks and the shutdown
+                checks together, and somebody looking at a drain problem wants
+                one of those three.
+              */}
+              <Select
+                allowClear
+                placeholder="Any mechanism"
+                style={{ minWidth: 200 }}
+                value={subcategory}
+                onChange={setSubcategory}
+                showSearch
+                optionFilterProp="label"
+                options={subcategoryOptions(results)}
+              />
               {/* The split a reader makes first: whose problem is this. */}
               <Select
                 allowClear
@@ -781,7 +800,8 @@ export function ComplianceTab({ product, reference, repository }: {
                   loading={compliance.isFetching}
                   onOpenGroup={setGroup}
                   onOpenResult={setDetail}
-                  emptyText={emptyTextFor(view, Boolean(search || chart || determinacy || kind))}
+                  onSearchTerm={setDraft}
+                  emptyText={emptyTextFor(view, Boolean(search || chart || determinacy || kind || subcategory))}
                 />
               )
               : (
@@ -789,7 +809,8 @@ export function ComplianceTab({ product, reference, repository }: {
                   results={sortResults(results, sort)}
                   loading={compliance.isFetching}
                   onOpen={setDetail}
-                  emptyText={emptyTextFor(view, Boolean(search || chart || determinacy || kind))}
+                  onSearchTerm={setDraft}
+                  emptyText={emptyTextFor(view, Boolean(search || chart || determinacy || kind || subcategory))}
                 />
               )}
           </>
@@ -1067,6 +1088,9 @@ type CheckGroup = {
   outcome: ComplianceResult['outcome']
   outcomeLabel: string
   category?: string
+  /** The mechanism, in an engineer's words. Every occurrence of one check has
+   *  the same one, because it is a property of the check. */
+  subcategory?: string
   remediation?: string
   reference?: string
   message?: string
@@ -1100,6 +1124,7 @@ function groupByCheck(results: ComplianceResult[]): CheckGroup[] {
         outcome: r.outcome,
         outcomeLabel: r.outcomeLabel,
         category: r.category,
+        subcategory: r.subcategory,
         remediation: r.remediation,
         reference: r.reference,
         message: r.message || r.error,
@@ -1111,6 +1136,7 @@ function groupByCheck(results: ComplianceResult[]): CheckGroup[] {
       byKey.set(r.check, g)
     }
     if (!g.title && r.title) g.title = r.title
+    if (!g.subcategory && r.subcategory) g.subcategory = r.subcategory
     if (!g.remediation && r.remediation) g.remediation = r.remediation
     if (!g.reference && r.reference) g.reference = r.reference
     if (!g.message && (r.message || r.error)) g.message = r.message || r.error
@@ -1159,11 +1185,13 @@ function severityRank(severity: string): number {
  * and sends the reader back to the flat view for the rest. This is the shape
  * the Security tab's unique-CVE table uses, and for the same reason.
  */
-function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, emptyText }: {
+function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, onSearchTerm, emptyText }: {
   groups: CheckGroup[]
   loading?: boolean
   onOpenGroup: (g: CheckGroup) => void
   onOpenResult: (r: ComplianceResult) => void
+  /** Searching for a mechanism from the row that names it. */
+  onSearchTerm?: (term: string) => void
   emptyText: string
 }) {
   return (
@@ -1216,6 +1244,7 @@ function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, emptyText
                 <CheckSeverityTag severity={g.severity} />
               </Space>
               {g.title && <span style={{ fontSize: 12, color: c.text2 }}>{g.title}</span>}
+              <MechanismTag value={g.subcategory} onSearch={onSearchTerm} />
             </Space>
           ),
         },
@@ -1282,6 +1311,35 @@ function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, emptyText
         },
       ]}
     />
+  )
+}
+
+/**
+ * The mechanism a finding is about, in the words an engineer uses for it.
+ *
+ * # Why this is on the row at all
+ *
+ * Every title and message in this report is written so that somebody who is not
+ * a Kubernetes engineer can act on it. That means the PodDisruptionBudget check
+ * reads "a service with more than one copy survives planned maintenance" and
+ * contains the word "PodDisruptionBudget" nowhere - which is right for the
+ * person deciding whether to ship, and leaves the person who has to fix it with
+ * nothing to search for.
+ *
+ * Clicking it searches for it, so the label is also the way to find the rest of
+ * the findings about the same mechanism. The vocabulary is closed and shared, so
+ * what comes back is all of them.
+ */
+function MechanismTag({ value, onSearch }: { value?: string; onSearch?: (term: string) => void }) {
+  if (!value) return null
+  return (
+    <Typography.Link
+      onClick={(e) => { e.stopPropagation(); onSearch?.(value) }}
+      style={{ fontSize: 11, color: c.text3 }}
+      title={onSearch ? `Show every finding about ${value}` : undefined}
+    >
+      {value}
+    </Typography.Link>
   )
 }
 
@@ -1493,10 +1551,12 @@ function CheckDrawer({ group, onClose, onOpenResult }: {
   )
 }
 
-function ResultsTable({ results, loading, onOpen, emptyText }: {
+function ResultsTable({ results, loading, onOpen, onSearchTerm, emptyText }: {
   results: ComplianceResult[]
   loading?: boolean
   onOpen: (r: ComplianceResult) => void
+  /** Searching for a mechanism from the row that names it. */
+  onSearchTerm?: (term: string) => void
   emptyText: string
 }) {
   const columns = useMemo(() => [
@@ -1519,6 +1579,7 @@ function ResultsTable({ results, loading, onOpen, emptyText }: {
           {r.title && (
             <span style={{ fontSize: 12, color: c.text2 }}>{r.title}</span>
           )}
+          <MechanismTag value={r.subcategory} onSearch={onSearchTerm} />
         </Space>
       ),
     },
@@ -1542,7 +1603,7 @@ function ResultsTable({ results, loading, onOpen, emptyText }: {
         </Space>
       ),
     },
-  ], [onOpen])
+  ], [onOpen, onSearchTerm])
 
   return (
     <DataTable<ComplianceResult>
@@ -1688,6 +1749,22 @@ function ResultDrawer({ result, product, reference, repository, onClose, onOpenM
             {result.confidenceLabel && (
               <Descriptions.Item label="Confidence">{result.confidenceLabel}</Descriptions.Item>
             )}
+            {/*
+              The engineer's half of the finding. Everything above is written
+              for a reader who does not know these words; this is where they
+              are, so somebody who does can go from a finding to the rest of
+              what this release gets wrong about the same mechanism.
+            */}
+            {result.subcategory && (
+              <Descriptions.Item label="Mechanism">{result.subcategory}</Descriptions.Item>
+            )}
+            {result.keywords && result.keywords.length > 0 && (
+              <Descriptions.Item label="Search terms">
+                <span style={{ fontFamily: mono, fontSize: 11 }}>
+                  {result.keywords.join('  ')}
+                </span>
+              </Descriptions.Item>
+            )}
             {result.determinacy && result.determinacy !== 'na' && (
               /*
                 Not "Owner", which is what this said while holding something
@@ -1771,6 +1848,22 @@ function kindOptions(results: ComplianceResult[]): { label: string; value: strin
   const seen = new Set<string>()
   for (const r of results) {
     if (r.kind) seen.add(r.kind)
+  }
+  return [...seen].sort().map((k) => ({ label: k, value: k }))
+}
+
+/**
+ * The mechanisms present in what came back.
+ *
+ * Derived from the rows on screen for the same reason the kinds are: the list
+ * that matters is the one this release actually produced findings about, and an
+ * engineer narrowing to "Taints & tolerations" wants to know whether there is
+ * anything there before they click.
+ */
+function subcategoryOptions(results: ComplianceResult[]): { label: string; value: string }[] {
+  const seen = new Set<string>()
+  for (const r of results) {
+    if (r.subcategory) seen.add(r.subcategory)
   }
   return [...seen].sort().map((k) => ({ label: k, value: k }))
 }

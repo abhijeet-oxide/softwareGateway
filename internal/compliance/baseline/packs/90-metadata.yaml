@@ -25,6 +25,8 @@ spec:
       severity: warn
       tier: 1
       category: Metadata
+      subcategory: Standard labels
+      keywords: [app.kubernetes.io/name, app.kubernetes.io/instance, labels, metadata.labels]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -59,6 +61,8 @@ spec:
       severity: info
       tier: 1
       category: Metadata
+      subcategory: Standard labels
+      keywords: [app.kubernetes.io/component, app.kubernetes.io/part-of, app.kubernetes.io/managed-by, app.kubernetes.io/version, labels]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -94,6 +98,8 @@ spec:
       severity: warn
       tier: 1
       category: Metadata
+      subcategory: Label syntax
+      keywords: [labels, metadata.labels, "RFC 1123", "63 characters", "invalid label"]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-template
@@ -141,6 +147,8 @@ spec:
       severity: block
       tier: 1
       category: Metadata
+      subcategory: Selector labels
+      keywords: [spec.selector, matchLabels, "immutable selector", app.kubernetes.io/version, helm.sh/chart, pod-template-hash]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template
@@ -182,6 +190,8 @@ spec:
       severity: warn
       tier: 1
       category: Metadata
+      subcategory: Annotations
+      keywords: [annotations, metadata.annotations, "8 KiB", credential, "size limit"]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-template
@@ -227,6 +237,8 @@ spec:
       severity: info
       tier: 1
       category: Metadata
+      subcategory: Custom labels
+      keywords: [labels, "domain prefix", "custom keys", metadata.labels]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -266,6 +278,8 @@ spec:
       severity: warn
       tier: 1
       category: Metadata
+      subcategory: Helm hooks
+      keywords: [helm.sh/hook, helm.sh/hook-delete-policy, backoffLimit, activeDeadlineSeconds, "hook Job", Helm]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template

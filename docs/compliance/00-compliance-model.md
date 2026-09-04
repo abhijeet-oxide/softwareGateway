@@ -216,10 +216,12 @@ The address is the feature. Everything else is text.
 ── identity ────────────────────────────────────────────────────────
 checkId          PDB-02
 pack             sgw-baseline            which rulebook this came from
-title            PDB must not forbid every voluntary eviction
+title            No rule makes maintenance impossible
 severity         block
 tier             1
 category         Disruption & Availability
+subcategory      PodDisruptionBudget     the mechanism, in an engineer's words
+keywords         PodDisruptionBudget PDB maxUnavailable minAvailable eviction
 
 ── where, from the outside in ───────────────────────────────────────
 product          vendor-a-platform
@@ -276,6 +278,15 @@ Three properties of that shape are deliberate:
 - **`fingerprint` excludes the chart version and the release tag** on purpose.
   It is what makes "the vendor fixed this in 4.3.0" and "this has been failing
   for six releases" answerable, and it is what a waiver is keyed on.
+
+`subcategory` and `keywords` are the technical index over a report written in
+plain language, and they exist because the plain language took something away.
+The title above says "no rule makes maintenance impossible" and contains the
+word "PodDisruptionBudget" nowhere - which is what makes it readable by somebody
+who is not a Kubernetes engineer, and what leaves the engineer who has to fix it
+with nothing to search for. Both fields are matched by the report's search
+alongside the resource, the chart, the file and the field path, so one box
+serves both readers. See [02](02-authoring-checks.md) §2.2.1.
 
 The triage block is the newest part of the shape and the one that was missing
 longest. A severity says how much this organization cares about the rule; it

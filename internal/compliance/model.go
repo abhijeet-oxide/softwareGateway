@@ -416,10 +416,17 @@ type Result struct {
 	CheckID string `json:"checkId"`
 	// The check's own metadata, copied at evaluation time so the row explains
 	// itself with nothing else loaded.
-	CheckTitle  string   `json:"checkTitle,omitempty"`
-	Severity    Severity `json:"severity"`
-	Tier        Tier     `json:"tier,omitempty"`
-	Category    string   `json:"category,omitempty"`
+	CheckTitle string   `json:"checkTitle,omitempty"`
+	Severity   Severity `json:"severity"`
+	Tier       Tier     `json:"tier,omitempty"`
+	Category   string   `json:"category,omitempty"`
+	// Subcategory is the mechanism this finding is about, in the words an
+	// engineer uses for it, and Keywords is the technical vocabulary it should
+	// be findable by. Both are carried on the result because the report's
+	// search is over results, and because the plain-language message
+	// deliberately does not contain any of those words.
+	Subcategory string   `json:"subcategory,omitempty"`
+	Keywords    []string `json:"keywords,omitempty"`
 	Pack        string   `json:"pack,omitempty"`
 	Remediation string   `json:"remediation,omitempty"`
 	Reference   string   `json:"reference,omitempty"`

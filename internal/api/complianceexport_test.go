@@ -76,6 +76,10 @@ func TestComplianceFindingsCarryTheWholeAddress(t *testing.T) {
 		// determinacy, which is now "Value is" and says what it means.
 		"Who fixes it", "Effort", "When it bites", "Confidence", "Value is",
 		"Example fix",
+		// The engineer's half of the file. The plain-language columns say "the
+		// rule that tells the platform how many copies must stay running"; these
+		// say "PodDisruptionBudget", which is what somebody greps for.
+		"Mechanism", "Search terms",
 	} {
 		if _, ok := index[column]; !ok {
 			t.Errorf("the findings table has no %q column", column)
@@ -121,6 +125,7 @@ func TestComplianceUniqueTableCountsThePlaces(t *testing.T) {
 	for _, column := range []string{
 		"Check", "Places", "Charts", "Examples", "Remediation",
 		"Who fixes it", "Effort", "When it bites", "Value is", "Example fix",
+		"Mechanism",
 	} {
 		if _, ok := index[column]; !ok {
 			t.Fatalf("the unique table has no %q column: %v", column, rows[0])

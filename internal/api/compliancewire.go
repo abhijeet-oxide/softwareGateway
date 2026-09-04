@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
@@ -140,14 +141,20 @@ type ComplianceResultView struct {
 	// what the run found, so the run has to be what says where to point.
 	Seq int `json:"seq"`
 
-	Check       string `json:"check"`
-	Title       string `json:"title,omitempty"`
-	Severity    string `json:"severity"`
-	Category    string `json:"category,omitempty"`
-	Pack        string `json:"pack,omitempty"`
-	Tier        int    `json:"tier,omitempty"`
-	Remediation string `json:"remediation,omitempty"`
-	Reference   string `json:"reference,omitempty"`
+	Check    string `json:"check"`
+	Title    string `json:"title,omitempty"`
+	Severity string `json:"severity"`
+	Category string `json:"category,omitempty"`
+	// Subcategory is the mechanism this finding is about, in an engineer's
+	// words, and Keywords is the vocabulary it is searchable by. The message is
+	// written for a reader who does not know those words; these are for the one
+	// who does.
+	Subcategory string   `json:"subcategory,omitempty"`
+	Keywords    []string `json:"keywords,omitempty"`
+	Pack        string   `json:"pack,omitempty"`
+	Tier        int      `json:"tier,omitempty"`
+	Remediation string   `json:"remediation,omitempty"`
+	Reference   string   `json:"reference,omitempty"`
 
 	// The triage block. A severity says how much this organization cares; these
 	// four say what a reader should do about it, and they are what turns a list
@@ -279,17 +286,19 @@ type PolicyPackView struct {
 // This is what a vendor reads when they ask what will be checked before they
 // ship, and what a reviewer reads when settling an argument about a finding.
 type PolicyCheckView struct {
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	Description string `json:"description,omitempty"`
-	Rationale   string `json:"rationale,omitempty"`
-	Severity    string `json:"severity"`
-	Tier        int    `json:"tier,omitempty"`
-	Category    string `json:"category,omitempty"`
-	Remediation string `json:"remediation,omitempty"`
-	Reference   string `json:"reference,omitempty"`
-	Pack        string `json:"pack,omitempty"`
-	Engine      string `json:"engine,omitempty"`
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description,omitempty"`
+	Rationale   string   `json:"rationale,omitempty"`
+	Severity    string   `json:"severity"`
+	Tier        int      `json:"tier,omitempty"`
+	Category    string   `json:"category,omitempty"`
+	Subcategory string   `json:"subcategory,omitempty"`
+	Keywords    []string `json:"keywords,omitempty"`
+	Remediation string   `json:"remediation,omitempty"`
+	Reference   string   `json:"reference,omitempty"`
+	Pack        string   `json:"pack,omitempty"`
+	Engine      string   `json:"engine,omitempty"`
 
 	// How to read a finding from this check: how firmly it can be asserted,
 	// when the consequence arrives, who changes something, and how much work it
@@ -369,7 +378,9 @@ func complianceResultViews(rows []store.ComplianceResultRow) []ComplianceResultV
 		out = append(out, ComplianceResultView{
 			Seq:   r.Seq,
 			Check: r.CheckID, Title: r.CheckTitle, Severity: r.Severity,
-			Category: r.Category, Pack: r.Pack, Tier: r.Tier,
+			Category: r.Category, Subcategory: r.Subcategory,
+			Keywords: splitKeywords(r.Keywords),
+			Pack:     r.Pack, Tier: r.Tier,
 			Remediation: r.Remediation, Reference: r.Reference,
 
 			Confidence:       r.Confidence,
@@ -423,6 +434,7 @@ func policyCatalogueView(cat *compliance.Catalog) PolicyCatalogueView {
 		out.Checks = append(out.Checks, PolicyCheckView{
 			ID: c.ID, Title: c.Title, Description: c.Description, Rationale: c.Rationale,
 			Severity: string(c.Severity), Tier: int(c.Tier), Category: c.Category,
+			Subcategory: c.Subcategory, Keywords: c.Keywords,
 			Remediation: c.Remediation, Reference: c.Reference, Pack: c.Pack,
 			Engine:      c.EngineName(),
 			Confidence:  string(c.Confidence),
@@ -481,4 +493,15 @@ func joinWords(in []string) string {
 		out += s
 	}
 	return out + " and " + in[len(in)-1]
+}
+
+// splitKeywords reads the keywords back from the flat form they are stored in.
+//
+// Stored space-separated because what they exist for is a LIKE over the search
+// box; served as a list because that is what a client filters and renders.
+func splitKeywords(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return strings.Fields(s)
 }

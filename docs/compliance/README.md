@@ -64,3 +64,8 @@ report, milestones. This directory is the ground truth it rests on.
   four fields say who fixes it, how much work it is, when it bites and how
   firmly the tool knows. A finding a release manager cannot act on without a
   conversation has not been delivered.
+- **And it is still findable by the engineer who fixes it.** Plain language
+  takes the technical vocabulary out of the prose, so every check carries the
+  mechanism it is about and the terms somebody would search for - `toleration`,
+  `maxUnavailable`, `RWX`, `helm.sh/hook` - and the report's search matches
+  them. One set of results, two vocabularies.

@@ -113,7 +113,11 @@ export default function Policies() {
       if (category && check.category !== category) return false
       if (severity && check.severity !== severity) return false
       if (!q) return true
-      return [check.id, check.title, check.description, check.rationale, check.category, check.pack]
+      return [check.id, check.title, check.description, check.rationale, check.category,
+        // The technical vocabulary. The title deliberately does not contain it,
+        // so without these an engineer searching `toleration` or `RWX` finds
+        // nothing at all.
+        check.subcategory, ...(check.keywords ?? []), check.pack]
         .some((v) => v?.toLowerCase().includes(q))
     })
   }, [checks, search, category, severity])
@@ -128,7 +132,8 @@ export default function Policies() {
       if (!q) return true
       return [pack.name, pack.version, pack.description, pack.maintainer, ...(pack.prefixes ?? [])]
         .some((value) => value?.toLowerCase().includes(q))
-        || ownedChecks.some((check) => [check.id, check.title, check.description, check.rationale]
+        || ownedChecks.some((check) => [check.id, check.title, check.description, check.rationale,
+          check.subcategory, ...(check.keywords ?? [])]
           .some((value) => value?.toLowerCase().includes(q)))
     })
   }, [packs, checks, search, category, severity])
@@ -333,7 +338,22 @@ function PolicyTable({
             title: '', dataIndex: 'severity', width: 110,
             render: (value: string) => <CheckSeverityTag severity={value} />,
           },
-          { title: 'Category', dataIndex: 'category', width: 220, render: (value: string) => <CategoryLabel category={value} /> },
+          {
+            title: 'Category', dataIndex: 'category', width: 220,
+            render: (_: unknown, check: PolicyCheck) => (
+              <Space direction="vertical" size={0}>
+                <CategoryLabel category={check.category ?? ''} />
+                {/*
+                  The mechanism, under the section it belongs to. The section is
+                  where the requirement came from; this is what the check is
+                  about, and it is what an engineer is looking for.
+                */}
+                {check.subcategory && (
+                  <span style={{ fontSize: 11, color: c.text3 }}>{check.subcategory}</span>
+                )}
+              </Space>
+            ),
+          },
           {
             title: 'What it requires', dataIndex: 'title',
             render: (_: unknown, check: PolicyCheck) => (
@@ -385,6 +405,8 @@ function CheckDetail({ check, onSourceClick }: { check: PolicyCheck; onSourceCli
       check.rationale && `Why we require it\n${check.rationale}`,
       check.remediation && `How to satisfy it\n${check.remediation}`,
       check.fixExample && `Example\n${check.fixExample}`,
+      check.subcategory && `Mechanism\n${check.subcategory}`,
+      check.keywords?.length && `Search terms\n${check.keywords.join(', ')}`,
       check.appliesTo && `Applies to\n${check.appliesTo}`,
       check.fixOwner && `Who fixes it\n${FIX_OWNER_LABEL[check.fixOwner] ?? check.fixOwner}`,
       check.fixEffort && `Effort\n${check.fixEffort}`,
@@ -483,6 +505,11 @@ function CheckDetail({ check, onSourceClick }: { check: PolicyCheck; onSourceCli
             {check.confidence === 'needs-review'
               ? 'needs someone who knows the workload'
               : 'likely, unless the platform provides it'}
+          </span>
+        )}
+        {check.keywords && check.keywords.length > 0 && (
+          <span style={{ fontFamily: mono, fontSize: 11, color: c.text3 }}>
+            {check.keywords.join('  ')}
           </span>
         )}
         {check.tier ? <span>tier {check.tier}</span> : null}

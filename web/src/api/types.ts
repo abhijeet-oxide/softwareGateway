@@ -2445,6 +2445,16 @@ export interface ComplianceResult {
   title?: string
   severity: 'block' | 'warn' | 'info'
   category?: string
+  /**
+   * The mechanism this finding is about, in the words an engineer uses for it -
+   * "PodDisruptionBudget", "Taints & tolerations", "Seccomp". The title and the
+   * message are written so somebody who is not a Kubernetes engineer can act on
+   * them, which means they contain none of those words; this is the other half
+   * of the audience, and it is what a finding is grouped and filtered by.
+   */
+  subcategory?: string
+  /** The technical vocabulary this finding is searchable by. */
+  keywords?: string[]
   pack?: string
   tier?: number
   remediation?: string
@@ -2632,6 +2642,10 @@ export interface PolicyCheck {
   severity: 'block' | 'warn' | 'info'
   tier?: number
   category?: string
+  /** The mechanism, in an engineer's words - see ComplianceResult. */
+  subcategory?: string
+  /** The technical vocabulary this check is searchable by. */
+  keywords?: string[]
   remediation?: string
   reference?: string
   pack?: string

@@ -25,6 +25,8 @@ spec:
       severity: warn
       tier: 1
       category: Storage & Data
+      subcategory: Storage class
+      keywords: [storageClassName, PersistentVolumeClaim, PVC, StorageClass, "default class"]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-values
@@ -60,6 +62,8 @@ spec:
       severity: block
       tier: 1
       category: Storage & Data
+      subcategory: Shared storage
+      keywords: [ReadWriteMany, RWX, accessModes, NFS, runAsUser, root, "shared volume", supplementalGroups]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -111,6 +115,8 @@ spec:
       severity: info
       tier: 1
       category: Storage & Data
+      subcategory: Shared storage
+      keywords: [ReadWriteMany, RWX, accessModes, "concurrent writers", "shared volume"]
       confidence: needs-review
       whenItBites: under-load
       fixOwner: needs-decision
@@ -152,6 +158,8 @@ spec:
       severity: block
       tier: 1
       category: Storage & Data
+      subcategory: Volume sizing
+      keywords: [resources.requests.storage, PersistentVolumeClaim, PVC, capacity, storage]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-values
@@ -184,6 +192,8 @@ spec:
       severity: block
       tier: 1
       category: Storage & Data
+      subcategory: Stateful workloads
+      keywords: [Deployment, StatefulSet, PersistentVolumeClaim, PVC, volumeClaimTemplates, ReadWriteOnce, RWO]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-template
@@ -224,6 +234,8 @@ spec:
       severity: block
       tier: 1
       category: Storage & Data
+      subcategory: Volume permissions
+      keywords: [chown, chmod, initContainer, fsGroup, "recursive ownership", volumeMounts]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-template
@@ -266,6 +278,8 @@ spec:
       severity: warn
       tier: 1
       category: Storage & Data
+      subcategory: Volume permissions
+      keywords: [fsGroup, fsGroupChangePolicy, supplementalGroups, securityContext, OnRootMismatch]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-template
@@ -313,6 +327,8 @@ spec:
       severity: block
       tier: 1
       category: Storage & Data
+      subcategory: Stateful workloads
+      keywords: [StatefulSet, emptyDir, hostPath, local, volumeClaimTemplates, ephemeral]
       confidence: confirmed
       whenItBites: node-maintenance
       fixOwner: chart-template

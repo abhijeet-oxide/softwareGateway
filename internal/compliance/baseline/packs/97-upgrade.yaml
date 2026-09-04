@@ -27,6 +27,8 @@ spec:
       severity: warn
       tier: 1
       category: Upgrade & Maintenance Readiness
+      subcategory: Custom resource definitions
+      keywords: [CustomResourceDefinition, CRD, "custom resource", apiVersion, apiextensions.k8s.io, ordering]
       confidence: probable
       whenItBites: install
       fixOwner: chart-template
@@ -77,6 +79,8 @@ spec:
       severity: warn
       tier: 1
       category: Upgrade & Maintenance Readiness
+      subcategory: Forced operations
+      keywords: [--force, "--grace-period=0", --disable-eviction, kubectl, "hook Job", drain]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template
@@ -144,6 +148,8 @@ spec:
       severity: info
       tier: 1
       category: Upgrade & Maintenance Readiness
+      subcategory: Helm hooks
+      keywords: [helm.sh/hook, pre-install, post-install, pre-upgrade, post-upgrade, hook, Helm]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template
@@ -209,6 +215,8 @@ spec:
       severity: warn
       tier: 1
       category: Upgrade & Maintenance Readiness
+      subcategory: Helm hooks
+      keywords: [helm.sh/hook, pre-rollback, post-rollback, "helm rollback", GitOps, Flux, "Argo CD", declarative]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template
@@ -262,6 +270,8 @@ spec:
       severity: warn
       tier: 1
       category: Upgrade & Maintenance Readiness
+      subcategory: Custom resource definitions
+      keywords: [CustomResourceDefinition, CRD, helm.sh/resource-policy, keep, uninstall, crds/]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template

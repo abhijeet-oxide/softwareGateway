@@ -25,6 +25,8 @@ spec:
       severity: warn
       tier: 1
       category: Observability
+      subcategory: Metrics
+      keywords: [metrics, ServiceMonitor, PodMonitor, prometheus.io/scrape, Prometheus, scrape]
       confidence: probable
       whenItBites: on-failure
       fixOwner: chart-template
@@ -64,6 +66,8 @@ spec:
       severity: warn
       tier: 1
       category: Observability
+      subcategory: Logging
+      keywords: [logs, stdout, stderr, LOG_FILE, "log collection", logging]
       confidence: probable
       whenItBites: on-failure
       fixOwner: application
@@ -108,6 +112,8 @@ spec:
       severity: warn
       tier: 1
       category: Observability
+      subcategory: Alerting
+      keywords: [PrometheusRule, alert, runbook_url, severity, Alertmanager, "alerting rule"]
       confidence: confirmed
       whenItBites: on-failure
       fixOwner: chart-template

@@ -28,6 +28,8 @@ spec:
       severity: block
       tier: 1
       category: Disruption & Availability
+      subcategory: PodDisruptionBudget
+      keywords: [PodDisruptionBudget, PDB, policy/v1, eviction, "node drain", minAvailable, maxUnavailable, replicas]
       confidence: confirmed
       whenItBites: node-maintenance
       fixOwner: chart-template
@@ -76,6 +78,8 @@ spec:
       severity: block
       tier: 1
       category: Disruption & Availability
+      subcategory: PodDisruptionBudget
+      keywords: [PodDisruptionBudget, PDB, maxUnavailable, minAvailable, eviction, "node drain", deadlock]
       confidence: confirmed
       whenItBites: node-maintenance
       fixOwner: chart-template
@@ -119,6 +123,8 @@ spec:
       severity: block
       tier: 1
       category: Disruption & Availability
+      subcategory: PodDisruptionBudget
+      keywords: [PodDisruptionBudget, PDB, minAvailable, "single replica", eviction, "node drain"]
       confidence: confirmed
       whenItBites: node-maintenance
       fixOwner: chart-template
@@ -161,6 +167,8 @@ spec:
       severity: block
       tier: 1
       category: Disruption & Availability
+      subcategory: Rollout strategy
+      keywords: [RollingUpdate, maxSurge, maxUnavailable, spec.strategy, rollout, rollingUpdate]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template
@@ -198,6 +206,8 @@ spec:
       severity: block
       tier: 1
       category: Disruption & Availability
+      subcategory: Rollout strategy
+      keywords: [Recreate, RollingUpdate, spec.strategy.type, rollout, downtime]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template
@@ -234,6 +244,8 @@ spec:
       severity: warn
       tier: 1
       category: Disruption & Availability
+      subcategory: Rollout strategy
+      keywords: [progressDeadlineSeconds, rollout, ProgressDeadlineExceeded, "stuck deployment"]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template
@@ -264,6 +276,8 @@ spec:
       severity: info
       tier: 1
       category: Disruption & Availability
+      subcategory: Graceful shutdown
+      keywords: [terminationGracePeriodSeconds, SIGTERM, "grace period", "graceful shutdown"]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template
@@ -305,6 +319,8 @@ spec:
       severity: warn
       tier: 1
       category: Disruption & Availability
+      subcategory: PodDisruptionBudget
+      keywords: [PodDisruptionBudget, PDB, spec.selector, matchLabels, orphan, eviction]
       confidence: confirmed
       whenItBites: node-maintenance
       fixOwner: chart-template
@@ -345,6 +361,8 @@ spec:
       severity: warn
       tier: 1
       category: Disruption & Availability
+      subcategory: Graceful shutdown
+      keywords: [terminationGracePeriodSeconds, SIGKILL, "grace period", "graceful shutdown"]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template

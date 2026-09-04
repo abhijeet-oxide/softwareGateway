@@ -185,11 +185,16 @@ func TestComplianceFilters(t *testing.T) {
 
 	results := []ComplianceResultRow{
 		{Seq: 0, CheckID: "SEC-01", Severity: "block", Outcome: "fail", Determinacy: "fixed",
-			Chart: "alpha", Kind: "Deployment", Name: "api", Message: "runs as root"},
+			Chart: "alpha", Kind: "Deployment", Name: "api", Message: "runs as root",
+			Subcategory: "Run-as user", Keywords: "runAsUser runAsNonRoot securityContext",
+			Locus: "spec.template.spec.securityContext.runAsNonRoot"},
 		{Seq: 1, CheckID: "SEC-02", Severity: "warn", Outcome: "fail", Determinacy: "configurable",
-			Chart: "beta", Kind: "StatefulSet", Name: "db", Message: "escalation allowed"},
+			Chart: "beta", Kind: "StatefulSet", Name: "db", Message: "escalation allowed",
+			Subcategory: "Privilege escalation", Keywords: "allowPrivilegeEscalation setuid",
+			Locus: "spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation"},
 		{Seq: 2, CheckID: "RES-01", Severity: "block", Outcome: "pass",
-			Chart: "alpha", Kind: "Deployment", Name: "api"},
+			Chart: "alpha", Kind: "Deployment", Name: "api",
+			Subcategory: "Resource requests", Keywords: "resources.requests.cpu QoS"},
 	}
 	if err := p.FinishComplianceRun(t.Context(),
 		ComplianceRunRow{ID: "run-3", PackageID: pkg, State: ComplianceComplete, Verdict: "fail"},
@@ -213,6 +218,19 @@ func TestComplianceFilters(t *testing.T) {
 		{"search by message", ComplianceFilter{Search: "root"}, 1},
 		{"search by name", ComplianceFilter{Search: "db"}, 1},
 		{"search misses", ComplianceFilter{Search: "nothing-here"}, 0},
+
+		// The engineer's vocabulary. The messages here are written in plain
+		// language and contain none of these words - which is the whole reason
+		// the keywords are carried on the row. Without them, an engineer
+		// searching for the mechanism gets nothing back from a report that is
+		// full of findings about it.
+		{"search by keyword", ComplianceFilter{Search: "allowPrivilegeEscalation"}, 1},
+		{"search by mechanism", ComplianceFilter{Search: "Run-as user"}, 1},
+		{"search by field path", ComplianceFilter{Search: "securityContext"}, 2},
+		{"search by acronym in keywords", ComplianceFilter{Search: "QoS"}, 1},
+		// And the mechanism as a filter, which is the split an engineer makes
+		// first and the one the category is too coarse for.
+		{"one mechanism", ComplianceFilter{Subcategories: []string{"Privilege escalation"}}, 1},
 	}
 	for _, c := range cases {
 		rows, total, err := p.ComplianceResults(t.Context(), "run-3", c.filter)

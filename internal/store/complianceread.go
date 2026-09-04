@@ -28,15 +28,20 @@ import (
 // between the vendor's problem and the site's, and somebody triaging a report
 // splits it that way first.
 type ComplianceFilter struct {
-	Outcomes    []string
-	Severities  []string
-	Checks      []string
-	Charts      []string
-	Kinds       []string
-	Determinacy []string
-	Search      string
-	Limit       int
-	Offset      int
+	Outcomes   []string
+	Severities []string
+	Checks     []string
+	Charts     []string
+	Kinds      []string
+	// Subcategories narrows to a mechanism - "Taints & tolerations",
+	// "PodDisruptionBudget". The split an engineer makes first, and the one
+	// the category is too coarse for: "Disruption & Availability" holds the
+	// budget checks, the rollout checks and the shutdown checks together.
+	Subcategories []string
+	Determinacy   []string
+	Search        string
+	Limit         int
+	Offset        int
 
 	// Seq narrows to ONE result by its position in the run, which is its
 	// identity there. The evidence endpoints take it rather than an address
@@ -348,7 +353,8 @@ func (p *Packages) ComplianceResults(ctx context.Context, runID string, f Compli
 	// each by chart, file and resource. Sorting in SQL by those columns instead
 	// would reproduce that ordering approximately and differently.
 	query := p.dialect.Rewrite(`
-		SELECT seq, check_id, check_title, severity, tier, category, pack,
+		SELECT seq, check_id, check_title, severity, tier, category,
+		       subcategory, keywords, pack,
 		       remediation, reference, outcome, determinacy,
 		       confidence, when_it_bites, fix_owner, fix_effort, fix_example,
 		       chart, chart_version, subchart_path, artifact_digest, artifact_ref,
@@ -373,7 +379,7 @@ func (p *Packages) ComplianceResults(ctx context.Context, runID string, f Compli
 			expires string
 		)
 		if err := rows.Scan(&r.Seq, &r.CheckID, &r.CheckTitle, &r.Severity, &r.Tier,
-			&r.Category, &r.Pack, &r.Remediation, &r.Reference, &r.Outcome, &r.Determinacy,
+			&r.Category, &r.Subcategory, &r.Keywords, &r.Pack, &r.Remediation, &r.Reference, &r.Outcome, &r.Determinacy,
 			&r.Confidence, &r.WhenItBites, &r.FixOwner, &r.FixEffort, &r.FixExample,
 			&r.Chart, &r.ChartVersion, &r.SubchartPath, &r.ArtifactDigest, &r.ArtifactRef,
 			&r.SourceFile, &r.RenderedLine, &r.APIVersion, &r.Kind, &r.Namespace, &r.Name,
@@ -413,6 +419,7 @@ func complianceWhere(runID string, f ComplianceFilter) (string, []any) {
 	in("check_id", f.Checks)
 	in("chart", f.Charts)
 	in("kind", f.Kinds)
+	in("subcategory", f.Subcategories)
 	in("determinacy", f.Determinacy)
 
 	if f.Seq != nil {
@@ -421,15 +428,30 @@ func complianceWhere(runID string, f ComplianceFilter) (string, []any) {
 	}
 
 	if s := strings.TrimSpace(f.Search); s != "" {
-		// Matched against the fields a person types into a search box while
-		// reading a report: the object's name, the file, the check, the
-		// sentence. Not the remediation - that is the same text on hundreds of
-		// rows and would match everything.
+		// Two vocabularies, one box.
+		//
+		// A release manager searches for a service by name, or for a chart, or
+		// for a phrase they remember from the finding. An engineer searches for
+		// the mechanism: `toleration`, `maxUnavailable`, `RWX`, `seccomp`,
+		// `helm.sh/hook`. The report's own prose is written for the first
+		// reader, which means almost none of the second reader's words appear
+		// anywhere in it - so `keywords`, `subcategory` and `locus` are matched
+		// too, and the technical vocabulary is carried on the row deliberately
+		// rather than left to chance.
+		//
+		// The remediation is deliberately NOT matched. It is the same sentence
+		// on hundreds of rows and searching it would return everything.
 		like := "%" + strings.ToLower(s) + "%"
-		clauses = append(clauses,
-			`(LOWER(name) LIKE ? OR LOWER(source_file) LIKE ? OR LOWER(check_id) LIKE ?
-			  OR LOWER(message) LIKE ? OR LOWER(chart) LIKE ? OR LOWER(container) LIKE ?)`)
-		args = append(args, like, like, like, like, like, like)
+		columns := []string{
+			"name", "source_file", "check_id", "message", "chart", "container",
+			"subcategory", "keywords", "locus", "check_title", "category",
+		}
+		parts := make([]string, 0, len(columns))
+		for _, col := range columns {
+			parts = append(parts, "LOWER("+col+") LIKE ?")
+			args = append(args, like)
+		}
+		clauses = append(clauses, "("+strings.Join(parts, " OR ")+")")
 	}
 	return "WHERE " + strings.Join(clauses, " AND "), args
 }

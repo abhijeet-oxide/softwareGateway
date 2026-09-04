@@ -26,6 +26,8 @@ spec:
       severity: block
       tier: 1
       category: Health Probes & Lifecycle
+      subcategory: Readiness probe
+      keywords: [readinessProbe, probe, Service, endpoints, traffic, rollout]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template
@@ -59,6 +61,8 @@ spec:
       severity: warn
       tier: 1
       category: Health Probes & Lifecycle
+      subcategory: Startup probe
+      keywords: [startupProbe, livenessProbe, initialDelaySeconds, "slow start", CrashLoopBackOff]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-template
@@ -97,6 +101,8 @@ spec:
       severity: warn
       tier: 1
       category: Health Probes & Lifecycle
+      subcategory: Probe timing
+      keywords: [livenessProbe, readinessProbe, periodSeconds, failureThreshold, "restart loop", probe]
       confidence: confirmed
       whenItBites: on-failure
       fixOwner: chart-template
@@ -145,6 +151,8 @@ spec:
       severity: warn
       tier: 1
       category: Health Probes & Lifecycle
+      subcategory: Probe handlers
+      keywords: [livenessProbe, readinessProbe, httpGet, exec, tcpSocket, grpc, "probe handler", endpoint]
       confidence: confirmed
       whenItBites: on-failure
       fixOwner: application
@@ -191,6 +199,8 @@ spec:
       severity: warn
       tier: 1
       category: Health Probes & Lifecycle
+      subcategory: Probe timing
+      keywords: [timeoutSeconds, periodSeconds, readinessProbe, "exec probe", httpGet, probe]
       confidence: confirmed
       whenItBites: on-failure
       fixOwner: chart-template
@@ -244,6 +254,8 @@ spec:
       severity: block
       tier: 1
       category: Health Probes & Lifecycle
+      subcategory: Probe target port
+      keywords: [httpGet.port, tcpSocket.port, containerPort, "named port", "probe port", readinessProbe]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-template
@@ -290,6 +302,8 @@ spec:
       severity: warn
       tier: 1
       category: Health Probes & Lifecycle
+      subcategory: Lifecycle hooks
+      keywords: [preStop, lifecycle, sleep, terminationGracePeriodSeconds, SIGKILL]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template
@@ -336,6 +350,8 @@ spec:
       severity: warn
       tier: 1
       category: Health Probes & Lifecycle
+      subcategory: Probe timing
+      keywords: [timeoutSeconds, periodSeconds, probe, overlap, livenessProbe, startupProbe]
       confidence: confirmed
       whenItBites: on-failure
       fixOwner: chart-template
@@ -381,6 +397,8 @@ spec:
       severity: warn
       tier: 1
       category: Health Probes & Lifecycle
+      subcategory: Probe applicability
+      keywords: [livenessProbe, readinessProbe, initContainers, Job, CronJob, probe]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-template
@@ -423,6 +441,8 @@ spec:
       severity: warn
       tier: 1
       category: Health Probes & Lifecycle
+      subcategory: Startup probe
+      keywords: [startupProbe, failureThreshold, periodSeconds, "startup budget", probe]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-template

@@ -37,6 +37,13 @@ source catalog that can only be decided by a heuristic becomes a `warn` here: a
 heuristic that blocks a release will be switched off within a month, and a
 switched-off check finds nothing.
 
+**Every check carries a mechanism and a set of search terms.** The titles in
+this catalogue are written so that somebody who is not a Kubernetes engineer can
+read them, which means most of them do not contain the name of the thing they
+are about. `subcategory` and `keywords` carry that vocabulary, they are matched
+by the report's search, and about fifty terms are asserted to find the checks
+they belong to - see [02](02-authoring-checks.md) §2.2.1.
+
 **Rows marked `v2`** changed after the audit in
 [compliance-report.md](compliance-report.md): a severity recalibrated, a
 condition narrowed to remove a false positive, or a check split in two because

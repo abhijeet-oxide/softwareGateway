@@ -25,6 +25,8 @@ spec:
       severity: warn
       tier: 1
       category: Scheduling & Placement
+      subcategory: Topology spread constraints
+      keywords: [topologySpreadConstraints, topologyKey, topology.kubernetes.io/zone, kubernetes.io/hostname, spread, anti-affinity, replicas, zone, node]
       confidence: confirmed
       whenItBites: on-failure
       fixOwner: chart-template
@@ -87,6 +89,8 @@ spec:
       severity: warn
       tier: 1
       category: Scheduling & Placement
+      subcategory: Topology spread constraints
+      keywords: [topologySpreadConstraints, maxSkew, skew, whenUnsatisfiable, spread]
       confidence: confirmed
       whenItBites: on-failure
       fixOwner: chart-template
@@ -129,6 +133,8 @@ spec:
       severity: warn
       tier: 1
       category: Scheduling & Placement
+      subcategory: Affinity & node selection
+      keywords: [affinity, nodeAffinity, podAntiAffinity, requiredDuringSchedulingIgnoredDuringExecution, DoNotSchedule, whenUnsatisfiable, unschedulable, Pending]
       confidence: confirmed
       whenItBites: node-maintenance
       fixOwner: chart-template
@@ -170,6 +176,8 @@ spec:
       severity: warn
       tier: 1
       category: Scheduling & Placement
+      subcategory: Topology spread constraints
+      keywords: [topologySpreadConstraints, labelSelector, matchLabels, app.kubernetes.io/version, pod-template-hash, "stable labels"]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template
@@ -213,6 +221,8 @@ spec:
       severity: warn
       tier: 1
       category: Scheduling & Placement
+      subcategory: Affinity & node selection
+      keywords: [nodeAffinity, nodeSelectorTerms, matchExpressions, topology.kubernetes.io/zone, "zone pinning", nodeSelector]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-template
@@ -278,6 +288,8 @@ spec:
       severity: block
       tier: 1
       category: Scheduling & Placement
+      subcategory: Taints & tolerations
+      keywords: [tolerations, toleration, taint, NoSchedule, node.kubernetes.io/memory-pressure, node.kubernetes.io/disk-pressure, node.kubernetes.io/pid-pressure, node.kubernetes.io/network-unavailable, node.kubernetes.io/unschedulable, "node pressure"]
       confidence: confirmed
       whenItBites: on-failure
       fixOwner: chart-template
@@ -354,6 +366,8 @@ spec:
       severity: warn
       tier: 1
       category: Scheduling & Placement
+      subcategory: Taints & tolerations
+      keywords: [tolerations, toleration, tolerationSeconds, NoExecute, node.kubernetes.io/not-ready, node.kubernetes.io/unreachable, taint, eviction]
       confidence: confirmed
       whenItBites: on-failure
       fixOwner: chart-template

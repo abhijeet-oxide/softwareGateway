@@ -46,6 +46,8 @@ spec:
       severity: block
       tier: 1
       category: Configuration & Secrets
+      subcategory: Credentials in configuration
+      keywords: [ConfigMap, data, password, token, "api key", plaintext, credential]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -90,6 +92,8 @@ spec:
       severity: block
       tier: 1
       category: Configuration & Secrets
+      subcategory: Credentials in the environment
+      keywords: [env, value, secretKeyRef, password, token, credential, "environment variable"]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -141,6 +145,8 @@ spec:
       severity: block
       tier: 1
       category: Configuration & Secrets
+      subcategory: Credentials in the chart
+      keywords: [Secret, data, stringData, base64, ExternalSecret, GitOps, credential]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -205,6 +211,8 @@ spec:
       severity: block
       tier: 1
       category: Configuration & Secrets
+      subcategory: Credentials on the command line
+      keywords: [args, command, --password, --token, "process listing", credential]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -255,6 +263,8 @@ spec:
       severity: warn
       tier: 1
       category: Configuration & Secrets
+      subcategory: ConfigMap immutability
+      keywords: [ConfigMap, immutable, "configuration drift"]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template
@@ -292,6 +302,8 @@ spec:
       severity: warn
       tier: 1
       category: Configuration & Secrets
+      subcategory: Configuration rollout
+      keywords: [checksum/config, "checksum annotation", ConfigMap, Secret, rollout, "helm upgrade"]
       confidence: probable
       whenItBites: upgrade
       fixOwner: chart-template
@@ -332,6 +344,8 @@ spec:
       severity: block
       tier: 1
       category: Configuration & Secrets
+      subcategory: Configuration references
+      keywords: [configMapRef, secretRef, configMapKeyRef, secretKeyRef, optional, CreateContainerConfigError]
       confidence: probable
       whenItBites: install
       fixOwner: chart-template
@@ -382,6 +396,8 @@ spec:
       severity: warn
       tier: 1
       category: Configuration & Secrets
+      subcategory: TLS material
+      keywords: [tls.crt, tls.key, certificate, "private key", env, volumeMounts, kubernetes.io/tls]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -423,6 +439,8 @@ spec:
       severity: warn
       tier: 1
       category: Configuration & Secrets
+      subcategory: Secret scoping
+      keywords: [envFrom, secretRef, items, "whole secret", secretKeyRef]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template

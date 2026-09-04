@@ -80,6 +80,13 @@ spec:
       severity: block            # block | warn | info
       tier: 1
       category: Disruption & Availability
+      # THE MECHANISM, in the words an engineer uses for it, and the vocabulary
+      # this check is findable by. The title above deliberately contains none of
+      # these words - that is what makes it readable by somebody who is not a
+      # Kubernetes engineer - so without them the check is invisible to the
+      # person who has to fix it. See section 2.2.1.
+      subcategory: PodDisruptionBudget
+      keywords: [PodDisruptionBudget, PDB, minAvailable, quorum, eviction, "node drain"]
       reference: https://wiki.acme.example/platform/standards#quorum
 
       # THE TRIAGE BLOCK. A severity says how much this organization cares. It
@@ -167,6 +174,11 @@ which is a sentence somebody can act on.
 
 ## 2.2 The language standard
 
+Every check is written for two readers who need different things from the same
+row, and §2.2.1 is how the second one gets what they need without the first one
+losing it.
+
+
 Every string in a check is read by somebody who is not a Kubernetes engineer: a
 release manager deciding whether to ship, a programme lead reading a summary, a
 supplier quality engineer forwarding a spreadsheet. A finding they cannot act on
@@ -198,6 +210,45 @@ Eight rules, applied to `title`, `description`, `rationale`, `message` and
 The test for all of this is not a linter. It is that somebody who is not a
 Kubernetes specialist reads the finding and can explain the consequence back. If
 they cannot, the description is wrong regardless of how accurate it is.
+
+### 2.2.1 The two vocabularies
+
+The plain-language rules above have a cost, and it is worth naming rather than
+discovering: **the plainer the prose gets, the fewer technical words survive
+anywhere in the report.** The PodDisruptionBudget check now reads "a service
+with more than one copy survives planned maintenance" and contains the word
+`PodDisruptionBudget` nowhere at all. That is right for the release manager and
+useless for the engineer, who opens the report and types `toleration`, or
+`maxUnavailable`, or `RWX`, or `seccomp`, and gets nothing back from a report
+that is full of findings about exactly that.
+
+So the technical vocabulary is carried deliberately, on two fields:
+
+| Field | What it holds |
+|---|---|
+| `subcategory` | The MECHANISM, in an engineer's words: `PodDisruptionBudget`, `Taints & tolerations`, `Seccomp`, `Shared storage`. One short noun phrase, from a closed list. |
+| `keywords` | The vocabulary the check is findable by: field paths (`spec.strategy.type`), API kinds (`NetworkPolicy`), acronyms (`PDB`, `RWX`, `SCC`, `HPA`), annotation names (`helm.sh/hook`), and the words for the symptom (`node drain`, `OOMKilled`, `CrashLoopBackOff`). At least three. |
+
+Both are stored on every result and indexed by the report's search, alongside
+the resource name, the chart, the file, the field path and the message. One
+search box, two vocabularies, and neither reader has to learn the other's.
+
+**`subcategory` is a closed vocabulary**, declared in
+`baseline/contract_test.go` and asserted there. Free text drifts within a month -
+"Helm hooks" and "Helm hook", "Probe timing" and "Probe timings" - and a filter
+offering both spellings is worse than no filter, because each hides half the
+findings and neither says so. Adding a value is an edit somebody makes on
+purpose.
+
+A subcategory may span categories, and that is the point rather than a defect:
+Helm hooks are metadata to the labels section of the standard and lifecycle to
+the upgrade section, and an engineer looking at a hook problem wants both.
+
+**The terms are asserted, not hoped for.** `TestTechnicalTermsFindTheirChecks`
+maps about fifty terms somebody would plausibly search for to the checks that
+must come back. A rewritten description cannot silently take any of them away,
+which is the failure this whole section exists to prevent - and which is exactly
+what the plain-language rewrite did before these fields existed.
 
 ## 2.3 The severity rubric
 
@@ -520,6 +571,9 @@ failure that reached a real report before anybody noticed:
 - **Every check carries the triage block, a rationale and a reference**, and no
   blocking check declares `confidence: needs-review`. The rubric in §2.3 is
   enforced rather than trusted.
+- **Every check carries a subcategory from the closed vocabulary and at least
+  three keywords**, and about fifty technical terms are asserted to find the
+  checks they belong to. See §2.2.1.
 
 ## 7. What is deliberately not here
 

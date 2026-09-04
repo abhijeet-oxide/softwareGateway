@@ -161,14 +161,50 @@ it will, discovered on the day somebody needs it. A hook that runs at a rollback
 upgrade moment, or to move the work into the application's own start-up so that
 it happens whichever direction the version moves in.
 
+## 5.1 What the plain language cost, and how it is paid back
+
+Not in the audit, and found by reading the result of acting on it.
+
+Rewriting every title and message so that a release manager can act on it takes
+the technical vocabulary out of the report. "A service with more than one copy
+survives planned maintenance" is a better sentence than "Replicated workloads
+are covered by a PodDisruptionBudget" for the person deciding whether to ship,
+and it is a worse one for the engineer who opens the report and searches for
+`PodDisruptionBudget`, or `toleration`, or `maxUnavailable`, or `RWX`. The
+audit's §3.2 is right about the prose and silent about what the prose displaces.
+
+So the vocabulary is carried on the finding rather than left to whatever words
+the sentence happens to use:
+
+| Field | Example |
+|---|---|
+| `subcategory` | `PodDisruptionBudget`, `Taints & tolerations`, `Seccomp`, `Shared storage` |
+| `keywords` | `PodDisruptionBudget PDB policy/v1 eviction "node drain" minAvailable maxUnavailable replicas` |
+
+Both are stored on every result and matched by the report's search, next to the
+resource name, the chart, the file, the field path and the message. The finding
+row shows the mechanism and clicking it searches for it; the findings table has
+a mechanism filter; the export has "Mechanism" and "Search terms" columns; the
+policy catalogue is searchable by the same terms. One report, two vocabularies,
+and neither reader has to learn the other's.
+
+The subcategory list is closed and asserted, because free text drifts into
+"Helm hooks" and "Helm hook" within a month and a filter offering both hides
+half the findings under each. About fifty technical terms are asserted to find
+the checks they belong to, so a future rewrite of a description cannot quietly
+take them away again - which is precisely what this rewrite did before the
+fields existed.
+
 ## 6. Findings schema
 
 The audit's Part 2 proposes 24 fields. Five were added; the rest were already
 present under other names, or were declined.
 
-**Added** (migration `00048`, stored per result so an exported report keeps
-saying what it said): `confidence`, `whenItBites`, `fixOwner`, `fixEffort`,
-`fixExample`. See [02](02-authoring-checks.md) §2.1.
+**Added** (migrations `00048` and `00049`, stored per result so an exported
+report keeps saying what it said): `confidence`, `whenItBites`, `fixOwner`,
+`fixEffort`, `fixExample` (see [02](02-authoring-checks.md) §2.1), and
+`subcategory` and `keywords` (see §5.1 above and [02](02-authoring-checks.md)
+§2.2.1).
 
 **Already present**: `policy_id` (`check`), `policy_name` (`title`), `severity`,
 `outcome`, `chart`, `chart_version`, `source_file`, `source_line`,

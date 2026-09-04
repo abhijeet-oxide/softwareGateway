@@ -46,6 +46,30 @@ type Check struct {
 	Severity Severity `json:"severity"`
 	Tier     Tier     `json:"tier,omitempty"`
 	Category string   `json:"category,omitempty"`
+	// Subcategory names the MECHANISM in the words an engineer uses for it -
+	// "PodDisruptionBudget", "Taints & tolerations", "Seccomp". Category is the
+	// section of the standard and is written for whoever is deciding whether to
+	// ship; this is written for whoever is about to fix it, and it is what makes
+	// findings groupable by the thing they are actually about.
+	Subcategory string `json:"subcategory,omitempty"`
+	// Keywords is the technical vocabulary this check is findable by: the field
+	// paths, the API kinds, the acronyms, the annotation names.
+	//
+	// # Why a plain-language rewrite needs this
+	//
+	// Titles and messages are written so that somebody who is not a Kubernetes
+	// engineer can act on them, which means they say "the rule that tells the
+	// platform how many copies must stay running" rather than
+	// "PodDisruptionBudget". That is right for the person deciding whether to
+	// ship and useless for the person fixing it: an engineer types `toleration`
+	// or `maxUnavailable` or `RWX` into the search box, and the plainer the
+	// prose gets the fewer of those words remain anywhere in the report.
+	//
+	// So the vocabulary is carried deliberately instead of being a side effect
+	// of how the sentences happen to be worded. It is indexed by the search on
+	// the findings table, so both readers get the report they need out of one
+	// set of results.
+	Keywords []string `json:"keywords,omitempty"`
 
 	Remediation string `json:"remediation,omitempty"`
 	Reference   string `json:"reference,omitempty"`
@@ -157,6 +181,18 @@ func (c Check) Validate() []error {
 	}
 	if c.Tier != 0 && c.Tier != Tier1 && c.Tier != Tier2 {
 		add("tier %d must be 1 or 2", c.Tier)
+	}
+	// Subcategory and Keywords are not required HERE, for the same reason
+	// Rationale is not: they are what the report needs to be usable, not what
+	// the check needs to be evaluable, and refusing to load a check over its
+	// metadata would make a finding vanish rather than read badly. The shipped
+	// pack is held to them by baseline/contract_test.go, and any pack should be
+	// - see docs/compliance/02-authoring-checks.md. An empty keyword is a
+	// different thing: it is a malformed value that would match every search.
+	for _, k := range c.Keywords {
+		if strings.TrimSpace(k) == "" {
+			add("keywords contains an empty term, which would match every search")
+		}
 	}
 	if !c.Confidence.Valid() {
 		add("confidence %q must be one of confirmed, probable, needs-review", c.Confidence)

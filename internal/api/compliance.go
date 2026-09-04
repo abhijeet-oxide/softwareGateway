@@ -326,15 +326,18 @@ func (s *Server) complianceHelm() ComplianceHelmView {
 func complianceFilterFrom(r *http.Request) store.ComplianceFilter {
 	q := r.URL.Query()
 	f := store.ComplianceFilter{
-		Outcomes:    commaList(q.Get("outcome")),
-		Severities:  commaList(q.Get("severity")),
-		Checks:      commaList(q.Get("check")),
-		Charts:      commaList(q.Get("chart")),
-		Kinds:       commaList(q.Get("kind")),
-		Determinacy: commaList(q.Get("determinacy")),
-		Search:      strings.TrimSpace(q.Get("q")),
-		Limit:       intParam(r, "limit", 500),
-		Offset:      intParam(r, "offset", 0),
+		Outcomes:   commaList(q.Get("outcome")),
+		Severities: commaList(q.Get("severity")),
+		Checks:     commaList(q.Get("check")),
+		Charts:     commaList(q.Get("chart")),
+		Kinds:      commaList(q.Get("kind")),
+		// The mechanism a finding is about, which is the split an engineer
+		// makes first and the one the category is too coarse for.
+		Subcategories: commaList(q.Get("subcategory")),
+		Determinacy:   commaList(q.Get("determinacy")),
+		Search:        strings.TrimSpace(q.Get("q")),
+		Limit:         intParam(r, "limit", 500),
+		Offset:        intParam(r, "offset", 0),
 	}
 	if len(f.Outcomes) == 0 && q.Get("all") != "true" {
 		f.Outcomes = []string{

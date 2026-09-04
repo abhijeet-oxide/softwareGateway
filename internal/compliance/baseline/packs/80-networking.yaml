@@ -28,6 +28,8 @@ spec:
       severity: warn
       tier: 1
       category: Networking
+      subcategory: Network policy
+      keywords: [NetworkPolicy, "default deny", podSelector, policyTypes, Ingress, networking.k8s.io]
       confidence: probable
       whenItBites: continuously
       fixOwner: platform-team
@@ -76,6 +78,8 @@ spec:
       severity: block
       tier: 1
       category: Networking
+      subcategory: Network policy rules
+      keywords: [NetworkPolicy, ingress, from, ports, allow-all, podSelector]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -114,6 +118,8 @@ spec:
       severity: warn
       tier: 1
       category: Networking
+      subcategory: Network policy rules
+      keywords: [NetworkPolicy, namespaceSelector, ipBlock, 0.0.0.0/0, allow-all, ingress]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -154,6 +160,8 @@ spec:
       severity: warn
       tier: 1
       category: Networking
+      subcategory: Network policy rules
+      keywords: [NetworkPolicy, egress, to, policyTypes, outbound]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -191,6 +199,8 @@ spec:
       severity: warn
       tier: 1
       category: Networking
+      subcategory: Network policy
+      keywords: [NetworkPolicy, podSelector, matchLabels, app.kubernetes.io/version, "stable labels"]
       confidence: confirmed
       whenItBites: upgrade
       fixOwner: chart-template
@@ -223,6 +233,8 @@ spec:
       severity: block
       tier: 1
       category: Networking
+      subcategory: External exposure
+      keywords: [Ingress, Route, spec.tls, termination, TLS, HTTPS, certificate]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -260,6 +272,8 @@ spec:
       severity: block
       tier: 1
       category: Networking
+      subcategory: External exposure
+      keywords: [Ingress, Route, LoadBalancer, /metrics, /debug, /actuator, /admin, pprof]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -312,6 +326,8 @@ spec:
       severity: warn
       tier: 1
       category: Networking
+      subcategory: Service selectors
+      keywords: [Service, spec.selector, endpoints, matchLabels, headless, EndpointSlice]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-template
@@ -360,6 +376,8 @@ spec:
       severity: warn
       tier: 1
       category: Networking
+      subcategory: Service ports
+      keywords: [Service, targetPort, containerPort, "named port", ports]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-template
@@ -415,6 +433,8 @@ spec:
       severity: warn
       tier: 1
       category: Networking
+      subcategory: Secondary networks
+      keywords: [k8s.v1.cni.cncf.io/networks, Multus, NetworkAttachmentDefinition, NAD, CNI, SR-IOV, "secondary interface"]
       confidence: needs-review
       whenItBites: continuously
       fixOwner: needs-decision
@@ -455,6 +475,8 @@ spec:
       severity: warn
       tier: 1
       category: Networking
+      subcategory: Extended resources
+      keywords: [hugepages, intel.com/sriov_netdevice, "extended resource", "device plugin", requests, limits, SR-IOV, GPU]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-values

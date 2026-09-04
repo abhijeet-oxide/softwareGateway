@@ -26,6 +26,8 @@ spec:
       severity: block
       tier: 1
       category: Identity & Access
+      subcategory: Service accounts
+      keywords: [serviceAccountName, ServiceAccount, "default account", identity]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -81,6 +83,8 @@ spec:
       severity: warn
       tier: 1
       category: Identity & Access
+      subcategory: Service account tokens
+      keywords: [automountServiceAccountToken, token, "projected token", "API credential"]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -120,6 +124,8 @@ spec:
       severity: block
       tier: 1
       category: Identity & Access
+      subcategory: Role rules
+      keywords: [Role, ClusterRole, wildcard, verbs, resources, apiGroups, rules]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -159,6 +165,8 @@ spec:
       severity: block
       tier: 1
       category: Identity & Access
+      subcategory: Cluster-scoped RBAC
+      keywords: [ClusterRole, ClusterRoleBinding, cluster-admin, admin, edit, view, "cluster scope"]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -203,6 +211,8 @@ spec:
       severity: block
       tier: 1
       category: Identity & Access
+      subcategory: Secret access
+      keywords: [secrets, list, watch, get, resourceNames, Role, RBAC]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -243,6 +253,8 @@ spec:
       severity: block
       tier: 1
       category: Identity & Access
+      subcategory: Secret access
+      keywords: [secrets, create, update, patch, delete, deletecollection, RBAC, "write access"]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -280,6 +292,8 @@ spec:
       severity: block
       tier: 1
       category: Identity & Access
+      subcategory: Privilege escalation via RBAC
+      keywords: [roles, rolebindings, clusterroles, escalate, bind, RBAC]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -317,6 +331,8 @@ spec:
       severity: block
       tier: 1
       category: Identity & Access
+      subcategory: Impersonation & exec
+      keywords: [impersonate, pods/exec, pods/attach, pods/portforward, RBAC]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -352,6 +368,8 @@ spec:
       severity: block
       tier: 1
       category: Identity & Access
+      subcategory: Role bindings
+      keywords: [RoleBinding, ClusterRoleBinding, subjects, Group, "system:authenticated", "system:serviceaccounts"]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template

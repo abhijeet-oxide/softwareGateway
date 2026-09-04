@@ -29,6 +29,8 @@ spec:
       severity: block
       tier: 1
       category: Resources, Scaling & Performance
+      subcategory: Resource requests
+      keywords: [resources.requests.cpu, resources.requests.memory, requests, scheduling, QoS, eviction]
       confidence: confirmed
       whenItBites: under-load
       fixOwner: chart-values
@@ -60,6 +62,8 @@ spec:
       severity: block
       tier: 1
       category: Resources, Scaling & Performance
+      subcategory: Memory limits
+      keywords: [resources.limits.memory, limits, OOMKilled, OOM, "memory limit"]
       confidence: confirmed
       whenItBites: under-load
       fixOwner: chart-values
@@ -89,6 +93,8 @@ spec:
       severity: block
       tier: 1
       category: Resources, Scaling & Performance
+      subcategory: Resource limits
+      keywords: [resources.limits, resources.requests, limits, requests, invalid, rejected]
       confidence: confirmed
       whenItBites: install
       fixOwner: chart-values
@@ -132,6 +138,8 @@ spec:
       severity: info
       tier: 1
       category: Resources, Scaling & Performance
+      subcategory: Memory limits
+      keywords: [resources.limits.memory, resources.requests.memory, headroom, overcommit, burstable]
       confidence: probable
       whenItBites: under-load
       fixOwner: chart-values
@@ -173,6 +181,8 @@ spec:
       severity: info
       tier: 1
       category: Resources, Scaling & Performance
+      subcategory: CPU limits
+      keywords: [resources.limits.cpu, "CFS quota", throttling, "cpu cap", latency]
       confidence: probable
       whenItBites: under-load
       fixOwner: chart-values
@@ -216,6 +226,8 @@ spec:
       severity: warn
       tier: 1
       category: Resources, Scaling & Performance
+      subcategory: Autoscaling
+      keywords: [HorizontalPodAutoscaler, HPA, minReplicas, maxReplicas, autoscaling]
       confidence: confirmed
       whenItBites: on-failure
       fixOwner: chart-values

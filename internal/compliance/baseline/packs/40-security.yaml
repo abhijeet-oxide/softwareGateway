@@ -32,6 +32,8 @@ spec:
       severity: block
       tier: 1
       category: Container Security Posture
+      subcategory: Run-as user
+      keywords: [runAsUser, runAsNonRoot, securityContext, root, "UID 0"]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: application
@@ -84,6 +86,8 @@ spec:
       severity: warn
       tier: 1
       category: Container Security Posture
+      subcategory: Run-as user
+      keywords: [runAsNonRoot, runAsUser, securityContext, PodSecurity, restricted]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -123,6 +127,8 @@ spec:
       severity: block
       tier: 1
       category: Container Security Posture
+      subcategory: Privilege escalation
+      keywords: [allowPrivilegeEscalation, securityContext, setuid, no_new_privs]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -158,6 +164,8 @@ spec:
       severity: block
       tier: 1
       category: Container Security Posture
+      subcategory: Privileged containers
+      keywords: [privileged, securityContext, "device access", "node access"]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -194,6 +202,8 @@ spec:
       severity: block
       tier: 1
       category: Container Security Posture
+      subcategory: Linux capabilities
+      keywords: [capabilities, drop, ALL, securityContext, capability]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -236,6 +246,8 @@ spec:
       severity: block
       tier: 1
       category: Container Security Posture
+      subcategory: Linux capabilities
+      keywords: [capabilities.add, SYS_ADMIN, NET_ADMIN, SYS_PTRACE, SYS_MODULE, DAC_OVERRIDE, SETUID, SETGID, capability]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -283,6 +295,8 @@ spec:
       severity: warn
       tier: 1
       category: Container Security Posture
+      subcategory: Read-only root filesystem
+      keywords: [readOnlyRootFilesystem, securityContext, emptyDir, /tmp, "writable filesystem"]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -326,6 +340,8 @@ spec:
       severity: warn
       tier: 1
       category: Container Security Posture
+      subcategory: Seccomp
+      keywords: [seccompProfile, seccomp, RuntimeDefault, Localhost, Unconfined, syscall]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -369,6 +385,8 @@ spec:
       severity: block
       tier: 1
       category: Container Security Posture
+      subcategory: Host namespaces
+      keywords: [hostNetwork, hostPID, hostIPC, hostPort, "host namespace", "node namespace"]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -420,6 +438,8 @@ spec:
       severity: block
       tier: 1
       category: Container Security Posture
+      subcategory: Host path volumes
+      keywords: [hostPath, docker.sock, containerd.sock, crio.sock, "container runtime socket", "node filesystem"]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -470,6 +490,8 @@ spec:
       severity: block
       tier: 1
       category: Container Security Posture
+      subcategory: Security policy grants
+      keywords: [SecurityContextConstraints, SCC, PodSecurityPolicy, PSP, RoleBinding, anyuid, privileged, hostmount-anyuid]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-template
@@ -511,6 +533,8 @@ spec:
       severity: warn
       tier: 1
       category: Container Security Posture
+      subcategory: Ephemeral storage
+      keywords: [emptyDir, "medium: Memory", sizeLimit, tmpfs, memory-backed, eviction]
       confidence: confirmed
       whenItBites: under-load
       fixOwner: chart-template

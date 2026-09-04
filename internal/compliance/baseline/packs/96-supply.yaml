@@ -26,6 +26,8 @@ spec:
       severity: block
       tier: 1
       category: Supply Chain & Release Integrity
+      subcategory: Image tags
+      keywords: [image, latest, tag, "mutable tag", "moving tag"]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: chart-values
@@ -73,6 +75,8 @@ spec:
       severity: warn
       tier: 1
       category: Supply Chain & Release Integrity
+      subcategory: Image digests
+      keywords: [image, sha256, digest, immutable, pinning]
       confidence: confirmed
       whenItBites: continuously
       fixOwner: build-pipeline
@@ -116,6 +120,8 @@ spec:
       severity: block
       tier: 1
       category: Supply Chain & Release Integrity
+      subcategory: Image registries
+      keywords: [image, registry, allowlist, "approved registries", "Docker Hub", air-gapped, mirror]
       confidence: confirmed
       whenItBites: install
       fixOwner: build-pipeline

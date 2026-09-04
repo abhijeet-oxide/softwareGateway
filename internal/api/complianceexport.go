@@ -375,6 +375,7 @@ func complianceUniqueSheet(productName, release string, views []ComplianceResult
 			v.Title,
 			compliance.Severity(v.Severity).Label(),
 			v.Category,
+			v.Subcategory,
 			strconv.Itoa(g.places),
 			strconv.Itoa(len(g.charts)),
 			joinSet(g.kinds),
@@ -396,18 +397,18 @@ func complianceUniqueSheet(productName, release string, views []ComplianceResult
 	return export.Sheet{
 		Name: sheetUniqueFindings,
 		Headers: []string{
-			"Check", "Title", "Severity", "Category",
+			"Check", "Title", "Severity", "Category", "Mechanism",
 			"Places", "Charts", "Kinds",
 			"Who fixes it", "Effort", "When it bites",
 			"Value is", "Examples", "Remediation", "Example fix", "Reference", "Pack", "Tier",
 			"Product", "Release",
 		},
 		Rows: rows,
-		Widths: []int{12, 46, 11, 20, 9, 9, 20,
+		Widths: []int{12, 46, 11, 20, 26, 9, 9, 20,
 			22, 30, 38, 24, 52, 60, 46, 34, 16, 10, 20, 20},
 		// Title, Examples, Remediation, Example fix. The examples column holds
 		// three addresses on three lines and rendered as the first of them.
-		Wrap:    []int{1, 11, 12, 13},
+		Wrap:    []int{1, 12, 13, 14},
 		Primary: true,
 	}
 }
@@ -436,9 +437,10 @@ func complianceFindingsSheet(
 		Headers: complianceFindingHeaders,
 		Rows:    rows,
 		Widths:  complianceFindingWidths,
-		// Title, Field, Finding, Remediation, Example fix - the ones that are
-		// prose, YAML, or a path long enough to be clipped.
-		Wrap: []int{1, 19, 22, 23, 24},
+		// Title, Search terms, Field, Finding, Remediation, Example fix - the
+		// ones that are prose, YAML, a term list, or a path long enough to be
+		// clipped.
+		Wrap: []int{1, 10, 21, 24, 25, 26},
 	}
 }
 
@@ -493,6 +495,7 @@ func complianceUncheckedSheet(productName, release string, views []ComplianceRes
 var complianceFindingHeaders = []string{
 	"Check", "Title", "Severity", "Outcome",
 	"Who fixes it", "Effort", "When it bites", "Confidence", "Value is",
+	"Mechanism", "Search terms",
 	"Chart", "Chart version", "Template file", "Line",
 	"API version", "Kind", "Namespace", "Resource", "Container", "Container type",
 	"Field", "Observed", "Expected", "Finding",
@@ -504,6 +507,7 @@ var complianceFindingHeaders = []string{
 var complianceFindingWidths = []int{
 	12, 46, 11, 12,
 	22, 30, 38, 34, 24,
+	26, 52,
 	24, 14, 40, 7,
 	16, 18, 16, 26, 16, 14,
 	40, 26, 26, 64,
@@ -530,6 +534,13 @@ func complianceFindingRow(
 		whenItBites(v),
 		v.ConfidenceLabel,
 		determinacyOrBlank(v),
+
+		// The other half of the audience. Everything to the left of here is
+		// written for somebody deciding whether to ship; these two are the
+		// vocabulary the engineer who has to fix it would search for, and the
+		// plain-language columns deliberately do not contain them.
+		v.Subcategory,
+		strings.Join(v.Keywords, ", "),
 
 		v.Chart,
 		v.ChartVersion,

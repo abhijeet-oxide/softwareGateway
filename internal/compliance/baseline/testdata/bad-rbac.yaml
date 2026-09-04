@@ -30,6 +30,33 @@ rules:
     resources: ["secrets"]
     verbs: ["get"]
 ---
+# Source: bad-rbac/templates/role-both-shapes.yaml
+# Two rules, one of each shape. Both findings are correct here: they name
+# different rules with different fixes. This is what keeps the disjointness in
+# RBAC-11 from becoming "RBAC-11 never fires on a role that also lists".
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: both-shapes, namespace: bad}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+# Source: bad-rbac/templates/role-reads-and-lists.yaml
+# ONE rule granting both, which is the commonest shape in a real release and
+# the one that used to be counted twice - thirty-five of thirty-nine roles.
+# RBAC-05 owns it; RBAC-11 must stay silent.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: reads-and-lists, namespace: bad}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "secrets"]
+    verbs: ["get", "list", "delete", "watch", "patch"]
+---
 # Source: bad-rbac/templates/role-rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

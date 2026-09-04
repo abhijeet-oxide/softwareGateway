@@ -572,3 +572,73 @@ func TestAFindingNamesTheFieldItJudged(t *testing.T) {
 		}
 	}
 }
+
+// One rule with one fix produces one finding.
+//
+// # The defect this exists for
+//
+// RBAC-05 was split into "can enumerate every credential" (list or watch) and
+// RBAC-11 "can fetch any credential by name" (get with no resourceNames),
+// because the single check's title described only half the rules it fired on.
+// The two halves were not made exclusive, so the commonest shape in a real
+// release - one rule granting `get, list, watch` together - produced two
+// blocking findings with one fix between them. Thirty-five of thirty-nine
+// roles were counted twice.
+//
+// The rule that matters: where a rule already permits enumeration, an unscoped
+// get reaches nothing further, so RBAC-05 owns it. Two rules of different
+// shapes in one Role are still two findings, because they are two fixes - and
+// that half is asserted too, or the fix would be "RBAC-11 never fires".
+func TestOneRBACRuleIsNotCountedTwice(t *testing.T) {
+	fired := map[string]map[string]bool{}
+	for _, r := range runFixture(t, "bad-rbac.yaml") {
+		if r.Outcome != compliance.OutcomeFail {
+			continue
+		}
+		if fired[r.Address.Name] == nil {
+			fired[r.Address.Name] = map[string]bool{}
+		}
+		fired[r.Address.Name][r.CheckID] = true
+	}
+
+	// One rule granting get, list and watch together: RBAC-05's, and only
+	// RBAC-05's.
+	both := fired["reads-and-lists"]
+	if !both["RBAC-05"] {
+		t.Error("RBAC-05 does not fire on a rule that grants list on secrets")
+	}
+	if both["RBAC-11"] {
+		t.Error("RBAC-11 fires on a rule that RBAC-05 already reports. One rule, one fix, " +
+			"one finding: this is the double count that put 35 spurious Criticals in a report")
+	}
+
+	// A wildcard verb permits listing, so the same rule applies.
+	if fired["everything"]["RBAC-11"] {
+		t.Error("RBAC-11 fires on a wildcard rule, which permits listing and is RBAC-05's")
+	}
+
+	// Two rules, one of each shape: two findings, because two fixes.
+	two := fired["both-shapes"]
+	if !two["RBAC-05"] || !two["RBAC-11"] {
+		t.Errorf("a Role with a list rule AND a separate unscoped-get rule got %v; both are "+
+			"real and each needs its own edit", keysOf(two))
+	}
+
+	// And the unscoped get on its own is still RBAC-11's alone.
+	only := fired["gets-any-secret"]
+	if !only["RBAC-11"] {
+		t.Error("RBAC-11 does not fire on a rule granting get with no resourceNames")
+	}
+	if only["RBAC-05"] {
+		t.Error("RBAC-05 fires on a rule with no list verb - the wording defect the split fixed")
+	}
+}
+
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}

@@ -240,7 +240,13 @@ func bindings3(idx *compliance.Index) map[string]impl {
 			return types.Int(-1)
 		}
 		worst := -2
-		for _, w := range idx.OfKind(compliance.WorkloadKinds...) {
+		// Only the kinds that DECLARE a copy count. A DaemonSet's count is the
+		// size of the cluster, a Job's is its parallelism, and a bare Pod
+		// beside a Deployment is a test pod - none of the three is a
+		// denominator this arithmetic may invent. See
+		// compliance.ReplicatedWorkloadKinds for the false positive that came
+		// of doing so.
+		for _, w := range idx.OfKind(compliance.ReplicatedWorkloadKinds...) {
 			if !sameNamespace(w, pdb) {
 				continue
 			}
@@ -259,6 +265,20 @@ func bindings3(idx *compliance.Index) map[string]impl {
 			}
 		}
 		return types.Int(worst)
+	})
+
+	// declaresReplicas() reports whether a workload states its own copy count.
+	//
+	// A check that reasons about how many copies something runs has to be able
+	// to say "this one does not say". Without it, `replicas(w) < 2` is true of
+	// every DaemonSet and every Job in a release - not because they run one
+	// copy, but because they do not have the field the default of 1 comes from.
+	add("declaresreplicas_dyn", func(args ...ref.Val) ref.Val {
+		obj, ok := native(args[0]).(map[string]any)
+		if len(args) != 1 || !ok {
+			return types.Bool(false)
+		}
+		return types.Bool(compliance.DeclaresReplicas(scalarString(compliance.Resource{Object: obj}.Kind())))
 	})
 
 	// shippedObjectName() reports whether a literal is the NAME of something

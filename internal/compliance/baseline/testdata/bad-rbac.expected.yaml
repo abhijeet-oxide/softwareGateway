@@ -6,7 +6,21 @@ findings:
   # verb, and a title saying "list" against a rule with no list is how a
   # reviewer learns to distrust the report.
   - {check: RBAC-11, kind: Role, name: gets-any-secret}
-  - {check: RBAC-11, kind: Role, name: everything}
+  # `everything` uses a wildcard verb, so its one rule permits listing too. It
+  # is RBAC-05's alone: an unscoped get adds nothing to what a rule that can
+  # already enumerate reaches, and two blocking findings over one rule with one
+  # fix between them is a doubled count and a halved credibility.
+  #
+  # `both-shapes` below has TWO rules, one of each shape, and gets both
+  # findings - because those are two rules and two fixes.
+  - {check: RBAC-05, kind: Role, name: both-shapes}
+  - {check: RBAC-11, kind: Role, name: both-shapes}
+  # ONE rule granting get, list, watch, delete and patch on secrets. RBAC-05
+  # for the enumeration and RBAC-09 for the write, which are two different
+  # powers - and NOT RBAC-11, whose absence here is the assertion: this is the
+  # shape that was counted twice, on 35 of 39 roles in a real release.
+  - {check: RBAC-05, kind: Role, name: reads-and-lists}
+  - {check: RBAC-09, kind: Role, name: reads-and-lists}
   - {check: RBAC-06, kind: Role, name: everything}
   - {check: RBAC-06, kind: Role, name: grants-itself}
   - {check: RBAC-07, kind: Role, name: everything}

@@ -12,3 +12,7 @@ findings:
   - {check: MTA-05, kind: Deployment, name: versioned-selector}
   # A hook with no delete policy and no bound on its retries.
   - {check: MTA-08, kind: Job, name: unbounded-hook}
+  # The four reporting labels are missing too, recorded separately: nothing
+  # breaks without them, but the release is invisible to every dashboard.
+  - {check: MTA-09, kind: Deployment, name: versioned-selector}
+  - {check: MTA-09, kind: Job, name: unbounded-hook}

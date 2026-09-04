@@ -8,3 +8,16 @@ findings:
   # The container runtime socket: reported as cluster-admin equivalence rather
   # than as a mount, because that is what it is.
   - {check: SEC-08, kind: Deployment, name: loose}
+  # Gives up every permission and takes back the ability to trace other
+  # processes, which is one of the ones that undoes container isolation.
+  - {check: SEC-13, kind: Deployment, name: loose, container: loose}
+  # Memory-backed scratch with no ceiling: filling it evicts every other pod on
+  # the server.
+  - {check: SEC-11, kind: Deployment, name: unbounded-scratch}
+  - {check: SEC-02, kind: Deployment, name: unbounded-scratch, container: app}
+  - {check: SEC-04, kind: Deployment, name: unbounded-scratch, container: app}
+  - {check: SEC-05, kind: Deployment, name: unbounded-scratch, container: app}
+  - {check: SEC-06, kind: Deployment, name: unbounded-scratch, container: app}
+  # Says nothing at all about which user it runs as - which is not the same as
+  # running as root, and is reported separately from SEC-01 for that reason.
+  - {check: SEC-12, kind: Deployment, name: unbounded-scratch, container: app}

@@ -4,6 +4,7 @@ findings:
   # reader is looking.
   - {check: NET-01, kind: NetworkPolicy, name: allow-everything}
   - {check: NET-01, kind: NetworkPolicy, name: versioned}
+  - {check: NET-01, kind: NetworkPolicy, name: allow-all-namespaces}
   # An ingress rule with neither `from` nor `ports`.
   - {check: NET-02, kind: NetworkPolicy, name: allow-everything}
   # An egress rule with no `to` permits the internet.
@@ -17,3 +18,9 @@ findings:
   - {check: NET-06, kind: Service, name: exposed}
   # One character wrong in the selector.
   - {check: NET-07, kind: Service, name: orphan}
+  # A rule that names a source and admits the entire cluster. It satisfies
+  # NET-02, which only asks whether a source was given.
+  - {check: NET-13, kind: NetworkPolicy, name: allow-all-namespaces}
+  # Selects a real workload and sends traffic to a port name no container in it
+  # declares - the same symptom as selecting nothing.
+  - {check: NET-11, kind: Service, name: mistyped-port}

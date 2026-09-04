@@ -3,29 +3,39 @@ kind: PolicyPack
 metadata:
   name: sgw-baseline-observability
   prefix: OBS
-  version: 1.0.0
+  version: 2.0.0
   description: >
-    Observability. Whether anybody will know when this release is failing.
+    Whether anybody will find out when this release is failing, and whether they
+    will know what to do about it.
   maintainer: platform-sre
+  reference: docs/compliance/source-standards.md - 10. Observability
 spec:
   checks:
     - id: OBS-01
-      title: Workloads receiving traffic expose metrics
+      title: A service that takes traffic publishes numbers about how it is doing
       description: >
-        A workload selected by a Service either declares a container port named
-        metrics or http-metrics, is covered by a ServiceMonitor or PodMonitor
-        the release ships, or carries prometheus.io/scrape.
+        A workload behind a Service either opens a port named for metrics, is
+        covered by monitoring configuration the release ships, or carries the
+        annotation that asks the monitoring system to collect from it.
       rationale: >
-        A service with no metrics is a service whose degradation is discovered
-        by a user. Three conventions for exposing them coexist and none is
-        universal, so any of the three satisfies this - and that is also why it
-        is a warning rather than a block.
+        A service publishing nothing is a service whose degradation is discovered
+        by a user rather than by an alert. Three conventions for publishing exist
+        side by side and none is universal, so any of the three satisfies this -
+        which is also why it is a warning rather than a blocker.
       severity: warn
       tier: 1
       category: Observability
+      confidence: probable
+      whenItBites: on-failure
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - OBS-01
       remediation: >
-        Name the metrics port, or ship a ServiceMonitor covering this
-        workload.
+        Name the metrics port, or ship a ServiceMonitor covering this workload.
+      fixExample: |
+        ports:
+          - name: metrics
+            containerPort: 9090
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet]
         where: 'size(servicesFor(self)) > 0'
@@ -38,23 +48,80 @@ spec:
           text(self, "spec.template.metadata.annotations[prometheus.io/scrape]") == "true" ||
           size(resourcesIn(["ServiceMonitor", "PodMonitor"])) > 0
         locus: spec.template.spec.containers[].ports
-        expected: a metrics port, a scrape annotation, or a ServiceMonitor in this release
+        expected: a metrics port, a collection annotation, or monitoring configuration in this release
+        observed: '"no metrics port, no collection annotation and no monitoring configuration in this release"'
 
-    - id: OBS-09
-      title: Alert rules say what to do about them
+    - id: OBS-05
+      title: Logs go where the platform can collect them
       description: >
-        Every rule in a PrometheusRule carries a runbook_url annotation and a
-        severity label.
+        No container is configured to write its logs to a file inside itself
+        instead of to the output stream the platform reads.
       rationale: >
-        An alert that fires at 3am and names no runbook is an alert somebody
-        silences. The severity label is what routes it, so without one it goes
-        to the default receiver, which is usually nobody.
+        Logs written to a file inside a container disappear when the container
+        restarts - which is exactly the moment they are most needed. They are
+        also invisible to central log search, so investigating an incident means
+        reaching into individual containers one at a time, if they still exist.
       severity: warn
       tier: 1
       category: Observability
+      confidence: probable
+      whenItBites: on-failure
+      fixOwner: application
+      fixEffort: medium
+      reference: source-standards.md - OBS-05
       remediation: >
-        Add a runbook_url annotation and a severity label to every alerting
-        rule.
+        Configure the application to write to standard output. If it can only
+        write to a file, have it write to /dev/stdout.
+      fixExample: |
+        env:
+          - name: LOG_OUTPUT
+            value: stdout
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: 'present(self, "env")'
+      assert:
+        expr: |
+          self.env.all(e,
+            !string(value(e, "name")).matches("(?i)^log.*(file|path|dir|dest|destination|output)$") ||
+            !present(e, "value") ||
+            string(value(e, "value")).matches("^(/dev/std(out|err)|stdout|stderr|console|-)$"))
+        locus: env
+        expected: logs written to the output stream the platform collects
+        observed: |
+          self.env.filter(e,
+            string(value(e, "name")).matches("(?i)^log.*(file|path|dir|dest|destination|output)$") &&
+            present(e, "value") &&
+            !string(value(e, "value")).matches("^(/dev/std(out|err)|stdout|stderr|console|-)$"))
+            .map(e, string(value(e, "name")) + " sends logs to " + string(value(e, "value"))).join(", ")
+
+    - id: OBS-09
+      title: Every alert says what to do about it
+      description: >
+        Every alerting rule the release ships carries a link to its instructions
+        and a severity label.
+      rationale: >
+        An alert that fires at three in the morning and names no instructions is
+        an alert somebody silences. The severity label is what decides who it
+        goes to, so without one it goes to the default destination, which is
+        usually nobody.
+      severity: warn
+      tier: 1
+      category: Observability
+      confidence: confirmed
+      whenItBites: on-failure
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - OBS-09
+      remediation: >
+        Add a runbook_url annotation and a severity label to every alerting rule.
+      fixExample: |
+        - alert: MyServiceErrorRate
+          expr: rate(http_requests_total{code=~"5.."}[5m]) > 0.05
+          for: 10m
+          labels: {severity: critical}
+          annotations:
+            runbook_url: https://wiki.example.com/runbooks/my-service-error-rate
       appliesTo:
         kinds: [PrometheusRule]
         where: 'value(self, "spec.groups") != null'
@@ -66,4 +133,11 @@ spec:
               !present(r, "alert") ||
               (present(r, "annotations.runbook_url") && present(r, "labels.severity"))))
         locus: spec.groups
-        expected: runbook_url and severity on every alerting rule
+        expected: a runbook link and a severity on every alerting rule
+        observed: |
+          "groups with alerts missing a runbook link or a severity: " +
+          self.spec.groups
+            .filter(g, value(g, "rules") != null &&
+                       g.rules.exists(r, present(r, "alert") &&
+                         !(present(r, "annotations.runbook_url") && present(r, "labels.severity"))))
+            .map(g, string(value(g, "name"))).join(", ")

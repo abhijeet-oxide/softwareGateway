@@ -200,3 +200,4 @@ func TestBadStorage(t *testing.T)       { assertFixture(t, "bad-storage.yaml") }
 func TestBadConfig(t *testing.T)        { assertFixture(t, "bad-config.yaml") }
 func TestBadMetadata(t *testing.T)      { assertFixture(t, "bad-metadata.yaml") }
 func TestBadObservability(t *testing.T) { assertFixture(t, "bad-observability.yaml") }
+func TestBadUpgrade(t *testing.T)       { assertFixture(t, "bad-upgrade.yaml") }

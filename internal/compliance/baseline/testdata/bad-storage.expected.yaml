@@ -1,8 +1,14 @@
 findings:
   - {check: STO-01, kind: PersistentVolumeClaim, name: implicit-class}
-  - {check: STO-02, kind: PersistentVolumeClaim, name: implicit-class}
   - {check: STO-04, kind: PersistentVolumeClaim, name: implicit-class}
   - {check: STO-05, kind: Deployment, name: shared}
   - {check: STO-07, kind: Deployment, name: shared, container: fix-perms}
   - {check: STO-08, kind: Deployment, name: shared}
   - {check: STO-10, kind: StatefulSet, name: ephemeral}
+  # Shared-write storage written by a process running as root. The old rule
+  # told teams to stop using shared storage, which is the opposite of what the
+  # standard says; this one checks the terms the standard sets for using it.
+  - {check: STO-02, kind: PersistentVolumeClaim, name: shared-rwx}
+  # And written by two workloads at once, which is a claim about the software
+  # that somebody has to confirm.
+  - {check: STO-13, kind: PersistentVolumeClaim, name: shared-rwx}

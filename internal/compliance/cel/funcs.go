@@ -137,11 +137,34 @@ func bindings(idx *compliance.Index) map[string]impl {
 		return types.DefaultTypeAdapter.NativeToValue(out)
 	})
 
+	// selectedBy() is the workloads a Service routes to.
+	//
+	// # Why runtime-supplied selector keys are skipped
+	//
+	// A headless Service addressing one member of a clustered database selects
+	// on `statefulset.kubernetes.io/pod-name: db-0`. Kubernetes puts that label
+	// on the pod when it creates it; no chart writes it, and it is never in a
+	// rendered template. Comparing the selector against template labels alone
+	// therefore finds no match and concludes the Service routes into a void -
+	// which was reported, at blocking severity, for every per-replica Service
+	// in the release, while the tool's own output printed the workload it was
+	// pointing at.
+	//
+	// Skipping those keys asks the question that can actually be answered: do
+	// the keys a chart CONTROLS match a workload the chart ships? A Service
+	// whose remaining keys match is routing to that workload, and the ordinal
+	// narrows it to one of its pods.
 	add([]string{FnSelected, "selectedby_dyn"}, func(args ...ref.Val) ref.Val {
 		svc := resolve(idx, args)
 		out := []any{}
 		if svc != nil {
-			sel := stringMapField(svc.Object, "spec", "selector")
+			sel := map[string]string{}
+			for k, v := range stringMapField(svc.Object, "spec", "selector") {
+				if IsRuntimeSuppliedLabelKey(k) {
+					continue
+				}
+				sel[k] = v
+			}
 			if len(sel) > 0 {
 				for _, w := range idx.OfKind(compliance.WorkloadKinds...) {
 					if w.Namespace() != svc.Namespace() {

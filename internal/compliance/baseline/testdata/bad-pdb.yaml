@@ -189,3 +189,33 @@ spec:
   minAvailable: 1
   selector:
     matchLabels: {app.kubernetes.io/name: recreate}
+---
+# Source: bad-pdb/templates/pdb-orphan.yaml
+# A budget whose selector matches nothing in the release. It looks correct in
+# review and protects nothing at all.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: protects-nothing, namespace: bad}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: a-workload-that-does-not-exist
+---
+# Source: bad-pdb/templates/instant-kill.yaml
+# Killed the instant it is asked to stop: whatever request it was handling is
+# dropped, on every restart and every drain.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: instant-kill, namespace: bad}
+spec:
+  replicas: 1
+  progressDeadlineSeconds: 600
+  selector: {matchLabels: {app.kubernetes.io/name: instant-kill}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: instant-kill}}
+    spec:
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: instant-kill
+          image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000

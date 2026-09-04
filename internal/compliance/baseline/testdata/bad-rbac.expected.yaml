@@ -9,3 +9,6 @@ findings:
   # The release grants cluster-admin. The message names the built-in role,
   # because that is the part a reviewer needs to see.
   - {check: RBAC-04, kind: ClusterRoleBinding, name: too-much}
+  # Reading a credential and being able to overwrite it are different powers,
+  # and only the first was ever checked.
+  - {check: RBAC-09, kind: Role, name: everything}

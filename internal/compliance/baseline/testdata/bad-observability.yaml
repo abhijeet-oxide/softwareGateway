@@ -106,3 +106,23 @@ roleRef:
   name: system:openshift:scc:privileged
 subjects:
   - {kind: Group, name: "system:serviceaccounts:bad", apiGroup: rbac.authorization.k8s.io}
+---
+# Source: bad-observability/templates/filelogger.yaml
+# Writes its logs to a file inside the container, where they vanish on the
+# restart that made them interesting.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: filelogger, namespace: bad}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: filelogger}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: filelogger}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: app
+          image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
+          env:
+            - name: LOG_FILE
+              value: /var/log/app/app.log

@@ -69,3 +69,61 @@ spec:
           image: registry.acme.example/bad/app@sha256:6666000066660000666600006666000066660000666600006666000066660000
           volumeMounts:
             - {name: state, mountPath: /var/lib/state}
+---
+# Source: bad-storage/templates/shared-rwx.yaml
+# Shared-write storage used the way the standard says not to: written by a
+# process running as root, and by two different workloads at once.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: shared-rwx, namespace: bad}
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: acme-nfs
+  resources:
+    requests: {storage: 10Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: rwx-writer-root, namespace: bad}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: rwx-writer-root}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: rwx-writer-root}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        # Root on a share everybody else also uses.
+        runAsUser: 0
+        fsGroup: 0
+      volumes:
+        - name: shared
+          persistentVolumeClaim: {claimName: shared-rwx}
+      containers:
+        - name: app
+          image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
+          volumeMounts:
+            - {name: shared, mountPath: /var/shared}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: rwx-writer-second, namespace: bad}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: rwx-writer-second}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: rwx-writer-second}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        supplementalGroups: [20001]
+      volumes:
+        - name: shared
+          persistentVolumeClaim: {claimName: shared-rwx}
+      containers:
+        - name: app
+          image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
+          volumeMounts:
+            - {name: shared, mountPath: /var/shared}

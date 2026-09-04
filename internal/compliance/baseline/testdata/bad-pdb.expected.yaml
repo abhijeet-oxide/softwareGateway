@@ -30,3 +30,8 @@ findings:
   - {check: PDB-07, kind: Deployment, name: uncovered}
   - {check: PDB-07, kind: Deployment, name: stuck}
   - {check: PDB-07, kind: Deployment, name: recreate}
+  # A budget whose selector matches nothing: it looks correct and protects
+  # nothing at all.
+  - {check: PDB-09, kind: PodDisruptionBudget, name: protects-nothing}
+  # Killed instantly on shutdown, so whatever it was handling is dropped.
+  - {check: PDB-10, kind: Deployment, name: instant-kill}

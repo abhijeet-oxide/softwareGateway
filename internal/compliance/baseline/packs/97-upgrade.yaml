@@ -3,50 +3,279 @@ kind: PolicyPack
 metadata:
   name: sgw-baseline-upgrade
   prefix: UPG
-  version: 1.0.0
+  version: 2.0.0
   description: >
-    Upgrade readiness. Whether this release installs, and whether the next one
-    can replace it.
+    Whether this release installs, whether the next one can replace it, and what
+    the platform runs outside the ordinary install.
   maintainer: platform-sre
+  reference: docs/compliance/source-standards.md - 13. Upgrade & Maintenance Readiness
 spec:
   checks:
     - id: UPG-07
-      title: Every custom resource has its definition in the same release
+      title: Every extension type the release uses is installed first
       description: >
-        Each custom resource the release ships has a matching
-        CustomResourceDefinition in the same release, at a version the
-        definition serves.
+        For each resource of a type the cluster does not provide itself, either
+        the release ships the definition of that type, or the type belongs to a
+        group named in this deployment's list of platform prerequisites.
       rationale: >
-        A custom resource whose definition arrives later - or comes from
-        another chart, or was expected to be in the cluster already - is an
-        install that fails on ordering. It is only decidable across the whole
-        release, which is why no single-chart check finds it.
+        A resource of a type the cluster has never heard of cannot be created.
+        The installation fails part way through, in an order that depends on
+        timing, and the error names the type rather than the chart that should
+        have shipped it. Types the cluster provides itself, and types installed
+        by an operator the platform team owns, are not the vendor's to ship - so
+        neither is reported here.
       severity: warn
       tier: 1
       category: Upgrade & Maintenance Readiness
+      confidence: probable
+      whenItBites: install
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - UPG-07
       remediation: >
-        Ship the CustomResourceDefinition in this release, ahead of the
-        resource, or declare the operator as a dependency.
+        Ship the CustomResourceDefinition in this release, ahead of the resources
+        that use it, or declare the operator that provides it as a prerequisite
+        by adding its API group to config.platformApiGroups.
+      fixExample: |
+        # Either ship the definition:
+        apiVersion: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        metadata:
+          name: widgets.acme.example
+        # or record the prerequisite in this deployment's compliance config:
+        # platformApiGroups: ["monitoring.coreos.com", "cert-manager.io"]
       appliesTo:
         where: |
           text(self, "apiVersion").contains("/") &&
-          !text(self, "apiVersion").startsWith("apps/") &&
-          !text(self, "apiVersion").startsWith("batch/") &&
-          !text(self, "apiVersion").startsWith("policy/") &&
-          !text(self, "apiVersion").startsWith("networking.k8s.io/") &&
-          !text(self, "apiVersion").startsWith("rbac.authorization.k8s.io/") &&
-          !text(self, "apiVersion").startsWith("autoscaling/") &&
-          !text(self, "apiVersion").startsWith("apiextensions.k8s.io/") &&
-          !text(self, "apiVersion").startsWith("storage.k8s.io/") &&
-          !text(self, "apiVersion").startsWith("route.openshift.io/") &&
-          !text(self, "apiVersion").startsWith("monitoring.coreos.com/") &&
-          !text(self, "apiVersion").startsWith("k8s.cni.cncf.io/")
+          !builtinApiGroup(text(self, "apiVersion"))
       assert:
-        expr: 'size(crdFor(self)) > 0'
+        expr: |
+          size(crdFor(self)) > 0 ||
+          (value(config, "platformApiGroups") != null &&
+           config.platformApiGroups.exists(g, text(self, "apiVersion").startsWith(string(g) + "/")))
         locus: apiVersion
-        expected: a CustomResourceDefinition for this kind in the same release
-        observed: 'text(self, "apiVersion") + " " + text(self, "kind")'
+        expected: the definition of this type shipped here, or declared as a platform prerequisite
+        observed: '"a " + text(self, "kind") + " of type " + text(self, "apiVersion") + ", whose definition this release does not ship"'
         message: |
-          "this release ships a " + text(self, "kind") + " but no CustomResourceDefinition for " +
-          text(self, "apiVersion") + ". The install will fail on ordering unless the definition is" +
-          " already in the cluster"
+          "this release ships a " + text(self, "kind") + " but no definition for " +
+          text(self, "apiVersion") + ". The install will fail on ordering unless that type is " +
+          "already installed in the target cluster - so either ship the definition, or record the " +
+          "operator that provides it as a prerequisite."
+
+    - id: UPG-05
+      title: Setup tasks do not force their way past the platform's safeguards
+      description: >
+        No task the release runs uses a forced delete, a zero grace period, or a
+        drain that skips the maintenance rules.
+      rationale: >
+        Each of these tells the platform to skip a check that exists to protect
+        something. A forced delete removes an object the platform still believes
+        is in use; a zero grace period kills a service part way through what it
+        was doing; skipping the maintenance rules defeats the entire mechanism
+        the disruption checks in this pack are about. All three usually appear in
+        a task written to get around a problem that has since been fixed.
+      severity: warn
+      tier: 1
+      category: Upgrade & Maintenance Readiness
+      confidence: confirmed
+      whenItBites: upgrade
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - UPG-05
+      remediation: >
+        Remove the flag and let the platform's own sequencing apply. If the task
+        genuinely cannot wait, say why in the chart rather than forcing past the
+        safeguard.
+      fixExample: |
+        command: ["kubectl", "delete", "job", "my-migration"]   # no --force
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: 'present(self, "command") || present(self, "args")'
+      assert:
+        expr: |
+          (!present(self, "command") ||
+            self.command.all(a, !string(a).matches("(--force|--grace-period=0|--disable-eviction|--now)"))) &&
+          (!present(self, "args") ||
+            self.args.all(a, !string(a).matches("(--force|--grace-period=0|--disable-eviction|--now)")))
+        locus: command
+        expected: no forced deletes, zero grace periods or eviction bypasses
+        observed: |
+          ((present(self, "command") ? self.command : []) +
+           (present(self, "args") ? self.args : []))
+            .filter(a, string(a).matches("(--force|--grace-period=0|--disable-eviction|--now)"))
+            .map(a, string(a)).join(" ")
+
+    # ------------------------------------------------------------------
+    # What Helm runs outside the ordinary install.
+    #
+    # A Helm hook is a task the chart asks Helm to run at a particular moment -
+    # before an install, after an upgrade, and so on. Hooks are ordinary and
+    # often necessary, and the two checks below are not against them:
+    #
+    #   UPG-08 records every one of them, so the report says what this release
+    #   will run outside the normal install rather than leaving a reader to find
+    #   out by reading templates. It only fails when a hook names a moment Helm
+    #   does not recognise, because a misspelled moment means the task silently
+    #   never runs at all.
+    #
+    #   UPG-09 is the one that matters for a GitOps deployment. A task that runs
+    #   ONLY on a Helm rollback never runs here at all, because the platform
+    #   reconciles a declared state forward - it does not issue a rollback, and
+    #   moving to an earlier version arrives as an ordinary upgrade with the
+    #   rollback hooks skipped. Whatever that task was there to repair does not
+    #   get repaired.
+    # ------------------------------------------------------------------
+
+    - id: UPG-08
+      title: Every task Helm runs is named and understood
+      description: >
+        Every object the chart marks as a Helm hook names moments Helm actually
+        recognises. The moments are listed in the finding, so the report carries
+        an inventory of everything this release runs outside the ordinary
+        install.
+      rationale: >
+        Hooks are the part of a release that does not appear in the deployed
+        objects, so nothing else in a compliance report shows them. Recording
+        them is the point: a reader can see what will run, and when, without
+        opening the chart. It fails only for a moment Helm does not recognise -
+        a misspelling there is silent, the task never runs, and the upgrade
+        reports success while the work it was supposed to do never happened.
+      severity: info
+      tier: 1
+      category: Upgrade & Maintenance Readiness
+      confidence: confirmed
+      whenItBites: upgrade
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - MTA-08, SUP-09
+      remediation: >
+        Use the moments Helm defines: pre-install, post-install, pre-upgrade,
+        post-upgrade, pre-delete, post-delete, pre-rollback, post-rollback and
+        test. Anything else is ignored.
+      fixExample: |
+        metadata:
+          annotations:
+            helm.sh/hook: pre-upgrade,pre-install
+            helm.sh/hook-weight: "-5"
+            helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+      appliesTo:
+        # Any kind at all: a Helm hook can be a Job, a ConfigMap, a Secret, a
+        # Role - anything the chart wants run at a particular moment.
+        where: "true"
+        annotations:
+          helm.sh/hook: "*"
+      assert:
+        expr: |
+          text(self, "metadata.annotations[helm.sh/hook]").split(",").all(h,
+            h.trim() in ["pre-install", "post-install", "pre-upgrade", "post-upgrade",
+                         "pre-delete", "post-delete", "pre-rollback", "post-rollback",
+                         "test", "test-success", "test-failure", "crd-install"])
+        locus: metadata.annotations[helm.sh/hook]
+        expected: moments Helm recognises
+        observed: |
+          "Helm runs this " + text(self, "kind") + " at: " +
+          text(self, "metadata.annotations[helm.sh/hook]").split(",").map(h, h.trim()).join(", ")
+        message: |
+          "this " + text(self, "kind") + " is marked to run at " +
+          text(self, "metadata.annotations[helm.sh/hook]").split(",")
+            .filter(h, !(h.trim() in ["pre-install", "post-install", "pre-upgrade", "post-upgrade",
+                                      "pre-delete", "post-delete", "pre-rollback", "post-rollback",
+                                      "test", "test-success", "test-failure", "crd-install"]))
+            .map(h, "\"" + h.trim() + "\"").join(", ") +
+          ", which Helm does not recognise. The task will simply never run, and the upgrade will " +
+          "report success anyway."
+
+    - id: UPG-09
+      title: No task depends on Helm rolling back
+      description: >
+        No object is marked to run only at a Helm rollback. A task that runs at a
+        rollback and also at another moment is fine.
+      rationale: >
+        This platform deploys by reconciling a declared state forward. It never
+        issues a Helm rollback, so a task that only runs at one never runs at
+        all - not on the way in, and not on the way back. Going to an earlier
+        version arrives as an ordinary upgrade, and the rollback tasks are
+        skipped along with it. Whatever repair, cleanup or migration reversal
+        that task was written to perform silently does not happen, and the
+        release comes back up in a state nobody has tested. It is also a
+        deployment style that assumes somebody is running commands by hand,
+        which is the opposite of how this release is installed.
+      severity: warn
+      tier: 1
+      category: Upgrade & Maintenance Readiness
+      confidence: confirmed
+      whenItBites: upgrade
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - SUP-09, UPG-09
+      remediation: >
+        Make the task run at pre-upgrade or post-upgrade as well, so that going
+        to an earlier version - which arrives here as an ordinary upgrade -
+        performs the same work. If the work only makes sense after a rollback,
+        move it into the application's own start-up so it happens whichever way
+        the version changes.
+      fixExample: |
+        metadata:
+          annotations:
+            # runs whichever direction the version moves in
+            helm.sh/hook: pre-upgrade,pre-rollback
+            helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+      appliesTo:
+        # Any kind at all: a Helm hook can be a Job, a ConfigMap, a Secret, a
+        # Role - anything the chart wants run at a particular moment.
+        where: "true"
+        annotations:
+          helm.sh/hook: "*"
+      assert:
+        expr: |
+          text(self, "metadata.annotations[helm.sh/hook]").split(",").exists(h,
+            !(h.trim() in ["pre-rollback", "post-rollback"]))
+        locus: metadata.annotations[helm.sh/hook]
+        expected: a task that also runs at a moment this platform actually reaches
+        observed: |
+          "runs only at " +
+          text(self, "metadata.annotations[helm.sh/hook]").split(",").map(h, h.trim()).join(", ") +
+          ", which this platform never triggers"
+        message: |
+          "this " + text(self, "kind") + " runs only when Helm rolls back. This platform reconciles " +
+          "forward and never issues a rollback, so the task never runs - including when the release " +
+          "is moved to an earlier version, which arrives here as an ordinary upgrade. Whatever it " +
+          "was written to repair will not be repaired."
+
+    - id: UPG-11
+      title: Extension definitions survive an uninstall
+      description: >
+        Every CustomResourceDefinition the release ships as a template carries
+        the annotation that keeps it when the release is removed.
+      rationale: >
+        Removing the definition of a type removes every object of that type in
+        the cluster, immediately and without a further prompt - including objects
+        belonging to other releases and other teams. An uninstall meant to remove
+        one release can therefore delete another team's data, and there is no
+        undo.
+      severity: warn
+      tier: 1
+      category: Upgrade & Maintenance Readiness
+      confidence: confirmed
+      whenItBites: upgrade
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - UPG-11 (proposed addition)
+      remediation: >
+        Add helm.sh/resource-policy with the value keep to the definition, or
+        move it into the chart's crds/ directory, which Helm never deletes.
+      fixExample: |
+        apiVersion: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        metadata:
+          name: widgets.acme.example
+          annotations:
+            helm.sh/resource-policy: keep
+      appliesTo:
+        kinds: [CustomResourceDefinition]
+      assert:
+        expr: 'text(self, "metadata.annotations[helm.sh/resource-policy]") == "keep"'
+        locus: metadata.annotations[helm.sh/resource-policy]
+        expected: marked to be kept when the release is removed
+        observed: '"not marked to be kept, so uninstalling this release deletes every object of this type in the cluster"'

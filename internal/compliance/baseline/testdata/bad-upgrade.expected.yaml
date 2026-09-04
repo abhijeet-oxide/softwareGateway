@@ -1,0 +1,16 @@
+# What the release runs outside the ordinary install, and what it would take
+# away with it.
+findings:
+  # The finding this fixture exists for: a task that only runs when Helm rolls
+  # back. This platform reconciles forward and never issues a rollback, so the
+  # task never runs at all - not even when the release is moved to an earlier
+  # version, which arrives here as an ordinary upgrade.
+  - {check: UPG-09, kind: Job, name: undo-migration}
+  # "post-instal" is not a moment Helm recognises. The task silently never
+  # runs, and the upgrade reports success.
+  - {check: UPG-08, kind: Job, name: register-service}
+  # A task that forces its way past the platform's own safeguards.
+  - {check: UPG-05, kind: Job, name: clear-the-way, container: clear}
+  # A definition with no keep policy: uninstalling this release deletes every
+  # object of that type in the cluster, including other teams'.
+  - {check: UPG-11, kind: CustomResourceDefinition, name: gadgets.acme.example}

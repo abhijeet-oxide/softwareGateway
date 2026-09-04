@@ -9,8 +9,11 @@ findings:
   - {check: PDB-08, kind: CronJob, name: nightly}
 
   # Container scoped: both containers must be reached, including the init one.
+  # Only `worker` is reported for SEC-01: it sets runAsUser 0 explicitly. The
+  # init container merely says nothing about its user, which is a different and
+  # lesser finding (SEC-12) - reporting the two identically is what made this
+  # check's own title untrue of most of its findings.
   - {check: SEC-01, kind: CronJob, name: nightly, container: worker}
-  - {check: SEC-01, kind: CronJob, name: nightly, container: prepare}
   - {check: SEC-02, kind: CronJob, name: nightly, container: worker}
   - {check: SEC-02, kind: CronJob, name: nightly, container: prepare}
   - {check: SEC-03, kind: CronJob, name: nightly, container: worker}

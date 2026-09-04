@@ -49,7 +49,11 @@ spec:
           image: registry.acme.example/bad/api@sha256:3333000033330000333300003333000033330000333300003333000033330000
           ports: [{name: own, containerPort: 8082}]
           readinessProbe:
-            httpGet: {path: /ready, port: 9999, scheme: HTTP}
+            # A NAME this container does not declare. It can never resolve, so
+            # the copy never becomes ready. (A numeric port would resolve
+            # whether or not it appears in the ports list, which is why numbers
+            # are no longer reported.)
+            httpGet: {path: /ready, port: metrics, scheme: HTTP}
             timeoutSeconds: 30
             periodSeconds: 60
           livenessProbe:
@@ -60,3 +64,70 @@ spec:
             preStop:
               exec:
                 command: ["sleep", "600"]
+---
+# Source: bad-probes/templates/task.yaml
+# A one-off task carrying checks meant for something that keeps running, and a
+# startup allowance too short to be worth having.
+apiVersion: batch/v1
+kind: Job
+metadata: {name: migrate, namespace: bad}
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  template:
+    metadata: {labels: {app.kubernetes.io/name: migrate}}
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: migrate
+          image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
+          # A restart check can kill this just before it finishes, and the
+          # install then fails in a way that does not reproduce.
+          livenessProbe:
+            httpGet: {path: /livez, port: 8080}
+            periodSeconds: 10
+---
+# Source: bad-probes/templates/slowstart.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: slowstart, namespace: bad}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: slowstart}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: slowstart}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: slowstart
+          image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
+          # Three attempts, five seconds apart: fifteen seconds of protection
+          # for a service that takes a minute to start. It looks like a startup
+          # allowance and still kills the container mid-start.
+          startupProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 5
+            failureThreshold: 3
+---
+# Source: bad-probes/templates/numeric-port.yaml
+# A numeric probe port, and a container that declares no ports at all. This
+# resolves perfectly well at runtime - containerPort is documentation - and it
+# must NOT be reported.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: numeric-probe-port, namespace: bad}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: numeric-probe-port}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: numeric-probe-port}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: numeric
+          image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
+          readinessProbe:
+            httpGet: {path: /ready, port: 8443, scheme: HTTPS}
+            timeoutSeconds: 2
+            periodSeconds: 5

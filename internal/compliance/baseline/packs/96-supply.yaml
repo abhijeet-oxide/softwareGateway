@@ -3,52 +3,121 @@ kind: PolicyPack
 metadata:
   name: sgw-baseline-supply
   prefix: SUP
-  version: 1.0.0
+  version: 2.0.0
   description: >
-    Supply chain. Whether what runs is what was tested, and whether it came
-    from somewhere this organization controls.
+    Whether what runs is what was tested, and whether it came from somewhere this
+    organization controls.
   maintainer: platform-sre
+  reference: docs/compliance/source-standards.md - 12. Supply Chain & Release Integrity
 spec:
   checks:
-    - id: SUP-01
-      title: Every image is pinned by digest
+    - id: SUP-11
+      title: No image can change without anybody noticing
       description: >
-        Every image reference is of the form name@sha256:… . A tag - including
-        a semantic version - fails.
+        No image is referenced by a moving label - "latest", "stable", "main",
+        "edge", "dev", or no label at all.
       rationale: >
-        A tag is a pointer and it can be moved. The release that was tested and
-        the release that is installed six months later are then different
-        software with the same name, and nothing records that they differ. A
-        digest is the content.
+        These labels are pointers, and they are meant to move. The software that
+        was tested and the software that starts after the next restart are then
+        different, with the same name, and nothing anywhere records that they
+        differ. Two copies of the same service started a week apart can be
+        running different code, which makes an incident impossible to reason
+        about.
       severity: block
       tier: 1
       category: Supply Chain & Release Integrity
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-values
+      fixEffort: low
+      reference: source-standards.md - SUP-01 (moving-label half)
       remediation: >
-        Replace the tag with the digest the image currently resolves to.
+        Reference a specific version, and ideally the exact content fingerprint
+        of the image.
+      fixExample: |
+        image: registry.example.com/my-service:1.4.2
+        # better still:
+        # image: registry.example.com/my-service@sha256:0f1e2d3c4b5a...
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+      assert:
+        expr: |
+          imageRef(text(self, "image")).hasDigest ||
+          !(imageRef(text(self, "image")).tag in ["", "latest", "stable", "main", "master", "edge", "dev", "test", "nightly"])
+        locus: image
+        expected: a specific version, not a label that moves
+        observed: |
+          imageRef(text(self, "image")).tag == ""
+            ? "no version at all, so this resolves to whatever \"latest\" points at today"
+            : "the moving label \"" + imageRef(text(self, "image")).tag + "\""
+        message: |
+          "this container runs " + text(self, "image") + ". That label is a pointer and it moves, " +
+          "so the software that was tested and the software that starts after the next restart can " +
+          "be different, with nothing recording that they differ."
+
+    - id: SUP-01
+      title: Deployed images are exactly reproducible
+      description: >
+        Every image is identified by its content fingerprint - the form
+        name@sha256:... - rather than by a version label.
+      rationale: >
+        A version label is a name somebody assigned; a fingerprint is the content
+        itself and cannot be reassigned. Pinning by fingerprint is what makes two
+        installations of the same release provably identical. This is a warning
+        rather than a blocker for two reasons: the version labels this
+        organization uses are not moving labels, which is the prohibited case and
+        is covered separately by SUP-11; and where images are copied into a
+        different registry on the way in, the fingerprint is a property of the
+        pipeline that copies them rather than of the chart the vendor wrote.
+      severity: warn
+      tier: 1
+      category: Supply Chain & Release Integrity
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: build-pipeline
+      fixEffort: medium
+      reference: source-standards.md - SUP-01
+      remediation: >
+        Replace the version label with the fingerprint the image currently
+        resolves to, ideally written by the pipeline that publishes the release
+        rather than by hand.
+      fixExample: |
+        image: registry.example.com/my-service@sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: all
       assert:
         expr: 'imageRef(text(self, "image")).hasDigest'
         locus: image
-        expected: "name@sha256:…"
-        observed: 'text(self, "image")'
+        expected: an image identified by its content fingerprint (name@sha256:...)
+        observed: '"identified by the label \"" + imageRef(text(self, "image")).tag + "\", not by content"'
 
     - id: SUP-02
-      title: Every image comes from an approved registry
+      title: Every image comes from a registry this organization runs
       description: >
-        Every image reference resolves to a registry named in this
-        deployment's configured allowlist.
+        Every image is pulled from a registry named in this deployment's
+        configured list of approved registries.
       rationale: >
-        An image from an unapproved registry has not been scanned, is not
-        mirrored, and will not pull at all in a disconnected environment. The
-        allowlist is deployment configuration, not a constant, because the
-        registries an organization runs are a fact about the organization.
+        An image from an unapproved source has not been scanned, has no record of
+        where it came from, and will not be available at all in a disconnected
+        environment - so the first time it matters is a restart during an
+        incident, when the image cannot be fetched. The approved list is
+        deployment configuration rather than a fixed rule, because which
+        registries an organization runs is a fact about the organization.
       severity: block
       tier: 1
       category: Supply Chain & Release Integrity
+      confidence: confirmed
+      whenItBites: install
+      fixOwner: build-pipeline
+      fixEffort: medium
+      reference: source-standards.md - SUP-02
       remediation: >
-        Mirror the image into an approved registry and reference it there.
+        Copy the image into an approved registry and reference it there, usually
+        through a chart value for the registry host.
+      fixExample: |
+        image: registry.acme.example/mirror/my-service@sha256:0f1e2d3c4b5a...
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: all
@@ -57,8 +126,8 @@ spec:
         expr: |
           config.approvedRegistries.exists(r, string(r) == imageRef(text(self, "image")).registry)
         locus: image
-        expected: 'a registry in config.approvedRegistries'
+        expected: 'an image from one of the approved registries'
         observed: |
           imageRef(text(self, "image")).registry == ""
-            ? "(no registry, so this resolves to Docker Hub)"
-            : string(imageRef(text(self, "image")).registry)
+            ? "no registry named, so this is pulled from Docker Hub"
+            : "pulled from " + string(imageRef(text(self, "image")).registry)

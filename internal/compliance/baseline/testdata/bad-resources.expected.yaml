@@ -8,6 +8,14 @@ findings:
   # The sidecar has requests but no memory limit.
   - {check: RES-02, kind: Deployment, name: mixed, container: sidecar-proxy}
   # Informational: the containers that cap CPU, listed for the throttling review.
-  - {check: RES-03, kind: Deployment, name: mixed, container: capped}
   # An autoscaler that will take the service to one pod overnight.
   - {check: RES-04, kind: HorizontalPodAutoscaler, name: mixed}
+  # Capped below what it asks for: Kubernetes rejects the pod outright.
+  - {check: RES-10, kind: Deployment, name: impossible, container: inverted}
+  # A cap with no headroom above the request, so ordinary bursts are paused.
+  # `capped` in the mixed Deployment must NOT fire: its cap is well above its
+  # request, and listing every container that caps CPU produced roughly a fifth
+  # of a real report while describing no defect at all.
+  - {check: RES-03, kind: Deployment, name: impossible, container: inverted}
+  # Reserves 128Mi and may grow to 4Gi: placed somewhere that cannot satisfy it.
+  - {check: RES-11, kind: Deployment, name: impossible, container: overcommitted}

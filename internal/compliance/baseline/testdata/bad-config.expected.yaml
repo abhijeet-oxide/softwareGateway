@@ -4,3 +4,16 @@ findings:
   - {check: CFG-03, kind: ConfigMap, name: leaky}
   - {check: CFG-06, kind: Deployment, name: leaky, container: app}
   - {check: CFG-07, kind: Deployment, name: leaky, container: app}
+  # The settings this workload reads can change with nothing restarting.
+  - {check: CFG-04, kind: Deployment, name: leaky}
+  # It asks for a Secret the release does not ship: the pod never starts.
+  - {check: CFG-11, kind: Deployment, name: leaky}
+  # A private key written straight into the environment.
+  - {check: CFG-13, kind: Deployment, name: leaky, container: app}
+  # A Secret shipped with material already in it. The empty shell beside it
+  # must NOT fire: shipping the object is correct, shipping the material is not.
+  - {check: CFG-14, kind: Secret, name: shipped-credentials}
+  # And nothing at all from credential-parameters: six keys that NAME a
+  # credential and hold a count, an interval, a length, a path and a class
+  # name. Every one of them was a false positive before the detector started
+  # looking at values.

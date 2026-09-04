@@ -3,28 +3,55 @@ kind: PolicyPack
 metadata:
   name: sgw-baseline
   prefix: SCH
-  version: 1.0.0
+  version: 2.0.0
   description: >
-    Scheduling and placement. Whether a workload survives losing a node, a
-    zone, or the one node it was pinned to.
+    Where copies of a service are allowed to run. These checks are about
+    surviving the loss of one server, one rack or one data-centre zone, and
+    about not painting a service into a corner it cannot be moved out of.
   maintainer: platform-sre
+  reference: docs/compliance/source-standards.md - 1. Scheduling & Placement
 spec:
   checks:
     - id: SCH-01
-      title: Replicated workloads spread across zones and nodes
+      title: Copies of a service are spread across servers and zones
       description: >
-        A workload with two or more replicas declares topologySpreadConstraints
-        covering both topology.kubernetes.io/zone and kubernetes.io/hostname.
+        A service running two or more copies tells the platform to place them on
+        different servers, and in different data-centre zones.
       rationale: >
-        Without a spread constraint the scheduler is free to place every
-        replica on one node. Three replicas on one node is one replica with
-        extra cost, and the failure is invisible until the node goes.
-      severity: block
+        Running a second copy only helps if the two copies cannot fail together.
+        With no spreading rule the platform is free to put every copy on one
+        server, so the service costs twice as much and survives exactly as much
+        as one copy did. Nobody finds out until that server fails.
+      severity: warn
       tier: 1
       category: Scheduling & Placement
+      confidence: confirmed
+      whenItBites: on-failure
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - SCH-01
       remediation: >
-        Add topologySpreadConstraints for topology.kubernetes.io/zone and
-        kubernetes.io/hostname with whenUnsatisfiable: ScheduleAnyway.
+        Add topologySpreadConstraints - the field that tells the platform how to
+        spread copies - for topology.kubernetes.io/zone and
+        kubernetes.io/hostname, with whenUnsatisfiable set to ScheduleAnyway so
+        a busy cluster still places the pods.
+      fixExample: |
+        spec:
+          template:
+            spec:
+              topologySpreadConstraints:
+                - topologyKey: topology.kubernetes.io/zone
+                  maxSkew: 1
+                  whenUnsatisfiable: ScheduleAnyway
+                  labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: my-service
+                - topologyKey: kubernetes.io/hostname
+                  maxSkew: 1
+                  whenUnsatisfiable: ScheduleAnyway
+                  labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: my-service
       appliesTo:
         kinds: [Deployment, StatefulSet]
         where: 'replicas(self) >= 2'
@@ -34,28 +61,43 @@ spec:
           self.spec.template.spec.topologySpreadConstraints.exists(c, c.topologyKey == "topology.kubernetes.io/zone") &&
           self.spec.template.spec.topologySpreadConstraints.exists(c, c.topologyKey == "kubernetes.io/hostname")
         locus: spec.template.spec.topologySpreadConstraints
-        expected: constraints on both topology.kubernetes.io/zone and kubernetes.io/hostname
+        expected: spreading rules for both the data-centre zone and the server
         observed: |
-          value(self, "spec.template.spec.topologySpreadConstraints") == null ? "(none)" :
-            self.spec.template.spec.topologySpreadConstraints.map(c, string(c.topologyKey)).join(", ")
+          value(self, "spec.template.spec.topologySpreadConstraints") == null
+            ? "no spreading rules at all"
+            : "spreads only across " +
+              self.spec.template.spec.topologySpreadConstraints.map(c, string(c.topologyKey)).join(" and ")
         message: |
-          text(self, "kind") + " " + text(self, "metadata.name") + " runs " + string(replicas(self)) +
-          " replicas that the scheduler may place on one node: " +
+          text(self, "metadata.name") + " runs " + string(replicas(self)) +
+          " copies, and nothing stops the platform putting them all on the same server. " +
           (value(self, "spec.template.spec.topologySpreadConstraints") == null
-            ? "it declares no topologySpreadConstraints"
-            : "its spread constraints cover only " +
-              self.spec.template.spec.topologySpreadConstraints.map(c, string(c.topologyKey)).join(", "))
+            ? "The chart declares no spreading rules."
+            : "Its spreading rules cover only " +
+              self.spec.template.spec.topologySpreadConstraints.map(c, string(c.topologyKey)).join(" and ") + ".")
 
     - id: SCH-02
-      title: Spread constraints allow a skew of at most one
-      description: Every zone or hostname spread constraint sets maxSkew to 1.
+      title: Spreading rules actually even the copies out
+      description: >
+        Where a chart spreads copies across zones or servers, it allows a
+        difference of at most one copy between them.
       rationale: >
-        A maxSkew above 1 permits the imbalance the constraint was added to
-        prevent, so the constraint is present, passes review, and does nothing.
+        The allowed difference is what makes a spreading rule mean anything. Set
+        higher than one, the rule permits exactly the pile-up it was added to
+        prevent: it is present, it passes review, and it does nothing.
       severity: warn
       tier: 1
       category: Scheduling & Placement
-      remediation: Set maxSkew to 1 on the zone and hostname constraints.
+      confidence: confirmed
+      whenItBites: on-failure
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - SCH-02
+      remediation: Set maxSkew to 1 on the zone and server spreading rules.
+      fixExample: |
+        topologySpreadConstraints:
+          - topologyKey: kubernetes.io/hostname
+            maxSkew: 1
+            whenUnsatisfiable: ScheduleAnyway
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet]
         where: 'value(self, "spec.template.spec.topologySpreadConstraints") != null'
@@ -65,23 +107,42 @@ spec:
             (c.topologyKey != "topology.kubernetes.io/zone" && c.topologyKey != "kubernetes.io/hostname")
             || int(value(c, "maxSkew")) == 1)
         locus: spec.template.spec.topologySpreadConstraints[].maxSkew
-        expected: maxSkew 1 on zone and hostname constraints
+        expected: a difference of at most one copy (maxSkew 1) between zones and between servers
+        observed: |
+          self.spec.template.spec.topologySpreadConstraints
+            .filter(c, (c.topologyKey == "topology.kubernetes.io/zone" || c.topologyKey == "kubernetes.io/hostname")
+                       && int(value(c, "maxSkew")) != 1)
+            .map(c, string(c.topologyKey) + " allows a gap of " + string(value(c, "maxSkew")))
+            .join(", ")
 
     - id: SCH-03
-      title: A pod does not carry three hard placement constraints at once
+      title: Placement rules leave the platform somewhere to put a copy
       description: >
-        No pod declares required node affinity, required pod anti-affinity, and
-        a spread constraint with whenUnsatisfiable DoNotSchedule together.
+        A workload does not stack three strict placement demands at once: a
+        required server type, a required separation from its own copies, and a
+        spreading rule that refuses to place a copy rather than bend.
       rationale: >
-        Each constraint alone is reasonable. All three together is a workload
-        that becomes unschedulable the moment one node is cordoned, and the
-        symptom is a pod stuck Pending during a routine node update.
-      severity: block
+        Each demand on its own is sensible. Together they can leave no legal
+        place for a copy to run, so the moment one server is taken out for
+        patching a copy is stuck waiting and never starts. The more rules were
+        added to protect the service, the more thoroughly it is stuck.
+      severity: warn
       tier: 1
       category: Scheduling & Placement
+      confidence: confirmed
+      whenItBites: node-maintenance
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - SCH-03
       remediation: >
-        Relax one of the three - usually the spread constraint, to
-        whenUnsatisfiable: ScheduleAnyway.
+        Relax one of the three. Usually the spreading rule: set
+        whenUnsatisfiable to ScheduleAnyway so it is a preference rather than a
+        refusal.
+      fixExample: |
+        topologySpreadConstraints:
+          - topologyKey: kubernetes.io/hostname
+            maxSkew: 1
+            whenUnsatisfiable: ScheduleAnyway   # a preference, not a refusal
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet]
         containers: none
@@ -92,23 +153,36 @@ spec:
             && value(self, "spec.template.spec.topologySpreadConstraints") != null
             && self.spec.template.spec.topologySpreadConstraints.exists(c, value(c, "whenUnsatisfiable") == "DoNotSchedule"))
         locus: spec.template.spec.affinity
-        expected: at most two of required node affinity, required pod anti-affinity, and DoNotSchedule spread
+        expected: at most two strict placement demands, so the platform keeps somewhere to put a copy
+        observed: '"a required server type, required separation from its own copies, and a spreading rule that refuses to place"'
 
     - id: SCH-04
-      title: Placement selectors use labels that survive an upgrade
+      title: Spreading rules use names that do not change between releases
       description: >
-        Label keys used in topologySpreadConstraints and pod affinity selectors
-        are not ones whose value changes on every build.
+        The labels a spreading or separation rule matches on are ones whose
+        value stays the same from one release to the next.
       rationale: >
-        A spread constraint selecting on app.kubernetes.io/version spreads the
-        new version against itself and ignores the old one, so during a rollout
-        there is no anti-affinity at all - which is when it was needed.
+        A rule that matches on the software version only ever sees copies of the
+        version being installed. During an upgrade, when old and new copies are
+        both running and the risk is highest, the rule spreads the new copies
+        against each other and ignores the old ones - so there is effectively no
+        rule at exactly the moment it was needed.
       severity: warn
       tier: 1
       category: Scheduling & Placement
+      confidence: confirmed
+      whenItBites: upgrade
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - SCH-04
       remediation: >
-        Select on app.kubernetes.io/name and app.kubernetes.io/instance, which
-        are stable across releases.
+        Match on app.kubernetes.io/name and app.kubernetes.io/instance, which
+        identify the service rather than the release.
+      fixExample: |
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: my-service
+            app.kubernetes.io/instance: my-release
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet]
         where: 'value(self, "spec.template.spec.topologySpreadConstraints") != null'
@@ -118,23 +192,40 @@ spec:
             value(c, "labelSelector.matchLabels") == null ||
             c.labelSelector.matchLabels.all(k, !unstableLabelKey(k)))
         locus: spec.template.spec.topologySpreadConstraints[].labelSelector
-        expected: selectors on labels that do not change between releases
+        expected: labels that identify the service, not the release
+        observed: |
+          self.spec.template.spec.topologySpreadConstraints
+            .filter(c, value(c, "labelSelector.matchLabels") != null &&
+                       c.labelSelector.matchLabels.exists(k, unstableLabelKey(k)))
+            .map(c, c.labelSelector.matchLabels.filter(k, unstableLabelKey(k)).join(", "))
+            .join("; ")
 
     - id: SCH-05
-      title: Node affinity does not pin to named zones
+      title: The chart does not name specific data-centre zones
       description: >
-        Required node affinity does not match on topology.kubernetes.io/zone
-        with literal zone names.
+        A strict server requirement does not list zone names such as "eu-west-1a"
+        as literal values.
       rationale: >
-        A chart naming zone-a and zone-b cannot be installed in a cluster whose
-        zones are called anything else, and the failure is at install time in
-        somebody else's datacentre.
+        Zone names belong to the cluster, not to the software. A chart that names
+        them cannot be installed anywhere whose zones are called something else,
+        and the failure happens at install time in somebody else's data centre,
+        where the person running it cannot fix the chart.
       severity: warn
       tier: 1
       category: Scheduling & Placement
+      confidence: confirmed
+      whenItBites: install
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - SCH-05
       remediation: >
-        Express zone distribution with topologySpreadConstraints, which name the
-        topology key rather than its values.
+        Express zone distribution with a spreading rule, which names the kind of
+        boundary (topology.kubernetes.io/zone) rather than the individual zones.
+      fixExample: |
+        topologySpreadConstraints:
+          - topologyKey: topology.kubernetes.io/zone   # the boundary, not its names
+            maxSkew: 1
+            whenUnsatisfiable: ScheduleAnyway
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet]
         where: 'present(self, "spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution")'
@@ -145,60 +236,64 @@ spec:
               value(t, "matchExpressions") == null ||
               t.matchExpressions.all(e, value(e, "key") != "topology.kubernetes.io/zone"))
         locus: spec.template.spec.affinity.nodeAffinity
-        expected: no required affinity on topology.kubernetes.io/zone
+        expected: no strict requirement naming individual zones
+        observed: '"a strict server requirement matches on topology.kubernetes.io/zone"'
 
     # ------------------------------------------------------------------
-    # Tolerations.
+    # Running on a server that has reported trouble.
     #
-    # A taint is a node saying "stay away", and a toleration is a chart
-    # overruling it. The two checks below split the taints by what the node
-    # means, because the right answer differs:
+    # A server can put up a sign saying "stay away". A chart can overrule that
+    # sign. The two checks below split those signs by what the server means,
+    # because the right answer differs:
     #
-    #   NoSchedule pressure taints - memory, disk, PID, an unavailable network,
-    #   a cordoned node - mean the node is ALREADY in trouble. A pod that
-    #   tolerates them is scheduled onto a node that is out of memory, which
-    #   makes the pressure worse and takes the pod down with the node. There
-    #   are real exceptions (a node agent that has to run everywhere is the
-    #   obvious one), and an exception nobody wrote down is indistinguishable
-    #   from a mistake - so the exception is allowed and has to be declared.
+    #   "I am out of memory / out of disk / being drained" means the server is
+    #   ALREADY in trouble. A service that overrules this is placed on a server
+    #   that has said it cannot take any more work, which makes the trouble
+    #   worse and takes the service down with the server. There are real
+    #   exceptions - an agent that has to run everywhere to collect logs off a
+    #   failing server is the obvious one - and an exception nobody wrote down
+    #   is indistinguishable from a mistake. So it is allowed, and it has to be
+    #   declared.
     #
-    #   NoExecute not-ready and unreachable mean the node has stopped
-    #   answering. Tolerating those is ordinary and often right: an eviction
-    #   the instant a kubelet misses a heartbeat is a restart storm on a
-    #   network blip. What is not right is tolerating them FOREVER, which is
-    #   what a toleration without tolerationSeconds says. Kubernetes adds
-    #   these two with 300 seconds by default; a chart that declares them and
-    #   omits the bound has quietly replaced that default with "never evict",
-    #   and its pods sit unreachable on a dead node until somebody notices.
+    #   "I have stopped answering" is different. Overruling that is ordinary and
+    #   often right: moving every copy the instant a server misses one heartbeat
+    #   causes a restart storm out of a network blip. What is not right is
+    #   overruling it FOREVER, which is what leaving out the time limit means.
     # ------------------------------------------------------------------
 
     - id: SCH-08
-      title: Tolerating a node-pressure taint is declared, not assumed
+      title: Running on a server that reported trouble is a stated choice
       description: >
-        A pod spec that tolerates a NoSchedule node-pressure taint -
-        memory-pressure, disk-pressure, pid-pressure, network-unavailable or
-        unschedulable - carries a
-        compliance.softwaregateway.io/toleration-rationale annotation saying
-        why. A toleration with no key and no effect tolerates all of them and
-        counts here too.
+        A workload that agrees to run on a server reporting low memory, low disk,
+        no process slots, no network or "being drained" carries an annotation -
+        compliance.softwaregateway.io/toleration-rationale - saying why. A blanket
+        agreement with no conditions covers all of them and counts here too.
       rationale: >
-        These taints are the node reporting its own condition. Tolerating them
-        does not make the node healthy; it makes the scheduler place work on a
-        node that has already said it cannot take any, so the pod lands on a
-        node out of memory or out of disk and goes down with it. Some workloads
-        genuinely must run there - a DaemonSet collecting logs off a failing
-        node is the case everyone reaches for - and that is why this asks for a
-        sentence rather than forbidding it: an undeclared toleration and a
-        deliberate one look identical in a diff.
+        These signs are the server reporting its own condition. Agreeing to them
+        does not make the server healthy; it makes the platform put work on a
+        server that has already said it cannot take any, so the service lands on
+        a machine out of memory and goes down with it. Some workloads genuinely
+        must run there, which is why this asks for a sentence rather than
+        forbidding it outright.
       severity: block
       tier: 1
       category: Scheduling & Placement
+      confidence: confirmed
+      whenItBites: on-failure
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - SCH-08
       remediation: >
-        Remove the toleration, or annotate the workload with
-        compliance.softwaregateway.io/toleration-rationale explaining which
-        taint is tolerated and why this workload has to run on a node in that
-        condition. The annotation is read from the workload or from its pod
-        template.
+        Remove the toleration, or annotate the workload - or its pod template -
+        with compliance.softwaregateway.io/toleration-rationale, saying which
+        condition is being overruled and why this workload has to run on a server
+        in that state.
+      fixExample: |
+        metadata:
+          annotations:
+            compliance.softwaregateway.io/toleration-rationale: >
+              Log collector: must keep running on a node under disk pressure,
+              because that is when its output matters most.
       appliesTo:
         subject: podSpec
         where: 'value(self, "tolerations") != null'
@@ -216,8 +311,9 @@ spec:
           ("compliance.softwaregateway.io/toleration-rationale" in allAnnotations(owner) &&
            size(allAnnotations(owner)["compliance.softwaregateway.io/toleration-rationale"]) > 0)
         locus: tolerations
-        expected: no node-pressure toleration, or a declared rationale for one
+        expected: no agreement to run on a server in trouble, or a written reason for one
         observed: |
+          "agrees to run on a server reporting: " +
           self.tolerations.filter(t,
             (text(t, "effect") == "" || text(t, "effect") == "NoSchedule") &&
             (text(t, "key") == "" ||
@@ -226,9 +322,11 @@ spec:
                                 "node.kubernetes.io/pid-pressure",
                                 "node.kubernetes.io/network-unavailable",
                                 "node.kubernetes.io/unschedulable"]))
-            .map(t, text(t, "key") == "" ? "(every taint)" : text(t, "key")).join(", ")
+            .map(t, text(t, "key") == "" ? "any condition at all" : text(t, "key")).join(", ") +
+          "; no written reason"
         message: |
-          text(owner, "kind") + " " + text(owner, "metadata.name") + " tolerates " +
+          text(owner, "kind") + " " + text(owner, "metadata.name") +
+          " agrees to run on a server that has reported " +
           self.tolerations.filter(t,
             (text(t, "effect") == "" || text(t, "effect") == "NoSchedule") &&
             (text(t, "key") == "" ||
@@ -237,31 +335,44 @@ spec:
                                 "node.kubernetes.io/pid-pressure",
                                 "node.kubernetes.io/network-unavailable",
                                 "node.kubernetes.io/unschedulable"]))
-            .map(t, text(t, "key") == "" ? "every NoSchedule taint" : text(t, "key")).join(", ") +
-          " and declares no compliance.softwaregateway.io/toleration-rationale saying why it has " +
-          "to run on a node in that condition"
+            .map(t, text(t, "key") == "" ? "any problem at all" : text(t, "key")).join(", ") +
+          ", and the chart does not say why it has to run there. Without a stated reason " +
+          "this cannot be told apart from a copied-in mistake."
 
     - id: SCH-09
-      title: A NoExecute toleration is bounded in time
+      title: Waiting for an unresponsive server has a time limit
       description: >
-        Every toleration of node.kubernetes.io/not-ready or
-        node.kubernetes.io/unreachable on NoExecute sets tolerationSeconds. A
-        toleration with no key tolerates both and counts here too.
+        Where a chart says its copies may stay on a server that has stopped
+        answering, it also says for how long.
       rationale: >
-        Without tolerationSeconds the toleration never expires, so a pod stays
-        bound to a node that stopped answering - not evicted, not rescheduled,
-        and counted as a healthy replica by everything that reads the
-        Deployment. Kubernetes supplies these two tolerations with 300 seconds
-        when a chart says nothing; declaring them without a bound REPLACES that
-        default with an indefinite one, which is the opposite of what the
-        author almost always meant.
+        With no time limit the agreement never expires, so a copy stays attached
+        to a dead server - not moved, not restarted, and still counted as a
+        healthy copy by everything that reads the service. Kubernetes supplies a
+        five-minute limit when a chart says nothing at all; writing the agreement
+        without a limit REPLACES that five minutes with "forever", which is the
+        opposite of what the author almost always meant.
       severity: warn
       tier: 1
       category: Scheduling & Placement
+      confidence: confirmed
+      whenItBites: on-failure
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - SCH-09
       remediation: >
-        Add tolerationSeconds to the not-ready and unreachable tolerations -
-        300 is the Kubernetes default and a reasonable starting point - or drop
-        the tolerations and let the defaults apply.
+        Add tolerationSeconds to the not-ready and unreachable tolerations - 300
+        is the Kubernetes default and a reasonable starting point - or drop the
+        tolerations entirely and let the default apply.
+      fixExample: |
+        tolerations:
+          - key: node.kubernetes.io/not-ready
+            operator: Exists
+            effect: NoExecute
+            tolerationSeconds: 300
+          - key: node.kubernetes.io/unreachable
+            operator: Exists
+            effect: NoExecute
+            tolerationSeconds: 300
       appliesTo:
         subject: podSpec
         where: 'value(self, "tolerations") != null'
@@ -274,7 +385,7 @@ spec:
                                   "node.kubernetes.io/unreachable"]))
             || value(t, "tolerationSeconds") != null)
         locus: tolerations[].tolerationSeconds
-        expected: tolerationSeconds set on every not-ready and unreachable toleration
+        expected: a time limit (tolerationSeconds) on every agreement to stay on an unresponsive server
         observed: |
           self.tolerations.filter(t,
             (text(t, "effect") == "" || text(t, "effect") == "NoExecute") &&
@@ -282,16 +393,10 @@ spec:
              text(t, "key") in ["node.kubernetes.io/not-ready",
                                 "node.kubernetes.io/unreachable"]) &&
             value(t, "tolerationSeconds") == null)
-            .map(t, (text(t, "key") == "" ? "(every taint)" : text(t, "key")) + ": unbounded")
+            .map(t, (text(t, "key") == "" ? "any unresponsive server" : text(t, "key")) + ": no limit")
             .join(", ")
         message: |
-          text(owner, "kind") + " " + text(owner, "metadata.name") + " tolerates " +
-          self.tolerations.filter(t,
-            (text(t, "effect") == "" || text(t, "effect") == "NoExecute") &&
-            (text(t, "key") == "" ||
-             text(t, "key") in ["node.kubernetes.io/not-ready",
-                                "node.kubernetes.io/unreachable"]) &&
-            value(t, "tolerationSeconds") == null)
-            .map(t, text(t, "key") == "" ? "every NoExecute taint" : text(t, "key")).join(", ") +
-          " with no tolerationSeconds, so its pods stay bound to a node that has stopped " +
-          "answering for as long as the node object exists"
+          text(owner, "kind") + " " + text(owner, "metadata.name") +
+          " lets its copies stay on a server that has stopped answering, with no time limit. " +
+          "They will sit there unreachable for as long as the server object exists, while the " +
+          "service still counts them as healthy."

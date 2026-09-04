@@ -17,3 +17,13 @@ findings:
   # A 600-second preStop sleep against a 20-second grace period: SIGKILL every
   # time, guaranteed.
   - {check: PRB-07, kind: Deployment, name: api, container: misconfigured}
+  # A time limit longer than the gap between attempts: the checks overlap and
+  # failure detection stops having any upper bound.
+  - {check: PRB-08, kind: Deployment, name: api, container: same-handler}
+  # A restart check on a task that is meant to finish and exit.
+  - {check: PRB-09, kind: Job, name: migrate, container: migrate}
+  # Fifteen seconds of start-up allowance: it looks like protection and still
+  # kills the container mid-start.
+  - {check: PRB-11, kind: Deployment, name: slowstart, container: slowstart}
+  # And nothing from numeric-probe-port: a numeric probe port resolves whether
+  # or not the container lists it, so reporting one is a finding with no fix.

@@ -3,51 +3,216 @@ kind: PolicyPack
 metadata:
   name: sgw-baseline-config
   prefix: CFG
-  version: 1.0.0
+  version: 2.0.0
   description: >
-    Configuration and secrets. What the release puts where anybody can read it.
+    What the release puts where other people can read it, and whether a change to
+    its settings actually reaches the running software.
   maintainer: platform-sre
+  reference: docs/compliance/source-standards.md - 6. Configuration & Secrets
 spec:
   checks:
+    # ------------------------------------------------------------------
+    # How a credential is recognised.
+    #
+    # The four checks below share one detector, and it looks at the VALUE
+    # first. A value shaped like a private key, a signed token, a cloud access
+    # key, a connection string with the password in it, or a well-known
+    # placeholder is reported whatever the field is called - which is the half
+    # that a name-driven detector misses entirely.
+    #
+    # The field name is used only to corroborate the one case where the shape
+    # is not conclusive: an ordinary-looking literal in a field named for a
+    # credential. Before that name is trusted at all, fields naming a
+    # parameter ABOUT a credential are excluded - a retry count, a cache
+    # lifetime, a minimum length, a file path, a class name - because those are
+    # the ordinary way to configure credential handling and every one of them
+    # was previously reported as a leaked credential.
+    #
+    # No finding ever prints the value it found. A compliance report is itself
+    # something that gets forwarded, and a report quoting the password has
+    # copied the exposure rather than described it.
+    # ------------------------------------------------------------------
+
     - id: CFG-01
-      title: No credential is written into configuration
+      title: No credential is written into ordinary configuration
       description: >
-        No ConfigMap key, and no container env value, is a credential written
-        in plain text.
+        No value in a ConfigMap is a password, token, key or connection string
+        written in plain text.
       rationale: >
-        A ConfigMap is readable by anybody who can read the namespace, which is
-        a far wider set than can read a Secret. An env value is visible in the
-        pod spec, in kubectl describe, and in every log line that dumps the
-        environment.
+        A ConfigMap is readable by anybody who can read the namespace, which is a
+        far wider group than can read a Secret, and it appears in backups, in
+        exports and in every copy of the release anybody has taken. A credential
+        there has to be treated as compromised from the moment it was written.
       severity: block
       tier: 1
       category: Configuration & Secrets
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - CFG-01
       remediation: >
-        Move the value to a Secret and reference it with secretKeyRef.
+        Move the value into a Secret and refer to it with secretKeyRef, or fetch
+        it from the organization's secret store when the release is installed.
+      fixExample: |
+        env:
+          - name: DB_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: my-service-db, key: password}
       appliesTo:
         kinds: [ConfigMap]
         where: 'value(self, "data") != null'
       assert:
         expr: 'self.data.all(k, !looksLikeCredential(k, string(self.data[k])))'
         locus: data
-        expected: no credential-shaped keys
-        observed: 'self.data.filter(k, looksLikeCredential(k, string(self.data[k]))).join(", ")'
+        expected: no credential material in ordinary configuration
+        observed: |
+          self.data.filter(k, looksLikeCredential(k, string(self.data[k])))
+            .map(k, k + " holds " + credentialClass(k, string(self.data[k]))).join(", ")
+        message: |
+          "ConfigMap " + text(self, "metadata.name") + " holds " +
+          self.data.filter(k, looksLikeCredential(k, string(self.data[k])))
+            .map(k, credentialClass(k, string(self.data[k])) + " under the key \"" + k + "\"").join(", ") +
+          ". Anybody who can read this namespace can read it, and it is in every copy and backup of " +
+          "this release. Treat it as already exposed."
 
-    - id: CFG-02
-      title: No credential is passed on the command line
+    - id: CFG-13
+      title: No credential is written into a container's environment
       description: >
-        No container args or command element carries a literal password, token,
-        secret or API key.
+        No environment variable is given a password, token, key or connection
+        string as a literal value.
       rationale: >
-        Container args are world-readable through the API and appear in ps
-        inside the container, so a credential there is readable by any process
-        in the pod including a compromised sidecar.
+        A literal in the environment is part of the object that describes the
+        pod, so it is visible to anybody who can read that object, it is printed
+        by ordinary troubleshooting commands, and it is captured in crash reports
+        and by any code that logs its own environment on start-up. A reference to
+        a Secret is not: only the running process ever sees the value.
       severity: block
       tier: 1
       category: Configuration & Secrets
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - CFG-01 (environment half)
       remediation: >
-        Pass the value through an environment variable sourced from a Secret,
-        or a mounted file.
+        Replace the literal with a secretKeyRef pointing at a Secret.
+      fixExample: |
+        env:
+          - name: API_TOKEN
+            valueFrom:
+              secretKeyRef: {name: my-service-api, key: token}
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: 'present(self, "env")'
+      assert:
+        expr: |
+          self.env.all(e,
+            !present(e, "value") ||
+            !looksLikeCredential(string(value(e, "name")), string(value(e, "value"))))
+        locus: env
+        expected: credentials referenced from a Secret, not written out
+        observed: |
+          self.env.filter(e, present(e, "value") &&
+                             looksLikeCredential(string(value(e, "name")), string(value(e, "value"))))
+            .map(e, string(value(e, "name")) + " holds " +
+                    credentialClass(string(value(e, "name")), string(value(e, "value")))).join(", ")
+
+    - id: CFG-14
+      title: The chart does not carry credentials inside it
+      description: >
+        No Secret in the release ships with material already in it. An empty
+        Secret, created for something else to fill in, passes.
+      rationale: >
+        Anything inside a chart is in version control, in every mirror, in every
+        archive anybody has taken, and readable by everyone who can read the
+        repository. A credential shipped this way has to be assumed compromised
+        from the moment it was committed, and rotating it means rebuilding and
+        redistributing the chart rather than changing one value. This is the
+        exposure that is easiest to miss, because a Secret is exactly where a
+        credential is supposed to live - the problem is that it travels with the
+        software.
+      severity: block
+      tier: 1
+      category: Configuration & Secrets
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - CFG-01, SUP-10
+      remediation: >
+        Ship the Secret empty and have the platform's secret store fill it in at
+        install time, or reference an existing Secret by name through a chart
+        value.
+      fixExample: |
+        apiVersion: external-secrets.io/v1beta1
+        kind: ExternalSecret
+        metadata:
+          name: my-service-db
+        spec:
+          secretStoreRef: {name: platform-vault, kind: ClusterSecretStore}
+          target: {name: my-service-db}
+          data:
+            - secretKey: password
+              remoteRef: {key: my-service/db, property: password}
+      appliesTo:
+        kinds: [Secret]
+        where: 'value(self, "data") != null || value(self, "stringData") != null'
+      assert:
+        expr: |
+          (value(self, "data") == null ||
+            self.data.all(k, decodeBase64(string(self.data[k])).trim() == "")) &&
+          (value(self, "stringData") == null ||
+            self.stringData.all(k, string(self.stringData[k]).trim() == ""))
+        locus: data
+        expected: no credential material travelling inside the chart
+        observed: |
+          ((value(self, "data") == null ? [] :
+            self.data.filter(k, decodeBase64(string(self.data[k])).trim() != "")
+              .map(k, k + ": " + (credentialClass(k, decodeBase64(string(self.data[k]))) == ""
+                                  ? "a value shipped in the chart"
+                                  : credentialClass(k, decodeBase64(string(self.data[k])))))) +
+           (value(self, "stringData") == null ? [] :
+            self.stringData.filter(k, string(self.stringData[k]).trim() != "")
+              .map(k, k + ": " + (credentialClass(k, string(self.stringData[k])) == ""
+                                  ? "a value shipped in the chart"
+                                  : credentialClass(k, string(self.stringData[k]))))))
+          .join(", ")
+        message: |
+          "Secret " + text(self, "metadata.name") + " ships with material already in it. " +
+          "Everything in a chart is in version control and in every mirror and archive of the " +
+          "release, so this has to be treated as exposed from the moment it was committed - and " +
+          "changing it means rebuilding and redistributing the chart."
+
+    - id: CFG-02
+      title: No credential is passed on a command line
+      description: >
+        No container start-up command or argument carries a password, token, key
+        or similar as a literal value.
+      rationale: >
+        Command-line arguments are visible to every process in the same container
+        through an ordinary process listing, they are stored in the object that
+        describes the pod, and they are captured in crash reports. A credential
+        passed this way leaks to anything that gets a foothold anywhere in the
+        pod, including a helper container from a different team.
+      severity: block
+      tier: 1
+      category: Configuration & Secrets
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - CFG-02
+      remediation: >
+        Pass the value through an environment variable sourced from a Secret, or
+        as a mounted file the program reads.
+      fixExample: |
+        command: ["/opt/app/bin/start"]
+        env:
+          - name: DB_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: my-service-db, key: password}
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: all
@@ -55,46 +220,168 @@ spec:
       assert:
         expr: |
           (!present(self, "args") ||
-            self.args.all(a, !string(a).matches("(?i)^--?(password|passwd|token|secret|api[-_]?key)="))) &&
+            self.args.all(a, !string(a).matches("(?i)^--?(password|passwd|token|secret|api[-_]?key)=") &&
+                             credentialClass("commandline", string(a)) == "")) &&
           (!present(self, "command") ||
-            self.command.all(a, !string(a).matches("(?i)^--?(password|passwd|token|secret|api[-_]?key)=")))
+            self.command.all(a, !string(a).matches("(?i)^--?(password|passwd|token|secret|api[-_]?key)=") &&
+                                credentialClass("commandline", string(a)) == ""))
         locus: args
-        expected: no credential flag with a literal value
+        expected: no credential written into the start-up command
+        observed: '"a start-up argument carries a credential as a literal value"'
 
     - id: CFG-03
-      title: Consumed ConfigMaps are immutable
+      title: Configuration that is in use cannot be edited in place
       description: >
-        A ConfigMap mounted or referenced by a workload sets immutable: true.
+        A ConfigMap is marked as unchangeable.
       rationale: >
-        A mutable ConfigMap can be edited in place, and the pods consuming it
-        will not restart - so the running configuration diverges from the
-        declared one with nothing to show for it. Immutable forces the change
-        to go through a new object and a rollout.
+        A changeable ConfigMap can be edited directly in the cluster, and the
+        services reading it do not restart - so the settings actually running
+        drift away from the settings the release declares, with nothing anywhere
+        recording that they have. Marking it unchangeable forces a change to
+        become a new object and a proper rollout, which is visible and
+        reversible.
       severity: warn
       tier: 1
       category: Configuration & Secrets
+      confidence: confirmed
+      whenItBites: upgrade
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - CFG-03
       remediation: >
-        Set immutable: true and give the ConfigMap a content-derived name
-        suffix so an update creates a new object.
+        Set immutable to true, and give the ConfigMap a name suffix derived from
+        its contents so an update creates a new object rather than editing one.
+      fixExample: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: my-service-config-8f3a21c
+        immutable: true
       appliesTo:
         kinds: [ConfigMap]
       assert:
         equals:
           immutable: true
 
-    - id: CFG-06
-      title: TLS material reaches the container as a file
+    - id: CFG-04
+      title: A change to the settings actually restarts the service
       description: >
-        No environment variable carries a certificate or a private key; TLS
-        material is mounted read-only.
+        A workload that reads a ConfigMap or a Secret carries a checksum
+        annotation on its pod template, so that changing those settings changes
+        the pod and triggers a rollout.
       rationale: >
-        A private key in an environment variable is in the pod spec, in every
-        crash dump, and in any log line that prints the environment. A mounted
-        file is readable only by the process.
+        Changing a ConfigMap does not restart anything. Without a trigger, an
+        upgrade that changes the settings appears to succeed and nothing actually
+        changes - until some unrelated event restarts one copy, at which point
+        some copies are running the new settings and some the old. That produces
+        intermittent behaviour that is extremely hard to reproduce, and it is the
+        single most common "the change did not take effect" in Helm-packaged
+        software.
       severity: warn
       tier: 1
       category: Configuration & Secrets
-      remediation: Mount the TLS secret as a read-only volume.
+      confidence: probable
+      whenItBites: upgrade
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - CFG-04
+      remediation: >
+        Add a checksum annotation on the pod template, computed from the
+        configuration files the chart renders. Charts that reload configuration
+        without restarting should record that instead.
+      fixExample: |
+        spec:
+          template:
+            metadata:
+              annotations:
+                checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum | quote }}
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet]
+        where: 'size(configRefs(self)) > 0'
+      assert:
+        expr: 'allAnnotations(self).exists(k, k.startsWith("checksum/"))'
+        locus: spec.template.metadata.annotations
+        expected: a checksum annotation over the settings this workload reads
+        observed: |
+          "reads " + configRefs(self).map(r, string(r.kind) + " " + string(r.name)).join(", ") +
+          " and carries no checksum annotation, so changing them will not restart anything"
+
+    - id: CFG-11
+      title: Every configuration reference points at something that exists
+      description: >
+        Every ConfigMap and Secret a workload asks for is either shipped by this
+        release or explicitly marked optional.
+      rationale: >
+        A reference to something that is not there is not a warning at
+        installation time - the copy never starts at all, and stays in a
+        configuration error indefinitely. Nothing in the chart hints at which of
+        the six places a pod can name a ConfigMap the name came from, so this is
+        typically half an hour of reading templates to find one typo.
+      severity: block
+      tier: 1
+      category: Configuration & Secrets
+      confidence: probable
+      whenItBites: install
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - CFG-11 (proposed addition)
+      remediation: >
+        Ship the missing object, correct the name, or mark the reference optional
+        if the workload can genuinely start without it.
+      fixExample: |
+        envFrom:
+          - configMapRef:
+              name: my-service-config
+              optional: true      # only if the workload really can start without it
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob]
+        where: 'size(configRefs(self)) > 0'
+      assert:
+        expr: |
+          configRefs(self).all(r,
+            r.optional ||
+            resourcesIn([string(r.kind)]).exists(o, text(o, "metadata.name") == string(r.name)))
+        locus: spec.template.spec
+        expected: every ConfigMap and Secret it reads shipped by this release, or marked optional
+        observed: |
+          "missing: " + configRefs(self)
+            .filter(r, !r.optional &&
+                       !resourcesIn([string(r.kind)]).exists(o, text(o, "metadata.name") == string(r.name)))
+            .map(r, string(r.kind) + " " + string(r.name)).join(", ")
+        message: |
+          text(self, "kind") + " " + text(self, "metadata.name") + " asks for " +
+          configRefs(self)
+            .filter(r, !r.optional &&
+                       !resourcesIn([string(r.kind)]).exists(o, text(o, "metadata.name") == string(r.name)))
+            .map(r, string(r.kind) + " " + string(r.name)).join(", ") +
+          ", which this release does not ship. Its copies will never start; they will sit in a " +
+          "configuration error with no other explanation."
+
+    - id: CFG-06
+      title: Certificates and keys arrive as files, not environment variables
+      description: >
+        No environment variable carries a certificate or a private key; that
+        material is mounted as a read-only file instead.
+      rationale: >
+        A private key in an environment variable is part of the object describing
+        the pod, so it is in every crash report and in any log line that prints
+        the environment. Mounted as a file it is readable only by the process
+        that needs it, and it can be replaced without changing the workload.
+      severity: warn
+      tier: 1
+      category: Configuration & Secrets
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - CFG-06
+      remediation: Mount the certificate Secret as a read-only volume.
+      fixExample: |
+        volumeMounts:
+          - {name: tls, mountPath: /etc/tls, readOnly: true}
+        # volumes:
+        #   - name: tls
+        #     secret: {secretName: my-service-tls}
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: all
@@ -105,26 +392,37 @@ spec:
             !string(value(e, "name")).matches("(?i)(tls|ssl)?_?(cert|certificate|key|pem|ca_?bundle)$") ||
             !present(e, "value"))
         locus: env
-        expected: TLS material mounted as a file rather than passed in the environment
+        expected: certificates and keys mounted as files
         observed: |
+          "passed in the environment: " +
           self.env.filter(e,
             string(value(e, "name")).matches("(?i)(tls|ssl)?_?(cert|certificate|key|pem|ca_?bundle)$") &&
             present(e, "value")).map(e, string(value(e, "name"))).join(", ")
 
     - id: CFG-07
-      title: A container receives named secret keys, not whole secrets
+      title: A container is given the credentials it needs, not all of them
       description: >
-        Reports envFrom.secretRef and whole-Secret volume mounts that declare
-        no items.
+        Whole Secrets are not handed to a container wholesale through envFrom.
       rationale: >
-        The container gets every key in the Secret, including the ones added
-        next release for a different component. It is the difference between a
-        credential this workload needs and every credential the namespace has.
+        The container receives every key in the Secret, including the ones added
+        next release for a different component. If that container is ever
+        compromised, what leaks is everything the Secret happened to hold rather
+        than the one value this workload needed.
       severity: warn
       tier: 1
       category: Configuration & Secrets
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - CFG-07
       remediation: >
-        Name the keys with secretKeyRef, or with an items list on the volume.
+        Name the keys with secretKeyRef, or list them under items on the volume.
+      fixExample: |
+        env:
+          - name: DB_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: my-service-db, key: password}
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: all
@@ -132,6 +430,7 @@ spec:
       assert:
         expr: '!self.envFrom.exists(e, has(e.secretRef))'
         locus: envFrom
-        expected: named secret keys rather than a whole Secret
+        expected: named keys rather than whole Secrets
         observed: |
+          "takes every key from " +
           self.envFrom.filter(e, has(e.secretRef)).map(e, string(e.secretRef.name)).join(", ")

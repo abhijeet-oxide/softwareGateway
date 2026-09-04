@@ -3,29 +3,49 @@ kind: PolicyPack
 metadata:
   name: sgw-baseline-networking
   prefix: NET
-  version: 1.0.0
+  version: 2.0.0
   description: >
-    Networking. What can reach this release, what it can reach, and whether
-    what it exposes is what it meant to expose.
+    What can reach this release, what it can reach, and whether what it publishes
+    is what it meant to publish.
   maintainer: platform-sre
+  reference: docs/compliance/source-standards.md - 8. Networking
 spec:
   checks:
     - id: NET-01
-      title: The release ships a default-deny network policy
+      title: The release blocks unexpected connections by default
       description: >
-        At least one NetworkPolicy in the release has an empty podSelector and
-        policyTypes containing Ingress.
+        The release ships at least one rule that blocks incoming connections to
+        everything in its namespace, so that the rules allowing specific traffic
+        have something to be an exception to.
       rationale: >
-        Kubernetes networking is allow-all until something denies. A release
-        with policies for its own components but no default deny leaves every
-        pod reachable from every other namespace, which is the state the
-        policies were written to end.
-      severity: block
+        Inside a cluster, everything can reach everything else until something
+        says otherwise. Without a blocking rule, a break-in anywhere in the
+        cluster has a clear path to every service here, including databases that
+        were never meant to be reachable from outside their own namespace.
+        Reported as a warning rather than a blocker because many platforms apply
+        this centrally - if yours does, this is the platform team's to confirm,
+        not the vendor's to fix.
+      severity: warn
       tier: 1
       category: Networking
+      confidence: probable
+      whenItBites: continuously
+      fixOwner: platform-team
+      fixEffort: low
+      reference: source-standards.md - NET-01
       remediation: >
-        Ship a NetworkPolicy with an empty podSelector and policyTypes:
-        [Ingress], then allow what is needed.
+        Ship a NetworkPolicy with an empty podSelector and policyTypes [Ingress],
+        then add rules allowing exactly the traffic the release needs. If your
+        platform applies this for every namespace, record that and waive the
+        check.
+      fixExample: |
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: default-deny-ingress
+        spec:
+          podSelector: {}            # everything in the namespace
+          policyTypes: [Ingress]     # and nothing may connect in
       appliesTo:
         kinds: [Namespace, NetworkPolicy]
         where: 'text(self, "kind") == "NetworkPolicy"'
@@ -36,25 +56,39 @@ spec:
             value(np, "spec.policyTypes") != null &&
             np.spec.policyTypes.exists(t, string(t) == "Ingress"))
         locus: spec.podSelector
-        expected: a default-deny policy somewhere in this release
-        observed: 'string(size(resourcesIn(["NetworkPolicy"]))) + " NetworkPolicy object(s), none a default deny"'
+        expected: one rule in the release that blocks incoming connections by default
+        observed: 'string(size(resourcesIn(["NetworkPolicy"]))) + " network rule(s), none of them a default block"'
         message: |
           "this release ships " + string(size(resourcesIn(["NetworkPolicy"]))) +
-          " NetworkPolicy object(s) and none of them is a default deny, so every pod in the namespace" +
-          " stays reachable from every other namespace"
+          " network rule(s) and none of them blocks connections by default, so every service in the " +
+          "namespace stays reachable from every other namespace in the cluster."
 
     - id: NET-02
-      title: Ingress rules name their sources and ports
+      title: Allow rules name who may connect and on which port
       description: >
-        No ingress rule allows every source, and every rule names ports.
+        No rule allowing incoming traffic leaves the source or the port
+        unspecified.
       rationale: >
-        A rule with no `from` allows the whole cluster, which makes the policy
-        a no-op that reads as a control. A rule with no ports allows every port
-        on the selected pods, including the ones added next release.
+        A rule with no stated source allows the entire cluster, which makes the
+        rule a no-op that reads like a control. A rule with no stated port allows
+        every port the selected services open, including the ones added in the
+        next release that nobody has reviewed.
       severity: block
       tier: 1
       category: Networking
-      remediation: Give every ingress rule an explicit `from` and `ports`.
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - NET-02
+      remediation: Give every incoming rule an explicit source and an explicit port.
+      fixExample: |
+        ingress:
+          - from:
+              - podSelector:
+                  matchLabels: {app.kubernetes.io/name: my-gateway}
+            ports:
+              - {protocol: TCP, port: 8443}
       appliesTo:
         kinds: [NetworkPolicy]
         where: 'value(self, "spec.ingress") != null'
@@ -64,21 +98,74 @@ spec:
             value(r, "from") != null && size(r.from) > 0 &&
             value(r, "ports") != null && size(r.ports) > 0)
         locus: spec.ingress
-        expected: every ingress rule declaring both from and ports
+        expected: a source and a port on every incoming rule
+        observed: '"a rule leaves the source or the port unspecified, so it allows more than it appears to"'
 
-    - id: NET-03
-      title: Egress rules name their destinations
+    - id: NET-13
+      title: No rule lets in the whole cluster
       description: >
-        Where policyTypes includes Egress, at least one rule enumerates
-        destinations.
+        No allow rule matches every namespace, or every service, without
+        narrowing it.
       rationale: >
-        An egress policy with an empty `to` permits the whole internet, which
-        is the opposite of what an egress policy is for and is
-        indistinguishable from having none.
+        A rule that admits all namespaces looks like network control and provides
+        none. It is usually added to get something working during testing and
+        never narrowed afterwards, and because it satisfies every check that only
+        asks whether a source was named, it survives review indefinitely.
       severity: warn
       tier: 1
       category: Networking
-      remediation: Give each egress rule a `to` naming the destinations.
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - NET-02 (breadth half)
+      remediation: >
+        Narrow the namespace selector to the namespaces that genuinely need
+        access, by label.
+      fixExample: |
+        ingress:
+          - from:
+              - namespaceSelector:
+                  matchLabels: {kubernetes.io/metadata.name: ingress}
+            ports: [{protocol: TCP, port: 8443}]
+      appliesTo:
+        kinds: [NetworkPolicy]
+        where: 'value(self, "spec.ingress") != null'
+      assert:
+        expr: |
+          self.spec.ingress.all(r,
+            value(r, "from") == null ||
+            r.from.all(f,
+              !(has(f.namespaceSelector) && size(f.namespaceSelector) == 0) &&
+              !(has(f.ipBlock) && string(value(f, "ipBlock.cidr")) == "0.0.0.0/0")))
+        locus: spec.ingress
+        expected: sources narrowed to the namespaces or addresses that need access
+        observed: '"a rule admits every namespace in the cluster, or every address on the internet"'
+
+    - id: NET-03
+      title: Outbound rules name where traffic may go
+      description: >
+        Where a rule controls outgoing traffic, every part of it names a
+        destination.
+      rationale: >
+        An outgoing rule with no destination permits the entire internet, which
+        is the opposite of what an outgoing rule is for and is indistinguishable
+        from having none at all.
+      severity: warn
+      tier: 1
+      category: Networking
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - NET-03
+      remediation: Give each outgoing rule a destination.
+      fixExample: |
+        egress:
+          - to:
+              - podSelector:
+                  matchLabels: {app.kubernetes.io/name: my-database}
+            ports: [{protocol: TCP, port: 5432}]
       appliesTo:
         kinds: [NetworkPolicy]
         where: 'value(self, "spec.policyTypes") != null && self.spec.policyTypes.exists(t, string(t) == "Egress")'
@@ -87,44 +174,66 @@ spec:
           value(self, "spec.egress") != null &&
           self.spec.egress.all(r, value(r, "to") != null && size(r.to) > 0)
         locus: spec.egress
-        expected: every egress rule declaring a destination
+        expected: a destination on every outgoing rule
+        observed: '"an outgoing rule names no destination, so it permits everything"'
 
     - id: NET-04
-      title: Network policy selectors use stable labels
+      title: Network rules use names that do not change between releases
       description: >
-        A NetworkPolicy does not select on a label whose value changes between
-        releases.
+        A network rule does not select services by a label whose value changes
+        with the version.
       rationale: >
-        A policy selecting on app.kubernetes.io/version stops matching the
-        moment the version changes, so the new pods have no policy at all -
-        during the rollout, which is when the old and new versions are both
-        running and the blast radius is largest.
+        A rule that matches on the version stops matching the moment the version
+        changes, so the new copies have no network rule at all - during the
+        rollout, which is exactly when old and new are both running and the reach
+        of a mistake is widest. Traffic that should be blocked is quietly allowed,
+        or the reverse.
       severity: warn
       tier: 1
       category: Networking
-      remediation: Select on app.kubernetes.io/name and instance.
+      confidence: confirmed
+      whenItBites: upgrade
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - NET-04
+      remediation: Select on app.kubernetes.io/name and app.kubernetes.io/instance.
+      fixExample: |
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: my-service
+            app.kubernetes.io/instance: my-release
       appliesTo:
         kinds: [NetworkPolicy]
       assert:
         expr: 'selectorKeys(self).all(k, !unstableLabelKey(k))'
         locus: spec.podSelector
-        expected: selectors on labels that do not change between releases
-        observed: 'selectorKeys(self).filter(k, unstableLabelKey(string(k))).join(", ")'
+        expected: labels that identify the service, not the release
+        observed: '"selects on " + selectorKeys(self).filter(k, unstableLabelKey(string(k))).join(", ") + ", which changes with every release"'
 
     - id: NET-05
-      title: External entry points terminate TLS
+      title: Anything reachable from outside the cluster is encrypted
       description: >
-        Every Ingress declares tls, and every OpenShift Route declares
-        tls.termination.
+        Every external entry point declares how it terminates encryption.
       rationale: >
-        An entry point without TLS carries credentials in plain text across
-        whatever is between the load balancer and the cluster. It is usually
-        absent because TLS was terminated somewhere else in the environment the
-        chart was developed in.
+        An entry point without encryption carries credentials and data in plain
+        text across whatever sits between the load balancer and the cluster. It
+        is usually missing because encryption was handled somewhere else in the
+        environment the chart was developed in, and that somewhere else does not
+        exist here.
       severity: block
       tier: 1
       category: Networking
-      remediation: Add a tls block naming the secret holding the certificate.
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - NET-05
+      remediation: Add a tls block naming the secret that holds the certificate.
+      fixExample: |
+        spec:
+          tls:
+            - hosts: [my-service.example.com]
+              secretName: my-service-tls
       appliesTo:
         kinds: [Ingress, Route]
       assert:
@@ -133,25 +242,40 @@ spec:
             ? present(self, "spec.tls.termination")
             : (value(self, "spec.tls") != null && size(self.spec.tls) > 0)
         locus: spec.tls
-        expected: TLS declared on the entry point
+        expected: encryption declared on the entry point
+        observed: '"no encryption declared, so traffic to this entry point is in plain text"'
 
     - id: NET-06
-      title: Operational endpoints are not published externally
+      title: Management and debug pages are not published outside the cluster
       description: >
-        No Ingress or Route path matches /metrics, /debug, /actuator, /admin or
-        /-/, and no LoadBalancer Service exposes a port named metrics, debug or
-        admin, or numbered 9090, 9100 or 6060.
+        No external entry point routes to a metrics, debug, administration or
+        profiling path, and no externally published service exposes a port named
+        or numbered for one.
       rationale: >
-        These endpoints are unauthenticated by convention because they are
-        meant to be reachable only from inside the cluster. Published, a
-        metrics endpoint is an inventory of the deployment and a debug endpoint
-        is usually a profiler.
+        These pages have no authentication by convention, because by convention
+        they are only reachable from inside the cluster. Published, a metrics
+        page is a live inventory of the deployment and its traffic, and a debug
+        page is usually a profiler that will hand a memory dump to anyone who
+        asks for it.
       severity: block
       tier: 1
       category: Networking
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - NET-06, OBS-10
       remediation: >
-        Remove the path from the Ingress and scrape the endpoint through a
-        ServiceMonitor inside the cluster.
+        Remove the path from the external entry point, and collect the metrics
+        from inside the cluster with a ServiceMonitor instead.
+      fixExample: |
+        # Keep /metrics on an internal Service only, and scrape it with:
+        apiVersion: monitoring.coreos.com/v1
+        kind: ServiceMonitor
+        spec:
+          selector:
+            matchLabels: {app.kubernetes.io/name: my-service}
+          endpoints: [{port: metrics}]
       appliesTo:
         kinds: [Ingress, Route, Service]
         where: 'text(self, "kind") != "Service" || text(self, "spec.type") == "LoadBalancer"'
@@ -169,77 +293,180 @@ spec:
               r.http.paths.all(p, !operationalPath(string(value(p, "path")))))) &&
           (text(self, "kind") != "Route" || !operationalPath(text(self, "spec.path")))
         locus: spec
-        expected: no operational endpoint published externally
+        expected: no management, debug or metrics endpoint reachable from outside the cluster
+        observed: '"an externally reachable route or port leads to a management, debug or metrics endpoint"'
 
     - id: NET-07
-      title: Every Service selects something
+      title: Every internal address points at a running service
       description: >
-        A Service's selector matches at least one pod template in the release.
+        A Service's selector matches at least one workload in the release. Labels
+        the platform adds itself at pod creation - the copy's ordinal, for
+        instance - are not counted against the selector, because no chart can
+        contain them.
       rationale: >
-        A Service selecting nothing has no endpoints, so every request to it
-        fails - while the rollout is green, the pods are running and nothing is
-        marked unhealthy. It is a one-character label mismatch, and it is
-        invisible until traffic arrives.
-      severity: block
+        A Service that matches nothing has nowhere to send traffic, so every
+        request to it fails - while the installation is green, every copy is
+        running, and nothing anywhere is marked unhealthy. It is usually a
+        one-character difference between a label and a selector, and it is
+        invisible until real traffic arrives.
+      severity: warn
       tier: 1
       category: Networking
+      confidence: confirmed
+      whenItBites: install
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - NET-07
       remediation: >
         Make the Service's selector match the labels on the workload's pod
-        template.
+        template - the ones under spec.template.metadata.labels, which are often
+        not the same as the workload's own labels.
+      fixExample: |
+        spec:
+          selector:
+            app.kubernetes.io/name: my-service        # must match the POD labels
+            app.kubernetes.io/instance: my-release
       appliesTo:
         kinds: [Service]
         where: 'value(self, "spec.selector") != null && size(self.spec.selector) > 0'
       assert:
-        expr: 'size(selectedBy(self)) > 0'
+        expr: |
+          size(selectedBy(self)) > 0 ||
+          selectorKeys(self).all(k, runtimeLabelKey(k))
         locus: spec.selector
-        expected: at least one workload in this release with matching pod labels
-        observed: 'self.spec.selector.map(k, k + "=" + string(self.spec.selector[k])).join(",")'
+        expected: a selector matching at least one workload in this release
+        observed: '"looks for " + self.spec.selector.map(k, k + "=" + string(self.spec.selector[k])).join(", ") + ", which matches nothing here"'
         message: |
-          "Service " + text(self, "metadata.name") + " selects " +
-          self.spec.selector.map(k, k + "=" + string(self.spec.selector[k])).join(",") +
-          ", which matches no pod template in this release. It will have no endpoints and every" +
-          " request to it will fail, while the rollout reports success"
+          "Service " + text(self, "metadata.name") + " looks for " +
+          self.spec.selector.map(k, k + "=" + string(self.spec.selector[k])).join(", ") +
+          ", and no workload in this release carries those labels. It will have nowhere to send " +
+          "traffic and every request to it will fail, while the installation reports success."
 
-    - id: NET-09
-      title: Secondary interfaces are not covered by network policy
+    - id: NET-11
+      title: A Service's target port exists in the container it routes to
       description: >
-        Reports any pod carrying a k8s.v1.cni.cncf.io/networks annotation where
-        the release also ships a NetworkPolicy.
+        Where a Service names its target port by name rather than by number, at
+        least one container in the workload it routes to declares a port with
+        that name.
       rationale: >
-        Kubernetes NetworkPolicy governs the cluster network only. Traffic on a
-        secondary interface - which is the whole point of a CNF's dataplane -
-        is not covered by any of the policies in this release. The finding is
-        the statement; it asks for the compensating control rather than
-        claiming a defect.
+        A named target port is looked up in the container's own list of ports. If
+        the name is not there the Service has no working destination, and the
+        symptom is identical to a Service that selects nothing: green
+        installation, running copies, every request failing. Port names are
+        capped at 15 characters, so a name trimmed to fit is a common and
+        invisible cause.
       severity: warn
       tier: 1
       category: Networking
+      confidence: confirmed
+      whenItBites: install
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - NET-11 (proposed addition)
       remediation: >
-        Document the control governing the secondary network, or state that the
-        interface is on an isolated fabric.
+        Use the port name the container declares, or the port number. Check for a
+        name trimmed to 15 characters.
+      fixExample: |
+        # container:
+        ports:
+          - name: https
+            containerPort: 8443
+        # service:
+        ports:
+          - name: https
+            port: 443
+            targetPort: https      # the name the container declares
+      appliesTo:
+        kinds: [Service]
+        where: |
+          value(self, "spec.selector") != null && size(self.spec.selector) > 0 &&
+          value(self, "spec.ports") != null && size(selectedBy(self)) > 0
+      assert:
+        expr: |
+          self.spec.ports.all(p,
+            !present(p, "targetPort") ||
+            selectedBy(self).exists(w,
+              podField(w, "containers") != null &&
+              podField(w, "containers").exists(c, declaresPort(c, value(p, "targetPort")))))
+        locus: spec.ports
+        expected: a target port name that a container in the target workload declares
+        observed: |
+          self.spec.ports
+            .filter(p, present(p, "targetPort") &&
+                       !selectedBy(self).exists(w,
+                         podField(w, "containers") != null &&
+                         podField(w, "containers").exists(c, declaresPort(c, value(p, "targetPort")))))
+            .map(p, "port " + text(p, "name") + " sends to \"" + text(p, "targetPort") + "\", which no container declares")
+            .join("; ")
+
+    - id: NET-09
+      title: An extra network attachment is outside the cluster's firewall rules
+      description: >
+        Any workload asking for a second network connection is reported wherever
+        the release also ships network rules.
+      rationale: >
+        The cluster's firewall rules govern the cluster's own network and nothing
+        else. Traffic on a second network attachment - which is the whole point
+        of one, for a network function - is not covered by any rule in this
+        release. This finding is a statement rather than an accusation: it asks
+        for whatever else controls that traffic to be written down.
+      severity: warn
+      tier: 1
+      category: Networking
+      confidence: needs-review
+      whenItBites: continuously
+      fixOwner: needs-decision
+      fixEffort: low
+      reference: source-standards.md - NET-09
+      remediation: >
+        Record the control that governs the second network - a firewall, a
+        separate physical fabric, or an isolated VLAN - or state that the
+        interface is on an isolated network.
+      fixExample: |
+        metadata:
+          annotations:
+            compliance.softwaregateway.io/secondary-network-control: >
+              SR-IOV interface is on an isolated provider VLAN with no route to
+              the cluster network; access is controlled by the fabric.
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, Pod]
         where: 'size(resourcesIn(["NetworkPolicy"])) > 0'
       assert:
         expr: '!present(self, "spec.template.metadata.annotations[k8s.v1.cni.cncf.io/networks]")'
         locus: spec.template.metadata.annotations
-        expected: no secondary network, or a documented compensating control
-        observed: 'text(self, "spec.template.metadata.annotations[k8s.v1.cni.cncf.io/networks]")'
+        expected: no second network, or a written record of what controls it
+        observed: |
+          "attaches to " + text(self, "spec.template.metadata.annotations[k8s.v1.cni.cncf.io/networks]") +
+          ", which the network rules in this release do not cover"
 
     - id: NET-10
-      title: Extended resources are requested and limited equally
+      title: Special hardware is asked for and capped at the same amount
       description: >
-        A container asking for an accelerated-networking or hugepages resource
-        declares the same quantity in both requests and limits.
+        A container asking for accelerated networking or large memory pages
+        declares the same quantity in both what it asks for and what it is
+        capped at.
       rationale: >
-        Kubernetes requires request and limit to be equal for extended
-        resources and rejects the pod otherwise. A chart that sets only one is
-        an install failure, and one that sets them differently is the same
+        Kubernetes requires these two numbers to be identical for special
+        hardware, and rejects the pod when they are not. A chart that sets only
+        one is an install that fails; one that sets them differently is the same
         failure with a more confusing message.
       severity: warn
       tier: 1
       category: Networking
-      remediation: Set the same quantity in requests and limits for the extended resource.
+      confidence: confirmed
+      whenItBites: install
+      fixOwner: chart-values
+      fixEffort: low
+      reference: source-standards.md - NET-10
+      remediation: Use the same quantity in requests and limits for the special resource.
+      fixExample: |
+        resources:
+          requests:
+            hugepages-1Gi: 2Gi
+            intel.com/sriov_netdevice: "1"
+          limits:
+            hugepages-1Gi: 2Gi
+            intel.com/sriov_netdevice: "1"
       appliesTo:
         kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
         containers: all
@@ -254,9 +481,9 @@ spec:
              k in self.resources.limits &&
              string(self.resources.limits[k]) == string(self.resources.requests[k])))
         locus: resources
-        expected: equal request and limit for every extended resource
+        expected: the same quantity asked for and capped, for every special resource
         observed: |
           self.resources.requests.filter(k, extendedResource(k)).map(k,
-            k + " request " + string(self.resources.requests[k]) +
-            ", limit " + (value(self, "resources.limits") != null && k in self.resources.limits
-                          ? string(self.resources.limits[k]) : "(absent)")).join("; ")
+            k + ": asks for " + string(self.resources.requests[k]) +
+            ", capped at " + (value(self, "resources.limits") != null && k in self.resources.limits
+                              ? string(self.resources.limits[k]) : "nothing")).join("; ")

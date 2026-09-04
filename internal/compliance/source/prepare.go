@@ -334,8 +334,7 @@ func (p *Preparer) Prepare(
 					RenderAttempts:  attempts,
 				}}
 				out[i].failed = err.Error()
-				rep.Event(compliance.EventFail, "%s: %s - %v",
-					name, kind.Label(), firstLine(err.Error()))
+				rep.Event(compliance.EventFail, "%s", renderFailureLine(name, out[i].charts))
 				rep.Count(func(k *compliance.ProgressCounts) { k.ChartsFailed++ })
 				return
 			}
@@ -348,11 +347,18 @@ func (p *Preparer) Prepare(
 			out[i].docs = chartRel.Rendered
 
 			bad := 0
+			// The charts that actually failed, in order. Named rather than
+			// counted: an umbrella whose fourth subchart is broken used to be
+			// reported as Charts[0] - the umbrella, which rendered perfectly -
+			// so the log gave a classification belonging to a chart that had no
+			// failure and no cause at all.
+			var failed []*compliance.Chart
 			for _, ch := range chartRel.Charts {
 				if ch.RenderStatus == compliance.RenderOK {
 					continue
 				}
 				bad++
+				failed = append(failed, ch)
 				ch.RenderAttempts = attempts
 				if ch.RenderErrorKind == "" && ch.RenderError != "" {
 					ch.RenderErrorKind = string(render.ClassifyFailure(errors.New(ch.RenderError)))
@@ -360,8 +366,7 @@ func (p *Preparer) Prepare(
 			}
 			if bad > 0 {
 				rep.Count(func(k *compliance.ProgressCounts) { k.ChartsFailed += bad })
-				rep.Event(compliance.EventFail, "%s: %s", name,
-					render.FailureKind(chartRel.Charts[0].RenderErrorKind).Label())
+				rep.Event(compliance.EventFail, "%s", renderFailureLine(name, failed))
 			} else {
 				rep.Count(func(k *compliance.ProgressCounts) { k.ChartsRendered++ })
 				rep.Event(compliance.EventOK, "Rendered %s: %d objects", name, len(chartRel.Resources))
@@ -613,16 +618,56 @@ func renderWorkers(configured int) int {
 	return n
 }
 
-// firstLine keeps a log line to one line.
+// renderFailureLine is what the run log says about a chart that did not render.
 //
-// helm's errors are frequently a paragraph with a stack of template frames in
-// them. The first line names the problem; the rest belongs on the chart's row
-// in the coverage table, where there is room for it.
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return strings.TrimSpace(s[:i])
+// # Why this is not "name: Template error"
+//
+// That is what it used to be, and it is what an operator saw thirteen times in
+// a row while a run was going: a classification, and nothing to act on. The
+// cause was captured - helm's stderr is stored on the chart and the coverage
+// table shows it - but the log is the screen that is up WHILE the run is still
+// running, and it was the one place the cause was missing.
+//
+// So the line carries, in the order somebody reads them: which chart failed,
+// what kind of failure it was, and what helm actually said. The subchart is
+// named only when it differs from the artifact, because "cfx: cfx: ..." is
+// noise on the common case of a single-chart artifact.
+//
+// When several charts under one artifact failed, the first is given in full and
+// the rest are counted. A log line per subchart of a broken umbrella would push
+// the other artifacts out of a bounded transcript, which is how the one failure
+// somebody needed disappears.
+func renderFailureLine(name string, failed []*compliance.Chart) string {
+	if len(failed) == 0 {
+		return name + ": render failed"
 	}
-	return strings.TrimSpace(s)
+	first := failed[0]
+	var b strings.Builder
+	b.WriteString(name)
+	// The subchart, when the failure is in one. Keyed on SubchartPath rather
+	// than on the names differing: a chart that could not be loaded at all is
+	// recorded under its artifact REFERENCE, and printing that beside the short
+	// name it was already logged under is the noise this line exists to remove.
+	if first.SubchartPath != "" {
+		b.WriteString(" (")
+		b.WriteString(first.SubchartPath)
+		b.WriteString(")")
+	}
+	b.WriteString(": ")
+	b.WriteString(render.FailureKind(first.RenderErrorKind).Label())
+	if cause := render.Cause(first.RenderError); cause != "" {
+		b.WriteString(" - ")
+		b.WriteString(cause)
+	}
+	if where := render.FailingTemplate(errors.New(first.RenderError)); where != "" {
+		b.WriteString(" (")
+		b.WriteString(where)
+		b.WriteString(")")
+	}
+	if n := len(failed) - 1; n > 0 {
+		b.WriteString(fmt.Sprintf(" [and %d more chart(s) under this artifact]", n))
+	}
+	return b.String()
 }
 
 // rendered is one chart's contribution, however it was produced - by a helm

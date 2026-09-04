@@ -105,6 +105,12 @@ type ComplianceChartView struct {
 	ErrorKind  string `json:"errorKind,omitempty"`
 	ErrorLabel string `json:"errorLabel,omitempty"`
 	ErrorHint  string `json:"errorHint,omitempty"`
+	// ErrorCause is the clause of helm's paragraph that says what actually went
+	// wrong, with the frames it nests around it stripped. The run log, the
+	// coverage table and the export are three readers of that one fact, and it
+	// was extracted in the interface only - so the log, which is the screen
+	// that is up while a run is going, showed a classification and no cause.
+	ErrorCause string `json:"errorCause,omitempty"`
 	// ErrorValue is the values key the chart demanded, pulled out of helm's
 	// paragraph. Six of the eight charts that failed in a real orb failed for
 	// one reason - a `global.registry` an umbrella supplies - and the only
@@ -372,6 +378,7 @@ func complianceChartViews(rows []store.ComplianceChartRow) []ComplianceChartView
 		// does, and no column has to be kept in step with a parser.
 		if c.Error != "" {
 			err := errors.New(c.Error)
+			v.ErrorCause = render.Cause(c.Error)
 			v.ErrorValue = render.MissingValue(err)
 			v.ErrorFile = render.FailingTemplate(err)
 			v.ErrorInTest = render.InTestHook(err)

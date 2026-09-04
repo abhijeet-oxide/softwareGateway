@@ -164,9 +164,11 @@ spec:
         # twice with one fix between the two is the pattern this pack removed
         # everywhere else.
         where: |
-          disruptionsAllowed(self) >= 0 && covers(self).exists(w, replicas(w) >= 2)
+          disruptionsAllowed(self) >= 0 &&
+          covers(self).exists(w, declaresReplicas(w) && replicas(w) >= 2)
       assert:
-        expr: 'covers(self).all(w, disruptionsAllowed(self) < replicas(w))'
+        expr: |
+          covers(self).all(w, !declaresReplicas(w) || disruptionsAllowed(self) < replicas(w))
         locus: spec
         expected: a rule that keeps at least one copy running
         observed: |
@@ -176,7 +178,8 @@ spec:
             : "at most " + text(self, "spec.maxUnavailable") + " may be unavailable")
         message: |
           "the rule " + text(self, "metadata.name") + " allows every copy of " +
-          covers(self).map(w, string(value(w, "metadata.name"))).join(", ") +
+          sorted(covers(self).filter(w, declaresReplicas(w))
+                      .map(w, string(value(w, "metadata.name")))).join(", ") +
           " to be moved at the same time. It exists, it appears in inventories and it passes review, " +
           "and it will not stop a drain from taking the service fully offline."
 
@@ -218,18 +221,18 @@ spec:
         # report doubles its count and halves its credibility.
         where: 'disruptionsAllowed(self) != 0'
       assert:
-        expr: 'covers(self).all(w, replicas(w) >= 2)'
+        expr: 'covers(self).all(w, !declaresReplicas(w) || replicas(w) >= 2)'
         locus: spec.selector
         expected: covering only services that run two or more copies
-        observed: 'sorted(covers(self).filter(w, replicas(w) < 2).map(w, string(value(w, "metadata.name")) + " runs a single copy")).join(", ")'
+        observed: 'sorted(covers(self).filter(w, declaresReplicas(w) && replicas(w) < 2).map(w, string(value(w, "metadata.name")) + " runs a single copy")).join(", ")'
         effective: |
           "no eviction can ever be approved for " +
-          sorted(covers(self).filter(w, replicas(w) < 2)
+          sorted(covers(self).filter(w, declaresReplicas(w) && replicas(w) < 2)
                       .map(w, string(value(w, "metadata.name")))).join(", ") +
           ", because there is no second copy to keep running"
         message: |
           "the rule " + text(self, "metadata.name") + " protects " +
-          sorted(covers(self).filter(w, replicas(w) < 2)
+          sorted(covers(self).filter(w, declaresReplicas(w) && replicas(w) < 2)
                       .map(w, string(value(w, "metadata.name")))).join(", ") +
           ", which runs a single copy. It reads as a guarantee that the service stays up during " +
           "maintenance. In practice there is no second copy to keep running, so the platform can " +
@@ -382,7 +385,8 @@ spec:
         expr: 'present(self, "terminationGracePeriodSeconds")'
         locus: terminationGracePeriodSeconds
         expected: a stated shutdown time
-        observed: '"not declared, so the platform allows 30 seconds"'
+        observed: '"not declared"'
+        effective: '"30 seconds - the Kubernetes default applies"'
         message: |
           text(owner, "kind") + " " + text(owner, "metadata.name") +
           " does not say how long it needs to finish work in progress before being stopped. " +

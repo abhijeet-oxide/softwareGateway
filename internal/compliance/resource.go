@@ -110,6 +110,43 @@ var WorkloadKinds = []string{
 	"ReplicaSet", "ReplicationController", "Job", "CronJob",
 }
 
+// ReplicatedWorkloadKinds are the kinds whose COPY COUNT is declared in the
+// manifest, so arithmetic over it means something.
+//
+// # Why this is a smaller set than WorkloadKinds, and what it fixes
+//
+// A PodDisruptionBudget's allowance is computed against the number of copies
+// the workload it covers runs. Computed against every kind that carries a pod
+// template, it was computed against three kinds that have no such number:
+//
+//	DaemonSet   one copy per node. The count is the size of a cluster this
+//	            tool has never seen, and defaulting it to 1 turns every
+//	            correct policy over a DaemonSet into a reported deadlock.
+//	Job/CronJob parallelism, which is a different field with different
+//	            semantics, and a Job is not what a maintenance policy is for.
+//	Pod         a bare Pod is one copy - and a bare Pod carrying a
+//	            Deployment's labels is almost always a test or hook pod
+//	            beside it, not the thing the policy protects.
+//
+// That is where "minAvailable: 50% over 2 replicas" was reported as a
+// deadlock: the policy also selected a one-copy object beside the Deployment,
+// and the tightest match decided. Two policies with identical configuration
+// disagreed, because only one of them had such an object next to it - which
+// read as non-determinism and was really an invented denominator.
+var ReplicatedWorkloadKinds = []string{
+	"Deployment", "StatefulSet", "ReplicaSet", "ReplicationController",
+}
+
+// DeclaresReplicas reports whether a kind states its own copy count.
+func DeclaresReplicas(kind string) bool {
+	for _, k := range ReplicatedWorkloadKinds {
+		if k == kind {
+			return true
+		}
+	}
+	return false
+}
+
 // PodSpec returns the object's pod spec, and whether it has one.
 func (r Resource) PodSpec() (map[string]any, bool) {
 	path := PodSpecPath(r.Kind())

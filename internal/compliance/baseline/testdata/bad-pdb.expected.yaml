@@ -19,6 +19,10 @@ findings:
   # zero, so the most permissive-looking rule in the chart is the one that stops
   # the drain.
   - {check: PDB-02, kind: PodDisruptionBudget, name: percent-deadlock}
+  # minAvailable 50% over ONE copy: ceil(1 x 0.5) = 1 of 1 must stay up, so
+  # nothing may ever be moved. `half-of-two` beside it has the identical
+  # threshold over TWO copies and must stay silent - see the fixture.
+  - {check: PDB-02, kind: PodDisruptionBudget, name: half-of-one}
   # over-singleton is minAvailable 1 over a single copy, which leaves no copy
   # movable - so it is PDB-02's deadlock, not PDB-03's pointless rule. One
   # decision, one finding, one fix.

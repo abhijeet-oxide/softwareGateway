@@ -456,6 +456,11 @@ spec:
       assert:
         equals:
           immutable: true
+        effective: |
+          !present(self, "immutable")
+            ? "mutable - Kubernetes fills the blank with \"editable\", so this ConfigMap can " +
+              "be changed in place while workloads are reading it"
+            : "mutable - this ConfigMap can be changed in place while workloads are reading it"
 
     - id: CFG-04
       title: A change to the settings actually restarts the service

@@ -190,3 +190,70 @@ func TestInTestHookSeparatesAHookFromTheChartItself(t *testing.T) {
 		}
 	}
 }
+
+// The cause is the clause a reader acts on, with helm's frames stripped.
+//
+// # The defect this exists for
+//
+// A run log showed thirteen consecutive lines reading "<chart>: Template
+// error" and nothing else. helm's message was captured and stored the whole
+// time - the coverage table rendered it correctly - but the extraction that
+// made it readable lived in TypeScript, so the log, which is the screen that is
+// up WHILE a run is going, had no cause on it at all.
+func TestCauseStripsHelmsFrames(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "a required value, wrapped in three frames",
+			in: "helm template failed for cfx-adrf-chart: Error: execution error at " +
+				"(cfx-adrf-chart/templates/chart-check.yaml:2:4): global.registry must be specified",
+			want: "global.registry must be specified",
+		},
+		{
+			name: "a nil dereference, with the template frame helm nests",
+			in: "helm template failed for svs: Error: template: svs/templates/deploy.yaml:14:22: " +
+				`executing "svs/templates/deploy.yaml" at <.Values.image.tag>: ` +
+				"nil pointer evaluating interface {}.tag",
+			want: "nil pointer evaluating interface {}.tag",
+		},
+		{
+			name: "only the first line, because the rest is the stack",
+			in: "helm template failed for crr: Error: parse error at (crr/templates/_helpers.tpl:8): " +
+				"unexpected EOF\n  at <include \"crr.labels\">\n  more frames",
+			want: "unexpected EOF",
+		},
+		{
+			name: "helm's --debug advice is not the cause",
+			in: "helm template failed for x: Error: YAML parse error on x/templates/a.yaml: " +
+				"error converting YAML to JSON\n\nUse --debug flag to render out invalid YAML",
+			want: "YAML parse error on x/templates/a.yaml: error converting YAML to JSON",
+		},
+		{
+			name: "a message with no recognised frame is returned whole",
+			in:   "something nobody has seen before",
+			want: "something nobody has seen before",
+		},
+		{
+			name: "an empty message stays empty",
+			in:   "",
+			want: "",
+		},
+		{
+			// Stripping everything would leave a row with a classification and
+			// a blank, which is the state this function exists to prevent.
+			name: "a message that is nothing but frames keeps the head",
+			in:   "Error:",
+			want: "Error:",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := render.Cause(c.in); got != c.want {
+				t.Errorf("Cause() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

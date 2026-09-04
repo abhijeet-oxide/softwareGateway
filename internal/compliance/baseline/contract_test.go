@@ -1,7 +1,9 @@
 package baseline_test
 
 import (
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -29,6 +31,16 @@ import (
 //
 // Each is one assertion, and each would have caught its own defect before
 // release.
+
+// fixtureFiles is the whole violating corpus, in one place: several contract
+// tests sweep all of it, and a fixture added to only some of those lists is a
+// fixture that half the contract does not apply to.
+var fixtureFiles = []string{
+	"bad-config.yaml", "bad-cronjob.yaml", "bad-metadata.yaml", "bad-network.yaml",
+	"bad-observability.yaml", "bad-pdb.yaml", "bad-probes.yaml", "bad-rbac.yaml",
+	"bad-resources.yaml", "bad-scheduling.yaml", "bad-security.yaml",
+	"bad-storage.yaml", "bad-supply.yaml", "bad-upgrade.yaml",
+}
 
 // A pack that fails to load takes its checks with it. That must fail the build,
 // not the report.
@@ -59,12 +71,7 @@ func TestEveryShippedPackLoads(t *testing.T) {
 // chart to learn what the tool already knew, and a row containing a template
 // fragment tells them the tool is broken. Neither is worth emitting.
 func TestFindingsCarryTheValueTheyJudged(t *testing.T) {
-	fixtures := []string{
-		"bad-config.yaml", "bad-cronjob.yaml", "bad-metadata.yaml", "bad-network.yaml",
-		"bad-observability.yaml", "bad-pdb.yaml", "bad-probes.yaml", "bad-rbac.yaml",
-		"bad-resources.yaml", "bad-scheduling.yaml", "bad-security.yaml",
-		"bad-storage.yaml", "bad-supply.yaml", "bad-upgrade.yaml",
-	}
+	fixtures := fixtureFiles
 	// Fragments that mean a value never got substituted, or that a list was
 	// rendered through a conversion that produces nothing.
 	broken := []string{"{{", "}}", "<no value>", "%!", "(MISSING)"}
@@ -569,6 +576,141 @@ func TestAFindingNamesTheFieldItJudged(t *testing.T) {
 	for name := range want {
 		if !seen[name] {
 			t.Errorf("CFG-14 produced no finding on Secret %s", name)
+		}
+	}
+}
+
+// One rule with one fix produces one finding.
+//
+// # The defect this exists for
+//
+// RBAC-05 was split into "can enumerate every credential" (list or watch) and
+// RBAC-11 "can fetch any credential by name" (get with no resourceNames),
+// because the single check's title described only half the rules it fired on.
+// The two halves were not made exclusive, so the commonest shape in a real
+// release - one rule granting `get, list, watch` together - produced two
+// blocking findings with one fix between them. Thirty-five of thirty-nine
+// roles were counted twice.
+//
+// The rule that matters: where a rule already permits enumeration, an unscoped
+// get reaches nothing further, so RBAC-05 owns it. Two rules of different
+// shapes in one Role are still two findings, because they are two fixes - and
+// that half is asserted too, or the fix would be "RBAC-11 never fires".
+func TestOneRBACRuleIsNotCountedTwice(t *testing.T) {
+	fired := map[string]map[string]bool{}
+	for _, r := range runFixture(t, "bad-rbac.yaml") {
+		if r.Outcome != compliance.OutcomeFail {
+			continue
+		}
+		if fired[r.Address.Name] == nil {
+			fired[r.Address.Name] = map[string]bool{}
+		}
+		fired[r.Address.Name][r.CheckID] = true
+	}
+
+	// One rule granting get, list and watch together: RBAC-05's, and only
+	// RBAC-05's.
+	both := fired["reads-and-lists"]
+	if !both["RBAC-05"] {
+		t.Error("RBAC-05 does not fire on a rule that grants list on secrets")
+	}
+	if both["RBAC-11"] {
+		t.Error("RBAC-11 fires on a rule that RBAC-05 already reports. One rule, one fix, " +
+			"one finding: this is the double count that put 35 spurious Criticals in a report")
+	}
+
+	// A wildcard verb permits listing, so the same rule applies.
+	if fired["everything"]["RBAC-11"] {
+		t.Error("RBAC-11 fires on a wildcard rule, which permits listing and is RBAC-05's")
+	}
+
+	// Two rules, one of each shape: two findings, because two fixes.
+	two := fired["both-shapes"]
+	if !two["RBAC-05"] || !two["RBAC-11"] {
+		t.Errorf("a Role with a list rule AND a separate unscoped-get rule got %v; both are "+
+			"real and each needs its own edit", keysOf(two))
+	}
+
+	// And the unscoped get on its own is still RBAC-11's alone.
+	only := fired["gets-any-secret"]
+	if !only["RBAC-11"] {
+		t.Error("RBAC-11 does not fire on a rule granting get with no resourceNames")
+	}
+	if only["RBAC-05"] {
+		t.Error("RBAC-05 fires on a rule with no list verb - the wording defect the split fixed")
+	}
+}
+
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Where the platform fills a blank, the finding says what it filled it with.
+//
+// # Why this is a test and not a review note
+//
+// `assert.effective` was added and then supplied on nine checks, which covered
+// 32 of 1,701 rows in a real report - and none of the six highest-volume
+// checks, which are exactly the ones where the declared and effective values
+// differ most. A reader of RBAC-02 saw "not declared" against a field that
+// defaults to mounting a live credential, and had to know that themselves.
+//
+// The list is the checks whose finding IS a platform default - an absent field
+// that Kubernetes, or a registry, resolves to something the reader would not
+// guess. It is not every check: where the manifest's value is the effective
+// value, `effective` must stay empty rather than restate the observed one.
+// MTA-09 is the example - a missing label is missing, and nothing fills it in.
+func TestAPlatformDefaultIsNamedInTheFinding(t *testing.T) {
+	// check -> a word its effective value must contain, so this asserts the
+	// content and not merely that the field is non-empty.
+	want := map[string]string{
+		"RBAC-02": "credential", // absent -> a token is mounted
+		"PDB-08":  "30 seconds", // absent -> the platform's own grace period
+		"CFG-03":  "mutable",    // absent -> editable in place
+		"SEC-02":  "true",       // absent -> escalation permitted
+		"SEC-05":  "false",      // absent -> a writable root filesystem
+		"SUP-01":  "points at",  // a tag resolves at pull time
+		// RES-01 says one of two things depending on whether the container
+		// declared limits - "it reserves its limits instead" or "the scheduler
+		// treats it as needing nothing" - so only its presence is asserted.
+		"RES-01": "",
+	}
+
+	seen := map[string]bool{}
+	var bare []string
+	for _, f := range fixtureFiles {
+		for _, r := range runFixture(t, f) {
+			if r.Outcome != compliance.OutcomeFail {
+				continue
+			}
+			frag, ok := want[r.CheckID]
+			if !ok {
+				continue
+			}
+			seen[r.CheckID] = true
+			switch {
+			case strings.TrimSpace(r.Effective) == "":
+				bare = append(bare, r.CheckID+": no effective value, on a finding whose "+
+					"whole point is what the platform put there instead")
+			case frag != "" && !strings.Contains(strings.ToLower(r.Effective), strings.ToLower(frag)):
+				bare = append(bare, r.CheckID+": effective is "+
+					strconv.Quote(r.Effective)+", which does not say "+strconv.Quote(frag))
+			}
+		}
+	}
+	sort.Strings(bare)
+	for _, b := range slices.Compact(bare) {
+		t.Error(b)
+	}
+	for id := range want {
+		if !seen[id] {
+			t.Errorf("%s produced no finding in the corpus, so this assertion proves nothing "+
+				"about it", id)
 		}
 	}
 }

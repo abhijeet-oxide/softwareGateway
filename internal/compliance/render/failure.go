@@ -354,3 +354,69 @@ func InTestHook(err error) bool {
 	return strings.Contains(path, "/templates/tests/") ||
 		strings.HasPrefix(path, "templates/tests/")
 }
+
+// causePrefixes are the frames helm wraps a template failure in, matched from
+// the front and stripped in order.
+//
+// Every one is a prefix helm is known to emit. Anything unrecognised is left
+// whole, so a message this has never seen loses nothing.
+var causePrefixes = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)^helm template failed for [^:]+:\s*`),
+	regexp.MustCompile(`(?i)^rendering [^:]+:\s*`),
+	regexp.MustCompile(`(?i)^error:\s*`),
+	regexp.MustCompile(`(?i)^execution error at \([^)]*\)\s*`),
+	regexp.MustCompile(`(?i)^parse error at \([^)]*\)\s*`),
+	regexp.MustCompile(`(?i)^template: [^:]+:\d+:\d+:\s*`),
+	regexp.MustCompile(`(?i)^executing "[^"]*"\s*`),
+	regexp.MustCompile(`(?i)^at <[^>]*>:\s*`),
+	regexp.MustCompile(`^:\s*`),
+}
+
+// Cause is the part of a render failure that says what actually went wrong.
+//
+// # Why this exists
+//
+// helm's message is a paragraph in which the finding is the last clause:
+//
+//	helm template failed for cfx-adrf-chart: Error: execution error at
+//	(cfx-adrf-chart/templates/chart-check.yaml:2:4): global.registry must be
+//	specified
+//
+// Six words of that are the cause. The rest is the chart's name, which the row
+// already carries; the file and line, which FailingTemplate reports separately;
+// and the word "Error", which the classification beside it already said.
+//
+// # Why it is here and not only in the interface
+//
+// It was written in TypeScript first, for the coverage table, and that left the
+// run log with nothing: a chart that failed appeared as "crr: Template error"
+// and the operator watching had no cause at all, on the one screen that is
+// showing while the run is still going. The log, the table and the export are
+// three readers of one fact, and a fact with three implementations drifts.
+func Cause(message string) string {
+	head := strings.TrimSpace(firstLineOf(stripHelmAdvice(message)))
+	s := head
+	// Repeatedly, because helm nests them: a template error carries an
+	// execution error, which carries the frame, which carries the cause.
+	for pass := 0; pass < len(causePrefixes)*2; pass++ {
+		before := s
+		for _, re := range causePrefixes {
+			s = re.ReplaceAllString(s, "")
+		}
+		s = strings.TrimSpace(s)
+		if s == before {
+			break
+		}
+	}
+	if s == "" {
+		return head
+	}
+	return s
+}
+
+func firstLineOf(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}

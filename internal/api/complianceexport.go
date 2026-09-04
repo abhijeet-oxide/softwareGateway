@@ -451,7 +451,19 @@ func complianceFindingsSheet(
 		rows = append(rows, complianceFindingRow(productName, release, releaseDigest, v))
 	}
 	return export.Sheet{
-		Name:    sheetAllFindings,
+		Name: sheetAllFindings,
+		// Where the denominator is.
+		//
+		// Three validation rounds reported "no pass records" against a report
+		// that has recorded them all along: this table is failures, its Outcome
+		// column is therefore constant, and a reader who opens it first has no
+		// reason to look for another sheet. Saying where the rest is costs one
+		// line and is the difference between a coverage table existing and a
+		// coverage table being found.
+		Note: "Every place a rule was broken. Failures and waivers only, which is what a " +
+			"findings table is - so the Outcome column reads Fail on nearly every row and says " +
+			"nothing about coverage. What PASSED, what was not applicable, and each check's " +
+			"compliance rate are on the Rulebook sheet.",
 		Headers: complianceFindingHeaders,
 		Rows:    rows,
 		Widths:  complianceFindingWidths,
@@ -647,6 +659,7 @@ func complianceChartsSheet(productName, release string, charts []ComplianceChart
 			chartRenderedWord(c.Status),
 			strconv.Itoa(c.Resources),
 			c.ErrorLabel,
+			c.ErrorCause,
 			c.ErrorValue,
 			c.ErrorFile,
 			testHook,
@@ -665,13 +678,15 @@ func complianceChartsSheet(productName, release string, charts []ComplianceChart
 			"one of its objects is on the Unchecked sheet rather than passing.",
 		Headers: []string{
 			"Chart", "Version", "Rendered", "Objects",
-			"Reason", "Value required", "Template", "In a helm test hook", "Retried",
+			"Reason", "Cause", "Value required", "Template", "In a helm test hook", "Retried",
 			"Renderer message", "Chart digest", "Chart reference", "Product", "Release",
 		},
-		Rows:   rows,
-		Widths: []int{26, 14, 11, 9, 26, 26, 40, 18, 18, 80, 26, 40, 20, 20},
-		// The renderer's own message, which is a paragraph.
-		Wrap: []int{6, 9},
+		Rows: rows,
+		// "Cause" is helm's own words for what went wrong, with the frames it
+		// wraps them in stripped; "Renderer message" beside it is the whole
+		// paragraph, for the reader who is about to open the template.
+		Widths: []int{26, 14, 11, 9, 26, 52, 26, 40, 18, 18, 80, 26, 40, 20, 20},
+		Wrap:   []int{5, 7, 10},
 	}
 }
 

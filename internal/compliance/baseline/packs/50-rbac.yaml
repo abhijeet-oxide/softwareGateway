@@ -108,8 +108,13 @@ spec:
         expected: the platform access key switched off
         observed: |
           !present(self, "automountServiceAccountToken")
-            ? "not declared, and it defaults to on - a platform key is mounted into the container"
-            : "on - a platform key is mounted into the container"
+            ? "not declared"
+            : "on"
+        effective: |
+          !present(self, "automountServiceAccountToken")
+            ? "true - Kubernetes fills the blank with \"mount it\", so a live platform " +
+              "credential sits in every container's filesystem"
+            : "true - a live platform credential sits in every container's filesystem"
 
     - id: RBAC-03
       title: Permission rules name what they allow, instead of allowing everything
@@ -201,8 +206,10 @@ spec:
     - id: RBAC-05
       title: No service can list the namespace's credentials
       description: >
-        No rule allows listing or watching secrets. Reading one named secret is
-        judged separately, by RBAC-11.
+        No rule allows listing or watching secrets. A rule that permits reading
+        without naming which secrets is judged separately, by RBAC-11 - and only
+        where that rule does not already permit listing, so one rule never
+        produces two findings.
       rationale: >
         Listing secrets returns their contents, so it is read access to every
         credential in the namespace at once - including credentials belonging to
@@ -235,6 +242,9 @@ spec:
           self.rules.all(r, !ruleGrants(r, "secrets", ["list", "watch"]))
         locus: rules
         expected: no listing or watching of secrets
+        effective: |
+          "the contents of every secret in the namespace, in one call - including secrets put " +
+          "there later by somebody else"
         observed: |
           sorted(self.rules.filter(r, ruleGrants(r, "secrets", ["list", "watch"]))
             .map(r, "verbs " + sorted(r.verbs.map(v, string(v))).join("/"))).join("; ")
@@ -278,16 +288,33 @@ spec:
         kinds: [Role, ClusterRole]
         where: 'value(self, "rules") != null'
       assert:
+        # DISJOINT FROM RBAC-05, per rule.
+        #
+        # A rule granting `get, list, watch` on secrets is one decision with one
+        # fix, and it used to produce two blocking findings: RBAC-05 for the
+        # list, RBAC-11 for the unscoped get. Thirty-five of thirty-nine roles
+        # in a real release were counted twice that way.
+        #
+        # Where a rule already permits enumeration, the unscoped get adds
+        # nothing to what it can reach - so RBAC-05 owns it and this check
+        # stands aside. A Role with one rule of each shape still gets both
+        # findings, because those are two rules and two fixes.
         expr: |
           self.rules.all(r,
             !ruleGrants(r, "secrets", ["get"]) ||
+            ruleGrants(r, "secrets", ["list", "watch"]) ||
             (value(r, "resourceNames") != null && size(r.resourceNames) > 0))
         locus: rules
         expected: reading limited to secrets named in the rule
-        observed: '"a rule grants get on secrets with no resourceNames"'
+        observed: '"a rule grants get on secrets and names none of them"'
+        effective: |
+          "every secret in the namespace, readable one at a time by anything holding this role"
         message: |
           "a rule here can fetch any credential in the namespace by name: it grants get on " +
-          "secrets and names none of them, so nothing limits which secret it reads."
+          "secrets and names none of them, so nothing limits which secret it reads. Names in a " +
+          "release are predictable, so this reaches materially the same credentials as listing " +
+          "them - it just leaves no single call in the audit log that shows the whole namespace " +
+          "being read."
 
     - id: RBAC-09
       title: No service can change the credentials it reads

@@ -228,6 +228,10 @@ spec:
         observed: |
           "asks for " + text(self, "resources.requests.cpu") + " and is capped at " +
           text(self, "resources.limits.cpu")
+        effective: |
+          "the container is paused at " + text(self, "resources.limits.cpu") +
+          " - less than twice what it asked for, so an ordinary burst is throttled while the " +
+          "node still has capacity to serve it"
 
     - id: RES-04
       title: Automatic scaling never drops to a single copy

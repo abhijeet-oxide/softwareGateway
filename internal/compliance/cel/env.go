@@ -114,6 +114,7 @@ const (
 	FnCredShape    = "credentialShape"
 	FnVolumeState  = "volumeStateLabel"
 	FnStateVolume  = "stateVolume"
+	FnDeclReplicas = "declaresReplicas"
 )
 
 // costLimit bounds any single evaluation.
@@ -383,6 +384,11 @@ func newEnv(idx *compliance.Index) (*celgo.Env, error) {
 			overload("volumestatelabel_dyn", []*celgo.Type{dyn}, str)),
 		celgo.Function(FnStateVolume,
 			overload("statevolume_dyn", []*celgo.Type{dyn}, b)),
+		// Whether a workload states its own copy count. A DaemonSet and a Job
+		// do not, and treating their absent field as "one copy" is how a
+		// correct policy over either became a reported deadlock.
+		celgo.Function(FnDeclReplicas,
+			overload("declaresreplicas_dyn", []*celgo.Type{dyn}, b)),
 
 		// Version comparison, returning -1, 0 or 1. Semver rather than string
 		// order, because "1.10.0" sorts before "1.9.0" as a string and a check

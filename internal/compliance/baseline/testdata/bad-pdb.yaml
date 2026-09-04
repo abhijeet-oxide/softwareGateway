@@ -342,3 +342,97 @@ spec:
       containers:
         - name: solo
           image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
+---
+# Source: bad-pdb/templates/half-of-two-pdb.yaml
+# THE FALSE POSITIVE THIS FIXTURE EXISTS TO PREVENT.
+#
+# minAvailable 50% over a two-copy Deployment is correct and common:
+# ceil(2 x 0.5) = 1 must stay up, so 1 may be moved. It must NOT be reported.
+#
+# Beside it, sharing its labels, is a hook Pod and a DaemonSet - the two shapes
+# that used to break the arithmetic. Neither states a copy count: a bare Pod has
+# no replicas field and a DaemonSet's count is the size of the cluster. Treating
+# their absent field as "one copy" made ceil(1 x 0.5) = 1 the requirement, left
+# zero movable, and reported a deadlock on a policy that has none - and only for
+# the policies that happened to have such an object next to them, which read as
+# non-determinism.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: half-of-two, namespace: bad}
+spec:
+  minAvailable: 50%
+  selector:
+    matchLabels: {app.kubernetes.io/name: paired}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: paired, namespace: bad}
+spec:
+  replicas: 2
+  progressDeadlineSeconds: 600
+  selector:
+    matchLabels: {app.kubernetes.io/name: paired}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: paired}
+    spec:
+      containers:
+        - name: paired
+          image: registry.acme.example/bad/paired@sha256:bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000
+---
+# A migration hook that runs beside the workload and carries its labels. One
+# copy, no replicas field, and not what the policy is protecting.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: paired-migrate
+  namespace: bad
+  labels: {app.kubernetes.io/name: paired}
+spec:
+  restartPolicy: Never
+  containers:
+    - name: migrate
+      image: registry.acme.example/bad/paired@sha256:bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000
+---
+# A DaemonSet under the same labels. Its copy count is the number of nodes,
+# which no manifest states and this tool cannot know.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: paired-agent, namespace: bad}
+spec:
+  selector:
+    matchLabels: {app.kubernetes.io/name: paired}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: paired}
+    spec:
+      containers:
+        - name: agent
+          image: registry.acme.example/bad/paired@sha256:bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000
+---
+# Source: bad-pdb/templates/half-of-one-pdb.yaml
+# The same threshold over ONE copy, which IS a deadlock: ceil(1 x 0.5) = 1 must
+# stay up out of 1, so nothing may ever be moved.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: half-of-one, namespace: bad}
+spec:
+  minAvailable: 50%
+  selector:
+    matchLabels: {app.kubernetes.io/name: lonely}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: lonely, namespace: bad}
+spec:
+  replicas: 1
+  progressDeadlineSeconds: 600
+  selector:
+    matchLabels: {app.kubernetes.io/name: lonely}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: lonely}
+    spec:
+      containers:
+        - name: lonely
+          image: registry.acme.example/bad/lonely@sha256:cccc0000cccc0000cccc0000cccc0000cccc0000cccc0000cccc0000cccc0000

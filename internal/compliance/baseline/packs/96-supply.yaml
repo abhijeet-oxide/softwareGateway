@@ -104,6 +104,10 @@ spec:
         locus: image
         expected: an image identified by its content fingerprint (name@sha256:...)
         observed: '"identified by the label \"" + imageRef(text(self, "image")).tag + "\", not by content"'
+        effective: |
+          "whatever \"" + imageRef(text(self, "image")).tag +
+          "\" points at in " + imageRef(text(self, "image")).registry +
+          " at the moment each copy is pulled"
 
     - id: SUP-02
       title: Every image comes from a registry this organization runs

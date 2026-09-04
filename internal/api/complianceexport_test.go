@@ -66,9 +66,16 @@ func TestComplianceFindingsCarryTheWholeAddress(t *testing.T) {
 		index[h] = i
 	}
 	for _, column := range []string{
-		"Check", "Title", "Severity", "Owner", "Chart", "Chart version",
+		"Check", "Title", "Severity", "Chart", "Chart version",
 		"Template file", "Line", "Kind", "Resource", "Container", "Field",
 		"Observed", "Finding", "Product", "Release", "Release digest",
+		// The triage columns. A severity says how much this organization
+		// cares; these say what the reader should do about it, and without
+		// them the file is a list of complaints rather than a plan. "Who
+		// fixes it" replaces a column that was headed "Owner" and held the
+		// determinacy, which is now "Value is" and says what it means.
+		"Who fixes it", "Effort", "When it bites", "Confidence", "Value is",
+		"Example fix",
 	} {
 		if _, ok := index[column]; !ok {
 			t.Errorf("the findings table has no %q column", column)
@@ -111,7 +118,10 @@ func TestComplianceUniqueTableCountsThePlaces(t *testing.T) {
 	for i, h := range rows[0] {
 		index[h] = i
 	}
-	for _, column := range []string{"Check", "Places", "Charts", "Owner", "Examples", "Remediation"} {
+	for _, column := range []string{
+		"Check", "Places", "Charts", "Examples", "Remediation",
+		"Who fixes it", "Effort", "When it bites", "Value is", "Example fix",
+	} {
 		if _, ok := index[column]; !ok {
 			t.Fatalf("the unique table has no %q column: %v", column, rows[0])
 		}

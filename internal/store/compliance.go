@@ -210,6 +210,15 @@ type ComplianceResultRow struct {
 	Remediation string
 	Reference   string
 
+	// The triage block: who fixes it, how much work, when it bites, and how
+	// firmly the tool knows. Stored per result, not joined from the catalogue,
+	// so an exported report keeps saying what it said.
+	Confidence  string
+	WhenItBites string
+	FixOwner    string
+	FixEffort   string
+	FixExample  string
+
 	Outcome     string
 	Determinacy string
 
@@ -360,11 +369,12 @@ func (p *Packages) FinishComplianceRun(
 		INSERT INTO compliance_results (
 			run_id, seq, check_id, check_title, severity, tier, category, pack,
 			remediation, reference, outcome, determinacy,
+			confidence, when_it_bites, fix_owner, fix_effort, fix_example,
 			chart, chart_version, subchart_path, artifact_digest, artifact_ref,
 			source_file, rendered_line, api_version, kind, namespace, name,
 			container, container_type, locus,
 			observed, expected, message, error, waiver, waiver_expires, fingerprint)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
 	if err != nil {
 		return fmt.Errorf("prepare compliance result insert: %w", err)
 	}
@@ -374,6 +384,7 @@ func (p *Packages) FinishComplianceRun(
 		if _, err := stmt.ExecContext(ctx,
 			run.ID, r.Seq, r.CheckID, r.CheckTitle, r.Severity, r.Tier, r.Category, r.Pack,
 			r.Remediation, r.Reference, r.Outcome, r.Determinacy,
+			r.Confidence, r.WhenItBites, r.FixOwner, r.FixEffort, r.FixExample,
 			r.Chart, r.ChartVersion, r.SubchartPath, r.ArtifactDigest, r.ArtifactRef,
 			r.SourceFile, r.RenderedLine, r.APIVersion, r.Kind, r.Namespace, r.Name,
 			r.Container, r.ContainerType, r.Locus,
@@ -529,6 +540,11 @@ func (p *Packages) RecordComplianceRun(ctx context.Context, runID string, packag
 			Pack:        r.Pack,
 			Remediation: r.Remediation,
 			Reference:   r.Reference,
+			Confidence:  string(r.Confidence),
+			WhenItBites: string(r.WhenItBites),
+			FixOwner:    string(r.FixOwner),
+			FixEffort:   string(r.FixEffort),
+			FixExample:  r.FixExample,
 			Outcome:     string(r.Outcome),
 			Determinacy: string(r.Determinacy),
 

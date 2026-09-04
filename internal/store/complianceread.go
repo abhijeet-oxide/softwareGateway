@@ -350,6 +350,7 @@ func (p *Packages) ComplianceResults(ctx context.Context, runID string, f Compli
 	query := p.dialect.Rewrite(`
 		SELECT seq, check_id, check_title, severity, tier, category, pack,
 		       remediation, reference, outcome, determinacy,
+		       confidence, when_it_bites, fix_owner, fix_effort, fix_example,
 		       chart, chart_version, subchart_path, artifact_digest, artifact_ref,
 		       source_file, rendered_line, api_version, kind, namespace, name,
 		       container, container_type, locus,
@@ -373,6 +374,7 @@ func (p *Packages) ComplianceResults(ctx context.Context, runID string, f Compli
 		)
 		if err := rows.Scan(&r.Seq, &r.CheckID, &r.CheckTitle, &r.Severity, &r.Tier,
 			&r.Category, &r.Pack, &r.Remediation, &r.Reference, &r.Outcome, &r.Determinacy,
+			&r.Confidence, &r.WhenItBites, &r.FixOwner, &r.FixEffort, &r.FixExample,
 			&r.Chart, &r.ChartVersion, &r.SubchartPath, &r.ArtifactDigest, &r.ArtifactRef,
 			&r.SourceFile, &r.RenderedLine, &r.APIVersion, &r.Kind, &r.Namespace, &r.Name,
 			&r.Container, &r.ContainerType, &r.Locus,

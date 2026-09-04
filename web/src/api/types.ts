@@ -2450,6 +2450,23 @@ export interface ComplianceResult {
   remediation?: string
   reference?: string
 
+  /**
+   * The triage block. A severity says how much this organization cares; these
+   * say what a reader should do about it - how firmly the tool knows, when the
+   * consequence arrives, who changes something, and how much work it is. They
+   * are what turns a list of findings into a plan.
+   */
+  confidence?: 'confirmed' | 'probable' | 'needs-review'
+  confidenceLabel?: string
+  whenItBites?: ComplianceTiming
+  whenItBitesLabel?: string
+  fixOwner?: ComplianceFixOwner
+  fixOwnerLabel?: string
+  fixEffort?: 'low' | 'medium' | 'high'
+  fixEffortLabel?: string
+  /** The corrected configuration, as YAML. */
+  fixExample?: string
+
   outcome: ComplianceOutcome
   outcomeLabel: string
   determinacy?: ComplianceDeterminacy
@@ -2479,6 +2496,16 @@ export interface ComplianceResult {
   waiverExpires?: string
   fingerprint?: string
 }
+
+/** When the consequence of a finding actually arrives. */
+export type ComplianceTiming =
+  | 'install' | 'upgrade' | 'node-maintenance'
+  | 'under-load' | 'on-failure' | 'continuously'
+
+/** Who changes something to make a finding go away. */
+export type ComplianceFixOwner =
+  | 'chart-template' | 'chart-values' | 'application'
+  | 'build-pipeline' | 'platform-team' | 'needs-decision'
 
 /** What a run reports while it is working. */
 export type ComplianceStage =
@@ -2609,6 +2636,13 @@ export interface PolicyCheck {
   reference?: string
   pack?: string
   engine?: string
+  /** How to read a finding from this check - see ComplianceResult. */
+  confidence?: 'confirmed' | 'probable' | 'needs-review'
+  whenItBites?: ComplianceTiming
+  fixOwner?: ComplianceFixOwner
+  fixEffort?: 'low' | 'medium' | 'high'
+  /** The corrected configuration, as YAML. */
+  fixExample?: string
   /** What the check judges, as a sentence. */
   appliesTo?: string
   deprecated?: boolean

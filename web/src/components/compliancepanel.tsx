@@ -1668,8 +1668,34 @@ function ResultDrawer({ result, product, reference, repository, onClose, onOpenM
                 <span style={{ fontFamily: mono }}>{result.expected}</span>
               </Descriptions.Item>
             )}
+            {/*
+              The triage block. A severity says how much this organization
+              cares about the rule; these four say what to do about this
+              finding, and they are the difference between a list somebody
+              forwards and a list somebody works through.
+            */}
+            {result.fixOwnerLabel && (
+              <Descriptions.Item label="Who fixes it">{result.fixOwnerLabel}</Descriptions.Item>
+            )}
+            {result.fixEffortLabel && (
+              <Descriptions.Item label="Effort">{result.fixEffortLabel}</Descriptions.Item>
+            )}
+            {result.whenItBitesLabel && (
+              <Descriptions.Item label="When it bites">
+                {result.whenItBitesLabel}
+              </Descriptions.Item>
+            )}
+            {result.confidenceLabel && (
+              <Descriptions.Item label="Confidence">{result.confidenceLabel}</Descriptions.Item>
+            )}
             {result.determinacy && result.determinacy !== 'na' && (
-              <Descriptions.Item label="Owner">
+              /*
+                Not "Owner", which is what this said while holding something
+                else entirely. It is whether the chart fixes the value or a
+                values file can override it - whose value it is, not whose
+                change it is.
+              */
+              <Descriptions.Item label="Value is">
                 <DeterminacyTag determinacy={result.determinacy} label={result.determinacyLabel} />
               </Descriptions.Item>
             )}
@@ -1681,17 +1707,46 @@ function ResultDrawer({ result, product, reference, repository, onClose, onOpenM
           </Descriptions>
 
           {result.remediation && (
-            <Card size="small" title="Remediation">
+            <Card size="small" title="How to fix it">
               <Typography.Paragraph style={{ marginBottom: 0 }}>
                 {result.remediation}
               </Typography.Paragraph>
             </Card>
           )}
 
+          {/*
+            The corrected configuration, not a description of it. Prose about a
+            fix and the four lines that ARE the fix are not the same thing, and
+            only one of them gets applied.
+          */}
+          {result.fixExample && (
+            <Card size="small" title="Example">
+              <pre style={{
+                fontFamily: mono, fontSize: 11, margin: 0,
+                whiteSpace: 'pre-wrap', overflowX: 'auto',
+              }}>
+                {result.fixExample}
+              </pre>
+            </Card>
+          )}
+
           {result.reference && (
-            <Typography.Link href={result.reference} target="_blank" rel="noreferrer">
-              Source standard
-            </Typography.Link>
+            /*
+              A clause of the source standard, which is usually a section
+              reference rather than a URL. Rendered as a link only when it is
+              one - a link that goes nowhere is worse than the text.
+            */
+            result.reference.startsWith('http')
+              ? (
+                <Typography.Link href={result.reference} target="_blank" rel="noreferrer">
+                  Source standard
+                </Typography.Link>
+              )
+              : (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Source standard: {result.reference}
+                </Typography.Text>
+              )
           )}
         </Space>
       )}

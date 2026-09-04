@@ -424,6 +424,20 @@ type Result struct {
 	Remediation string   `json:"remediation,omitempty"`
 	Reference   string   `json:"reference,omitempty"`
 
+	// The triage block, copied from the check for the same reason the title
+	// and the remediation are: this row is read in a spreadsheet by somebody
+	// with nothing else loaded, and "who fixes this, how much work is it, and
+	// when does it bite" are the three questions they ask before anything else.
+	// See the Confidence, Timing, FixOwner and FixEffort types.
+	Confidence  Confidence `json:"confidence,omitempty"`
+	WhenItBites Timing     `json:"whenItBites,omitempty"`
+	FixOwner    FixOwner   `json:"fixOwner,omitempty"`
+	FixEffort   FixEffort  `json:"fixEffort,omitempty"`
+	// FixExample is the corrected configuration. Carried on the result rather
+	// than looked up, so a report exported today still shows the fix that was
+	// asked for today after the check has been edited.
+	FixExample string `json:"fixExample,omitempty"`
+
 	Outcome     Outcome     `json:"outcome"`
 	Determinacy Determinacy `json:"determinacy,omitempty"`
 	Address     Address     `json:"address"`

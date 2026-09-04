@@ -433,8 +433,7 @@ export function VulnerabilityCell({
   ].filter(Boolean)
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0 }}>
-      <SeverityMeter counts={summary.uniqueCveCounts} compact secondaryLabel="UNIQUE" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%', minWidth: 0 }}>
       {/*
         The exploited count, on the LISTING and not only on the release page.
 
@@ -461,12 +460,14 @@ export function VulnerabilityCell({
         >
           <Tag
             color={kevColour.fill}
-            style={{ marginInlineEnd: 0, flex: '0 0 auto', fontSize: 10.5, fontWeight: 600, lineHeight: '16px' }}
+            style={{ marginInlineEnd: 0, alignSelf: 'flex-start', fontSize: 10.5, fontWeight: 600, lineHeight: '16px' }}
           >
             {summary.kevs} KEV
           </Tag>
         </Tooltip>
       )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0 }}>
+        <SeverityMeter counts={summary.uniqueCveCounts} compact secondaryLabel="UNIQUE" />
       {caveats.length > 0 && (
         <Tooltip title={caveats.join(' ')}>
           <span style={{ display: 'inline-flex', flex: '0 0 auto' }}>
@@ -484,11 +485,14 @@ export function VulnerabilityCell({
       */}
       {(summary.providers?.length ?? 0) > 1 && (
         <Tooltip title={`Scanned by ${(summary.providers ?? []).map(scannerName).join(' and ')}.`}>
-          <Typography.Text type="secondary" style={{ fontSize: 10, flex: '0 0 auto' }}>
-            {summary.providers?.length}x
-          </Typography.Text>
+          <Space size={2} align="center" style={{ flex: '0 0 auto' }}>
+            {(summary.providers ?? []).map((provider) => (
+              <ScannerMark key={provider} provider={provider} size={14} />
+            ))}
+          </Space>
         </Tooltip>
       )}
+      </div>
     </div>
   )
 }

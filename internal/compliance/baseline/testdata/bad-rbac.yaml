@@ -18,6 +18,18 @@ rules:
     resources: ["secrets"]
     verbs: ["list", "watch"]
 ---
+# Source: bad-rbac/templates/role-gets-secrets.yaml
+# get with no resourceNames: no list verb anywhere, so RBAC-05's text would not
+# describe it. It still permits fetching any secret in the namespace by name,
+# which is RBAC-11's.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: gets-any-secret, namespace: bad}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
 # Source: bad-rbac/templates/role-rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

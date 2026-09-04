@@ -109,6 +109,10 @@ const (
 	FnSorted       = "sorted"
 	FnDisruptions  = "disruptionsAllowed"
 	FnShippedName  = "shippedObjectName"
+	FnSecretClass  = "secretMaterialClass"
+	FnCredShape    = "credentialShape"
+	FnVolumeState  = "volumeStateLabel"
+	FnStateVolume  = "stateVolume"
 )
 
 // costLimit bounds any single evaluation.
@@ -356,6 +360,23 @@ func newEnv(idx *compliance.Index) (*celgo.Env, error) {
 		// ships - which makes it a reference rather than a credential.
 		celgo.Function(FnShippedName,
 			overload("shippedobjectname_string", []*celgo.Type{str}, b)),
+		// What is inside one Secret value, including the credential fields of a
+		// configuration file shipped as one value - which is where the
+		// deliberately EMPTY password lives.
+		celgo.Function(FnSecretClass,
+			overload("secretmaterialclass_string_string", []*celgo.Type{str, str}, str)),
+		// The conclusive half of the credential detector: what a value IS,
+		// with no reference to what the field is called. Lets a check separate
+		// what it reads from what it infers, and rate them differently.
+		celgo.Function(FnCredShape,
+			overload("credentialshape_string", []*celgo.Type{str}, str)),
+		// What a volume means for the workload's data, and whether it means
+		// anything at all: a hugepage allocation and a /sys mount are neither
+		// scratch space nor a folder anybody stores data in.
+		celgo.Function(FnVolumeState,
+			overload("volumestatelabel_dyn", []*celgo.Type{dyn}, str)),
+		celgo.Function(FnStateVolume,
+			overload("statevolume_dyn", []*celgo.Type{dyn}, b)),
 
 		// Version comparison, returning -1, 0 or 1. Semver rather than string
 		// order, because "1.10.0" sorts before "1.9.0" as a string and a check

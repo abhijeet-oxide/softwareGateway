@@ -8,11 +8,23 @@ findings:
   - {check: CFG-04, kind: Deployment, name: leaky}
   # It asks for a Secret the release does not ship: the pod never starts.
   - {check: CFG-11, kind: Deployment, name: leaky}
-  # A private key written straight into the environment.
+  # A signed token written straight into the environment.
   - {check: CFG-13, kind: Deployment, name: leaky, container: app}
-  # A Secret shipped with material already in it. The empty shell beside it
-  # must NOT fire: shipping the object is correct, shipping the material is not.
+  # DB_PASSWORD is credential-named and opaque: an inference, reported for review.
+  - {check: CFG-16, kind: Deployment, name: leaky, container: app}
+  # A Secret shipped with material already in it. Neither the empty shell beside
+  # it nor db-connection-properties may fire: shipping the OBJECT is correct,
+  # and a configuration template whose password fields are empty is exactly the
+  # shape a well-behaved chart ships.
   - {check: CFG-14, kind: Secret, name: shipped-credentials}
+  # Values that are shipped and are not credentials - a hostname and a username.
+  # Recorded, not reported: something is travelling in version control and
+  # somebody should confirm it is meant to.
+  - {check: CFG-15, kind: Secret, name: service-endpoints}
+  # The configuration template too: its password fields are empty, so it is not
+  # CFG-14's - but a connection URL and a username are still shipped inside the
+  # chart, and that is worth a line in the inventory.
+  - {check: CFG-15, kind: Secret, name: db-connection-properties}
   # And nothing at all from credential-parameters: six keys that NAME a
   # credential and hold a count, an interval, a length, a path and a class
   # name. Every one of them was a false positive before the detector started

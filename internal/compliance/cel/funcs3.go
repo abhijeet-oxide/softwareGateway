@@ -271,6 +271,56 @@ func bindings3(idx *compliance.Index) map[string]impl {
 		return types.String(DecodeBase64(scalarString(native(args[0]))))
 	})
 
+	// secretMaterialClass() classifies what is inside one Secret value,
+	// including the credential fields of a configuration file shipped as one.
+	add("secretmaterialclass_string_string", func(args ...ref.Val) ref.Val {
+		if len(args) != 2 {
+			return types.String("")
+		}
+		return types.String(SecretMaterialClass(
+			scalarString(native(args[0])), scalarString(native(args[1]))))
+	})
+
+	add("credentialshape_string", func(args ...ref.Val) ref.Val {
+		if len(args) != 1 {
+			return types.String("")
+		}
+		return types.String(CredentialShape(scalarString(native(args[0]))))
+	})
+
+	// volumeStateLabel() names what a volume means for a workload's data, and
+	// returns "" for volumes that hold no application state at all.
+	//
+	// The stateful-storage check used to read every emptyDir as scratch space
+	// and every hostPath as a folder on the server. Two very common volumes are
+	// neither: an emptyDir with medium HugePages or Memory is a memory
+	// allocation, not a directory anything is written to, and a hostPath under
+	// /sys, /dev or /proc is device access - already reported by the check that
+	// exists for it, and not somewhere an application keeps its data. Listing
+	// them as lost state made a correct finding read as though the tool did not
+	// understand the workload, which is how a reader learns to discount it.
+	add("volumestatelabel_dyn", func(args ...ref.Val) ref.Val {
+		if len(args) != 1 {
+			return types.String("")
+		}
+		v, ok := native(args[0]).(map[string]any)
+		if !ok {
+			return types.String("")
+		}
+		return types.String(volumeStateLabel(v))
+	})
+
+	add("statevolume_dyn", func(args ...ref.Val) ref.Val {
+		if len(args) != 1 {
+			return types.Bool(false)
+		}
+		v, ok := native(args[0]).(map[string]any)
+		if !ok {
+			return types.Bool(false)
+		}
+		return types.Bool(volumeStateLabel(v) != "")
+	})
+
 	add("credentialclass_string_string", func(args ...ref.Val) ref.Val {
 		if len(args) != 2 {
 			return types.String("")
@@ -631,6 +681,12 @@ func configRefs(spec map[string]any) []any {
 	})
 	out := make([]any, 0, len(keys))
 	for _, k := range keys {
+		if platformSuppliedConfig[k.name] {
+			// Kubernetes creates this in every namespace itself. A chart cannot
+			// ship it, and reporting its absence sends somebody to look for a
+			// template that will never exist.
+			continue
+		}
 		out = append(out, map[string]any{
 			"kind": k.kind, "name": k.name, "optional": optional[k],
 		})
@@ -638,7 +694,61 @@ func configRefs(spec map[string]any) []any {
 	return out
 }
 
+// platformSuppliedConfig are ConfigMaps and Secrets the cluster puts in every
+// namespace without any chart shipping them.
+//
+// kube-root-ca.crt holds the API server's CA bundle and is created by the
+// controller manager in each namespace at creation time. A chart that mounts it
+// is doing the standard thing, and the reference-resolution check reported every
+// such mount as a workload that would never start.
+var platformSuppliedConfig = map[string]bool{
+	"kube-root-ca.crt":         true,
+	"openshift-service-ca.crt": true,
+}
+
 func asList(v any) []any {
 	l, _ := v.([]any)
 	return l
+}
+
+// deviceHostPaths are the roots under which a hostPath is the kernel's view of
+// the machine rather than a place an application stores anything.
+var deviceHostPaths = []string{"/sys", "/dev", "/proc"}
+
+// memoryBackedMedia are the emptyDir media that allocate memory rather than
+// provide a directory. HugePages appears both bare and sized -
+// "HugePages-2Mi", "HugePages-1Gi" - so it is matched by prefix.
+func memoryBackedMedium(medium string) bool {
+	m := strings.TrimSpace(medium)
+	return strings.EqualFold(m, "Memory") || strings.HasPrefix(strings.ToLower(m), "hugepages")
+}
+
+// volumeStateLabel names, in a sentence a reader can act on, what a volume
+// means for the durability of a workload's data - and returns "" when the
+// volume holds no application state, so a check can leave it out of both the
+// verdict and the evidence.
+func volumeStateLabel(v map[string]any) string {
+	if hp, ok := v["hostPath"].(map[string]any); ok {
+		path := scalarString(hp["path"])
+		for _, root := range deviceHostPaths {
+			if path == root || strings.HasPrefix(path, root+"/") {
+				// Device access. SEC-08 reports it, and nothing is stored here.
+				return ""
+			}
+		}
+		return "a folder on the server"
+	}
+	if _, ok := v["local"]; ok {
+		return "storage tied to one server"
+	}
+	if ed, ok := v["emptyDir"]; ok {
+		m, _ := ed.(map[string]any)
+		if m != nil && memoryBackedMedium(scalarString(m["medium"])) {
+			// A memory allocation. Nothing is written to it that a restart
+			// could lose, because nothing is written to it at all.
+			return ""
+		}
+		return "scratch space, deleted with the copy"
+	}
+	return ""
 }

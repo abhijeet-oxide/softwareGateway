@@ -219,7 +219,7 @@ func TestTechnicalTermsFindTheirChecks(t *testing.T) {
 		"automountserviceaccounttoken": {"RBAC-02"},
 		"clusterrolebinding":           {"RBAC-04", "RBAC-10"},
 		"impersonate":                  {"RBAC-07"},
-		"resourcenames":                {"RBAC-05"},
+		"resourcenames":                {"RBAC-11"},
 		"hpa":                          {"RES-04"},
 		"oomkilled":                    {"RES-02"},
 		"throttling":                   {"RES-03"},
@@ -446,6 +446,82 @@ func TestEveryCheckIsTriageable(t *testing.T) {
 		}
 		if c.Severity == compliance.SeverityCritical && c.Confidence == compliance.ConfidenceNeedsReview {
 			t.Errorf("%s: blocks a release on a finding it says needs a human to judge", c.ID)
+		}
+	}
+}
+
+// A privileged container gets one finding, and the ones it cancels say so.
+//
+// # The defect this exists for
+//
+// The audit found three blocking findings on one container: privileged, the
+// missing capability drop, and the permitted privilege escalation. The kernel
+// grants a privileged container the full capability set whatever
+// `capabilities.drop` says, and permits escalation whatever
+// `allowPrivilegeEscalation` says - so two of the three cannot be acted on. A
+// reader fixes them, the container's actual powers are unchanged, and the next
+// report says exactly what this one said.
+//
+// The two dependent checks stand down (see compliance.Supersession) and are
+// recorded as SKIPS naming SEC-03, not dropped: a missing row and a passing row
+// look the same, and neither is true here.
+func TestAPrivilegedContainerGetsOneFinding(t *testing.T) {
+	dependents := map[string]bool{"SEC-02": true, "SEC-04": true}
+	stoodDown := map[string]bool{}
+	sawRootCause := false
+
+	for _, r := range runFixture(t, "bad-security.yaml") {
+		if r.Address.Name != "loose" || r.Address.Container != "loose" {
+			continue
+		}
+		switch {
+		case r.CheckID == "SEC-03":
+			if r.Outcome != compliance.OutcomeFail {
+				t.Errorf("SEC-03 is the root cause here and reported %s", r.Outcome)
+			}
+			sawRootCause = true
+			// The root cause has to name what it cancels, or a reader who
+			// notices the two missing rows concludes the tool missed them.
+			for _, want := range []string{"capabilities.drop", "allowPrivilegeEscalation"} {
+				if !strings.Contains(r.Message, want) {
+					t.Errorf("SEC-03's message does not say it nullifies %s: %s", want, r.Message)
+				}
+			}
+		case dependents[r.CheckID]:
+			if r.Outcome != compliance.OutcomeSkip {
+				t.Errorf("%s reported %s on a privileged container; fixing it would change "+
+					"nothing until SEC-03 is fixed", r.CheckID, r.Outcome)
+			}
+			if r.SupersededBy != "SEC-03" {
+				t.Errorf("%s stood down and named %q rather than SEC-03", r.CheckID, r.SupersededBy)
+			}
+			if strings.TrimSpace(r.Message) == "" {
+				t.Errorf("%s stood down silently, which reads as the check not having run", r.CheckID)
+			}
+			stoodDown[r.CheckID] = true
+		}
+	}
+	if !sawRootCause {
+		t.Error("SEC-03 produced no result on the privileged container")
+	}
+	for id := range dependents {
+		if !stoodDown[id] {
+			t.Errorf("%s produced no result at all on the privileged container", id)
+		}
+	}
+
+	// And the standalone case is untouched: an ordinary container missing these
+	// settings is still a finding, which is the great majority of both checks.
+	standalone := map[string]bool{}
+	for _, r := range runFixture(t, "bad-security.yaml") {
+		if r.Address.Name == "unbounded-scratch" && dependents[r.CheckID] &&
+			r.Outcome == compliance.OutcomeFail {
+			standalone[r.CheckID] = true
+		}
+	}
+	for id := range dependents {
+		if !standalone[id] {
+			t.Errorf("%s stopped firing on a container that is not privileged", id)
 		}
 	}
 }

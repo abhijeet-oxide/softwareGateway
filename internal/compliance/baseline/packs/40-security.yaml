@@ -150,6 +150,12 @@ spec:
             ? "not declared, so it defaults to allowed"
             : securityValue(self, owner, "allowPrivilegeEscalation") + ", " +
               securitySource(self, owner, "allowPrivilegeEscalation")
+        supersededBy:
+          check: SEC-03
+          when: 'securityValue(self, owner, "privileged") == "true"'
+          because: >-
+            a privileged container is permitted to escalate whatever this
+            setting says
 
     - id: SEC-03
       title: No container is given full control of the server
@@ -188,6 +194,15 @@ spec:
         locus: securityContext.privileged
         expected: not privileged
         observed: '"privileged, " + securitySource(self, owner, "privileged")'
+        message: |
+          "this container is marked privileged, " +
+          securitySource(self, owner, "privileged") +
+          ", which gives it every permission and direct access to the server's devices. " +
+          "It also cancels three other protections whatever they are set to: the kernel " +
+          "grants the full set of special permissions regardless of capabilities.drop, " +
+          "privilege escalation is permitted regardless of allowPrivilegeEscalation, and a " +
+          "read-only root filesystem can be remounted from inside. Those are not reported " +
+          "separately here - fixing this one is what makes any of them take effect."
 
     - id: SEC-04
       title: Containers give up every special permission, then take back only what they need
@@ -230,9 +245,36 @@ spec:
             ? "keeps the default permissions and adds " +
               self.securityContext.capabilities.add.map(c, string(c)).join(", ")
             : "keeps the default set of special permissions"
+        supersededBy:
+          check: SEC-03
+          when: 'securityValue(self, owner, "privileged") == "true"'
+          because: >-
+            the kernel grants a privileged container the full set of special
+            permissions whatever capabilities.drop says
+
+    # ------------------------------------------------------------------
+    # Added-back permissions, in three tiers.
+    #
+    # A single rule covering every capability was both too loud and too quiet:
+    # it blocked the release over SETUID and said nothing at all about NET_RAW,
+    # which permits raw packet crafting and ARP and DNS spoofing from inside
+    # the pod. The validation audit counted twenty-two containers adding
+    # permissions and nineteen findings - the three it missed added NET_RAW or
+    # SYS_NICE and nothing else.
+    #
+    # The tiers are by what the permission actually lets a process do:
+    #   SEC-13  reaches outside the container            -> blocking
+    #   SEC-14  changes who the process is, or what it     -> warning
+    #           can see on the network
+    #   SEC-15  ordinary, and worth writing down           -> for information
+    #
+    # Each tier is disjoint from the others, so a container adding SYS_ADMIN
+    # and SYS_NICE gets one blocking finding and one informational one, not two
+    # blocking ones.
+    # ------------------------------------------------------------------
 
     - id: SEC-13
-      title: No container takes back a high-risk system permission
+      title: No container takes back a permission that reaches outside it
       description: >
         No container adds back one of the permissions that effectively undoes
         container isolation: full administration, network administration,
@@ -271,15 +313,147 @@ spec:
           !self.securityContext.capabilities.add.exists(c,
             string(c).upperAscii() in ["SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE",
                                        "SYS_RAWIO", "SYS_BOOT", "DAC_OVERRIDE", "DAC_READ_SEARCH",
-                                       "SETUID", "SETGID", "ALL"])
+                                       "ALL"])
         locus: securityContext.capabilities.add
         expected: no high-risk system permission added back
         observed: |
           self.securityContext.capabilities.add
             .filter(c, string(c).upperAscii() in ["SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE",
                                                   "SYS_RAWIO", "SYS_BOOT", "DAC_OVERRIDE", "DAC_READ_SEARCH",
-                                                  "SETUID", "SETGID", "ALL"])
+                                                  "ALL"])
             .map(c, string(c)).join(", ")
+
+    - id: SEC-14
+      title: A container that takes back a permission over identity or the network says why
+      description: >
+        No container adds back a permission that lets it change which user its
+        processes are, take ownership of files it does not own, or send and read
+        raw network traffic.
+      rationale: >
+        None of these reaches outside the container the way the blocking set
+        does, and each has ordinary legitimate uses - a program that binds a
+        port as one user and serves as another, a container image whose
+        entrypoint fixes ownership on start. They are still the permissions a
+        compromised process reaches for first: NET_RAW alone permits crafting
+        raw packets and spoofing ARP and DNS from inside the pod, and SETUID
+        with SETGID is most of what is needed to become a different user.
+        They belong in the report and not in the way of a release.
+      severity: warning
+      tier: 1
+      category: Container Security Posture
+      subcategory: Linux capabilities
+      keywords: [capabilities.add, SETUID, SETGID, CHOWN, FOWNER, NET_RAW, SYS_CHROOT, capability, spoofing]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: chart-template
+      fixEffort: medium
+      reference: source-standards.md - SEC-04 (added-capability half, middle tier)
+      remediation: >
+        Remove the permission if the program does not need it. NET_RAW is only
+        needed to send raw packets - ordinary networking, including ping on
+        recent images, does not require it. File ownership is better fixed when
+        the image is built than by a container that can take ownership at run
+        time.
+      fixExample: |
+        securityContext:
+          capabilities:
+            drop: [ALL]
+            add: [NET_BIND_SERVICE]     # not NET_RAW: binding a low port is not raw traffic
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: 'value(self, "securityContext.capabilities.add") != null'
+      assert:
+        expr: |
+          !self.securityContext.capabilities.add.exists(c,
+            string(c).upperAscii() in ["SETUID", "SETGID", "CHOWN", "FOWNER",
+                                       "NET_RAW", "SYS_CHROOT", "FSETID", "SETPCAP",
+                                       "SETFCAP", "LINUX_IMMUTABLE", "MKNOD"])
+        locus: securityContext.capabilities.add
+        expected: no permission over identity, file ownership or raw network traffic
+        observed: |
+          self.securityContext.capabilities.add
+            .filter(c, string(c).upperAscii() in ["SETUID", "SETGID", "CHOWN", "FOWNER",
+                                                  "NET_RAW", "SYS_CHROOT", "FSETID", "SETPCAP",
+                                                  "SETFCAP", "LINUX_IMMUTABLE", "MKNOD"])
+            .map(c, string(c)).join(", ")
+
+    - id: SEC-15
+      title: Every extra permission a container asks for is one the standard recognises
+      description: >
+        Every permission a container adds back is one of the permissions this
+        standard classifies. The full list of what a container asks for is
+        recorded whether it passes or not.
+      rationale: >
+        The two checks above judge the permissions that matter. This one exists
+        so the release has one complete answer to "what extra permissions does
+        it ask for" - including the ordinary ones, which are not a defect and
+        are still worth writing down, because a permission nobody recorded is
+        one nobody removes when the reason for it goes away. It fails only on a
+        permission this standard has never classified, which is a gap in the
+        standard rather than in the chart, and somebody should look at it before
+        the release ships with a permission nobody has assessed.
+      severity: inform
+      tier: 2
+      category: Container Security Posture
+      subcategory: Linux capabilities
+      keywords: [capabilities.add, AUDIT_WRITE, SYS_NICE, KILL, IPC_LOCK, NET_BIND_SERVICE, capability, inventory]
+      confidence: confirmed
+      whenItBites: continuously
+      fixOwner: platform-team
+      fixEffort: low
+      reference: source-standards.md - SEC-04 (added-capability inventory)
+      remediation: >
+        Where the permission is an ordinary one, no change is required - confirm
+        it is still needed the next time this workload is reviewed. Where this
+        check has failed, the permission is not in the standard at all and needs
+        classifying before the release ships.
+      fixExample: |
+        securityContext:
+          capabilities:
+            drop: [ALL]
+            add: [NET_BIND_SERVICE]     # recorded, not a defect
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: 'value(self, "securityContext.capabilities.add") != null'
+      assert:
+        # Recorded on a pass as well, which is most of the point: an ordinary
+        # added permission is not a defect and still belongs in the report.
+        observeOnPass: true
+        expr: |
+          self.securityContext.capabilities.add.all(c,
+            string(c).upperAscii() in
+              ["SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE", "SYS_RAWIO",
+               "SYS_BOOT", "DAC_OVERRIDE", "DAC_READ_SEARCH", "ALL",
+               "SETUID", "SETGID", "CHOWN", "FOWNER", "NET_RAW", "SYS_CHROOT",
+               "FSETID", "SETPCAP", "SETFCAP", "LINUX_IMMUTABLE", "MKNOD",
+               "AUDIT_WRITE", "AUDIT_CONTROL", "SYS_NICE", "KILL", "IPC_LOCK",
+               "IPC_OWNER", "NET_BIND_SERVICE", "NET_BROADCAST", "SYS_TIME",
+               "SYS_RESOURCE", "SYS_PACCT", "SYS_TTY_CONFIG", "LEASE",
+               "WAKE_ALARM", "BLOCK_SUSPEND", "SYSLOG", "MAC_ADMIN",
+               "MAC_OVERRIDE", "BPF", "PERFMON", "CHECKPOINT_RESTORE"])
+        locus: securityContext.capabilities.add
+        expected: every added permission classified by this standard
+        observed: |
+          "asks for " + sorted(self.securityContext.capabilities.add
+            .map(c, string(c).upperAscii())).join(", ")
+        message: |
+          "this container adds back " +
+          sorted(self.securityContext.capabilities.add
+            .filter(c, !(string(c).upperAscii() in
+              ["SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE", "SYS_RAWIO",
+               "SYS_BOOT", "DAC_OVERRIDE", "DAC_READ_SEARCH", "ALL",
+               "SETUID", "SETGID", "CHOWN", "FOWNER", "NET_RAW", "SYS_CHROOT",
+               "FSETID", "SETPCAP", "SETFCAP", "LINUX_IMMUTABLE", "MKNOD",
+               "AUDIT_WRITE", "AUDIT_CONTROL", "SYS_NICE", "KILL", "IPC_LOCK",
+               "IPC_OWNER", "NET_BIND_SERVICE", "NET_BROADCAST", "SYS_TIME",
+               "SYS_RESOURCE", "SYS_PACCT", "SYS_TTY_CONFIG", "LEASE",
+               "WAKE_ALARM", "BLOCK_SUSPEND", "SYSLOG", "MAC_ADMIN",
+               "MAC_OVERRIDE", "BPF", "PERFMON", "CHECKPOINT_RESTORE"]))
+            .map(c, string(c))).join(", ") +
+          ", which this standard does not classify at all. Nobody has assessed what it lets " +
+          "this container do, so somebody has to before the release ships."
 
     - id: SEC-05
       title: A container cannot rewrite its own program files
@@ -289,9 +463,15 @@ spec:
       rationale: >
         A writable program directory is where a compromised process drops
         something that survives a restart. Read-only means a restart always
-        returns a known state. Workloads with persistent storage are left out,
-        because this check would otherwise fire on every database - and a check
-        that fires on every database gets switched off.
+        returns a known state.
+
+        This used to skip any workload with persistent storage, and only ever
+        looked at main containers. Both exclusions were wrong: a read-only root
+        filesystem says nothing about the volumes a container mounts, so a
+        database with a data volume can and should have one, and an init
+        container that writes to its own root filesystem is the same exposure
+        as a main one. The validation audit found thirty-seven containers that
+        no check in the pack looked at because of it.
       severity: warning
       tier: 1
       category: Container Security Posture
@@ -314,9 +494,8 @@ spec:
         # volumes:
         #   - {name: tmp, emptyDir: {}}
       appliesTo:
-        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet]
-        containers: main
-        where: 'size(pvcMountPaths(owner)) == 0'
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
       assert:
         expr: 'securityValue(self, owner, "readOnlyRootFilesystem") == "true"'
         locus: securityContext.readOnlyRootFilesystem
@@ -325,6 +504,72 @@ spec:
           securityValue(self, owner, "readOnlyRootFilesystem") == ""
             ? "not declared, so the program files are writable"
             : "writable, " + securitySource(self, owner, "readOnlyRootFilesystem")
+        supersededBy:
+          check: SEC-03
+          when: 'securityValue(self, owner, "privileged") == "true"'
+          because: >-
+            a privileged process can remount its own root filesystem, so
+            read-only does not hold for it
+
+    - id: SEC-16
+      title: A container with read-only program files has somewhere to write
+      description: >
+        Where a container's program files are read-only, it mounts at least one
+        writable volume. Reported for information: whether it needs one depends
+        on the program.
+      rationale: >
+        This is the failure that makes teams turn the read-only setting back
+        off. Most programs write something - a temporary file, a lock, a cache,
+        an extracted template - and with nothing writable mounted the first
+        such write fails at run time, usually minutes into a rollout and
+        usually with an error that does not mention the filesystem. Mounting a
+        small scratch volume at /tmp costs nothing and settles it before it
+        happens.
+      severity: inform
+      tier: 2
+      category: Container Security Posture
+      subcategory: Read-only root filesystem
+      keywords: [readOnlyRootFilesystem, emptyDir, /tmp, volumeMounts, scratch, "read-only filesystem"]
+      confidence: needs-review
+      whenItBites: under-load
+      fixOwner: chart-template
+      fixEffort: low
+      reference: source-standards.md - SEC-05 (the paired case)
+      remediation: >
+        If the program writes anything at all, mount a small scratch volume
+        where it writes - usually /tmp. If it genuinely writes nothing, no
+        change is needed.
+      fixExample: |
+        securityContext:
+          readOnlyRootFilesystem: true
+        volumeMounts:
+          - {name: tmp, mountPath: /tmp}
+        # and in the pod spec:
+        # volumes:
+        #   - {name: tmp, emptyDir: {}}
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: 'securityValue(self, owner, "readOnlyRootFilesystem") == "true"'
+      assert:
+        expr: |
+          value(self, "volumeMounts") != null &&
+          self.volumeMounts.exists(m, value(m, "readOnly") != true)
+        locus: volumeMounts
+        expected: somewhere writable for the files the program creates
+        observed: |
+          value(self, "volumeMounts") == null
+            ? "no volumes mounted at all"
+            : "every volume it mounts is read-only too"
+        message: |
+          "this container's program files are read-only, which is right, and it has nowhere " +
+          "writable at all: " +
+          (value(self, "volumeMounts") == null
+            ? "it mounts no volumes"
+            : "every volume it mounts is also read-only") +
+          ". If the program writes so much as a temporary file, that write fails at run time. " +
+          "Nothing needs changing if it genuinely writes nothing - somebody who knows this " +
+          "program has to say which."
 
     - id: SEC-06
       title: Containers use the platform's standard system-call filter

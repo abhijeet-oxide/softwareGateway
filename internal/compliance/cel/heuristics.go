@@ -286,6 +286,150 @@ var wordValues = map[string]bool{
 	"kubernetes": true, "vault": true, "aws": true, "azure": true, "gcp": true,
 }
 
+// SecretMaterialClass classifies the contents of one Secret value.
+//
+// # Why a Secret needs its own rule
+//
+// The check that reports credentials travelling inside a chart fired on the
+// PRESENCE of inline data. On a real release that was 56 findings of which 14
+// were genuine: the rest were usernames, hostnames, object names, and - worst -
+// configuration templates whose credential fields are deliberately EMPTY,
+// waiting to be filled in at install time. Rating those Critical tells a team
+// to fix something that is already correct.
+//
+// So the contents decide, in three tiers:
+//
+//	private key   - unambiguous, and the one credential that cannot be contained
+//	                after exposure
+//	credential    - a value that is credential-shaped, or a credential-named
+//	                field holding a non-empty literal
+//	inline data   - something is shipped in the chart and it is not recognisably
+//	                a credential. Worth recording, not worth blocking a release
+//
+// An empty value returns "" at every tier, including the field-inside-a-file
+// case: `password =` with nothing after it is a placeholder, which is the shape
+// a well-behaved chart ships.
+func SecretMaterialClass(key, value string) string {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return ""
+	}
+	if pemPrivateKey.MatchString(v) {
+		return "a private key"
+	}
+	// A properties or YAML fragment shipped as one value. Classify the fields
+	// inside it rather than the blob: this is the shape that produced ten of
+	// the twelve false positives, because the blob is long and opaque and every
+	// credential field in it is empty.
+	if inner := embeddedFieldClass(v); inner != "" {
+		return inner
+	}
+	if strings.ContainsAny(v, "\n") {
+		// Multi-line and nothing inside it looked like a credential. Reporting
+		// the blob itself would be reporting its length.
+		return ""
+	}
+	if c := CredentialClass(key, v); c != "" {
+		return c
+	}
+	return ""
+}
+
+// embeddedFieldClass reads `key = value` and `key: value` lines out of a value
+// that is really a configuration file, and classifies those.
+//
+// Returns "" when every credential-named field in it is empty, which is the
+// case a check that looks only at the whole blob gets wrong.
+func embeddedFieldClass(v string) string {
+	if !strings.Contains(v, "\n") && !strings.Contains(v, "=") {
+		return ""
+	}
+	found := false
+	for _, line := range strings.Split(v, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
+			continue
+		}
+		k, val, ok := cutField(line)
+		if !ok {
+			continue
+		}
+		found = true
+		if c := CredentialClass(k, strings.TrimSpace(val)); c != "" {
+			return c
+		}
+	}
+	if found {
+		// It parsed as a configuration file and nothing in it is a credential.
+		// Saying so is what stops the blob being reported for its size.
+		return ""
+	}
+	return ""
+}
+
+// cutField splits one configuration line into its key and value, on either
+// separator, taking whichever comes first.
+func cutField(line string) (string, string, bool) {
+	eq := strings.Index(line, "=")
+	co := strings.Index(line, ":")
+	switch {
+	case eq < 0 && co < 0:
+		return "", "", false
+	case eq >= 0 && (co < 0 || eq < co):
+		k, v, _ := strings.Cut(line, "=")
+		return strings.TrimSpace(k), v, true
+	default:
+		k, v, _ := strings.Cut(line, ":")
+		return strings.TrimSpace(k), v, true
+	}
+}
+
+// CredentialShape is the conclusive half of the detector: what a value IS,
+// with no reference to what the field is called.
+//
+// # Why the two halves are separable
+//
+// A PEM private key is a private key wherever it appears. An opaque string in a
+// field named for a credential is an inference, and a good one - but it is
+// still an inference, and on a real release it was wrong: three environment
+// variables named APP_*_SECRET held "session-store-v1" and similar, which
+// follow the naming convention of the other objects in that release rather than
+// the shape of credential material.
+//
+// Reporting both at one severity, with confidence "confirmed", puts a guess
+// behind the tool's strongest claim. Separating them lets the shape-confirmed
+// case block a release and the inferred case ask a question.
+func CredentialShape(value string) string {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return ""
+	}
+	if strings.HasPrefix(v, "$") || strings.Contains(v, "{{") || strings.Contains(v, "$(") {
+		return ""
+	}
+	if strings.Contains(v, "-----BEGIN CERTIFICATE-----") ||
+		strings.Contains(v, "-----BEGIN PUBLIC KEY-----") {
+		return ""
+	}
+	switch {
+	case pemPrivateKey.MatchString(v):
+		return "a private key"
+	case jsonWebToken.MatchString(v):
+		return "a signed token (JWT)"
+	case cloudAccessKey.MatchString(v):
+		return "a cloud access key"
+	case uriWithSecret.MatchString(v):
+		return "a connection string with the password written into it"
+	case authHeader.MatchString(v):
+		return "a ready-made authorization header"
+	case vendorToken.MatchString(v):
+		return "an API access token"
+	case obviousPlaceholders[strings.ToLower(v)]:
+		return "a placeholder credential somebody was meant to replace"
+	}
+	return ""
+}
+
 // CredentialClass names what a value looks like, or returns "" when it does not
 // look like a credential at all.
 //

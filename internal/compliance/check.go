@@ -206,14 +206,20 @@ func (c Check) Validate() []error {
 	if !c.FixEffort.Valid() {
 		add("fixEffort %q must be one of low, medium, high", c.FixEffort)
 	}
-	// The severity rubric, mechanical. A check that says in its own metadata
-	// that somebody has to look at the workload before the finding means
-	// anything cannot also fail the release on its own - that combination is
-	// what produces the argument where a vendor is told their deliberate,
+	// The severity rubric, mechanical: critical requires confirmed.
+	//
+	// A check that says in its own metadata that the finding might not hold for
+	// this workload cannot also fail the release on its own - that combination
+	// is what produces the argument where a vendor is told their deliberate,
 	// correct design choice is a blocking defect, and one of those is enough to
 	// cost the whole report its credibility.
-	if c.Confidence == ConfidenceNeedsReview && c.Severity == SeverityCritical {
-		add("a check with confidence needs-review may not be severity critical: it says itself that the finding may be correct for this workload, so it cannot decide the verdict alone")
+	//
+	// The validation audit put a number on it: 429 of 481 blocking findings
+	// were confirmed from the chart, and one check accounted for 52 of the rest
+	// - every one of them a reference the platform might well supply itself.
+	// Its own confidence said so, and it was blocking anyway.
+	if c.Severity == SeverityCritical && c.Confidence != "" && c.Confidence != ConfidenceConfirmed {
+		add("a check with confidence %q may not be severity critical: only a finding read directly from the chart can fail the release on its own", c.Confidence)
 	}
 	if c.Deprecated {
 		// A retired check runs nothing, so the rest of the schema does not
@@ -232,6 +238,20 @@ func (c Check) Validate() []error {
 		}
 		if c.Assert.ObserveOnPass && c.Assert.Observed == "" {
 			add("assert.observeOnPass records the observed value on a pass, and this check has no observed expression to record")
+		}
+		if sup := c.Assert.SupersededBy; sup != nil {
+			if !checkIDPattern.MatchString(sup.Check) {
+				add("assert.supersededBy.check %q is not a check id, and a finding that stands down has to say which check to read instead", sup.Check)
+			}
+			if sup.Check == c.ID {
+				add("assert.supersededBy.check names this check itself")
+			}
+			if strings.TrimSpace(sup.When) == "" {
+				add("assert.supersededBy needs a `when`: without one this check would never report anything")
+			}
+			if strings.TrimSpace(sup.Because) == "" {
+				add("assert.supersededBy needs a `because`: a skipped finding with no reason reads as the check not having run")
+			}
 		}
 	case EngineBuiltin:
 		if !c.Assert.Empty() {
@@ -510,6 +530,39 @@ type Assert struct {
 	Expected string `json:"expected,omitempty"`
 	Locus    string `json:"locus,omitempty"`
 	Message  string `json:"message,omitempty"`
+
+	// SupersededBy names a check whose finding, when it fires on the same
+	// subject, makes this one unactionable.
+	SupersededBy *Supersession `json:"supersededBy,omitempty"`
+}
+
+// Supersession is one check standing down in favour of another that has already
+// reported the root cause.
+//
+// # The defect this exists for
+//
+// A container with `privileged: true` gets three blocking findings: the
+// privilege itself, the missing capability drop, and the permitted privilege
+// escalation. The second and third cannot be acted on - the kernel grants the
+// full capability set to a privileged container whatever `capabilities.drop`
+// says, and permits escalation whatever `allowPrivilegeEscalation` says. A
+// reader fixes two of the three, changes nothing about the container's actual
+// powers, and learns that the tool counts rather than reasons.
+//
+// A superseded subject is recorded as SKIPPED, not dropped: it stays in the
+// full record, with a sentence saying which check owns it, so nobody concludes
+// the check was never run.
+type Supersession struct {
+	// Check is the ID that owns the root cause - the one whose finding has to
+	// be acted on first.
+	Check string `json:"check"`
+	// When is CEL over the same subject. True means this subject's finding is
+	// superseded.
+	When string `json:"when"`
+	// Because is one clause, in plain language, saying why this finding cannot
+	// be acted on while the other holds. It is joined onto a sentence, so it
+	// reads as "...is not reported here because <because>".
+	Because string `json:"because"`
 }
 
 // PathPair is the two operands of an equalPaths assertion.

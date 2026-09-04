@@ -184,3 +184,46 @@ func TestDisruptionsAllowed(t *testing.T) {
 		}
 	}
 }
+
+// What is inside a Secret decides, not that there is something inside it.
+//
+// The check that reports credentials travelling inside a chart fired on the
+// PRESENCE of inline data. On a real release that was 56 findings of which 14
+// were genuine - the rest usernames, hostnames, object names, and configuration
+// templates whose credential fields are deliberately empty because the values
+// arrive at install time. Rating those Critical tells a team to fix something
+// that is already correct, which is the single most damaging thing a compliance
+// report can do.
+func TestSecretMaterialClass(t *testing.T) {
+	cases := []struct {
+		key, value string
+		want       bool
+		why        string
+	}{
+		// Genuine, and the reason the check exists.
+		{"tls.key", "-----BEGIN RSA PRIVATE KEY-----\nMIIEow...", true, "a private key"},
+		{"password", "S3cr3t-P@ssw0rd-Value", true, "a password in a field named for one"},
+		{"db.properties", "dataSource.user = svcusr\ndataSource.password = hunter2",
+			true, "a credential inside a shipped configuration file"},
+
+		// The false positives. Every one of these was rated Critical.
+		{"db.properties", "dataSource.user = svcusr\ndataSource.password =",
+			false, "a template with the credential field left empty for install time"},
+		{"conf.properties", "url: jdbc:postgresql://db.example:5432/appdb\npassword:",
+			false, "the same shape with the other separator"},
+		{"username", "svcusr", false, "a username is not a credential"},
+		{"host", "db.acme.example", false, "a hostname"},
+		{"upstream", "service-b", false, "an object name"},
+		{"password", "", false, "an empty value is a placeholder for a credential"},
+		{"password", "   ", false, "and so is a blank one"},
+		{"ca.crt", "-----BEGIN CERTIFICATE-----\nMIIB...", false, "a certificate is public"},
+	}
+	for _, c := range cases {
+		got := SecretMaterialClass(c.key, c.value) != ""
+		if got != c.want {
+			t.Errorf("SecretMaterialClass(%q, %q) = %v, want %v - %s (class %q)",
+				c.key, truncate(c.value), got, c.want, c.why,
+				SecretMaterialClass(c.key, c.value))
+		}
+	}
+}

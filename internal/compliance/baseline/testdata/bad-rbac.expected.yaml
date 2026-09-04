@@ -2,6 +2,11 @@ findings:
   - {check: RBAC-03, kind: Role, name: everything}
   - {check: RBAC-05, kind: Role, name: everything}
   - {check: RBAC-05, kind: Role, name: reads-secrets}
+  # get with no resourceNames. RBAC-05 must stay silent here - it has no list
+  # verb, and a title saying "list" against a rule with no list is how a
+  # reviewer learns to distrust the report.
+  - {check: RBAC-11, kind: Role, name: gets-any-secret}
+  - {check: RBAC-11, kind: Role, name: everything}
   - {check: RBAC-06, kind: Role, name: everything}
   - {check: RBAC-06, kind: Role, name: grants-itself}
   - {check: RBAC-07, kind: Role, name: everything}

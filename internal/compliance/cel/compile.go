@@ -87,6 +87,11 @@ func (c *Compiler) Compile(check compliance.Check) (compliance.Program, error) {
 			return nil, fmt.Errorf("message: %w", err)
 		}
 	}
+	if sup := check.Assert.SupersededBy; sup != nil {
+		if p.superseded, err = c.compileBool(sup.When); err != nil {
+			return nil, fmt.Errorf("supersededBy.when: %w", err)
+		}
+	}
 	return p, nil
 }
 
@@ -161,11 +166,12 @@ type program struct {
 	check compliance.Check
 	env   *celgo.Env
 
-	applies  *celgo.Ast
-	assert   *celgo.Ast
-	observed *celgo.Ast
-	message  *celgo.Ast
-	terms    []compiledTerm
+	applies    *celgo.Ast
+	assert     *celgo.Ast
+	observed   *celgo.Ast
+	message    *celgo.Ast
+	superseded *celgo.Ast
+	terms      []compiledTerm
 
 	source   string
 	expected string
@@ -177,11 +183,12 @@ type program struct {
 }
 
 type plannedPrograms struct {
-	applies  celgo.Program
-	assert   celgo.Program
-	observed celgo.Program
-	message  celgo.Program
-	terms    []plannedTerm
+	applies    celgo.Program
+	assert     celgo.Program
+	observed   celgo.Program
+	message    celgo.Program
+	superseded celgo.Program
+	terms      []plannedTerm
 }
 
 type plannedTerm struct {
@@ -223,6 +230,9 @@ func (p *program) plan(idx *compliance.Index) (*plannedPrograms, error) {
 		return nil, err
 	}
 	if out.message, err = mk(p.message); err != nil {
+		return nil, err
+	}
+	if out.superseded, err = mk(p.superseded); err != nil {
 		return nil, err
 	}
 	for _, t := range p.terms {
@@ -286,6 +296,21 @@ func (p *program) Evaluate(ctx context.Context, subj compliance.Subject, idx *co
 			}
 		}
 		return j, nil
+	}
+
+	// A failure another check already owns is stood down here rather than
+	// reported: acting on it would change nothing until that one is fixed. The
+	// engine records it as a skip naming the other check, so it stays in the
+	// full record and out of the list of things to do.
+	if planned.superseded != nil {
+		sv, _, serr := planned.superseded.ContextEval(ctx, act)
+		if serr == nil {
+			if b, berr := asBool(sv.Value()); berr == nil && b {
+				j.SupersededBy = p.check.Assert.SupersededBy.Check
+				j.SupersededBecause = p.check.Assert.SupersededBy.Because
+				return j, nil
+			}
+		}
 	}
 
 	// Find the term that actually failed, so a check with four required paths

@@ -498,6 +498,10 @@ type Result struct {
 
 	Outcome     Outcome     `json:"outcome"`
 	Determinacy Determinacy `json:"determinacy,omitempty"`
+	// SupersededBy names the check that owns this subject's root cause, on a
+	// skip that happened because acting on this finding would change nothing
+	// until that one is fixed. See Supersession.
+	SupersededBy string `json:"supersededBy,omitempty"`
 	Address     Address     `json:"address"`
 
 	// Observed and Expected are what the check saw and what it required, in the

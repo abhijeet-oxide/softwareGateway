@@ -315,7 +315,10 @@ spec:
       description: >
         A StatefulSet does not mount a folder from the server or a server-local
         volume, and does not rely on temporary scratch space when it declares no
-        storage of its own at all.
+        storage of its own at all. Volumes that hold no data are left out of
+        this: a memory-backed scratch area (hugepages, or medium Memory) is an
+        allocation rather than a directory, and a mount under /sys, /dev or
+        /proc is device access, which SEC-08 reports on its own terms.
       rationale: >
         A StatefulSet exists because its data has to outlive the copy that wrote
         it. Scratch space does not: it is deleted with the copy, so anything
@@ -328,7 +331,7 @@ spec:
       tier: 1
       category: Storage & Data
       subcategory: Stateful workloads
-      keywords: [StatefulSet, emptyDir, hostPath, local, volumeClaimTemplates, ephemeral]
+      keywords: [StatefulSet, emptyDir, hostPath, local, volumeClaimTemplates, ephemeral, hugepages]
       confidence: confirmed
       whenItBites: node-maintenance
       fixOwner: chart-template
@@ -350,15 +353,14 @@ spec:
         where: 'value(self, "spec.template.spec.volumes") != null'
       assert:
         expr: |
-          !self.spec.template.spec.volumes.exists(v, has(v.hostPath) || has(v.local)) &&
+          !self.spec.template.spec.volumes.exists(v,
+            (has(v.hostPath) || has(v.local)) && stateVolume(v)) &&
           (value(self, "spec.volumeClaimTemplates") != null ||
-           !self.spec.template.spec.volumes.exists(v, has(v.emptyDir)))
+           !self.spec.template.spec.volumes.exists(v, has(v.emptyDir) && stateVolume(v)))
         locus: spec.template.spec.volumes
         expected: storage that outlives the copy, for a service that has to remember things
         observed: |
           self.spec.template.spec.volumes
-            .filter(v, has(v.hostPath) || has(v.local) || has(v.emptyDir))
-            .map(v, string(v.name) + (has(v.hostPath) ? " (a folder on the server)" :
-                                      has(v.local) ? " (storage tied to one server)" :
-                                      " (scratch space, deleted with the copy)"))
+            .filter(v, stateVolume(v))
+            .map(v, string(v.name) + " (" + volumeStateLabel(v) + ")")
             .join(", ")

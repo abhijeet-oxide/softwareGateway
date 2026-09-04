@@ -21,7 +21,7 @@ import (
 // wrong, and each one was got wrong at least once in the sixteen policies this
 // platform inherited. Written here, they are wrong at most once and unit-tested
 // against the behaviour they model; written per check, they are wrong in a
-// different way in each of the eighty-eight.
+// different way in each of the ninety-nine.
 //
 // The one in this file that most deserves the treatment is selects(). The
 // shipped pdb.rego compares matchLabels only, ignores matchExpressions

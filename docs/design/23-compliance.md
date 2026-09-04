@@ -486,7 +486,7 @@ catalogue.
 
 ### 7.2 Volume
 
-A large release: ~200 workloads, ~600 resources, 88 checks, most applying to
+A large release: ~200 workloads, ~600 resources, 99 checks, most applying to
 workloads only. Order 10,000-15,000 result rows per run. Small for Postgres,
 large for a browser - so the API paginates and the UI's default view is failures
 grouped by chart, with passes one click away. `maxResultsPerRun` (default
@@ -1233,7 +1233,7 @@ of fact.
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ ⚠ CONDITIONAL   3 blocking · 14 warnings · 1 041 passed · 26 skipped     │
-│ 97 of 97 charts rendered · 612 resources · 88 checks · helm 3.16.2      │
+│ 97 of 97 charts rendered · 612 resources · 99 checks · helm 3.16.2      │
 │ Checked   12 Aug 2026 14:22 · bundle a91f…  [ Re-run ]  [ Export ▾ ]    │
 └─────────────────────────────────────────────────────────────────────────┘
 
@@ -1511,7 +1511,7 @@ Consolidated; each is argued where it is made.
 | # | Question | Why it is open | What would settle it |
 |---|---|---|---|
 | Q1 | Does the determinacy probe hold up on a real 97-chart corpus? | Flipping booleans changes which resources render. The design handles that (a resource in one render only is `configurable`), but the *proportion* of `unknown` results is unknown until it is measured | Run it against a real orb in M11-A and count |
-| Q2 | Is 88 checks too many to ship at once? | A first report with 400 warnings on every vendor release is a report nobody reads | Measure against three real releases; if the warning volume is unusable, ship the `block` set first and stage the `warn` set |
+| Q2 | Is 99 checks too many to ship at once? | A first report with 400 warnings on every vendor release is a report nobody reads | Measure against three real releases; if the warning volume is unusable, ship the `block` set first and stage the `warn` set |
 | Q3 | Should MTA-06/07 severities be organization-configurable after all? | §13 says one organization, one severity. Provenance and ownership annotations are the checks most likely to be right for one product family and wrong for another | Whether the waiver mechanism handles it. If waivers are being written in bulk for one check, the check's severity is wrong |
 | Q4 | Where do the evidence-only items (26 of them) live? | They are real requirements that no check can decide. Tracking them nowhere means they are not tracked | Probably a release checklist beside the automated results, sourced from the same catalogue - but that is a feature, not a footnote, and it needs its own design |
 | Q5 | How many of the 88 baseline checks are expressible declaratively? | The target is most of them; the ones that are not define how much `builtin/` has to carry, and how good the shorthand has to be | Counted in M11-A as the baseline pack is written. A baseline that is 80% Go means the extension point is decorative |

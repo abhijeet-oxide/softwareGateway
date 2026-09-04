@@ -81,9 +81,23 @@ spec:
       tier: 1
       category: Disruption & Availability
       reference: https://wiki.acme.example/platform/standards#quorum
+
+      # THE TRIAGE BLOCK. A severity says how much this organization cares. It
+      # does not say what anybody should do, and a report of severities alone
+      # is a list somebody forwards rather than a list somebody works through.
+      # See section 2.1.
+      confidence: confirmed      # confirmed | probable | needs-review
+      whenItBites: node-maintenance
+      fixOwner: chart-template   # who changes something
+      fixEffort: low
       remediation: >
         Set spec.minAvailable on the PodDisruptionBudget to floor(size/2)+1 and
         remove maxUnavailable.
+      # THE FIX, not a description of it. Prose about a fix and the lines that
+      # ARE the fix are not the same artifact, and only one gets applied.
+      fixExample: |
+        spec:
+          minAvailable: 3        # floor(5/2) + 1
 
       # THE DENOMINATOR. The engine computes the applicable set from this before
       # any expression runs, and derives a `pass` for every applicable resource
@@ -108,7 +122,7 @@ spec:
 
 Three things about that manifest earn their place:
 
-- **Metadata lives in YAML, not in the check logic.** The UI lists 88 checks and
+- **Metadata lives in YAML, not in the check logic.** The UI lists ninety-nine checks and
   explains each one without evaluating anything; the exporter writes the rulebook
   into the vendor's spreadsheet; a reviewer diffs a severity change in a
   four-line patch. In the existing sample policies this metadata is string
@@ -122,6 +136,86 @@ Three things about that manifest earn their place:
   engine iterates and binds each one to `self`. This is what makes the CronJob
   false negative in [03](03-sample-policy-review.md) §3.1 unrepeatable: reaching
   a `CronJob`'s pod spec is the engine's job, and it is written once.
+
+## 2.1 The triage block, and why it is not optional
+
+Five fields, all validated at load, all printed in the vendor report and shown
+in the finding drawer.
+
+| Field | Values | What it answers |
+|---|---|---|
+| `confidence` | `confirmed`, `probable`, `needs-review` | Does the tool KNOW this, or is it inferring? |
+| `whenItBites` | `install`, `upgrade`, `node-maintenance`, `under-load`, `on-failure`, `continuously` | When does the consequence actually arrive? |
+| `fixOwner` | `chart-template`, `chart-values`, `application`, `build-pipeline`, `platform-team`, `needs-decision` | Who changes something? |
+| `fixEffort` | `low`, `medium`, `high` | How much work is it? |
+| `fixExample` | YAML | What does the corrected configuration look like? |
+
+**`confidence` carries a rule with teeth.** A check declaring `needs-review`
+may not be `severity: block`, and the loader refuses one that is - see
+`Check.Validate`. The reason is the single largest category of unproductive
+argument about a compliance report: the tool asserts as a defect something a
+vendor chose deliberately and correctly for that workload, and one of those is
+enough to cost the whole report its credibility. A check that says in its own
+metadata that somebody has to look at the workload cannot also decide the
+verdict on its own.
+
+**`fixOwner` has no "unknown".** It replaces a column that was headed `Owner`,
+held something else entirely, and read `Could not be established` on roughly a
+third of the rows of a real report. Where ownership genuinely depends on the
+site, the value is `needs-decision` and the `rationale` names who decides -
+which is a sentence somebody can act on.
+
+## 2.2 The language standard
+
+Every string in a check is read by somebody who is not a Kubernetes engineer: a
+release manager deciding whether to ship, a programme lead reading a summary, a
+supplier quality engineer forwarding a spreadsheet. A finding they cannot act on
+without a conversation has not been delivered.
+
+Eight rules, applied to `title`, `description`, `rationale`, `message` and
+`observed`:
+
+1. **The title states the desired state, not the defect.** "A service with more
+   than one copy survives planned maintenance", not "Replicated workloads are
+   covered by a PodDisruptionBudget". Somebody scanning the catalogue should be
+   reading a description of a well-built chart, not a list of accusations.
+2. **Name the thing, not the field.** "The chart does not say how many copies
+   must stay running", not "`spec.maxUnavailable` is absent". The field belongs
+   in `locus`, `remediation` and `fixExample`, where somebody is about to edit
+   it.
+3. **State the consequence in operational terms.** "The service goes offline
+   during patching", not "evictions are permitted".
+4. **Gloss Kubernetes vocabulary on first use, or avoid it.** "a
+   PodDisruptionBudget - the rule that tells the platform how many copies must
+   stay running". No unexpanded acronyms at all.
+5. **Say when it bites.** The `whenItBites` field carries it; the `rationale`
+   should say it in words too.
+6. **Say who acts.** Same: the field, and the sentence.
+7. **One idea per sentence.**
+8. **Never state a defect without a fix.** `remediation` is mandatory, and
+   `fixExample` is expected wherever the fix is structural.
+
+The test for all of this is not a linter. It is that somebody who is not a
+Kubernetes specialist reads the finding and can explain the consequence back. If
+they cannot, the description is wrong regardless of how accurate it is.
+
+## 2.3 The severity rubric
+
+Applied mechanically. The source catalogue's own severity is the starting point;
+this decides where it lands after review.
+
+| Severity | Test | Response |
+|---|---|---|
+| `block` | The standard prohibits it, AND the condition is a security exposure, data loss, or an outage or blocked upgrade under a foreseeable event | Do not accept the release |
+| `warn` | The standard recommends it, AND its absence measurably degrades resilience, operability or security | Fix in the next release |
+| `info` | An observation, a documentation gap, or a condition where the platform default is adequate | Record; no action required |
+
+Two constraints on top:
+
+- A check whose `confidence` is `needs-review` may not be `block` (§2.1).
+- Where two checks would fire on one configuration choice, one of them is
+  primary and the other narrows its applicability. Two checks independently
+  penalising a single decision doubles the count and halves the credibility.
 
 ## 3. The three layers
 
@@ -198,15 +292,64 @@ implementations are Go, unit-tested once, and correct for every caller:
 
 | Function | Returns |
 |---|---|
+| `present(doc, path)` | Whether a path exists. Absent-safe: a missing field is a value, not a fault |
+| `value(doc, path)` / `text(doc, path)` | The value at a path, raw or as the text the manifest wrote |
+| `podField(workload, path)` | A value from the workload's pod spec, wherever that kind keeps it - two levels deeper on a CronJob |
+| `securityValue(container, owner, field)` | A securityContext field resolved the way the kubelet resolves it: container, then pod, then nothing |
+| `securitySource(container, owner, field)` | Which of those three it came from, so a finding names the line to edit |
+| `runsAsRoot(workload)` | Whether anything in a workload runs as root. Undeclared is not root |
 | `pdbFor(workload)` | The PodDisruptionBudget selecting it, or a null-safe empty object |
+| `covers(obj)` | The reverse: the workloads an object's own selector matches |
 | `servicesFor(workload)` | Services whose selector matches its pod labels |
-| `endpointsOf(service)` | Workloads the Service selects - empty is NET-07 |
+| `selectedBy(service)` | Workloads a Service routes to. Selector keys the platform supplies at pod creation are skipped, because no chart can contain them |
 | `selects(selector, obj)` | Full label-selector semantics: `matchLabels` **and** `matchExpressions`, namespace-scoped |
+| `selectorKeys(obj)` | Every label key an object selects on, across the several shapes a selector takes |
+| `declaresPort(container, port)` | Whether a probe port resolves. A number always does; a name has to be declared |
+| `probeHandler(probe)` | A probe reduced to what it actually calls, timings dropped and defaults filled in |
+| `pvcMountPaths(workload)` | Where a workload mounts persistent claims |
+| `mountersOf(claim)` | The workloads that mount a claim, so a storage finding can name the software |
+| `configRefs(workload)` | Every ConfigMap and Secret a pod asks for, from all six places a pod spec can name one |
 | `crdFor(cr)` | The CustomResourceDefinition the release ships for a CR's `apiVersion`/`kind` |
+| `builtinApiGroup(apiVersion)` | Whether the cluster serves that group itself, so nothing is asked to ship a definition of `Deployment` |
+| `boundToRole(namespace, sa)` | Whether the release binds a service account to any Role |
+| `ruleGrants(rule, resource, verbs)` | Whether an RBAC rule grants a verb, honouring wildcards in both directions |
 | `quantity(v)` | A Kubernetes quantity as a number - `"1Gi"`, `"250m"`, `"0.5"` |
 | `imageRef(s)` | `{registry, repository, tag, digest, hasDigest}` from an image reference |
 | `resourcesIn(kinds)` | Release-wide lookup, for the few checks that need a set |
-| `semver(a).lt(semver(b))` | Version comparison |
+| `replicas(workload)` | The copy count, with the Kubernetes default of 1 for an absent field |
+| `allLabels(obj)` / `allAnnotations(obj)` | The object's metadata merged with its pod template's |
+| `credentialClass(key, value)` | What class of credential a value looks like, or `""`. See §4.2.1 |
+| `looksLikeCredential(key, value)` | The same, as a boolean |
+| `decodeBase64(v)` | A Secret value decoded, or the value unchanged when it is not base64 |
+| `unstableLabelKey(k)` | Whether a label's value changes between releases |
+| `runtimeLabelKey(k)` | Whether Kubernetes adds that label itself at pod creation |
+| `extendedResource(name)` | Whether a resource name is one where request must equal limit |
+| `operationalPath(path)` | Whether a URL path exposes a metrics, debug or admin endpoint |
+| `semverCompare(a, b)` | -1, 0 or 1. Semver order, not string order |
+
+#### 4.2.1 Credential detection, and its false-positive budget
+
+`credentialClass` is the one heuristic in the set, so its rule is written down
+and tested in `cel/heuristics_test.go`. It looks at the **value** first:
+
+- **Shape signals are conclusive whatever the field is called.** A PEM private
+  key header, a JSON web token, a cloud access key id, a URI with a password
+  written into it, a ready-made authorization header, a vendor token prefix, or
+  a placeholder somebody was obviously meant to replace.
+- **The field name only corroborates.** Before it is trusted at all, fields
+  naming a parameter *about* a credential are excluded - a retry count, an
+  interval, a cache lifetime, a minimum length, a file path, a class name - and
+  then values that cannot be the credential their key is named for are excluded
+  too: numbers, durations, paths, hostnames, URLs, class identifiers, UUIDs,
+  digests and single-word settings.
+- **Raw entropy is never a signal on its own.** It flags every checksum, UUID
+  and base64-encoded certificate in a chart. It is used only to sharpen the
+  wording of a finding that already matched on its key name.
+- **Secret values are decoded before analysis**, because base64 is an encoding
+  and not protection, and a detector reading the encoded form finds nothing.
+- **No finding prints the value.** It names the object, the key and the class.
+  A compliance report is itself something that gets forwarded, and a report
+  quoting the password has copied the exposure rather than described it.
 
 Adding a function is a platform change, deliberately: it is the point where a
 new Kubernetes semantic gets one tested implementation instead of five
@@ -308,6 +451,24 @@ Four rules turn that into a real gate:
    rather than by its author.
 
 Rules 3 and 4 are what separate this from a policy directory that accumulates.
+
+### 6.1 The output contract
+
+Three more assertions, in `baseline/contract_test.go`, each written for a
+failure that reached a real report before anybody noticed:
+
+- **Every shipped pack must load.** A pack that stops compiling takes its checks
+  with it, and nothing else fails: the good fixture is still clean, because a
+  check that does not exist cannot fire, and the report simply has a category
+  missing from it. Absence and compliance are indistinguishable on the screen a
+  release manager reads.
+- **A finding may not name a field and leave the value blank**, and neither its
+  observed value nor its message may contain an unsubstituted template fragment.
+  Two checks shipped emitting `" on "` where the value should have been, both
+  blocking, so they were among the first rows a reviewer opened.
+- **Every check carries the triage block, a rationale and a reference**, and no
+  blocking check declares `confidence: needs-review`. The rubric in §2.3 is
+  enforced rather than trusted.
 
 ## 7. What is deliberately not here
 

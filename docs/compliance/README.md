@@ -19,6 +19,8 @@ report, milestones. This directory is the ground truth it rests on.
 | 01 | [Check Catalog](01-check-catalog.md) | Every one of the 118 assertions triaged - automatable now, needs a values file, or needs a human reading a document - plus 8 proposed additions and the six checks that are easy to get wrong |
 | 02 | [Authoring Checks](02-authoring-checks.md) | The extension contract: the pack manifest, the YAML and CEL forms a check is written in, ID rules, and what a new check must prove before it can fail anybody's release |
 | 03 | [Review of the Existing Policies](03-sample-policy-review.md) | An honest read of the sixteen `.rego` files in [sample-policies/](sample-policies/): what is sound, what is broken, what each becomes |
+| — | [compliance-report.md](compliance-report.md) | **The audit.** This tool run against a real Helm chart, by somebody reading its output rather than its code: the false positives, the severities that were wrong, and the language nobody outside the team could read |
+| 04 | [Response to the Audit](04-audit-response.md) | What changed because of it, clause by clause - including the two proposals implemented differently, and what is still open |
 | — | [sample-policies/](sample-policies/) | The policies as they were handed over. Kept as-is; see 03 before adopting any of them |
 
 ## Reading order
@@ -30,6 +32,7 @@ report, milestones. This directory is the ground truth it rests on.
 | Writing a new check | 02 → 01 §3 → 00 §5 |
 | Wondering what happened to the existing Rego | 03 |
 | Explaining a finding to a vendor | 00 §3 → 01, the row for that ID |
+| Asking why a finding reads the way it does | 04 → 02 §2.2 |
 
 ## The model in ten lines
 
@@ -56,3 +59,8 @@ report, milestones. This directory is the ground truth it rests on.
 - **A check ships with fixtures or it does not ship.** A meta-test fails CI when a
   registered check has no positive and negative case, and a shared good chart
   makes "no false positives" a CI assertion rather than a claim.
+- **A finding is written for somebody who is not a Kubernetes engineer.** The
+  title says what good looks like, the rationale says what breaks and when, and
+  four fields say who fixes it, how much work it is, when it bites and how
+  firmly the tool knows. A finding a release manager cannot act on without a
+  conversation has not been delivered.

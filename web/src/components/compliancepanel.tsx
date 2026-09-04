@@ -9,7 +9,8 @@ import type { ReactNode } from 'react'
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
 import {
-  BookOutlined, FileTextOutlined, HelmOutlined, LoadingOutlined, SearchOutlined, SyncOutlined,
+  BookOutlined, ReportOutlined, FileTextOutlined, HelmOutlined, LoadingOutlined, SearchOutlined,
+  SyncOutlined,
 } from '../icons'
 import {
   complianceExportUrl, useCancelCompliance, useInspectPackage, usePackageCompliance,
@@ -132,6 +133,7 @@ const VIEWS: Record<ResultView, {
     all: true,
     outcome: ['pass'],
     count: (c) => c?.pass ?? 0,
+    unique: (c) => c?.uniquePassed ?? 0,
   },
   unchecked: {
     label: 'Unchecked',
@@ -450,9 +452,6 @@ export function ComplianceTab({ product, reference, repository }: {
   const uniqueInSlice = slice.unique
     ? slice.unique(data?.run?.counts)
     : grouped.length
-  const uniqueFindings = (data?.run?.counts.uniqueBlocking ?? 0)
-    + (data?.run?.counts.uniqueWarning ?? 0)
-    + (data?.run?.counts.uniqueInfo ?? 0)
   /*
    * Whether the page the server returned is the whole slice.
    *
@@ -488,51 +487,6 @@ export function ComplianceTab({ product, reference, repository }: {
             <Button icon={<BookOutlined />}>Rulebook</Button>
           </Link>
           {data?.run && <ComplianceRunLogButton run={data.run} size="middle" />}
-          {/*
-            THE REPORT, beside the controls that act on the whole run rather
-            than in the findings card, which is one view of it. What comes back
-            is every sheet regardless of what is filtered on screen: the reader
-            it is for has no filters, and a file shaped by somebody else's is a
-            file that looks complete and answers a different question.
-          */}
-          {data?.run && (
-            <ExportMenu
-              label="Download report"
-              choices={[
-                {
-                  key: 'xlsx',
-                  icon: <FileTextOutlined />,
-                  label: 'Excel workbook',
-                  note: 'A summary page, the rules broken, every place they were '
-                    + 'broken, what could not be checked, and the charts',
-                  href: complianceExportUrl(product, reference, {
-                    format: 'xlsx', repository,
-                  }),
-                  noun: 'The report',
-                },
-                {
-                  key: 'csv',
-                  icon: <FileTextOutlined />,
-                  label: 'Findings (CSV)',
-                  note: 'One table: every place a rule was broken, with its address',
-                  href: complianceExportUrl(product, reference, {
-                    format: 'csv', table: 'findings', repository,
-                  }),
-                  noun: 'The findings',
-                },
-                {
-                  key: 'json',
-                  icon: <FileTextOutlined />,
-                  label: 'Run (JSON)',
-                  note: 'The whole run with its relationships kept, for a machine',
-                  href: complianceExportUrl(product, reference, {
-                    format: 'json', repository,
-                  }),
-                  noun: 'The run',
-                },
-              ]}
-            />
-          )}
           <Tooltip
             title={
               'Renders every chart in this release with the pinned Kubernetes version and '
@@ -611,10 +565,8 @@ export function ComplianceTab({ product, reference, repository }: {
                 */
                 label: `Findings (${formatCount(
                   grouping === 'unique'
-                    ? uniqueFindings
-                    : (data?.run?.counts.blocking ?? 0)
-                      + (data?.run?.counts.warning ?? 0)
-                      + (data?.run?.counts.info ?? 0),
+                    ? uniqueInSlice
+                    : slice.count(data?.run?.counts),
                 )})`,
               },
               {
@@ -625,13 +577,55 @@ export function ComplianceTab({ product, reference, repository }: {
               },
             ]}
           />
-          <DownloadManifestsButton
-            product={product}
-            reference={reference}
-            repository={repository}
-            documents={manifests.data?.documents.length ?? 0}
-            bytes={manifests.data?.totalBytes ?? 0}
-          />
+          <Space size={8}>
+            <DownloadManifestsButton
+              product={product}
+              reference={reference}
+              repository={repository}
+              documents={manifests.data?.documents.length ?? 0}
+              bytes={manifests.data?.totalBytes ?? 0}
+            />
+            {data?.run && (
+              <ExportMenu
+                label="Download report"
+                icon={<ReportOutlined />}
+                choices={[
+                {
+                  key: 'xlsx',
+                  icon: <FileTextOutlined />,
+                  label: 'Excel workbook',
+                  note: 'A summary page, the rules broken, every place they were '
+                    + 'broken, what could not be checked, and the charts',
+                  href: complianceExportUrl(product, reference, {
+                    format: 'xlsx', repository,
+                  }),
+                  noun: 'The report',
+                },
+                {
+                  key: 'csv',
+                  icon: <FileTextOutlined />,
+                  label: 'Findings (CSV)',
+                  note: 'One table: every place a rule was broken, with its address',
+                  href: complianceExportUrl(product, reference, {
+                    format: 'csv', table: 'findings', repository,
+                  }),
+                  noun: 'The findings',
+                },
+                {
+                  key: 'json',
+                  icon: <FileTextOutlined />,
+                  label: 'Run (JSON)',
+                  note: 'The whole run with its relationships kept, for a machine',
+                  href: complianceExportUrl(product, reference, {
+                    format: 'json', repository,
+                  }),
+                  noun: 'The run',
+                },
+                ]}
+              />
+            )}
+            
+          </Space>
         </div>
 
         {tab === 'charts' ? (
@@ -683,7 +677,7 @@ export function ComplianceTab({ product, reference, repository }: {
                 onChange={(v) => setGrouping(v as 'unique' | 'all')}
                 options={[
                   { value: 'unique', label: `Unique findings (${formatCount(uniqueInSlice)})` },
-                  { value: 'all', label: `All findings (${formatCount(data?.total ?? 0)})` },
+                  { value: 'all', label: `All findings (${formatCount(slice.count(data?.run?.counts))})` },
                 ]}
               />
 

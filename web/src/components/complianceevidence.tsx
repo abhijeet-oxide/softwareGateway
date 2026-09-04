@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Alert, Button, Card, Drawer, Space, Tooltip, Typography } from 'antd'
-import { DownloadOutlined, FileTextOutlined } from '../icons'
+import { DownloadOutlined, FileTextOutlined, KubernetesPodOutlined } from '../icons'
 import { useComplianceExcerpt, renderedManifestUrl } from '../api/queries'
 import { fetchText } from '../api/client'
 import { formatBytes, formatCount } from '../domain/format'
@@ -296,7 +296,7 @@ export function DownloadManifestsButton({ product, reference, repository, docume
         The numbers are a fact about what will arrive, which is what a tooltip
         is for; the button says what pressing it does.
       */}
-      <Button icon={<DownloadOutlined />} href={renderedManifestUrl(product, reference, { repository, download: true })}>
+      <Button icon={<KubernetesPodOutlined />} href={renderedManifestUrl(product, reference, { repository, download: true })}>
         Download manifests
       </Button>
     </Tooltip>

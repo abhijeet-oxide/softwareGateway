@@ -1142,7 +1142,7 @@ export function SyncButton({ sync, onSync, pending, size = 'middle', freshness, 
         icon={<SyncOutlined spin={running || pending} />}
         loading={pending}
         disabled={running}
-        onClick={() => onSync(false)}
+        onClick={() => onSync(sync.state !== '')}
       >
         {running ? 'Syncing' : sync.state === '' ? 'Sync vulnerabilities' : 'Sync again'}
       </Button>
@@ -1201,7 +1201,7 @@ export function SyncButton({ sync, onSync, pending, size = 'middle', freshness, 
               onSync(true)
               return
             }
-            if (key.startsWith('only:')) onSync(false, key.slice(5))
+            if (key.startsWith('only:')) onSync(true, key.slice(5))
           },
         }}
       >

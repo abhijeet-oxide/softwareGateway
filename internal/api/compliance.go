@@ -127,6 +127,7 @@ func (s *Server) handlePackageCompliance(w http.ResponseWriter, r *http.Request)
 		view.Counts.UniqueBlocking = unique.Blocking
 		view.Counts.UniqueWarning = unique.Warning
 		view.Counts.UniqueInfo = unique.Info
+		view.Counts.UniquePassed = unique.Passed
 	}
 	out.Run = &view
 

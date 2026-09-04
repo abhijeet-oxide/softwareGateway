@@ -58,6 +58,8 @@ import PhCheckCircle from '~icons/ph/check-circle'
 import PhCheckCircleFill from '~icons/ph/check-circle-fill'
 import PhCircleHalf from '~icons/ph/circle-half'
 import PhClock from '~icons/ph/clock'
+import ReportIcon from '@iconify-react/carbon/report';
+import KubernetesPodIcon from '@iconify-react/carbon/kubernetes-pod';
 import PhClockCounterClockwise from '~icons/ph/clock-counter-clockwise'
 import PhCloudArrowDown from '~icons/ph/cloud-arrow-down'
 import PhCopy from '~icons/ph/copy'
@@ -156,6 +158,8 @@ export const ShopOutlined = make('shop', PhStorefront)
 export const ApiOutlined = make('api', PhPlugsConnected)
 export const PartitionOutlined = make('partition', PhTreeStructure)
 export const ClusterOutlined = make('cluster', PhStack)
+export const KubernetesPodOutlined = make('kubernetes-pod', KubernetesPodIcon)
+export const ReportOutlined = make('report', ReportIcon)
 export const UnorderedListOutlined = make('list', PhListBullets)
 export const BookOpenOutlined = make('book', PhBookOpen)
 // Discovery: a sweep going out and listening for what comes back, which is

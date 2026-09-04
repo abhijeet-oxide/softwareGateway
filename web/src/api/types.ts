@@ -2336,6 +2336,7 @@ export interface ComplianceCounts {
   uniqueBlocking: number
   uniqueWarning: number
   uniqueInfo: number
+  uniquePassed: number
 }
 
 /** One run, without its results. */

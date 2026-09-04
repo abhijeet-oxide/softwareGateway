@@ -647,6 +647,7 @@ func complianceChartsSheet(productName, release string, charts []ComplianceChart
 			chartRenderedWord(c.Status),
 			strconv.Itoa(c.Resources),
 			c.ErrorLabel,
+			c.ErrorCause,
 			c.ErrorValue,
 			c.ErrorFile,
 			testHook,
@@ -665,13 +666,15 @@ func complianceChartsSheet(productName, release string, charts []ComplianceChart
 			"one of its objects is on the Unchecked sheet rather than passing.",
 		Headers: []string{
 			"Chart", "Version", "Rendered", "Objects",
-			"Reason", "Value required", "Template", "In a helm test hook", "Retried",
+			"Reason", "Cause", "Value required", "Template", "In a helm test hook", "Retried",
 			"Renderer message", "Chart digest", "Chart reference", "Product", "Release",
 		},
-		Rows:   rows,
-		Widths: []int{26, 14, 11, 9, 26, 26, 40, 18, 18, 80, 26, 40, 20, 20},
-		// The renderer's own message, which is a paragraph.
-		Wrap: []int{6, 9},
+		Rows: rows,
+		// "Cause" is helm's own words for what went wrong, with the frames it
+		// wraps them in stripped; "Renderer message" beside it is the whole
+		// paragraph, for the reader who is about to open the template.
+		Widths: []int{26, 14, 11, 9, 26, 52, 26, 40, 18, 18, 80, 26, 40, 20, 20},
+		Wrap:   []int{5, 7, 10},
 	}
 }
 

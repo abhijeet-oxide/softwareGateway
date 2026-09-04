@@ -2040,7 +2040,7 @@ function ChartFailure({ chart }: { chart: ComplianceChart }) {
       {chart.error && (
         <Tooltip title={<span style={{ whiteSpace: 'pre-wrap' }}>{chart.error}</span>}>
           <Typography.Text style={{ fontSize: 12 }}>
-            {helmCause(chart.error)}
+            {chart.errorCause || helmCause(chart.error)}
           </Typography.Text>
         </Tooltip>
       )}
@@ -2070,6 +2070,13 @@ function ChartFailure({ chart }: { chart: ComplianceChart }) {
  * Every removal is a prefix helm is known to emit, matched from the front, and
  * anything unrecognised is returned whole - so a message this has never seen
  * loses nothing.
+ *
+ * # Why this is still here
+ *
+ * The server computes the same thing now (`errorCause`), because the run log
+ * needed it too and one fact with two implementations drifts. This is the
+ * fallback for a run recorded before that field existed, whose stored rows
+ * carry the message and not the cause.
  */
 function helmCause(message: string): string {
   const head = (message.split('\n')[0] ?? message).trim()

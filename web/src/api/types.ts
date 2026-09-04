@@ -2411,6 +2411,13 @@ export interface ComplianceChart {
    * applies one, so a chart failing only there installs perfectly and still
    * cannot be checked here.
    */
+  /**
+   * The clause of helm's message that says what actually went wrong, with the
+   * frames it nests around it stripped. Computed on the server so the run log,
+   * this table and the export cannot drift; `helmCause` below remains the
+   * fallback for runs recorded before the field existed.
+   */
+  errorCause?: string
   errorValue?: string
   errorFile?: string
   errorInTest?: boolean

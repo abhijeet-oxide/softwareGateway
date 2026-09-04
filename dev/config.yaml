@@ -62,6 +62,11 @@ coordinator:
   # Turn off to disable saving without losing the ability to view text files.
   files:
     downloadEnabled: false
+  security:
+    anchore:
+      endpoint: https://anchore.wst2m0ncdx0001c.oamwnvlil.itn.att.com
+      secretName: anchore-creds
+      insecureSkipVerify: true
 
 worker:
   coordinatorEndpoint: http://localhost:8080

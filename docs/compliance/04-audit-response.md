@@ -5,6 +5,10 @@
 > by clause: what was accepted, what was implemented differently, and what was
 > declined with a reason.
 >
+> A second validation followed, in
+> [complaince-report_2.md](complaince-report_2.md), against a larger release.
+> §9 answers that one the same way.
+>
 > **Prerequisite:** [00 - The Compliance Model](00-compliance-model.md) · **See also:** [01 - Check Catalog](01-check-catalog.md), [02 - Authoring Checks](02-authoring-checks.md)
 
 ---
@@ -251,9 +255,73 @@ Stated rather than quietly dropped.
 
 | Audit | Why not yet |
 |---|---|
-| Pass records in the vendor report | The runs already emit and store passes, skips and not-applicable outcomes; the export writes only failures. Making the "full inventory" artifact of §8.4 real is an export change, not a policy one. |
 | `CFG-05` - checksum inputs are stable | Needs the chart's template TEXT, not its rendered output: the defect is a call to `now` or `randAlphaNum` inside the checksum, which renders to a value that looks perfectly stable. The tier-1 renderer does not read templates. |
 | `SUP-07` - dependencies pinned and vendored | Same: reads `Chart.yaml`, which the manifest stream does not contain. |
 | `STO-03`, `STO-07` (reclaim policy), `STO-14` | Properties of a StorageClass the cluster provides, not of the chart. Reporting them from a chart alone would be a guess about somebody else's cluster. |
 | `MTA-06`, `MTA-07` - provenance and ownership annotations | The key names are an organizational convention. The check is fair only once the convention is configured, and configuring it is a deployment decision rather than a policy one. |
 | `HEALTH-007` - readiness does not depend on distant systems | The observable signature is a path name, and the catalogue was already right that this is not decidable from a manifest. A check keyed on `/health/full` would be a guess wearing a severity. |
+
+---
+
+## 9. Response to the second validation
+
+[complaince-report_2.md](complaince-report_2.md) is an independent verification
+of the work above, against a release of roughly 250 containers across a dozen
+charts. Its verdict was that the findings were largely correct and that the
+remaining problems were of a different kind from the first round: not rules that
+were wrong, but rules that were right and unusable - a title that did not
+describe the rule it fired on, an evidence pane that opened on the wrong
+screenful, three blocking findings where one decision was to blame.
+
+Every item is answered below. Where an item was already implemented before the
+second validation ran, that is said rather than claimed as new work.
+
+### 9.1 False positives and misdirected evidence
+
+| Item | What it found | What was done |
+|---|---|---|
+| A1, A2 | The workload-to-policy join failed whenever one object declared a namespace and the other did not, producing three findings saying "this workload has no policy" and four saying "this policy protects nothing" - about the same object pairs. | Fixed before the second report arrived, in the first round of this work. `sameNamespace()` treats an absent namespace as "wherever this is installed", which is what `helm template` means by it, and `TestAnAbsentNamespaceDoesNotBreakAJoin` holds the pair of mirror checks to it. |
+| A3, B1, B2 | `PDB-02` matched the literal `minAvailable: 1` - the configuration this organization's own standard recommends for a two-copy service - and missed `maxUnavailable: 10%` over one copy, which is a real deadlock. | Also first round. `disruptionsAllowed()` computes the allowance, including the percentage forms and their rounding, so the check is about the arithmetic rather than the spelling. |
+| A4 | `CFG-14` fired on the presence of `data`, not on what the data was: 56 findings of which 14 were genuine. Usernames, hostnames, object names and a configuration template whose password fields are deliberately empty were all rated blocking. | First round. `secretMaterialClass()` decodes base64 first and reads a shipped configuration file field by field, so an empty password field passes. |
+| A5 | The evidence window opened on `apiVersion`, `kind` and `metadata` - none of which the finding concerned - and the footer said `data` about a finding whose subject was `stringData`. | `CFG-14` now names the offending key, through the new `assert.locusExpr`. That exposed a second defect underneath: the locus walk split paths on every dot, so a bracketed key containing one - `metadata.annotations[helm.sh/hook]`, `stringData[db.properties]` - could never resolve at all. Dotted keys are ordinary in Kubernetes, and every finding about one was landing on the wrong screenful. |
+| A6 | `CFG-13` reported `APP_SESSION_SECRET: "session-store-v1"` as a leaked credential at the highest severity AND the highest confidence at once. It is far more likely the name of something the application looks up. | Split. `CFG-13` now asserts only on what a value **is** - a private key, a signed token, a cloud access key, a connection string with the password in it - with no reference to the field's name. The inferred case is `CFG-16`, a warning with confidence `needs-review`, and a value matching the name of a Secret or ConfigMap the release ships is treated as a reference and not reported at all. |
+| A7 | `STO-10`'s finding was correct and its evidence miscategorised two volumes: an `emptyDir` with `medium: HugePages` is a memory allocation, and a `hostPath` under `/sys` is device access. Neither holds application state. | `volumeStateLabel()` decides what a volume means for durability and returns nothing for the volumes that mean nothing. The finding reduces to its accurate core, and the device mount stays with `SEC-08`, which exists for it. |
+| A8 | `RBAC-05`'s title said "can **list** the namespace's credentials" against 15 rules that had only `get`. Both the finding and the title were defensible; only one of them described the rule. | Split into `RBAC-05` (list or watch - can enumerate every credential at once) and `RBAC-11` (get with no `resourceNames` - can fetch any credential by name). |
+| A9 | A privileged container produced three blocking findings, two of which could not be acted on: the kernel grants the full capability set whatever `capabilities.drop` says, and permits escalation whatever `allowPrivilegeEscalation` says. | New `assert.supersededBy`. `SEC-02`, `SEC-04` and `SEC-05` stand down on a privileged container and are recorded as **skips naming SEC-03**, not dropped - a missing row and a passing row look the same to a reader, and neither is true. `SEC-03` now says which three controls it nullifies. `TestAPrivilegedContainerGetsOneFinding` also asserts the standalone cases keep firing, because those are the great majority of both checks. |
+
+### 9.2 Conditions no check detected
+
+| Item | What was done |
+|---|---|
+| B3 - `NET_RAW` granted with no finding | The single capability rule was both too loud and too quiet: blocking on `SETUID`, silent on `NET_RAW`, which permits raw packet crafting and ARP and DNS spoofing from inside the pod. Three tiers now. `SEC-13` blocks on the permissions that reach outside the container; `SEC-14` warns on those over identity, file ownership and raw network traffic; `SEC-15` records the ordinary ones on a **pass** and fails only on a capability this standard has never classified - which is a gap in the standard rather than in the chart, and worth knowing before the release ships. |
+| B4 - writable container root filesystem | `SEC-05` existed and skipped any workload with persistent storage, and only ever looked at main containers. Both exclusions were wrong: a root filesystem and a mounted volume are independent, so a database with a data volume can and should have a read-only root. 37 containers that no check examined are now examined. New `SEC-16` pairs with it for the inverse the report asked for - read-only program files with nowhere writable at all, which is the failure that makes teams turn the setting back off. |
+| B5 - a mutable tag would not be blocking | Already implemented, and invisible for the reason B6 names. `SUP-11` blocks on a moving label (`latest`, `stable`, `main`, `edge`, or no label at all) and `SUP-01` warns on "tagged but not pinned by digest", exactly the split proposed. `SUP-11` emitted zero findings against that release, which is the good result the failure-only export had no way to show. The Rulebook sheet now shows it. |
+| B6 - no pass records | Passes, skips and not-applicable outcomes have always been evaluated and stored; the **Rulebook** sheet has carried per-check pass and fail counts. It now also carries the evaluated total and a rate. The rate's denominator is the subjects the check actually decided, so a chart that failed to render moves the "Not decided" column rather than the compliance rate - a rendering problem must not read as a compliance one, in either direction. |
+
+### 9.3 Language
+
+Part C asked for a four-part shape: state the literal, name the plausible
+reading, give the runtime reality, state the consequence. The second step is the
+one that lands, and it was the one missing.
+
+The report is right that most of it is mechanical once both values exist, and
+that is how it is implemented rather than as a writing convention: `SEC-02`,
+`SEC-04`, `CFG-11`, `STO-10` and `PDB-03` are rewritten, and the runtime half of
+each now comes from the new `assert.effective` (below) rather than from prose an
+author has to remember to keep true.
+
+### 9.4 Schema
+
+| Item | What was done |
+|---|---|
+| D1 - `Value is` is not deterministic | The determinacy is left **empty** where the differential render could not settle it, in the export and in the interface. 1,060 of 2,253 rows reading "Could not be established" is how a reader learns to skip a column on the rows where it works. The run summary states the coverage once - how many findings the column speaks for - which is the honest place for it. |
+| D2 - add an `effective_value` column | New `assert.effective`, stored, exported as **In practice**, and shown on the finding where it differs from what the manifest says. Supplied by `SEC-01`, `SEC-02`, `SEC-04`, `SEC-05`, `RES-01`, `PDB-02`, `PDB-03`, `CFG-11` and `STO-10`. The item's second half - `SEC-01` naming a container field path where the value is inherited from the pod - is fixed by `assert.locusExpr` and `securityLocus()`, which send the reader to the line they actually have to edit. |
+| D3 - group findings by originating rule | Partly answered and partly open. `supersededBy` is the mechanism for the case the report leads with, and it is deliberately narrower than a general `root_cause_id`: it records that one finding cannot be acted on while another stands, which is a fact the engine can establish. Grouping four correct findings that share one manifest construct is a presentation question over results that are all individually true, and it is listed as open below. |
+| D4 - severity should respect confidence | Adopted as a load-time rule, not a convention: a check may not be `critical` unless its confidence is `confirmed`. `CFG-11` was the only violation - it rated itself `probable` and blocked the release 52 times - and is a warning now. Its rationale says why: the chart is not the only thing that can put an object in a namespace. `kube-root-ca.crt` and its OpenShift equivalent are excluded outright, since no chart can ship what the cluster creates in every namespace itself. |
+
+### 9.5 Still open from the second validation
+
+| Item | Why not yet |
+|---|---|
+| D3 - `root_cause_id` grouping | Wants findings arising from one manifest construct - a single over-broad RBAC rule producing four correct rows across three check families - grouped in the interface. All four are true and each names a different power the rule grants, so this is a presentation change over correct results rather than a defect, and it belongs with a wider look at how the findings table groups. `supersededBy` covers the case where the rows are not independent. |
+| The `Value is` coverage itself | The differential render establishes determinacy for scalar fields it can perturb, and the report is right that the inference degrades as chart complexity grows. Leaving the cell empty is honest about that; improving the probe's reach is separate work with its own measurement. |

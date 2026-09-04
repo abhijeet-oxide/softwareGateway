@@ -502,6 +502,12 @@ type Result struct {
 	// skip that happened because acting on this finding would change nothing
 	// until that one is fixed. See Supersession.
 	SupersededBy string `json:"supersededBy,omitempty"`
+	// Effective is what actually applies at run time, where that differs from
+	// what the manifest says: "true (the platform's default)", "0 copies (10%
+	// of 1, rounded down)", "3 CPUs (Kubernetes copies the limit into the
+	// request)". Empty when the declared value is the effective one, which is
+	// most rows. See Assert.Effective.
+	Effective string `json:"effective,omitempty"`
 	Address     Address     `json:"address"`
 
 	// Observed and Expected are what the check saw and what it required, in the

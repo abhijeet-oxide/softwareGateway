@@ -98,6 +98,38 @@ func bindings3(idx *compliance.Index) map[string]impl {
 		return types.String(src)
 	})
 
+	// securityLocus() is the FIELD PATH the effective value actually came from.
+	//
+	// A container that inherits runAsNonRoot from its pod used to be reported
+	// at spec.template.spec.containers[0].securityContext.runAsNonRoot - a line
+	// that does not exist in the manifest. The reader opens the evidence, sees
+	// no such field, and either concludes the tool is wrong or goes looking for
+	// the real one by hand. Returning the pod's path when the pod is where the
+	// value is set costs nothing and sends them to the line they have to edit.
+	//
+	// The pod-level answer is absolute (it starts with "spec"), which is how
+	// the engine knows not to prefix it with the container's own path.
+	add("securitylocus_dyn_dyn_string", func(args ...ref.Val) ref.Val {
+		if len(args) != 3 {
+			return types.String("")
+		}
+		field := scalarString(native(args[2]))
+		container, owner := native(args[0]), native(args[1])
+		if c, ok := container.(map[string]any); ok {
+			if v, found := compliance.Lookup(c, "securityContext."+field); found && v != nil {
+				return types.String("securityContext." + field)
+			}
+		}
+		if spec, ok := podSpecOf(owner); ok {
+			if v, found := compliance.Lookup(spec, "securityContext."+field); found && v != nil {
+				return types.String(podSpecPrefixOf(owner) + "securityContext." + field)
+			}
+		}
+		// Nothing declares it anywhere. The container is where it would be
+		// added, so that is where the reader is sent.
+		return types.String("securityContext." + field)
+	})
+
 	// runsAsRoot() answers, for a whole workload, whether anything in it will
 	// run as the root user - either because a UID of 0 is set, or because
 	// running as non-root is explicitly switched off.
@@ -395,6 +427,21 @@ func effectiveSecurity(container, owner any, field string) (any, string) {
 		}
 	}
 	return nil, "not declared"
+}
+
+// podSpecPrefixOf is the dotted path from an object to its pod spec, with a
+// trailing dot, or "" for something that has no pod template.
+func podSpecPrefixOf(owner any) string {
+	obj, ok := owner.(map[string]any)
+	if !ok {
+		return ""
+	}
+	kind := scalarString(compliance.Resource{Object: obj}.Kind())
+	p := compliance.PodSpecPath(kind)
+	if p == nil {
+		return ""
+	}
+	return strings.Join(p, ".") + "."
 }
 
 // workloadRunsAsRoot reports whether a workload will run anything as root.

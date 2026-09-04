@@ -531,6 +531,37 @@ type Assert struct {
 	Locus    string `json:"locus,omitempty"`
 	Message  string `json:"message,omitempty"`
 
+	// LocusExpr computes the locus instead of stating it, for a check whose
+	// field depends on what the manifest says.
+	//
+	// # The defect this exists for
+	//
+	// A container that inherits runAsNonRoot from its pod was reported at
+	// spec.template.spec.containers[0].securityContext.runAsNonRoot - a line
+	// that is not in the manifest. The reader opens the evidence, finds no such
+	// field, and either distrusts the finding or goes hunting for the real one.
+	//
+	// A result beginning with "spec" is taken as an ABSOLUTE path from the
+	// object and is not prefixed with the container's own path; anything else
+	// is relative to the subject, exactly like Locus.
+	LocusExpr string `json:"locusExpr,omitempty"`
+
+	// Effective is what actually applies at run time, where that differs from
+	// what the manifest says.
+	//
+	// # Why a report needs both
+	//
+	// Nearly every finding worth writing is a gap between a declared value and
+	// an effective one: a field left out and filled in by a platform default,
+	// one setting overriding another, a value inherited from the pod,
+	// arithmetic that rounds a percentage down to zero, a limit that silently
+	// becomes the request. Naming only the declared value asks the reader to
+	// know the resolution rule; naming both is the whole finding.
+	//
+	// It is a CEL expression returning a string, evaluated on a failure and -
+	// like Observed - on a pass when observeOnPass is set.
+	Effective string `json:"effective,omitempty"`
+
 	// SupersededBy names a check whose finding, when it fires on the same
 	// subject, makes this one unactionable.
 	SupersededBy *Supersession `json:"supersededBy,omitempty"`

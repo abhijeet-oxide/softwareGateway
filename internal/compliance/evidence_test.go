@@ -256,3 +256,72 @@ func TestAnchorForAnIndexThatDoesNotExist(t *testing.T) {
 		t.Fatalf("NearLine = %d, want the containers key at %d", a.NearLine, want)
 	}
 }
+
+// A key with a dot in it resolves to its own line.
+//
+// # The defect this exists for
+//
+// The path was split on every dot, so `metadata.annotations[helm.sh/hook]`
+// became three segments and the second - `annotations[helm` - matched nothing.
+// The field could not be resolved, and the evidence window fell back to leading
+// with the object: a reviewer opening the finding saw apiVersion, kind and
+// metadata, none of which the finding was about, and a footer saying the field
+// was not in the manifest when it was two lines below the fold.
+//
+// Dotted keys are not exotic in Kubernetes. `helm.sh/hook`,
+// `app.kubernetes.io/name` and a Secret whose key is `db.properties` are all
+// ordinary, and every finding about one landed on the wrong screenful.
+func TestLocusLineResolvesABracketedKeyThatContainsDots(t *testing.T) {
+	const doc = `---
+# Source: app/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app
+  annotations:
+    helm.sh/hook: pre-install
+    helm.sh/hook-weight: "-5"
+stringData:
+  service.hostname: db.example
+  signing.key: |
+    -----BEGIN PRIVATE KEY-----
+`
+	lines := strings.Split(strings.TrimSuffix(doc, "\n"), "\n")
+	at := func(snippet string) int {
+		t.Helper()
+		for i, l := range lines {
+			if strings.Contains(l, snippet) {
+				return i + 1
+			}
+		}
+		t.Fatalf("no line contains %q", snippet)
+		return 0
+	}
+	object := at("kind: Secret")
+
+	for _, c := range []struct {
+		locus string
+		want  int
+	}{
+		{"metadata.annotations[helm.sh/hook]", at("helm.sh/hook: pre-install")},
+		{"metadata.annotations[helm.sh/hook-weight]", at("helm.sh/hook-weight")},
+		{"stringData[signing.key]", at("signing.key:")},
+		{"stringData[service.hostname]", at("service.hostname:")},
+		// A key the document does not have still resolves to nothing, and
+		// still reports how far the path got.
+		{"stringData[absent.key]", 0},
+	} {
+		got := compliance.LocusLine([]byte(doc), object, c.locus)
+		if got != c.want {
+			t.Errorf("LocusLine(%q) = %d, want %d", c.locus, got, c.want)
+		}
+	}
+
+	// And the near-line for the absent key is the block that does exist, so
+	// the window opens on stringData rather than on the top of the object.
+	a := compliance.AnchorFor([]byte(doc), object, "stringData[absent.key]")
+	if a.NearLine != at("stringData:") {
+		t.Errorf("near line for an absent key = %d, want the stringData block at %d",
+			a.NearLine, at("stringData:"))
+	}
+}

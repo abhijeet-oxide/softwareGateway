@@ -58,6 +58,10 @@ spec:
           securityValue(self, owner, "runAsUser") != "0" &&
           securityValue(self, owner, "runAsNonRoot") != "false"
         locus: securityContext.runAsNonRoot
+        locusExpr: |
+          securityValue(self, owner, "runAsUser") == "0"
+            ? securityLocus(self, owner, "runAsUser")
+            : securityLocus(self, owner, "runAsNonRoot")
         expected: not running as root
         observed: |
           securityValue(self, owner, "runAsUser") == "0"
@@ -144,12 +148,31 @@ spec:
       assert:
         expr: 'securityValue(self, owner, "allowPrivilegeEscalation") == "false"'
         locus: securityContext.allowPrivilegeEscalation
+        locusExpr: 'securityLocus(self, owner, "allowPrivilegeEscalation")'
         expected: privilege escalation switched off
         observed: |
           securityValue(self, owner, "allowPrivilegeEscalation") == ""
-            ? "not declared, so it defaults to allowed"
+            ? "not declared"
             : securityValue(self, owner, "allowPrivilegeEscalation") + ", " +
               securitySource(self, owner, "allowPrivilegeEscalation")
+        effective: |
+          securityValue(self, owner, "allowPrivilegeEscalation") == ""
+            ? "true - Kubernetes fills the blank with allowed"
+            : "true"
+        message: |
+          "this container " +
+          (securityValue(self, owner, "runAsNonRoot") == "true" ||
+           value(self, "securityContext.capabilities.drop") != null
+            ? "runs as a non-root user or gives up its permissions, so it looks well locked down. But "
+            : "") +
+          (securityValue(self, owner, "allowPrivilegeEscalation") == ""
+            ? "allowPrivilegeEscalation is not declared, and Kubernetes fills that blank with " +
+              "\"allowed\""
+            : "allowPrivilegeEscalation is switched on, " +
+              securitySource(self, owner, "allowPrivilegeEscalation")) +
+          ". A program inside the image that is marked to run with elevated rights can still " +
+          "become root, which undoes the other settings rather than sitting alongside them. " +
+          "One line fixes it, and it breaks nothing unless the image relies on such a program."
         supersededBy:
           check: SEC-03
           when: 'securityValue(self, owner, "privileged") == "true"'
@@ -241,10 +264,27 @@ spec:
         locus: securityContext.capabilities.drop
         expected: every special permission given up (drop includes ALL)
         observed: |
-          value(self, "securityContext.capabilities.add") != null
-            ? "keeps the default permissions and adds " +
-              self.securityContext.capabilities.add.map(c, string(c)).join(", ")
-            : "keeps the default set of special permissions"
+          value(self, "securityContext.capabilities.drop") == null
+            ? "no drop declared"
+            : "drops " + self.securityContext.capabilities.drop.map(c, string(c)).join(", ") +
+              ", which does not include ALL"
+        effective: |
+          "the container runtime's default set - about fourteen permissions, among them " +
+          "CHOWN, SETUID, SETGID, NET_RAW and KILL" +
+          (value(self, "securityContext.capabilities.add") != null
+            ? ", plus " + self.securityContext.capabilities.add.map(c, string(c)).join(", ")
+            : "")
+        message: |
+          (value(self, "securityContext.capabilities.drop") == null
+            ? "this container declares no capabilities.drop, which reads as asking for nothing special"
+            : "this container drops " +
+              self.securityContext.capabilities.drop.map(c, string(c)).join(", ") +
+              " and not ALL, which reads as having given up what it does not need") +
+          ". In practice it starts with the container runtime's default set - about fourteen " +
+          "permissions, among them CHOWN, SETUID, SETGID, NET_RAW and KILL. Nothing in this " +
+          "chart asks for raw network access and the container receives it anyway. Dropping " +
+          "ALL and adding back only what the program proves it needs turns \"is this container " +
+          "safe\" from a judgement into a short list somebody can read."
         supersededBy:
           check: SEC-03
           when: 'securityValue(self, owner, "privileged") == "true"'
@@ -499,7 +539,12 @@ spec:
       assert:
         expr: 'securityValue(self, owner, "readOnlyRootFilesystem") == "true"'
         locus: securityContext.readOnlyRootFilesystem
+        locusExpr: 'securityLocus(self, owner, "readOnlyRootFilesystem")'
         expected: program files read-only
+        effective: |
+          securityValue(self, owner, "readOnlyRootFilesystem") == ""
+            ? "false - Kubernetes fills the blank with a writable root filesystem"
+            : "false"
         observed: |
           securityValue(self, owner, "readOnlyRootFilesystem") == ""
             ? "not declared, so the program files are writable"

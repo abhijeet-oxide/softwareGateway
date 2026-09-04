@@ -255,6 +255,25 @@ spec:
           (value(self, "stringData") == null ||
             self.stringData.all(k, secretMaterialClass(k, string(self.stringData[k])) == ""))
         locus: data
+        # The field the finding is ACTUALLY about, down to the key.
+        #
+        # A Secret whose content is under `stringData` was reported at `data`,
+        # so the path did not resolve, the evidence window fell back to leading
+        # with the object, and a reviewer opening the finding saw apiVersion,
+        # kind and metadata - none of which the finding concerns. The footer
+        # then said "data is not in this manifest", about a finding whose
+        # subject was stringData. Naming the first offending key puts the
+        # window on the line and the note on the right field.
+        locusExpr: |
+          (value(self, "data") != null &&
+           self.data.exists(k, secretMaterialClass(k, decodeBase64(string(self.data[k]))) != ""))
+            ? "data[" + sorted(self.data
+                .filter(k, secretMaterialClass(k, decodeBase64(string(self.data[k]))) != ""))[0] + "]"
+            : ((value(self, "stringData") != null &&
+                self.stringData.exists(k, secretMaterialClass(k, string(self.stringData[k])) != ""))
+              ? "stringData[" + sorted(self.stringData
+                  .filter(k, secretMaterialClass(k, string(self.stringData[k])) != ""))[0] + "]"
+              : (value(self, "data") != null ? "data" : "stringData"))
         expected: no credential material travelling inside the chart
         observed: |
           sorted(
@@ -535,14 +554,23 @@ spec:
             .filter(r, !r.optional &&
                        !resourcesIn([string(r.kind)]).exists(o, text(o, "metadata.name") == string(r.name)))
             .map(r, string(r.kind) + " " + string(r.name)).join(", ")
+        effective: |
+          "the pods stay in CreateContainerConfigError until something else supplies " +
+          configRefs(self)
+            .filter(r, !r.optional &&
+                       !resourcesIn([string(r.kind)]).exists(o, text(o, "metadata.name") == string(r.name)))
+            .map(r, string(r.kind) + " " + string(r.name)).join(", ")
         message: |
           text(self, "kind") + " " + text(self, "metadata.name") + " asks for " +
           configRefs(self)
             .filter(r, !r.optional &&
                        !resourcesIn([string(r.kind)]).exists(o, text(o, "metadata.name") == string(r.name)))
             .map(r, string(r.kind) + " " + string(r.name)).join(", ") +
-          ", which this release does not ship. Its copies will never start; they will sit in a " +
-          "configuration error with no other explanation."
+          ", which nothing in this release creates. If an installer or a platform team supplies it " +
+          "before start-up this is fine; if nothing does, its copies will never start. They will sit " +
+          "in CreateContainerConfigError indefinitely - the event log names the missing object but " +
+          "not why it was expected, and nothing in the chart says which of the six places a pod can " +
+          "name one the reference came from."
 
     - id: CFG-06
       title: Certificates and keys arrive as files, not environment variables

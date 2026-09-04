@@ -175,6 +175,10 @@ type ComplianceResultView struct {
 	// decision, which is the first split somebody makes triaging a report.
 	Determinacy      string `json:"determinacy,omitempty"`
 	DeterminacyLabel string `json:"determinacyLabel,omitempty"`
+	// SupersededBy names the check that owns this subject's root cause, on a
+	// result skipped because acting on it would change nothing until that one
+	// is fixed.
+	SupersededBy string `json:"supersededBy,omitempty"`
 
 	Chart          string `json:"chart,omitempty"`
 	ChartVersion   string `json:"chartVersion,omitempty"`
@@ -192,9 +196,13 @@ type ComplianceResultView struct {
 	Locus          string `json:"locus,omitempty"`
 
 	Observed string `json:"observed,omitempty"`
-	Expected string `json:"expected,omitempty"`
-	Message  string `json:"message,omitempty"`
-	Error    string `json:"error,omitempty"`
+	// Effective is what actually applies at run time where that differs from
+	// the manifest - the platform default that filled the blank, the percentage
+	// that rounded to zero, the limit copied into the request.
+	Effective string `json:"effective,omitempty"`
+	Expected  string `json:"expected,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Error     string `json:"error,omitempty"`
 
 	Waiver        string     `json:"waiver,omitempty"`
 	WaiverExpires *time.Time `json:"waiverExpires,omitempty"`
@@ -402,6 +410,7 @@ func complianceResultViews(rows []store.ComplianceResultRow) []ComplianceResultV
 			OutcomeLabel:     compliance.Outcome(r.Outcome).Label(),
 			Determinacy:      r.Determinacy,
 			DeterminacyLabel: compliance.Determinacy(r.Determinacy).Label(),
+			SupersededBy:     r.SupersededBy,
 
 			Chart: r.Chart, ChartVersion: r.ChartVersion, SubchartPath: r.SubchartPath,
 			ArtifactDigest: r.ArtifactDigest, ArtifactRef: r.ArtifactRef,
@@ -409,7 +418,8 @@ func complianceResultViews(rows []store.ComplianceResultRow) []ComplianceResultV
 			APIVersion: r.APIVersion, Kind: r.Kind, Namespace: r.Namespace, Name: r.Name,
 			Container: r.Container, ContainerType: r.ContainerType, Locus: r.Locus,
 
-			Observed: r.Observed, Expected: r.Expected, Message: r.Message, Error: r.Error,
+			Observed: r.Observed, Effective: r.Effective,
+			Expected: r.Expected, Message: r.Message, Error: r.Error,
 			Waiver: r.Waiver, WaiverExpires: r.WaiverExpires, Fingerprint: r.Fingerprint,
 		})
 	}

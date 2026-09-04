@@ -182,7 +182,15 @@ export function DeterminacyTag({ determinacy, label }: {
   determinacy?: ComplianceDeterminacy
   label?: string
 }) {
-  if (!determinacy || determinacy === 'na') return null
+  // An unestablished determinacy shows NOTHING.
+  //
+  // The tag answers one question - can the site change this at install time,
+  // or does it need a new chart? - and the second, perturbed render cannot
+  // always settle it. On a validation run 47% of rows read "Could not be
+  // established", and a tag that says nothing on half the rows trains a reader
+  // to skip it on the other half. The run summary carries how much of the
+  // report the column speaks for; the rows it could not settle stay quiet.
+  if (!determinacy || determinacy === 'na' || determinacy === 'unknown') return null
   const tone: PillTone =
     determinacy === 'fixed' ? 'danger'
       : determinacy === 'configurable' ? 'review'

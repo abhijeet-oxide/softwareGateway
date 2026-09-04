@@ -360,12 +360,12 @@ func (p *Packages) ComplianceResults(ctx context.Context, runID string, f Compli
 	query := p.dialect.Rewrite(`
 		SELECT seq, check_id, check_title, severity, tier, category,
 		       subcategory, keywords, pack,
-		       remediation, reference, outcome, determinacy,
+		       remediation, reference, outcome, determinacy, superseded_by,
 		       confidence, when_it_bites, fix_owner, fix_effort, fix_example,
 		       chart, chart_version, subchart_path, artifact_digest, artifact_ref,
 		       source_file, rendered_line, api_version, kind, namespace, name,
 		       container, container_type, locus,
-		       observed, expected, message, error, waiver, ` +
+		       observed, effective_value, expected, message, error, waiver, ` +
 		p.dialect.TimestampText("waiver_expires") + `, fingerprint
 		  FROM compliance_results ` + where + `
 		 ORDER BY seq
@@ -384,12 +384,12 @@ func (p *Packages) ComplianceResults(ctx context.Context, runID string, f Compli
 			expires string
 		)
 		if err := rows.Scan(&r.Seq, &r.CheckID, &r.CheckTitle, &r.Severity, &r.Tier,
-			&r.Category, &r.Subcategory, &r.Keywords, &r.Pack, &r.Remediation, &r.Reference, &r.Outcome, &r.Determinacy,
+			&r.Category, &r.Subcategory, &r.Keywords, &r.Pack, &r.Remediation, &r.Reference, &r.Outcome, &r.Determinacy, &r.SupersededBy,
 			&r.Confidence, &r.WhenItBites, &r.FixOwner, &r.FixEffort, &r.FixExample,
 			&r.Chart, &r.ChartVersion, &r.SubchartPath, &r.ArtifactDigest, &r.ArtifactRef,
 			&r.SourceFile, &r.RenderedLine, &r.APIVersion, &r.Kind, &r.Namespace, &r.Name,
 			&r.Container, &r.ContainerType, &r.Locus,
-			&r.Observed, &r.Expected, &r.Message, &r.Error,
+			&r.Observed, &r.Effective, &r.Expected, &r.Message, &r.Error,
 			&r.Waiver, &expires, &r.Fingerprint); err != nil {
 			return nil, 0, fmt.Errorf("scan compliance result: %w", err)
 		}

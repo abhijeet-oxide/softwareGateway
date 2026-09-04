@@ -113,6 +113,11 @@ spec:
           (present(self, "spec.maxUnavailable")
             ? "at most " + text(self, "spec.maxUnavailable") + " may be unavailable"
             : "at least " + text(self, "spec.minAvailable") + " must stay running")
+        effective: |
+          "0 copies may be moved" +
+          (text(self, "spec.maxUnavailable").endsWith("%") || text(self, "spec.minAvailable").endsWith("%")
+            ? " - the percentage rounds down to zero against the number of copies this service runs"
+            : "")
         message: |
           "the rule " + text(self, "metadata.name") + " leaves no copy the platform may move" +
           (text(self, "spec.maxUnavailable").endsWith("%") || text(self, "spec.minAvailable").endsWith("%")
@@ -217,12 +222,20 @@ spec:
         locus: spec.selector
         expected: covering only services that run two or more copies
         observed: 'sorted(covers(self).filter(w, replicas(w) < 2).map(w, string(value(w, "metadata.name")) + " runs a single copy")).join(", ")'
+        effective: |
+          "no eviction can ever be approved for " +
+          sorted(covers(self).filter(w, replicas(w) < 2)
+                      .map(w, string(value(w, "metadata.name")))).join(", ") +
+          ", because there is no second copy to keep running"
         message: |
           "the rule " + text(self, "metadata.name") + " protects " +
           sorted(covers(self).filter(w, replicas(w) < 2)
                       .map(w, string(value(w, "metadata.name")))).join(", ") +
-          ", which runs a single copy. There is nothing to keep running while that copy moves, so the " +
-          "rule gives the service no availability it did not already have - it only reads as though it does."
+          ", which runs a single copy. It reads as a guarantee that the service stays up during " +
+          "maintenance. In practice there is no second copy to keep running, so the platform can " +
+          "never be given permission to move the one that exists - maintenance on its node waits " +
+          "for somebody to intervene. Either run two copies and allow one to be unavailable, or " +
+          "remove the rule and accept a brief restart."
 
     - id: PDB-05
       title: An update can always get started

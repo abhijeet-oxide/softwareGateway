@@ -99,6 +99,7 @@ const (
 	FnPodField     = "podField"
 	FnSecValue     = "securityValue"
 	FnSecSource    = "securitySource"
+	FnSecLocus     = "securityLocus"
 	FnRunsAsRoot   = "runsAsRoot"
 	FnMountersOf   = "mountersOf"
 	FnRuntimeKey   = "runtimeLabelKey"
@@ -316,6 +317,11 @@ func newEnv(idx *compliance.Index) (*celgo.Env, error) {
 			overload("securityvalue_dyn_dyn_string", []*celgo.Type{dyn, dyn, str}, str)),
 		celgo.Function(FnSecSource,
 			overload("securitysource_dyn_dyn_string", []*celgo.Type{dyn, dyn, str}, str)),
+		// The path the effective value actually came from. Pod-level answers
+		// are absolute, so a finding does not send a reader to a container
+		// field that is not in the manifest.
+		celgo.Function(FnSecLocus,
+			overload("securitylocus_dyn_dyn_string", []*celgo.Type{dyn, dyn, str}, str)),
 		// Whether a whole workload runs anything as root. Undeclared is not
 		// root: on a restricted cluster it is an assigned non-root UID.
 		celgo.Function(FnRunsAsRoot,

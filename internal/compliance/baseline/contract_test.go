@@ -525,3 +525,50 @@ func TestAPrivilegedContainerGetsOneFinding(t *testing.T) {
 		}
 	}
 }
+
+// A finding points at the field it is about, not at the block above it.
+//
+// # The defect this exists for
+//
+// CFG-14 named `data` on every finding. A Secret that keeps its content under
+// `stringData` therefore had a locus that resolved to nothing: the evidence
+// window fell back to leading with the object, so a reviewer opening the
+// finding saw apiVersion, kind, metadata and labels - and the footer said
+// "data is not in this manifest" about a finding whose whole subject was
+// stringData. Both halves read as a tool that had not looked at the file.
+func TestAFindingNamesTheFieldItJudged(t *testing.T) {
+	want := map[string]string{
+		// One Secret keeps its material under data, the other under stringData.
+		// The check has to name whichever it actually read.
+		"shipped-credentials": "data[",
+		"shipped-signing-key": "stringData[",
+	}
+	seen := map[string]bool{}
+	for _, r := range runFixture(t, "bad-config.yaml") {
+		if r.CheckID != "CFG-14" || r.Outcome != compliance.OutcomeFail {
+			continue
+		}
+		prefix, ok := want[r.Address.Name]
+		if !ok {
+			continue
+		}
+		seen[r.Address.Name] = true
+		if !strings.HasPrefix(r.Address.Locus, prefix) {
+			t.Errorf("CFG-14 on Secret %s points at %q; the material is under %s, and a locus "+
+				"that does not resolve leaves the evidence window on the object's metadata",
+				r.Address.Name, r.Address.Locus, strings.TrimSuffix(prefix, "["))
+		}
+		// And it names the key, not just the block: the window centres on the
+		// line, which for a Secret whose content runs past the bottom of the
+		// pane is the difference between showing the finding and not.
+		if strings.TrimSuffix(strings.TrimPrefix(r.Address.Locus, prefix), "]") == "" {
+			t.Errorf("CFG-14 on Secret %s names the block and not the key it objected to",
+				r.Address.Name)
+		}
+	}
+	for name := range want {
+		if !seen[name] {
+			t.Errorf("CFG-14 produced no finding on Secret %s", name)
+		}
+	}
+}

@@ -49,6 +49,21 @@ spec:
         containers: all
       assert:
         required: [resources.requests.cpu, resources.requests.memory]
+        # A missing request is not a blank. Kubernetes copies the limit into it,
+        # so a container that states only a ceiling silently RESERVES that
+        # ceiling on whatever node it lands on - typically several times what
+        # the author intended, and enough to stop the pod scheduling at all on a
+        # busy cluster. Saying only "requests are missing" leaves the reader to
+        # know that rule; saying what it reserves is the finding.
+        effective: |
+          value(self, "resources.limits.cpu") != null || value(self, "resources.limits.memory") != null
+            ? "it reserves its limits instead - " +
+              (value(self, "resources.limits.cpu") != null
+                ? text(self, "resources.limits.cpu") + " of CPU" : "no CPU") + " and " +
+              (value(self, "resources.limits.memory") != null
+                ? text(self, "resources.limits.memory") + " of memory" : "no memory") +
+              ", because Kubernetes copies a limit into the request when only the limit is given"
+            : "the scheduler treats it as needing nothing, and places it anywhere"
 
     - id: RES-02
       title: Every container has a memory ceiling

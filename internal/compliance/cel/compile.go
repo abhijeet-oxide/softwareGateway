@@ -87,6 +87,16 @@ func (c *Compiler) Compile(check compliance.Check) (compliance.Program, error) {
 			return nil, fmt.Errorf("message: %w", err)
 		}
 	}
+	if check.Assert.Effective != "" {
+		if p.effective, err = c.compileString(check.Assert.Effective); err != nil {
+			return nil, fmt.Errorf("effective: %w", err)
+		}
+	}
+	if check.Assert.LocusExpr != "" {
+		if p.locusExpr, err = c.compileString(check.Assert.LocusExpr); err != nil {
+			return nil, fmt.Errorf("locusExpr: %w", err)
+		}
+	}
 	if sup := check.Assert.SupersededBy; sup != nil {
 		if p.superseded, err = c.compileBool(sup.When); err != nil {
 			return nil, fmt.Errorf("supersededBy.when: %w", err)
@@ -170,6 +180,8 @@ type program struct {
 	assert     *celgo.Ast
 	observed   *celgo.Ast
 	message    *celgo.Ast
+	effective  *celgo.Ast
+	locusExpr  *celgo.Ast
 	superseded *celgo.Ast
 	terms      []compiledTerm
 
@@ -187,6 +199,8 @@ type plannedPrograms struct {
 	assert     celgo.Program
 	observed   celgo.Program
 	message    celgo.Program
+	effective  celgo.Program
+	locusExpr  celgo.Program
 	superseded celgo.Program
 	terms      []plannedTerm
 }
@@ -230,6 +244,12 @@ func (p *program) plan(idx *compliance.Index) (*plannedPrograms, error) {
 		return nil, err
 	}
 	if out.message, err = mk(p.message); err != nil {
+		return nil, err
+	}
+	if out.effective, err = mk(p.effective); err != nil {
+		return nil, err
+	}
+	if out.locusExpr, err = mk(p.locusExpr); err != nil {
 		return nil, err
 	}
 	if out.superseded, err = mk(p.superseded); err != nil {
@@ -287,7 +307,28 @@ func (p *program) Evaluate(ctx context.Context, subj compliance.Subject, idx *co
 	}
 
 	j := compliance.Judgement{Compliant: ok, Expected: p.expected, Locus: p.locus}
+	if planned.effective != nil && (!ok || p.check.Assert.ObserveOnPass) {
+		if ev, _, eerr := planned.effective.ContextEval(ctx, act); eerr == nil {
+			j.Effective = str(ev.Value())
+		}
+	}
+	// The locus a check COMPUTES wins over the one the shorthand derived, in
+	// both directions: it is evaluated after the per-term loop below, because a
+	// term's locus describes the term that failed and this describes the field
+	// the value actually came from.
+	resolveLocus := func() {
+		if planned.locusExpr == nil {
+			return
+		}
+		if lv, _, lerr := planned.locusExpr.ContextEval(ctx, act); lerr == nil {
+			if l := str(lv.Value()); l != "" {
+				j.Locus = l
+			}
+		}
+	}
+
 	if ok {
+		resolveLocus()
 		// A check that exists to report what is there, rather than to reject
 		// it, says so on a pass as well. See Assert.ObserveOnPass.
 		if p.check.Assert.ObserveOnPass && planned.observed != nil {
@@ -336,6 +377,8 @@ func (p *program) Evaluate(ctx context.Context, subj compliance.Subject, idx *co
 		}
 		break
 	}
+
+	resolveLocus()
 
 	// An author-supplied observed or message wins: they know what matters about
 	// their own check.

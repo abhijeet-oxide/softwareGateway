@@ -83,6 +83,22 @@ data:
   # base64 of "changeme"
   admin-initial: Y2hhbmdlbWU=
 ---
+# Source: bad-config/templates/shipped-stringdata.yaml
+# The same exposure written under stringData rather than data. The finding used
+# to name `data` whatever the Secret used, so on this one the path resolved to
+# nothing and the evidence window showed apiVersion, kind and metadata - none of
+# which the finding is about.
+apiVersion: v1
+kind: Secret
+metadata: {name: shipped-signing-key, namespace: bad}
+type: Opaque
+stringData:
+  service.hostname: db.acme.example
+  signing.key: |
+    -----BEGIN PRIVATE KEY-----
+    notarealkeyeither
+    -----END PRIVATE KEY-----
+---
 # Source: bad-config/templates/db-connection-properties.yaml
 # A configuration template shipped as one Secret value, with its credential
 # fields deliberately EMPTY - the values arrive at install time. Nothing is

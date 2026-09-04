@@ -1599,6 +1599,11 @@ function ResultsTable({ results, loading, onOpen, onSearchTerm, emptyText }: {
                 found {r.observed}
               </span>
             )}
+            {r.effective && (
+              <span style={{ fontSize: 11, color: c.text3 }}>
+                in practice {r.effective}
+              </span>
+            )}
           </Space>
         </Space>
       ),
@@ -1722,6 +1727,22 @@ function ResultDrawer({ result, product, reference, repository, onClose, onOpenM
             {result.observed && (
               <Descriptions.Item label="Observed">
                 <span style={{ fontFamily: mono }}>{result.observed}</span>
+              </Descriptions.Item>
+            )}
+            {/*
+              What the manifest says and what actually happens are different
+              facts, and nearly every finding worth writing is the gap between
+              them: a field left out and filled in by a platform default, a
+              percentage that rounds down to no copies at all, a limit
+              Kubernetes copies into the request. Shown only where they differ.
+            */}
+            {result.effective && (
+              <Descriptions.Item label="In practice">{result.effective}</Descriptions.Item>
+            )}
+            {result.supersededBy && (
+              <Descriptions.Item label="Settled by">
+                <span style={{ fontFamily: mono }}>{result.supersededBy}</span>
+                {' '}first - fixing this one changes nothing until then
               </Descriptions.Item>
             )}
             {result.expected && (

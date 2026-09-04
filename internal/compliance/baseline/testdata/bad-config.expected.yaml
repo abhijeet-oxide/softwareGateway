@@ -17,6 +17,9 @@ findings:
   # and a configuration template whose password fields are empty is exactly the
   # shape a well-behaved chart ships.
   - {check: CFG-14, kind: Secret, name: shipped-credentials}
+  # The same exposure under stringData rather than data, so the finding has to
+  # name the field it actually read - see TestAFindingNamesTheFieldItJudged.
+  - {check: CFG-14, kind: Secret, name: shipped-signing-key}
   # Values that are shipped and are not credentials - a hostname and a username.
   # Recorded, not reported: something is travelling in version control and
   # somebody should confirm it is meant to.

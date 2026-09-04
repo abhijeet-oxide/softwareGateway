@@ -364,3 +364,24 @@ spec:
             .filter(v, stateVolume(v))
             .map(v, string(v.name) + " (" + volumeStateLabel(v) + ")")
             .join(", ")
+        effective: |
+          value(self, "spec.volumeClaimTemplates") == null
+            ? "everything written to " +
+              self.spec.template.spec.volumes.filter(v, stateVolume(v))
+                .map(v, string(v.name)).join(", ") + " is lost on restart"
+            : "storage that cannot move with the copy that owns it"
+        message: |
+          value(self, "spec.volumeClaimTemplates") == null
+            ? text(self, "metadata.name") + " is a StatefulSet - the workload type chosen for " +
+              "stable identity and storage that outlives the copy that wrote it - and it declares " +
+              "no volumeClaimTemplates. Everything it writes goes to " +
+              self.spec.template.spec.volumes.filter(v, stateVolume(v))
+                .map(v, string(v.name)).join(", ") +
+              ", which is deleted with the copy, so it is gone on the next restart. If it holds no " +
+              "durable state, a Deployment would say what it actually is."
+            : text(self, "metadata.name") + " keeps data on the server itself, in " +
+              self.spec.template.spec.volumes
+                .filter(v, stateVolume(v) && (has(v.hostPath) || has(v.local)))
+                .map(v, string(v.name)).join(", ") +
+              ". That storage cannot move, so when the server is taken out for maintenance the " +
+              "service either cannot move with its data or moves and finds the data gone."

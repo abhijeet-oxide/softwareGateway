@@ -253,11 +253,11 @@ func LocusLines(content []byte, objectLine int, locus string) (exact, anchor int
 
 	segments := splitLocus(locus)
 	for n, seg := range segments {
-		key, index, indexed := parseSegment(seg)
-		if key == "" {
+		s := parseSegment(seg)
+		if s.key == "" {
 			return 0, deepest
 		}
-		at := findKey(lines, cur, end, parent, key)
+		at := findKey(lines, cur, end, parent, s.key)
 		if at < 0 {
 			return 0, deepest
 		}
@@ -265,20 +265,37 @@ func LocusLines(content []byte, objectLine int, locus string) (exact, anchor int
 		parent = indentOf(lines[at])
 		cur = at
 
-		if indexed && index < 0 {
+		if s.name != "" {
+			// A named subscript is a key inside the block this one opens -
+			// `annotations[helm.sh/hook]`, `data[db.properties]`. It resolves
+			// exactly like an ordinary segment; brackets are only how a path
+			// carries a key that has a dot in it.
+			inner := findKey(lines, cur, end, parent, s.name)
+			if inner < 0 {
+				return 0, deepest
+			}
+			deepest = inner + 1
+			parent = indentOf(lines[inner])
+			cur = inner
+			if n == len(segments)-1 {
+				return deepest, deepest
+			}
+			continue
+		}
+		if s.indexed && s.index < 0 {
 			// `tolerations[]`: the check means the collection, so the key is
 			// both the answer and the end of the walk - the segments after it
 			// name a field of no particular item.
 			return deepest, deepest
 		}
-		if !indexed {
+		if !s.indexed {
 			if n == len(segments)-1 {
 				return deepest, deepest
 			}
 			continue
 		}
 
-		item := findItem(lines, at, end, parent, index)
+		item := findItem(lines, at, end, parent, s.index)
 		if item < 0 {
 			// The path names an item this document does not have, so nothing
 			// below it can resolve either. The collection is as far as it got.
@@ -296,38 +313,78 @@ func LocusLines(content []byte, objectLine int, locus string) (exact, anchor int
 	return deepest, deepest
 }
 
-// splitLocus splits a dotted path, keeping bracketed indices attached to the
-// segment they qualify.
+// splitLocus splits a dotted path, keeping bracketed subscripts attached to the
+// segment they qualify - INCLUDING the dots inside them.
+//
+// A Kubernetes map key routinely contains dots: `helm.sh/hook`,
+// `app.kubernetes.io/name`, a Secret key called `db.properties`. Splitting the
+// path naively turned `metadata.annotations[helm.sh/hook]` into three segments,
+// the second of which was `annotations[helm` and matched nothing - so the
+// finding's field could not be resolved and the evidence window fell back to
+// the top of the object.
 func splitLocus(locus string) []string {
-	parts := strings.Split(locus, ".")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
+	var out []string
+	depth, start := 0, 0
+	for i := 0; i < len(locus); i++ {
+		switch locus[i] {
+		case '[':
+			depth++
+		case ']':
+			if depth > 0 {
+				depth--
+			}
+		case '.':
+			if depth == 0 {
+				if p := strings.TrimSpace(locus[start:i]); p != "" {
+					out = append(out, p)
+				}
+				start = i + 1
+			}
 		}
+	}
+	if p := strings.TrimSpace(locus[start:]); p != "" {
+		out = append(out, p)
 	}
 	return out
 }
 
-// parseSegment reads `containers[0]`, `tolerations[]` or `runAsNonRoot`.
-func parseSegment(seg string) (key string, index int, indexed bool) {
+// segment is one step of a locus: a key, optionally subscripted by a sequence
+// index (`containers[0]`), by a map key (`annotations[helm.sh/hook]`), or by
+// nothing at all (`tolerations[]`, meaning the collection itself).
+type segment struct {
+	key string
+	// index is the sequence position, or -1.
+	index int
+	// name is the map key, or "".
+	name string
+	// indexed is true when the segment carried brackets of any kind.
+	indexed bool
+}
+
+// parseSegment reads `containers[0]`, `annotations[helm.sh/hook]`,
+// `tolerations[]` or `runAsNonRoot`.
+func parseSegment(seg string) segment {
 	open := strings.IndexByte(seg, '[')
 	if open < 0 || !strings.HasSuffix(seg, "]") {
-		return seg, -1, false
+		return segment{key: seg, index: -1}
 	}
-	key = seg[:open]
+	out := segment{key: seg[:open], index: -1, indexed: true}
 	inner := seg[open+1 : len(seg)-1]
 	if inner == "" {
-		return key, -1, true
+		return out
 	}
 	n := 0
 	for _, r := range inner {
 		if r < '0' || r > '9' {
-			return key, -1, true
+			// Not a position: a map key, which resolves to its own line the
+			// same way an ordinary segment does.
+			out.name = inner
+			return out
 		}
 		n = n*10 + int(r-'0')
 	}
-	return key, n, true
+	out.index = n
+	return out
 }
 
 // findKey looks for `key:` inside the block that starts after `from`.

@@ -389,7 +389,10 @@ func (p *SyncProgress) Stage(name string, done, total int) {
 	if done >= cur.done {
 		cur.done = done
 	}
-	if total > cur.total {
+	// A stage can be reported by more than one provider or request. Its initial
+	// position is authoritative for the denominator; a later lower position is
+	// not retry work and must not leave the UI showing another stage's total.
+	if total > 0 && (!seen || (cur.done == 0 && done == 0)) {
 		cur.total = total
 	}
 	p.stages[name] = cur
@@ -708,7 +711,7 @@ func (s *Syncer) run(
 		for _, kind := range s.documents {
 			names = append(names, strings.ToLower(kind.Label()))
 		}
-		progress.Log(LogInfo, "Also retrieving "+strings.Join(names, " and ")+" for each scanned image.")
+		progress.Log(LogInfo, "Retrieving "+strings.Join(names, " and ")+" for each scanned image.")
 	}
 
 	res, err := s.service.Postures(ctx, MultiRequest{

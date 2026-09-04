@@ -283,6 +283,7 @@ const (
 	StageFetching    = "fetching"
 	StageCached      = "cached"
 	StageCorrelating = "correlating"
+	StageScanning    = "scanning"
 	StageComparing   = "comparing"
 	StageExporting   = "exporting"
 	// StageFailing counts the artifacts the scanner would not answer for.

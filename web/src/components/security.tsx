@@ -870,6 +870,7 @@ export function SecurityProgressPanel({ sync, onStop, stopping, starting }: {
   const log = sync.log ?? []
 
   const fetching = stages.find((st) => st.name === 'fetching')
+    const scanning = stages.find((st) => st.name === 'scanning')
   const failing = stages.find((st) => st.name === 'failing')
   const cached = stages.find((st) => st.name === 'cached')
   const resolving = stages.find((st) => st.name === 'resolving')
@@ -877,8 +878,8 @@ export function SecurityProgressPanel({ sync, onStop, stopping, starting }: {
   // The one bar worth drawing: artifacts answered for, out of artifacts asked
   // about. Everything else is a counter, because a second bar next to a first
   // one invites the reader to compare two things that are not comparable.
-  const total = fetching?.total ?? resolving?.total ?? 0
-  const done = fetching?.done ?? 0
+  const total = scanning?.total ?? fetching?.total ?? resolving?.total ?? 0
+  const done = scanning?.done ?? fetching?.done ?? 0
 
   /*
    * THIS sync's clock, not the last one's.
@@ -1148,7 +1149,11 @@ export function SyncButton({ sync, onSync, pending, size = 'middle', freshness, 
         disabled={running}
         onClick={() => onSync(sync.state !== '')}
       >
-        {running ? 'Syncing' : sync.state === '' ? 'Sync vulnerabilities' : 'Sync again'}
+        {running
+          ? 'Syncing'
+          : sync.state === ''
+            ? named.length > 1 ? 'Sync all scanners' : 'Sync vulnerabilities'
+            : named.length > 1 ? 'Sync all scanners' : 'Sync again'}
       </Button>
     </Tooltip>
   )

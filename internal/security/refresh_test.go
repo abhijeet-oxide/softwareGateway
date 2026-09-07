@@ -213,6 +213,14 @@ func TestASyncReusesAnswersInsideTheAgeLimit(t *testing.T) {
 
 	// Past the age it is asked about again, because a vulnerability answer
 	// goes out of date without the image changing.
+	//
+	// The sleep is not decoration. stale() asks `now.Sub(RetrievedAt) > maxAge`,
+	// and Windows's clock advances in ~15.6 ms ticks - so a stored answer read
+	// back within the same tick has an age of exactly zero, `0 > 1ns` is false,
+	// and the answer looks fresh no matter what MaxAge says. Waiting past one
+	// tick makes the elapsed time real on every platform instead of relying on
+	// a resolution only Linux and macOS happen to provide.
+	time.Sleep(20 * time.Millisecond)
 	provider.reset()
 	if _, err := svc.Posture(t.Context(), Request{
 		Scope: scope, Artifacts: []ArtifactRef{shared, fresh}, Detail: true,

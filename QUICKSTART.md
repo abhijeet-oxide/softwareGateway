@@ -3,14 +3,35 @@
 Everything below is one machine, one command, no manual setup.
 
 ```bash
-mkdir software-gateway && cd software-gateway
-curl -O     https://raw.githubusercontent.com/abhijeet-oxide/softwareGateway/main/deploy/docker-compose.yml
-curl -o .env https://raw.githubusercontent.com/abhijeet-oxide/softwareGateway/main/deploy/.env.example
-# edit .env  (at minimum: POSTGRES_PASSWORD, ZITADEL_MASTERKEY)
-docker compose up -d
+git clone https://github.com/abhijeet-oxide/softwareGateway
+cd softwareGateway
+docker compose up -d          # podman compose up -d works too
 ```
 
-Then open **http://localhost:8000** and sign in as `admin`.
+**That is the whole first run. There is no `.env` to create.** Every variable
+has a working default, so a fresh clone comes up seeded: the `default` tenant,
+three sample products, every role, three test users, two API users and an
+administrator you can sign in as.
+
+Then open **http://localhost:8000** and sign in as `admin` /
+`INSECURE-local-admin-Passw0rd!`.
+
+The defaults are insecure and say so in their own values. The seeder prints a
+banner at the end of every run naming exactly which ones are still at their
+default. For anything reachable by another person:
+
+```bash
+cp .env.example .env          # then edit it
+docker compose up -d
+docker compose run --rm zitadel-init
+```
+
+> **Why not require the variables?** An earlier version did, using compose's
+> `${VAR:?message}` syntax. It is correct and unusable: `podman compose` turns
+> a missing variable into a thirty-line Python traceback with the message
+> buried in the last line, so the first thing a new user sees is a stack dump
+> rather than "set POSTGRES_PASSWORD". Working defaults plus a loud banner
+> fails better.
 
 | What | URL | Sign in with |
 |---|---|---|
@@ -26,12 +47,16 @@ more than one replica.
 
 ## 1. Every environment variable
 
-### Required
+### The ones that matter
 
-| Variable | What it is |
-|---|---|
-| `POSTGRES_PASSWORD` | Database password. Both the gateway and ZITADEL use it. |
-| `ZITADEL_MASTERKEY` | **Exactly 32 characters.** Encrypts secrets at rest. `openssl rand -hex 16`. Losing it means losing every stored credential. |
+Nothing is required to start. These are the ones to change before anyone else
+can reach the system.
+
+| Variable | Default | What it is |
+|---|---|---|
+| `POSTGRES_PASSWORD` | `INSECURE-local-dev-password` | Database password, shared by the gateway and ZITADEL. |
+| `ZITADEL_MASTERKEY` | `INSECURE-local-dev-masterkey-32c` | **Exactly 32 characters** - ZITADEL refuses to start otherwise, and says so from inside a migration failure. `openssl rand -hex 16`. Encrypts every stored secret; lose it and you lose them all. |
+| `BOOTSTRAP_ADMIN_PASSWORD` | `INSECURE-local-admin-Passw0rd!` | The first administrator. The seeder **refuses to run** if this is set while SSO is configured. |
 
 ### Ports and scale
 
@@ -197,7 +222,18 @@ testable in CI with nothing else running.
 
 ---
 
-## 5. Everyday commands
+## 5. Running under Podman
+
+`podman compose up -d` works. Two differences worth knowing:
+
+- **`deploy.replicas` is ignored.** `CONTROLLER_REPLICAS` and `WORKER_REPLICAS`
+  are honoured by Docker Compose; podman-compose does not implement that key,
+  so you get one of each. Nothing breaks, you just do not get the scale-out.
+- **`podman ps ... exit status 125`** during `up` is Podman itself failing, not
+  this stack. On Windows and macOS it almost always means the Podman machine is
+  not running: `podman machine start`.
+
+## 6. Everyday commands
 
 ```bash
 docker compose up -d                    # start, in dependency order
@@ -208,20 +244,56 @@ docker compose down                     # stop; data kept
 docker compose down -v                  # stop and discard all data
 ```
 
-## 6. Behind a TLS-intercepting proxy
+## 7. Behind an internal registry or proxy
+
+Every image is a variable with a pinned default, and nothing is tagged
+`latest`. Versions this stack is verified against:
+
+| Image | Pinned to | Registry |
+|---|---|---|
+| PostgreSQL | `16.15-alpine` | Docker Hub |
+| **ZITADEL** | `v4.17.3` | **GHCR only, not on Docker Hub** |
+| Cerbos | `0.55.0` | Docker Hub |
+| Node (seeder, web build) | `22.23.2-alpine` | Docker Hub |
+| nginx (web runtime) | `1.27.5-alpine` | Docker Hub |
+| Go (build) | `1.25.14` | Docker Hub |
+| distroless (Go runtime) | `static-debian12:nonroot` | gcr.io |
+
+If your daemon has a pull-through cache configured, change nothing. If your
+internal registry re-hosts images under its own path, set the overrides in
+`.env`:
+
+```bash
+ZITADEL_IMAGE=artifactory.corp/ghcr/zitadel/zitadel:v4.17.3
+CERBOS_IMAGE=artifactory.corp/dockerhub/cerbos/cerbos:0.55.0
+POSTGRES_IMAGE=artifactory.corp/dockerhub/postgres:16.15-alpine
+SEEDER_IMAGE=artifactory.corp/dockerhub/node:22.23.2-alpine
+# build-time bases
+GO_IMAGE=artifactory.corp/dockerhub/golang:1.25.14
+NODE_IMAGE=artifactory.corp/dockerhub/node:22.23.2-alpine
+NGINX_IMAGE=artifactory.corp/dockerhub/nginx:1.27.5-alpine
+RUNTIME_IMAGE=artifactory.corp/gcr/distroless/static-debian12:nonroot
+```
+
+**ZITADEL is the one to mirror first** if your proxy reaches only one upstream:
+it is published to GHCR and nowhere else.
+
+## 8. Behind a TLS-intercepting proxy
 
 If `docker compose build` fails with `SELF_SIGNED_CERT_IN_CHAIN` or
 `x509: certificate signed by unknown authority`, drop your proxy's CA into
 `deploy/certs/*.crt` and rebuild. The images trust anything there. Do not
 disable certificate verification.
 
-## 7. If something is wrong
+## 9. If something is wrong
 
 | Symptom | Cause |
 |---|---|
 | Every token rejected, `iss` mismatch | `ZITADEL_EXTERNAL_DOMAIN` is not how the browser reaches ZITADEL. |
 | ZITADEL answers 404 to a healthy service | The `Host` header does not match `ZITADEL_EXTERNAL_DOMAIN`. |
 | `controller` unhealthy at boot | It fails fast on broken auth config rather than starting and refusing everyone. Read its logs. |
-| Worker restarting | No product YAML in `deploy/products/`. A worker says so rather than leasing jobs it cannot run. |
+| Worker restarting | No valid product YAML in `deploy/products/`. A worker says so rather than leasing jobs it cannot run. |
+| `masterkey must be 32 bytes, but is 33` | `ZITADEL_MASTERKEY` is the wrong length. Count it. |
+| A wall of Python traceback from `podman compose` | Usually Podman itself. Check `podman machine start` first. |
 
 Design and rationale: [docs/design/24 - Identity and Access](../docs/design/24-identity-and-access.md).

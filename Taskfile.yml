@@ -310,7 +310,7 @@ tasks:
   dev:postgres:
     desc: Start PostgreSQL for development
     cmds:
-      - docker compose up -d postgres
+      - docker compose -f dev/docker-compose.dev.yaml up -d postgres
       - cmd: |
           echo "Then run the Coordinator against it:"
           echo "  SWGW_DATABASE_DRIVER=postgres \\"
@@ -321,7 +321,7 @@ tasks:
   dev:registry:
     desc: Start two local OCI registries (source and destination)
     cmds:
-      - docker compose up -d registry registry-dest
+      - docker compose -f dev/docker-compose.dev.yaml up -d registry registry-dest
       - cmd: |
           echo "source      localhost:5000"
           echo "destination localhost:5001"
@@ -330,7 +330,7 @@ tasks:
   dev:down:
     desc: Stop all development containers
     cmds:
-      - docker compose down -v
+      - docker compose -f dev/docker-compose.dev.yaml down -v
 
   # ----------------------------------------------------------------- config --
 

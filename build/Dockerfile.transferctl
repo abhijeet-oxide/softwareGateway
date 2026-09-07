@@ -5,7 +5,16 @@
 # The CLI is a pure Coordinator API client and needs no cluster access, no
 # registry credentials and no database - so this image is safe to run anywhere.
 
-FROM golang:1.25 AS build
+# Pinned, and overridable so an internal registry or pull-through proxy can be
+# used: docker compose build --build-arg GO_IMAGE=registry.corp/golang:1.25.14
+# Base images: declared here, above every FROM, because an ARG used in a
+# FROM must be in the global scope - one declared inside a stage is
+# invisible to the next FROM and fails with "base name should not be blank".
+# All are overridable for an internal registry or pull-through proxy.
+ARG GO_IMAGE=golang:1.25.14
+ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
+
+FROM ${GO_IMAGE} AS build
 WORKDIR /src
 
 # See build/Dockerfile.web for why this exists: a TLS-intercepting corporate
@@ -32,7 +41,10 @@ RUN CGO_ENABLED=0 go build -trimpath \
         -X github.com/abhijeet-oxide/softwareGateway/internal/platform/version.Date=${BUILD_DATE}" \
       -o /out/transferctl ./cmd/transferctl
 
-FROM gcr.io/distroless/static-debian12:nonroot
+# Overridable for an internal registry or pull-through proxy. Pinned by digest
+# would be stronger still; :nonroot is what upstream documents and what the
+# published deployment manifests use.
+FROM ${RUNTIME_IMAGE}
 COPY --from=build /out/transferctl /transferctl
 USER nonroot:nonroot
 ENTRYPOINT ["/transferctl"]

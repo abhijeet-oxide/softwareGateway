@@ -321,3 +321,31 @@ console.log('\nbootstrap complete.');
 console.log(`  tenant   : ${TENANT} (${ORG_ID})`);
 console.log(`  products : ${products.join(', ') || 'none'}`);
 console.log(`  console  : ${process.env.ZITADEL_PUBLIC_URL || 'http://localhost:8090'}`);
+
+/* --- 11. say plainly what is not production-ready -------------------------
+ *
+ * The stack runs with no .env so a first run always works. The price is that
+ * defaults are insecure, and an insecure default nobody mentions is how a
+ * demo ends up on a network. This names each one, once, where it cannot be
+ * missed.
+ */
+{
+  const todo = [];
+  if (process.env.STACK_POSTGRES_PASSWORD_SET !== 'yes')
+    todo.push('POSTGRES_PASSWORD is the built-in default');
+  if (process.env.STACK_MASTERKEY_SET !== 'yes')
+    todo.push('ZITADEL_MASTERKEY is the built-in default (it encrypts every stored secret)');
+  if (!process.env.SSO_ISSUER)
+    todo.push('no SSO: sign-in is username and password');
+  if (process.env.BOOTSTRAP_ADMIN_PASSWORD)
+    todo.push(`the '${process.env.BOOTSTRAP_ADMIN_USERNAME || 'admin'}' account has a password from .env; disable it once a real admin exists`);
+
+  if (todo.length) {
+    console.log('\n  ' + '-'.repeat(66));
+    console.log('  NOT READY FOR ANYTHING OTHER PEOPLE CAN REACH:');
+    for (const t of todo) console.log(`    - ${t}`);
+    console.log('  Fix: cp .env.example .env, fill it in, then');
+    console.log('       docker compose up -d && docker compose run --rm zitadel-init');
+    console.log('  ' + '-'.repeat(66));
+  }
+}

@@ -7,6 +7,29 @@
 #
 # Open http://localhost:8000. Everything below is seeded automatically.
 #
+# EVERY IMAGE IS PINNED AND OVERRIDABLE. No `latest` anywhere: a tag that moves
+# under you turns a working deployment into a support call nobody can reproduce.
+# And no registry host is hard-coded that you cannot replace - each image is a
+# variable, so an internal registry or pull-through proxy is one line in .env:
+#
+#   ZITADEL_IMAGE=artifactory.corp/ghcr-remote/zitadel/zitadel:v4.17.3
+#
+# ZITADEL is published to GHCR ONLY - it is not on Docker Hub - so its default
+# is the one image reference that names a registry. If your proxy cannot reach
+# ghcr.io, that is the one to mirror first.
+#
+# IT RUNS WITH NO .env AT ALL. Every variable has a working default, so
+# `docker compose up -d` (or `podman compose up -d`) on a fresh clone gives you
+# a running system. That is deliberate: the previous version used compose's
+# `:?` required-variable syntax, which is correct and unusable - podman-compose
+# surfaces it as a thirty-line Python traceback with the actual message buried
+# in the last line, and the first thing anyone sees is a stack dump.
+#
+# The cost is that the defaults are INSECURE and say so in their own values
+# (INSECURE-local-dev-*). The seeder prints a banner naming exactly what to
+# change before this is reachable by anyone else. Copy .env.example to .env
+# and fill it in for anything beyond your own machine.
+#
 # STARTUP ORDER is declared, not raced. Each edge is a real condition:
 #
 #   postgres  --healthy-------> zitadel --healthy--> zitadel-init --completed-+
@@ -25,17 +48,17 @@ name: software-gateway
 services:
   # --- data ------------------------------------------------------------------
   postgres:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16.15-alpine}
     restart: unless-stopped
     environment:
       POSTGRES_USER: swgw
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-INSECURE-local-dev-password}
       POSTGRES_DB: swgw
     # Two DATABASES in one instance, never one shared database: ZITADEL claims
     # `public` and ~150 tables. See docs/design/24 section 3.1.
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./postgres/init-zitadel.sql:/docker-entrypoint-initdb.d/10-zitadel.sql:ro
+      - ./deploy/postgres/init-zitadel.sql:/docker-entrypoint-initdb.d/10-zitadel.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U swgw -d swgw"]
       interval: 5s
@@ -45,9 +68,12 @@ services:
 
   # --- identity --------------------------------------------------------------
   zitadel:
-    image: ghcr.io/zitadel/zitadel:latest
+    image: ${ZITADEL_IMAGE:-ghcr.io/zitadel/zitadel:v4.17.3}
     restart: unless-stopped
-    command: start-from-init --masterkey "${ZITADEL_MASTERKEY:?set ZITADEL_MASTERKEY (32 chars)}" --tlsMode disabled
+    # The masterkey must be EXACTLY 32 bytes. ZITADEL refuses to start
+    # otherwise, and the message ("masterkey must be 32 bytes, but is 33")
+    # arrives buried in a migration failure, so count before changing it.
+    command: start-from-init --masterkey "${ZITADEL_MASTERKEY:-INSECURE-local-dev-masterkey-32c}" --tlsMode disabled
     depends_on:
       postgres:
         condition: service_healthy
@@ -56,10 +82,10 @@ services:
       ZITADEL_DATABASE_POSTGRES_PORT: 5432
       ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
       ZITADEL_DATABASE_POSTGRES_USER_USERNAME: swgw
-      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: ${POSTGRES_PASSWORD}
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: ${POSTGRES_PASSWORD:-INSECURE-local-dev-password}
       ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
       ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: swgw
-      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD:-INSECURE-local-dev-password}
       ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
       ZITADEL_EXTERNALSECURE: "false"
       ZITADEL_EXTERNALDOMAIN: ${ZITADEL_EXTERNAL_DOMAIN:-localhost}
@@ -89,7 +115,7 @@ services:
 
   # --- day-0 seeding: one shot, idempotent, then gone ------------------------
   zitadel-init:
-    image: node:22-alpine
+    image: ${SEEDER_IMAGE:-node:22.23.2-alpine}
     depends_on:
       zitadel:
         condition: service_healthy
@@ -99,27 +125,34 @@ services:
       ZITADEL_PUBLIC_URL: http://localhost:${ZITADEL_PORT:-8090}
       WEB_PUBLIC_URL: http://localhost:${WEB_PORT:-8000}
       GATEWAY_TENANT: ${GATEWAY_TENANT:-default}
-      GATEWAY_PRODUCTS: ${GATEWAY_PRODUCTS:-}
+      GATEWAY_PRODUCTS: ${GATEWAY_PRODUCTS:-software-01,software-02,software-03}
       GATEWAY_ORG_ROLES: ${GATEWAY_ORG_ROLES:-org-admin,org-operator,org-security,org-reader}
       GATEWAY_PRODUCT_ROLES: ${GATEWAY_PRODUCT_ROLES:-product-owner,product-operator,product-reader}
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
-      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      # Defaulted so a zero-config run has an admin who can actually sign in.
+      # Setting SSO_ISSUER makes the seeder REFUSE this, so the convenience
+      # cannot follow you into production.
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-INSECURE-local-admin-Passw0rd!}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@example.com}
       SSO_ISSUER: ${SSO_ISSUER:-}
       SSO_CLIENT_ID: ${SSO_CLIENT_ID:-}
       SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:-}
       SSO_DISPLAY_NAME: ${SSO_DISPLAY_NAME:-Microsoft}
       BOOTSTRAP_USERS_FILE: /bootstrap-users.json
+      # Only so the banner can name what is still at its default. Never used
+      # to authenticate anything.
+      STACK_POSTGRES_PASSWORD_SET: ${POSTGRES_PASSWORD:+yes}
+      STACK_MASTERKEY_SET: ${ZITADEL_MASTERKEY:+yes}
     volumes:
       - patshare:/pat:ro
-      - ./zitadel/bootstrap.mjs:/bootstrap.mjs:ro
-      - ./zitadel/users.json:/bootstrap-users.json:ro
+      - ./deploy/zitadel/bootstrap.mjs:/bootstrap.mjs:ro
+      - ./deploy/zitadel/users.json:/bootstrap-users.json:ro
     entrypoint: ["node", "/bootstrap.mjs"]
     restart: on-failure:3
 
   # --- authorization ---------------------------------------------------------
   cerbos:
-    image: ghcr.io/cerbos/cerbos:latest
+    image: ${CERBOS_IMAGE:-cerbos/cerbos:0.55.0}
     restart: unless-stopped
     command: ["server", "--config=/config/config.yaml"]
     environment:
@@ -129,8 +162,8 @@ services:
       # connection in one that has.
       CERBOS_NO_TELEMETRY: "1"
     volumes:
-      - ./cerbos/policies:/policies:ro
-      - ./cerbos/config.yaml:/config/config.yaml:ro
+      - ./deploy/cerbos/policies:/policies:ro
+      - ./deploy/cerbos/config.yaml:/config/config.yaml:ro
     healthcheck:
       # Defaults to the gRPC health protocol on :3593, which the REST API sits on.
       test: ["CMD", "/cerbos", "healthcheck", "--config=/config/config.yaml"]
@@ -145,8 +178,11 @@ services:
   # a deprecation cycle rather than a rename. See docs/design/24 section 13.
   controller:
     build:
-      context: ..
+      context: .
       dockerfile: build/Dockerfile.coordinator
+      args:
+        GO_IMAGE: ${GO_IMAGE:-golang:1.25.14}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-gcr.io/distroless/static-debian12:nonroot}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -156,7 +192,7 @@ services:
       zitadel-init:
         condition: service_completed_successfully
     environment:
-      SWGW_DATABASE_DSN: postgres://swgw:${POSTGRES_PASSWORD}@postgres:5432/swgw?sslmode=disable
+      SWGW_DATABASE_DSN: postgres://swgw:${POSTGRES_PASSWORD:-INSECURE-local-dev-password}@postgres:5432/swgw?sslmode=disable
       # The issuer must be the PUBLIC url: it is what ZITADEL stamps into the
       # token's `iss`, so validating against the internal name fails.
       SWGW_AUTH_ENABLED: ${AUTH_ENABLED:-true}
@@ -174,7 +210,7 @@ services:
     # controller ships no CORS middleware) AND lets this service scale: a fixed
     # host port would collide the moment CONTROLLER_REPLICAS > 1.
     volumes:
-      - ./products:/etc/softwaregateway/products:ro
+      - ./deploy/products:/etc/softwaregateway/products:ro
     expose:
       - "8080"
     deploy:
@@ -191,27 +227,33 @@ services:
   # nothing, so scaling them is only ever a number.
   worker:
     build:
-      context: ..
+      context: .
       dockerfile: build/Dockerfile.worker
+      args:
+        GO_IMAGE: ${GO_IMAGE:-golang:1.25.14}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-gcr.io/distroless/static-debian12:nonroot}
     restart: unless-stopped
     depends_on:
       controller:
         condition: service_healthy
     environment:
       SWGW_WORKER_COORDINATORENDPOINT: http://controller:8080
-      SWGW_DATABASE_DSN: postgres://swgw:${POSTGRES_PASSWORD}@postgres:5432/swgw?sslmode=disable
+      SWGW_DATABASE_DSN: postgres://swgw:${POSTGRES_PASSWORD:-INSECURE-local-dev-password}@postgres:5432/swgw?sslmode=disable
     # A worker must see the SAME product configuration as the controller, or it
     # leases jobs it cannot execute and says so rather than failing quietly.
     volumes:
-      - ./products:/etc/softwaregateway/products:ro
+      - ./deploy/products:/etc/softwaregateway/products:ro
     deploy:
       replicas: ${WORKER_REPLICAS:-2}
 
   # --- the UI ----------------------------------------------------------------
   web:
     build:
-      context: ..
+      context: .
       dockerfile: build/Dockerfile.web
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:22.23.2-alpine}
+        NGINX_IMAGE: ${NGINX_IMAGE:-nginx:1.27.5-alpine}
     restart: unless-stopped
     depends_on:
       controller:

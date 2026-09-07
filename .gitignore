@@ -33,7 +33,7 @@ node_modules/
 dev/products/
 dev/secrets/
 
-# Local stack secrets. deploy/.env.example is the committed template.
+# Local stack secrets. .env.example is the committed template.
 deploy/.env
 .env
 

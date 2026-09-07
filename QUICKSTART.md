@@ -222,44 +222,7 @@ testable in CI with nothing else running.
 
 ---
 
-## 5. If the build fails under Podman
-
-Symptom, most often on Windows:
-
-```
-Error: no Containerfile or Dockerfile specified or found in context directory,
-C:\...\softwareGateway: The system cannot find the file specified.
-ERROR:podman_compose:Build command failed
-```
-
-The file is there. This is podman-compose's translation of `build:` into a
-`podman build` call, not the compose file. **Build the images directly and let
-compose only run them:**
-
-```powershell
-.\scripts\build-images.ps1                    # Linux/macOS: ./scripts/build-images.sh
-
-$env:CONTROLLER_IMAGE = "software-gateway-controller"
-$env:WORKER_IMAGE     = "software-gateway-worker"
-$env:WEB_IMAGE        = "software-gateway-web"
-podman compose up -d --no-build
-```
-
-Verified: full stack healthy in 39 seconds this way.
-
-**To see what podman-compose is actually asking podman to do**, without
-running anything:
-
-```bash
-podman-compose --dry-run build
-```
-
-That prints the exact `podman build -f ... ` line. If the `-f` path it shows is
-correct and podman still cannot find it, the problem is between podman and the
-filesystem (on Windows, the podman machine not being able to see that path),
-not this repository. Please send that line and `podman-compose --version`.
-
-## 6. Running under Podman
+## 5. Running under Podman
 
 `podman compose up -d` works. Two differences worth knowing:
 
@@ -270,7 +233,7 @@ not this repository. Please send that line and `podman-compose --version`.
   this stack. On Windows and macOS it almost always means the Podman machine is
   not running: `podman machine start`.
 
-## 7. Everyday commands
+## 6. Everyday commands
 
 ```bash
 docker compose up -d                    # start, in dependency order
@@ -281,7 +244,7 @@ docker compose down                     # stop; data kept
 docker compose down -v                  # stop and discard all data
 ```
 
-## 8. Behind an internal registry or proxy
+## 7. Behind an internal registry or proxy
 
 Every image is a variable with a pinned default, and nothing is tagged
 `latest`. Versions this stack is verified against:
@@ -315,6 +278,31 @@ RUNTIME_IMAGE=artifactory.corp/gcr/distroless/static-debian12:nonroot
 **ZITADEL is the one to mirror first** if your proxy reaches only one upstream:
 it is published to GHCR and nowhere else.
 
+## 8. Building behind a corporate proxy
+
+A build container inherits nothing from the host. Without these the build fails
+with `go mod download` TLS handshake timeouts and `UND_ERR_CONNECT_TIMEOUT` to
+registry.npmjs.org, even though the host has working internet.
+
+```bash
+HTTP_PROXY=http://proxy.corp:8080
+HTTPS_PROXY=http://proxy.corp:8080
+NO_PROXY=localhost,127.0.0.1,.corp
+```
+
+> **The proxy must not be `localhost` or `127.0.0.1`.** Inside the container
+> that address is the container itself, and the build fails with
+> `proxyconnect tcp: dial tcp 127.0.0.1:PORT: connect: connection refused`.
+> Use the proxy's real hostname, or `host.containers.internal` (Podman) /
+> `host.docker.internal` (Docker) when it really does run on your machine.
+
+Better still, point at internal mirrors and skip the proxy for these fetches:
+
+```bash
+GOPROXY=https://artifactory.corp/api/go/go,direct
+NPM_REGISTRY=https://artifactory.corp/api/npm/npm/
+```
+
 ## 9. Behind a TLS-intercepting proxy
 
 If `docker compose build` fails with `SELF_SIGNED_CERT_IN_CHAIN` or
@@ -330,8 +318,9 @@ disable certificate verification.
 | ZITADEL answers 404 to a healthy service | The `Host` header does not match `ZITADEL_EXTERNAL_DOMAIN`. |
 | `controller` unhealthy at boot | It fails fast on broken auth config rather than starting and refusing everyone. Read its logs. |
 | Worker restarting | No valid product YAML in `deploy/products/`. A worker says so rather than leasing jobs it cannot run. |
+| `go mod download` TLS handshake timeout, or `UND_ERR_CONNECT_TIMEOUT` to registry.npmjs.org | The build container has no proxy. Section 9. |
+| `proxyconnect tcp: dial tcp 127.0.0.1:PORT: connection refused` | The proxy is set to localhost, which inside a container is the container. Section 9. |
 | `masterkey must be 32 bytes, but is 33` | `ZITADEL_MASTERKEY` is the wrong length. Count it. |
 | A wall of Python traceback from `podman compose` | Usually Podman itself. Check `podman machine start` first. |
-| `no Containerfile or Dockerfile specified or found in context directory` | podman-compose's build translation. Use `scripts/build-images.*` and `--no-build`, section 5. |
 
 Design and rationale: [docs/design/24 - Identity and Access](../docs/design/24-identity-and-access.md).

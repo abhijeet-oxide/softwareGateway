@@ -17,6 +17,19 @@ ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 FROM ${GO_IMAGE} AS build
 WORKDIR /src
 
+# Network configuration for a build behind a corporate proxy. A container
+# inherits none of the host's proxy settings, so without these `go mod
+# download` fails with a TLS handshake timeout against storage.googleapis.com.
+# GOPROXY additionally lets an internal module mirror serve the whole graph.
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=
+ARG GOPROXY=https://proxy.golang.org,direct
+ARG GOSUMDB=sum.golang.org
+ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} NO_PROXY=${NO_PROXY} \
+    http_proxy=${HTTP_PROXY} https_proxy=${HTTPS_PROXY} no_proxy=${NO_PROXY} \
+    GOPROXY=${GOPROXY} GOSUMDB=${GOSUMDB}
+
 # See build/Dockerfile.web for why this exists: a TLS-intercepting corporate
 # proxy makes `go mod download` fail with x509: certificate signed by unknown
 # authority, and the only correct fix is to trust the proxy's CA.

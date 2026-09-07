@@ -158,8 +158,13 @@ export const ShopOutlined = make('shop', PhStorefront)
 export const ApiOutlined = make('api', PhPlugsConnected)
 export const PartitionOutlined = make('partition', PhTreeStructure)
 export const ClusterOutlined = make('cluster', PhStack)
-export const KubernetesPodOutlined = make('kubernetes-pod', KubernetesPodIcon)
-export const ReportOutlined = make('report', ReportIcon)
+// These two come from @iconify-react rather than unplugin-icons, and ship
+// forwardRef components whose props OMIT viewBox/width/height - so they are
+// not assignable to Glyph even though `make` renders them identically. The
+// cast is narrowed to these two call sites rather than widening Glyph, which
+// would drop type checking for every other icon in this file.
+export const KubernetesPodOutlined = make('kubernetes-pod', KubernetesPodIcon as unknown as Glyph)
+export const ReportOutlined = make('report', ReportIcon as unknown as Glyph)
 export const UnorderedListOutlined = make('list', PhListBullets)
 export const BookOpenOutlined = make('book', PhBookOpen)
 // Discovery: a sweep going out and listening for what comes back, which is

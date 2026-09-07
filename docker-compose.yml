@@ -177,6 +177,11 @@ services:
   # cmd/coordinator: its koanf keys are user-facing config, so renaming them is
   # a deprecation cycle rather than a rename. See docs/design/24 section 13.
   controller:
+    # Named so a prebuilt image can be used instead of building here:
+    #   ./scripts/build-images.sh && CONTROLLER_IMAGE=software-gateway-controller docker compose up -d
+    # That is the escape hatch when a compose-driven build fails, which on
+    # Windows it can, while `podman build` with the same arguments succeeds.
+    image: ${CONTROLLER_IMAGE:-software-gateway-controller:local}
     build:
       context: .
       dockerfile: build/Dockerfile.coordinator
@@ -226,6 +231,7 @@ services:
   # Stateless by design: workers stream blobs registry to registry and hold
   # nothing, so scaling them is only ever a number.
   worker:
+    image: ${WORKER_IMAGE:-software-gateway-worker:local}
     build:
       context: .
       dockerfile: build/Dockerfile.worker
@@ -248,6 +254,7 @@ services:
 
   # --- the UI ----------------------------------------------------------------
   web:
+    image: ${WEB_IMAGE:-software-gateway-web:local}
     build:
       context: .
       dockerfile: build/Dockerfile.web

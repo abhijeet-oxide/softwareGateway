@@ -33,3 +33,11 @@ node_modules/
 dev/products/
 dev/secrets/
 scripts
+
+# Local stack secrets. deploy/.env.example is the committed template.
+deploy/.env
+
+# stray local build artifacts
+/coordinator
+/worker
+/transferctl

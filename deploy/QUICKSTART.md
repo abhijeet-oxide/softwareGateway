@@ -1,0 +1,227 @@
+# Quick start
+
+Everything below is one machine, one command, no manual setup.
+
+```bash
+mkdir software-gateway && cd software-gateway
+curl -O     https://raw.githubusercontent.com/abhijeet-oxide/softwareGateway/main/deploy/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/abhijeet-oxide/softwareGateway/main/deploy/.env.example
+# edit .env  (at minimum: POSTGRES_PASSWORD, ZITADEL_MASTERKEY)
+docker compose up -d
+```
+
+Then open **http://localhost:8000** and sign in as `admin`.
+
+| What | URL | Sign in with |
+|---|---|---|
+| Software Gateway | http://localhost:8000 | `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` |
+| ZITADEL console (manage users) | http://localhost:8090/ui/console | the same account |
+| Controller API | http://localhost:8000/api/v1 | `Authorization: Bearer <token>` |
+
+The API is deliberately not published on its own port. It is reached through
+the web tier, which keeps the browser same-origin and lets the controller run
+more than one replica.
+
+---
+
+## 1. Every environment variable
+
+### Required
+
+| Variable | What it is |
+|---|---|
+| `POSTGRES_PASSWORD` | Database password. Both the gateway and ZITADEL use it. |
+| `ZITADEL_MASTERKEY` | **Exactly 32 characters.** Encrypts secrets at rest. `openssl rand -hex 16`. Losing it means losing every stored credential. |
+
+### Ports and scale
+
+| Variable | Default | What it is |
+|---|---|---|
+| `WEB_PORT` | `8000` | The UI, and the API beneath it at `/api/v1`. |
+| `ZITADEL_PORT` | `8090` | The identity console. |
+| `ZITADEL_EXTERNAL_DOMAIN` | `localhost` | The host people type. **Must match how the browser reaches ZITADEL**, or every token is rejected: it is what lands in the token's `iss`. |
+| `CONTROLLER_REPLICAS` | `1` | Control plane. Leader election keeps one active; the rest are warm. |
+| `WORKER_REPLICAS` | `2` | Data plane. Stateless, so raise it for throughput. |
+
+### The first administrator
+
+Set **exactly one** of these.
+
+| Variable | Use |
+|---|---|
+| `BOOTSTRAP_ADMIN_PASSWORD` | Local and demo. **The seeder refuses to run if this is set while SSO is configured**, so the shortcut cannot reach production. |
+| `BOOTSTRAP_ADMIN_EMAIL` alone | Production. The account is created with **no password at all** - nothing to leak, nothing to rotate. |
+
+`BOOTSTRAP_ADMIN_USERNAME` (default `admin`) names it either way. Its only job
+is to appoint a real administrator; disable it once you have one.
+
+### Microsoft SSO
+
+Leave `SSO_ISSUER` empty for username and password login. Fill all three and
+login redirects straight to Microsoft; ZITADEL's own form is never shown.
+
+| Variable | Where it comes from |
+|---|---|
+| `SSO_ISSUER` | `https://login.microsoftonline.com/<directory-tenant-id>/v2.0` |
+| `SSO_CLIENT_ID` | Entra → App registrations → your app → **Application (client) ID** |
+| `SSO_CLIENT_SECRET` | Entra → your app → Certificates & secrets → **New client secret** |
+| `SSO_DISPLAY_NAME` | The button label. Default `Microsoft`. |
+| `SSO_AUTO_REDIRECT` | `true` skips the ZITADEL form entirely. |
+
+In Entra, set the app's **redirect URI** to
+`http://localhost:8090/ui/login/login/externalidp/callback`
+(swap `localhost:8090` for your real `ZITADEL_EXTERNAL_DOMAIN` and port).
+
+After filling these in, apply them:
+
+```bash
+docker compose run --rm zitadel-init
+```
+
+### Tenant, products, roles
+
+| Variable | Default | What it is |
+|---|---|---|
+| `GATEWAY_TENANT` | `default` | The ZITADEL organization. Anything unspecified belongs to it. Leave it alone until you genuinely have a second tenant. |
+| `GATEWAY_PRODUCTS` | `software-01,...` | One ZITADEL project per entry. This is what people are granted access **to**. |
+| `GATEWAY_ORG_ROLES` | `org-admin,org-operator,org-security,org-reader` | Tenant-wide. Name no product. |
+| `GATEWAY_PRODUCT_ROLES` | `product-owner,product-operator,product-reader` | Per product. Stored as `<product>:<role>`. |
+| `AUTH_ENABLED` | `true` | `false` makes every caller anonymous. Local debugging only. |
+
+---
+
+## 2. Roles
+
+The prefix is the scope. The suffix is the level.
+
+| Role | May do | Over |
+|---|---|---|
+| `org-admin` | everything | every product, **including ones added later** |
+| `org-operator` | read, request, retry | every product |
+| `org-security` | read security detail | every product |
+| `org-reader` | read | every product |
+| `product-owner` | everything | one product |
+| `product-operator` | read, request, retry | one product |
+| `product-reader` | read | one product |
+
+An `org-` role names no product, so a product created next month is covered
+with **no re-login and no new grant**. That is the whole reason the tier exists.
+
+---
+
+## 3. Adding people: the file IS the deployment
+
+`deploy/zitadel/users.json` is the provisioning mechanism. Edit it, commit it,
+re-run the init container. Who has access is then reviewable in a pull request
+rather than being clicks in a console nobody can audit later.
+
+```jsonc
+{
+  "users": [
+    {
+      "username": "dana",
+      "email": "dana@example.com",
+      "firstName": "Dana", "lastName": "Okafor",
+      "password": "OnlyForLocalUse!23",       // ignored when SSO is configured
+      "orgRoles": ["org-security"],            // tenant-wide
+      "products": { "software-01": ["product-owner"] }
+    }
+  ],
+  "apiUsers": [
+    {
+      "username": "ci-deployer",
+      "description": "pipeline that requests downloads",
+      "orgRoles": [],
+      "products": { "software-01": ["product-operator"] }
+    }
+  ]
+}
+```
+
+Apply it:
+
+```bash
+docker compose run --rm zitadel-init
+```
+
+**It is idempotent.** Existing users are left alone, missing grants are added,
+nothing is ever removed. Run it as often as you like - this is the intended
+continuous-deployment path for access changes.
+
+API user secrets are printed **once**, in that command's output, because
+ZITADEL does not store them retrievably. Capture them then. To reissue one, add
+`"rotateSecret": true` to that entry, run the command, then take the flag back
+out - left in, it rotates on every `docker compose up` and invalidates whatever
+is using it.
+
+### Adding a product
+
+```bash
+# 1. add it to GATEWAY_PRODUCTS in .env
+# 2. put its product YAML in deploy/products/
+docker compose run --rm zitadel-init
+```
+
+Only the new project and its roles are created.
+
+### Adding a role
+
+Add it to `GATEWAY_ORG_ROLES` or `GATEWAY_PRODUCT_ROLES`, re-run the init
+container, then say what it may do in `deploy/cerbos/policies/`. The two halves
+are deliberately separate: **ZITADEL holds roles, Cerbos holds permissions**,
+so a new gated endpoint is one line of policy and one code change in one
+commit, with no console work and no re-assigning anybody.
+
+---
+
+## 4. Permissions
+
+`deploy/cerbos/policies/` is plain YAML, versioned with the code it gates.
+
+```yaml
+# security.yaml
+rules:
+  # An org role names no product, so this covers future products too.
+  - actions: ["view", "export"]
+    effect: EFFECT_ALLOW
+    derivedRoles: [org_wide_security]
+  # A product role must match the product being touched.
+  - actions: ["view"]
+    effect: EFFECT_ALLOW
+    derivedRoles: [product_reader]
+```
+
+Cerbos watches the directory, so an edit is live without a restart. Because a
+decision is a pure function of roles, resource and action, the policies are
+testable in CI with nothing else running.
+
+---
+
+## 5. Everyday commands
+
+```bash
+docker compose up -d                    # start, in dependency order
+docker compose ps                       # health of every service
+docker compose logs -f controller       # follow one service
+docker compose run --rm zitadel-init    # apply users/products/roles changes
+docker compose down                     # stop; data kept
+docker compose down -v                  # stop and discard all data
+```
+
+## 6. Behind a TLS-intercepting proxy
+
+If `docker compose build` fails with `SELF_SIGNED_CERT_IN_CHAIN` or
+`x509: certificate signed by unknown authority`, drop your proxy's CA into
+`deploy/certs/*.crt` and rebuild. The images trust anything there. Do not
+disable certificate verification.
+
+## 7. If something is wrong
+
+| Symptom | Cause |
+|---|---|
+| Every token rejected, `iss` mismatch | `ZITADEL_EXTERNAL_DOMAIN` is not how the browser reaches ZITADEL. |
+| ZITADEL answers 404 to a healthy service | The `Host` header does not match `ZITADEL_EXTERNAL_DOMAIN`. |
+| `controller` unhealthy at boot | It fails fast on broken auth config rather than starting and refusing everyone. Read its logs. |
+| Worker restarting | No product YAML in `deploy/products/`. A worker says so rather than leasing jobs it cannot run. |
+
+Design and rationale: [docs/design/24 - Identity and Access](../docs/design/24-identity-and-access.md).

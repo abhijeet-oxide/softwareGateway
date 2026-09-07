@@ -32,10 +32,10 @@ node_modules/
 .DS_Store
 dev/products/
 dev/secrets/
-scripts
 
 # Local stack secrets. deploy/.env.example is the committed template.
 deploy/.env
+.env
 
 # stray local build artifacts
 /coordinator

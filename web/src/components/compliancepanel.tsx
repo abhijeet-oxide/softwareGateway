@@ -962,7 +962,7 @@ function ChartCoverage({
         }}
         columns={[
           {
-            title: 'Chart', dataIndex: 'name', width: 280,
+            title: 'Chart', dataIndex: 'name', width: 80,
             sorter: (a: ComplianceChart, b: ComplianceChart) => a.name.localeCompare(b.name),
             render: (_: unknown, ch) => (
               <Space size={8} align="start">
@@ -998,7 +998,7 @@ function ChartCoverage({
             // failed four different ways are four conversations - three with
             // the vendor and one with us - and an undifferentiated column of
             // stack traces is how they become one complaint about the tool.
-            title: 'Reason', dataIndex: 'errorLabel',
+            title: 'Reason', dataIndex: 'errorLabel', width: 350, 
             render: (_: unknown, ch) => <ChartFailure chart={ch} />,
           },
           {
@@ -1225,7 +1225,7 @@ function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, onSearchT
       }}
       columns={[
         {
-          title: 'Check', width: 240,
+          title: 'Check', width: 350,
           render: (_: unknown, g: CheckGroup) => (
             <Space direction="vertical" size={2}>
               <Space size={6}>
@@ -1243,7 +1243,7 @@ function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, onSearchT
           ),
         },
         {
-          title: '', dataIndex: 'outcome', width: 120,
+          title: 'Status', dataIndex: 'outcome', width: 120,
           render: (_: unknown, g: CheckGroup) => (
             <OutcomePill outcome={g.outcome} label={g.outcomeLabel} />
           ),
@@ -1292,7 +1292,7 @@ function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, onSearchT
           render: (_: unknown, g: CheckGroup) => (
             <Space size={4} wrap>
               {g.determinacies.length === 0
-                ? <Typography.Text type="secondary" style={{ fontSize: 11 }}>—</Typography.Text>
+                ? <Typography.Text type="secondary" style={{ fontSize: 11 }}>N/A</Typography.Text>
                 : g.determinacies.map((d) => (
                   <DeterminacyTag
                     key={d}
@@ -1555,13 +1555,13 @@ function ResultsTable({ results, loading, onOpen, onSearchTerm, emptyText }: {
 }) {
   const columns = useMemo(() => [
     {
-      title: '', dataIndex: 'outcome', width: 110,
+      title: 'Status', dataIndex: 'outcome', width: 110,
       render: (_: unknown, r: ComplianceResult) => (
         <OutcomePill outcome={r.outcome} label={r.outcomeLabel} />
       ),
     },
     {
-      title: 'Check', dataIndex: 'check', width: 210,
+      title: 'Check', dataIndex: 'check', width: 310,
       render: (_: unknown, r: ComplianceResult) => (
         <Space direction="vertical" size={2}>
           <Space size={6}>
@@ -1578,11 +1578,11 @@ function ResultsTable({ results, loading, onOpen, onSearchTerm, emptyText }: {
       ),
     },
     {
-      title: 'Where', dataIndex: 'name', width: 320,
+      title: 'Where', dataIndex: 'name', width: 250,
       render: (_: unknown, r: ComplianceResult) => <ResultAddress result={r} />,
     },
     {
-      title: 'Finding', dataIndex: 'message',
+      title: 'Finding', dataIndex: 'message', width: 650,
       render: (_: unknown, r: ComplianceResult) => (
         <Space direction="vertical" size={4}>
           <span style={{ fontSize: 13 }}>{r.message || r.error}</span>

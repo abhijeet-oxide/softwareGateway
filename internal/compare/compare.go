@@ -288,23 +288,6 @@ func (r *sideReporter) did(phase string, n int) {
 	r.emitLocked()
 }
 
-// certain marks the denominator FINAL - no longer an estimate.
-//
-// The manifest walk discovers its own size as it goes, so its total is a
-// running maximum and the caller says so. A later phase can know its total
-// before it starts, and a reader deserves to be told the difference between
-// "379 of 383 so far" and "379 of 383".
-func (r *sideReporter) certain() {
-	if r == nil {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.estimated = false
-	r.emitLocked()
-}
-
 // settled marks this side finished, so a caller stops showing it as in flight.
 func (r *sideReporter) settled() {
 	if r == nil {

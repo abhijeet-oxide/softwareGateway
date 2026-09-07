@@ -179,7 +179,8 @@ func (f Fetcher) Fetch(
 			res.Skipped = append(res.Skipped, fmt.Sprintf(
 				"Skipped %d charts: the limit of %d charts per run was reached",
 				len(charts)-i, budgets.MaxCharts))
-			i = len(charts) // stop
+			// No assignment to i: writing to a range variable does not stop
+			// the loop. The break below the switch is what does.
 		case ca.LayerSize > budgets.PerChart:
 			res.Skipped = append(res.Skipped, fmt.Sprintf(
 				"Skipped %s: %d bytes exceeds the per-chart limit of %d",

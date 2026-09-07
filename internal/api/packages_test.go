@@ -777,11 +777,8 @@ func TestAComparisonReportsProgressAndGivesUpWhenItStops(t *testing.T) {
 
 	var progress v1.CompareProgressResponse
 	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if h.get("/api/v1/comparisons/tok-1", &progress) == http.StatusOK &&
-			len(progress.Sides) == 2 {
-			break
-		}
+	for h.get("/api/v1/comparisons/tok-1", &progress) != http.StatusOK ||
+		len(progress.Sides) != 2 {
 		if time.Now().After(deadline) {
 			t.Fatal("the comparison never reported any progress")
 		}

@@ -909,35 +909,3 @@ func toAPIReplicationProgress(
 	}
 	return out
 }
-
-// toAPIRegistrationFrom renders a registration that has JUST run, which carries
-// its own counts rather than the stored row's.
-func toAPIRegistrationFrom(
-	reg security.Registration, target securityTarget,
-) v1.SecurityRegistration {
-	out := v1.SecurityRegistration{
-		Provider:     reg.Provider,
-		Label:        providerLabel(reg.Provider),
-		State:        string(reg.State),
-		StateLabel:   reg.State.Label(),
-		Error:        reg.Message,
-		Expected:     reg.Expected,
-		Submitted:    reg.Submitted,
-		AlreadyKnown: reg.AlreadyKnown,
-		Associated:   reg.Associated,
-		Outstanding:  reg.Outstanding(),
-		Analysed:     reg.Analysed,
-		Application:  reg.Application,
-		Version:      reg.Version,
-		URL:          reg.URL,
-		CanReplicate: target.Available,
-		Reason:       target.Reason,
-	}
-	if !reg.At.IsZero() {
-		out.RegisteredAt = reg.At.UTC().Format(rfc3339)
-	}
-	if out.Error == "" && len(reg.Failed) > 0 {
-		out.Error = reg.FirstFailure()
-	}
-	return out
-}

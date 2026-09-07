@@ -155,7 +155,14 @@ func (s *Service) ReplicationProgress(packageID int64, provider string) (Progres
 	if !ok {
 		return ProgressSnapshot{}, false
 	}
-	return v.(*runningReplication).progress.SnapshotFull(), true
+	// Comma-ok rather than a bare assertion: the map is typed any, and a
+	// wrong type here should read as "no live run" - the durable row is the
+	// fallback - rather than panic inside a read a UI polls.
+	run, ok := v.(*runningReplication)
+	if !ok {
+		return ProgressSnapshot{}, false
+	}
+	return run.progress.SnapshotFull(), true
 }
 
 // CancelReplication stops a running replication, wherever it is running.
@@ -175,10 +182,11 @@ func (s *Service) CancelReplication(
 		return false, err
 	}
 	if v, ok := s.replicating.Load(replicationKey(packageID, provider)); ok {
-		run := v.(*runningReplication)
-		run.progress.Log(LogWarning, "The replication was stopped before it finished.")
-		run.cancel()
-		return true, nil
+		if run, ok := v.(*runningReplication); ok {
+			run.progress.Log(LogWarning, "The replication was stopped before it finished.")
+			run.cancel()
+			return true, nil
+		}
 	}
 	return stopped, nil
 }

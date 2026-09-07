@@ -85,8 +85,12 @@ tasks:
     deps: [build:backend, build:frontend]
 
   build:backend:
-    desc: Build the coordinator and worker binaries into bin/
-    deps: [build:coordinator, build:worker]
+    desc: Build the coordinator, worker and transferctl binaries into bin/
+    # transferctl belongs here: it is one of the three binaries this product
+    # ships (docs/design/00 section 5.3), CI asserts all three are runnable
+    # after `task build`, and build:all cross-compiles all three. Leaving it
+    # out made `task build` disagree with every other definition of "built".
+    deps: [build:coordinator, build:worker, build:transferctl]
 
   build:frontend:
     desc: Build the frontend production bundle

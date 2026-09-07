@@ -498,15 +498,6 @@ func assertFileChange(t *testing.T, row compare.Row, want fileChange) {
 	expect(want.absent, compare.VerdictSame)
 }
 
-func contains(values []string, want string) bool {
-	for _, v := range values {
-		if v == want {
-			return true
-		}
-	}
-	return false
-}
-
 // ---------------------------------------------------------------------------
 // Did the promotion land?  target vs target
 // ---------------------------------------------------------------------------

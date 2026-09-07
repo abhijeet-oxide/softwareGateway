@@ -1391,23 +1391,6 @@ func parseSearchKind(raw, query string) (store.SearchKind, error) {
 	}
 }
 
-// etagMatches implements the If-None-Match comparison, including `*` and a
-// comma-separated list.
-func etagMatches(header, etag string) bool {
-	header = strings.TrimSpace(header)
-	if header == "*" {
-		return true
-	}
-	for _, candidate := range strings.Split(header, ",") {
-		candidate = strings.TrimSpace(candidate)
-		candidate = strings.TrimPrefix(candidate, "W/")
-		if candidate == etag {
-			return true
-		}
-	}
-	return false
-}
-
 // securityStageLabel names a phase.
 //
 // Kept short and factual, because the interface renders the NUMBERS beside

@@ -200,13 +200,6 @@ func (f *fakeAnchore) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func digestOfPull(pull string) string {
-	if i := strings.Index(pull, "@"); i >= 0 {
-		return pull[i+1:]
-	}
-	return pull
-}
-
 func newProvider(t *testing.T, f *fakeAnchore, mutate func(*Settings)) *Provider {
 	t.Helper()
 	srv := f.server(t)

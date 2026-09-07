@@ -1,0 +1,23 @@
+# Cerbos PDP configuration.
+#
+# A file rather than a stack of --set flags, because `cerbos healthcheck`
+# derives what to probe from the config and refuses --config together with
+# --host-port. The documented Docker HEALTHCHECK pattern is config-driven.
+server:
+  httpListenAddr: ":3592"
+  grpcListenAddr: ":3593"
+
+storage:
+  driver: disk
+  disk:
+    directory: /policies
+    # Policies are mounted read-only from the repository. Watching means an
+    # edit is live without a restart, which is what makes them reviewable in
+    # a pull request and testable in CI.
+    watchForChanges: true
+
+telemetry:
+  disabled: true
+
+audit:
+  enabled: false

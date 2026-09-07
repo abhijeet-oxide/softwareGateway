@@ -17,12 +17,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/api"
+	"github.com/abhijeet-oxide/softwareGateway/internal/api/middleware"
 	"github.com/abhijeet-oxide/softwareGateway/internal/calibrate"
 	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
@@ -63,6 +65,27 @@ import (
 
 const component = "coordinator"
 
+// probeReadiness calls /readyz on the local listener. Used by -health-check.
+func probeReadiness() error {
+	addr := os.Getenv("SWGW_SERVER_ADDRESS")
+	if addr == "" {
+		addr = ":8080"
+	}
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+	c := &http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Get("http://" + addr + "/readyz")
+	if err != nil {
+		return fmt.Errorf("not ready: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("not ready: %s", resp.Status)
+	}
+	return nil
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "coordinator: %v\n", err)
@@ -74,12 +97,24 @@ func run() error {
 	var (
 		configPath  = flag.String("config", "", "path to the system configuration file")
 		showVersion = flag.Bool("version", false, "print version and exit")
+		healthCheck = flag.Bool("health-check", false,
+			"probe this process's own readiness endpoint and exit 0 or 1")
 	)
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println(version.Get(component))
 		return nil
+	}
+
+	// A container healthcheck that needs no shell and no curl.
+	//
+	// The runtime image is distroless: there is no /bin/sh, no wget and no
+	// curl, so the only thing that can probe this process is this process.
+	// Without it a compose or Kubernetes healthcheck has nothing to call and
+	// dependent services cannot wait on readiness.
+	if *healthCheck {
+		return probeReadiness()
 	}
 
 	cfg, err := config.Load(*configPath)
@@ -477,13 +512,35 @@ func run() error {
 	}
 
 	// ---- HTTP ----
+	// Authentication. Off by default so an existing deployment upgrades
+	// unchanged; the shipped compose file turns it on. Failing here rather
+	// than at the first request is deliberate: a Coordinator that starts with
+	// broken auth configuration looks healthy while refusing everyone.
+	var authenticator middleware.Authenticator
+	if cfg.Auth.Enabled {
+		a, err := middleware.NewOIDCAuthenticator(ctx,
+			cfg.Auth.Issuer, cfg.Auth.DiscoveryURL, cfg.Auth.HostHeader, cfg.Auth.Audience,
+			cfg.Auth.CerbosAddr, cfg.Auth.SkipIssuerCheck)
+		if err != nil {
+			return fmt.Errorf("authentication is enabled but not usable: %w", err)
+		}
+		authenticator = a
+		logger.Info("authentication enabled",
+			"issuer", cfg.Auth.Issuer,
+			"authorization", map[bool]string{true: "cerbos", false: "roles only"}[cfg.Auth.CerbosAddr != ""])
+	} else {
+		logger.Warn("AUTHENTICATION IS DISABLED - every caller holds admin. " +
+			"Safe only behind a NetworkPolicy; see docs/design/24.")
+	}
+
 	srv := api.NewServer(api.Deps{
-		Logger:   logger,
-		Metrics:  mreg,
-		Health:   hreg,
-		Products: products,
-		Store:    st,
-		Packages: packages,
+		Authenticator: authenticator,
+		Logger:        logger,
+		Metrics:       mreg,
+		Health:        hreg,
+		Products:      products,
+		Store:         st,
+		Packages:      packages,
 		// The vendor layouts, so an artifact listing can report a vendor's
 		// Helm charts as charts rather than as images. See
 		// Server.artifactClassifier.

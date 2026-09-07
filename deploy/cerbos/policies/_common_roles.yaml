@@ -1,0 +1,43 @@
+# Derived roles turn "which tier is this role in" into one statement, so every
+# resource policy below reads as a sentence about the resource rather than
+# repeating the tenant and product conditions.
+apiVersion: api.cerbos.dev/v1
+derivedRoles:
+  name: gateway_common
+  definitions:
+    # ORG TIER. Names no product on purpose: a product created tomorrow is
+    # covered with no re-login and no new grant. docs/design/24 section 5.1.
+    - name: org_wide_admin
+      parentRoles: ["org-admin"]
+      condition: {match: {expr: R.attr.tenant == P.attr.tenant}}
+
+    - name: org_wide_operator
+      parentRoles: ["org-admin", "org-operator"]
+      condition: {match: {expr: R.attr.tenant == P.attr.tenant}}
+
+    - name: org_wide_security
+      parentRoles: ["org-admin", "org-security"]
+      condition: {match: {expr: R.attr.tenant == P.attr.tenant}}
+
+    - name: org_wide_reader
+      parentRoles: ["org-admin", "org-operator", "org-security", "org-reader"]
+      condition: {match: {expr: R.attr.tenant == P.attr.tenant}}
+
+    # PRODUCT TIER. Must match the product being acted on.
+    - name: product_owner
+      parentRoles: ["product-owner"]
+      condition:
+        match:
+          expr: R.attr.tenant == P.attr.tenant && R.attr.product in P.attr.products
+
+    - name: product_operator
+      parentRoles: ["product-owner", "product-operator"]
+      condition:
+        match:
+          expr: R.attr.tenant == P.attr.tenant && R.attr.product in P.attr.products
+
+    - name: product_reader
+      parentRoles: ["product-owner", "product-operator", "product-reader"]
+      condition:
+        match:
+          expr: R.attr.tenant == P.attr.tenant && R.attr.product in P.attr.products

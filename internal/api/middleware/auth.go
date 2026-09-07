@@ -110,9 +110,20 @@ func (AnonymousAuthenticator) Authenticate(*http.Request) (Identity, error) {
 
 // Auth installs the authenticator and puts the resulting Identity in the
 // request context.
-func Auth(a Authenticator, writeUnauthenticated func(http.ResponseWriter, *http.Request, error)) func(http.Handler) http.Handler {
+//
+// public reports paths that must answer WITHOUT credentials. Pass nil for none.
+// Liveness and readiness probes belong here and the reason is not convenience:
+// a probe that requires a token gets 401, the orchestrator reads that as "not
+// ready", and every replica restart-loops while the service is perfectly
+// healthy. The same applies to the metrics endpoint, which is scraped by
+// infrastructure that holds no identity.
+func Auth(a Authenticator, writeUnauthenticated func(http.ResponseWriter, *http.Request, error), public func(*http.Request) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if public != nil && public(r) {
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKeyIdentity{}, Anonymous)))
+				return
+			}
 			id, err := a.Authenticate(r)
 			if err != nil {
 				writeUnauthenticated(w, r, err)
@@ -133,4 +144,14 @@ func IdentityFrom(ctx context.Context) Identity {
 		return id
 	}
 	return Anonymous
+}
+
+// PublicPaths reports the endpoints that must answer without credentials:
+// probes and metrics. Everything else is authenticated.
+func PublicPaths(r *http.Request) bool {
+	switch r.URL.Path {
+	case "/healthz", "/readyz", "/livez", "/metrics":
+		return true
+	}
+	return false
 }

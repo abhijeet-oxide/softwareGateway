@@ -8,6 +8,14 @@
 FROM golang:1.25 AS build
 WORKDIR /src
 
+# See build/Dockerfile.web for why this exists: a TLS-intercepting corporate
+# proxy makes `go mod download` fail with x509: certificate signed by unknown
+# authority, and the only correct fix is to trust the proxy's CA.
+COPY deploy/certs/ /usr/local/share/ca-certificates/extra/
+RUN if ls /usr/local/share/ca-certificates/extra/*.crt >/dev/null 2>&1; then \
+      update-ca-certificates && echo "trusting operator-supplied CA certificates"; \
+    fi
+
 COPY go.mod go.sum ./
 RUN go mod download
 

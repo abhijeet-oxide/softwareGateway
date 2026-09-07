@@ -40,6 +40,21 @@ jobs:
       - name: Verify go.mod is tidy
         run: task tidy:check
 
+      # `task build` depends on build:frontend, which runs `pnpm build`. Without
+      # these the task fails with exit status 127 - pnpm simply is not there.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.3.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
       - name: Build
         run: task build
 
@@ -189,7 +204,17 @@ jobs:
             ln -sf "$(command -v $t)" "/tmp/winpath/$t"
           done
 
-          for t in build vet validate validate:rejects-broken test:short; do
+          # build:backend, not build. `build` also runs build:frontend, which
+          # is `pnpm build` - and pnpm spawns package scripts THROUGH A SHELL,
+          # the one thing this job deliberately removes from PATH. Testing it
+          # here would fail on the harness rather than on a Unix-only command,
+          # which is the opposite of what this job is for. build:frontend is a
+          # single cross-platform command in `dir: web` with no shell
+          # built-ins; pnpm picks the right shell per platform itself.
+          # validate:rejects-broken is absent on purpose: it is a shell
+          # fixture gated to linux/darwin in the Taskfile, so asserting it runs
+          # without a shell would be asserting something nobody wants.
+          for t in build:backend vet validate test:short; do
             echo "--- task $t"
             if ! env -i \
                  PATH=/tmp/winpath \
@@ -224,6 +249,21 @@ jobs:
       # could not run here at all - Windows support was asserted, never tested,
       # and the .exe bug survived because nothing checked. Task ships its own
       # shell interpreter, so the same tasks run natively in PowerShell.
+      # `task build` depends on build:frontend, which runs `pnpm build`. Without
+      # these the task fails with exit status 127 - pnpm simply is not there.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.3.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
       - name: Build
         run: task build
 
@@ -254,7 +294,10 @@ jobs:
       # version and its own result cache, which a plain invocation does not.
       # The version is pinned because the config uses the v2 schema and a v1
       # binary rejects it.
-      - uses: golangci/golangci-lint-action@v6
+      # v7 or newer is REQUIRED: this repository pins golangci-lint v2, and
+      # action v6 refuses it outright with "golangci-lint v2 is not supported
+      # by golangci-lint-action v6".
+      - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.5.0
 
@@ -300,7 +343,21 @@ jobs:
       # containers, no manual migration step.
       - name: Coordinator boots on SQLite and serves its probes
         run: |
-          go run ./cmd/coordinator --config ./dev/config.yaml &
+          # Compile FIRST, then start. `go run` compiles inside the readiness
+          # budget below, so adding a dependency to the binary silently eats
+          # the wait and the job fails with "connection refused" as though the
+          # service were broken. Building separately keeps the 20 s budget
+          # measuring startup, which is what it is meant to measure.
+          go build -o /tmp/coordinator-ci ./cmd/coordinator
+
+          # dev/products/ is gitignored - it is a developer's working copy -
+          # so on a fresh checkout the Coordinator loads nothing and the
+          # products assertion below finds an empty list. Seed it from the
+          # committed reference, which is what a developer does by hand.
+          mkdir -p dev/products
+          cp dev/products.example/*.yaml dev/products/
+
+          /tmp/coordinator-ci --config ./dev/config.yaml &
           COORD=$!
           trap 'kill $COORD 2>/dev/null || true' EXIT
 
@@ -314,5 +371,9 @@ jobs:
           curl -fsS http://localhost:8080/healthz
           curl -fsS http://localhost:8080/readyz
           curl -fsS http://localhost:8080/metrics | grep -q 'softwaregateway_build_info'
-          curl -fsS http://localhost:8080/api/v1/products | grep -q 'reference'
+          # Asserts a product was actually LOADED and serialised, not merely
+          # that the route answers. The old assertion looked for 'reference',
+          # a field this response no longer carries, so it could not pass on
+          # any input - the endpoint returns name/productId/sources/targets.
+          curl -fsS http://localhost:8080/api/v1/products | grep -q '"productId"'
           echo "coordinator booted, migrated and served products"

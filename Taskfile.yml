@@ -336,11 +336,20 @@ tasks:
 
   validate:
     desc: Validate the sample product configuration
+    # dev/products.example/ is the COMMITTED reference. dev/products/ is a
+    # developer's own working copy and is gitignored, so validating that path
+    # fails on any fresh checkout - CI included, which is how this was found.
     cmds:
-      - go run ./cmd/transferctl config validate ./dev/products
+      - go run ./cmd/transferctl config validate ./dev/products.example
 
   validate:rejects-broken:
     desc: Confirm the validator actually rejects bad configuration
+    # Unix-only, deliberately: this is a shell fixture - heredoc, mktemp, trap
+    # - and rewriting it to be portable would obscure what it asserts. The
+    # three error classes it covers each have a unit test in
+    # internal/product/validate_test.go that pins the exact field path, so
+    # nothing is unchecked on Windows; only this CLI-level smoke test is.
+    platforms: [linux, darwin]
     # A validator that passes everything is worse than none, because it is
     # trusted. This asserts the negative case.
     #

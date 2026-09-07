@@ -303,14 +303,48 @@ GOPROXY=https://artifactory.corp/api/go/go,direct
 NPM_REGISTRY=https://artifactory.corp/api/npm/npm/
 ```
 
-## 9. Behind a TLS-intercepting proxy
+## 9. Authenticated internal registries
+
+A registry URL is not secret; a token is. Credentials are passed as **mounted
+build secrets**, so they exist only for the one build step that needs them and
+never reach an image layer.
+
+```bash
+cp deploy/npm/npmrc.example deploy/npm/npmrc     # npm / pnpm
+cp deploy/go/netrc.example  deploy/go/netrc      # Go module proxy
+```
+
+Fill them in, then in `.env`:
+
+```bash
+NPM_REGISTRY=https://artifactory.corp/api/npm/npm-remote/
+NPM_CONFIG_FILE=./deploy/npm/npmrc
+
+GOPROXY=https://artifactory.corp/api/go/go,direct
+GOSUMDB=off                     # a private proxy cannot serve public checksums
+GO_NETRC_FILE=./deploy/go/netrc
+```
+
+Both files are gitignored. `docker compose build` and `podman compose build`
+both support this; podman passes it through as `--secret`.
+
+> **Why not a build argument?** `--build-arg NPM_TOKEN=...` is baked into the
+> image's history and `docker history --no-trunc` prints it to anyone who can
+> pull the image. Verified on this repository: with a token in the npmrc, it
+> appears **zero** times in `docker history`, zero times in the saved image
+> tarball, and `/root/.npmrc` does not exist in the final image.
+
+> **Do not set `strict-ssl=false`.** If the registry uses your own CA, put the
+> CA in `deploy/certs/*.crt` (section 10) and verification keeps working.
+
+## 10. Behind a TLS-intercepting proxy
 
 If `docker compose build` fails with `SELF_SIGNED_CERT_IN_CHAIN` or
 `x509: certificate signed by unknown authority`, drop your proxy's CA into
 `deploy/certs/*.crt` and rebuild. The images trust anything there. Do not
 disable certificate verification.
 
-## 10. If something is wrong
+## 11. If something is wrong
 
 | Symptom | Cause |
 |---|---|
@@ -319,6 +353,8 @@ disable certificate verification.
 | `controller` unhealthy at boot | It fails fast on broken auth config rather than starting and refusing everyone. Read its logs. |
 | Worker restarting | No valid product YAML in `deploy/products/`. A worker says so rather than leasing jobs it cannot run. |
 | `go mod download` TLS handshake timeout, or `UND_ERR_CONNECT_TIMEOUT` to registry.npmjs.org | The build container has no proxy. Section 9. |
+| npm `E401`/`E403` against an internal registry | Credentials are missing. Section 9, `NPM_CONFIG_FILE`. |
+| `EROFS` / "rofs that don't support symlinks" during install | Something ran `npm config set` while `/root/.npmrc` was a read-only secret mount. Configure via `NPM_CONFIG_*` env instead. |
 | `proxyconnect tcp: dial tcp 127.0.0.1:PORT: connection refused` | The proxy is set to localhost, which inside a container is the container. Section 9. |
 | `masterkey must be 32 bytes, but is 33` | `ZITADEL_MASTERKEY` is the wrong length. Count it. |
 | A wall of Python traceback from `podman compose` | Usually Podman itself. Check `podman machine start` first. |

@@ -41,3 +41,8 @@ deploy/.env
 /coordinator
 /worker
 /transferctl
+
+# npm credentials for the web build. npmrc.example is the committed template.
+deploy/npm/npmrc
+deploy/npm/.npmrc
+deploy/go/netrc

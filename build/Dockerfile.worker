@@ -42,7 +42,11 @@ RUN if ls /usr/local/share/ca-certificates/extra/*.crt >/dev/null 2>&1; then \
     fi
 
 COPY go.mod go.sum ./
-RUN go mod download
+# Credentials for a private module proxy arrive as a mounted secret, never as
+# a build argument: an ARG is readable forever in `docker history`. /root/.netrc
+# is where the Go toolchain looks, and the mount exists only for this RUN.
+RUN --mount=type=secret,id=netrc,target=/root/.netrc \
+    go mod download
 
 COPY . .
 

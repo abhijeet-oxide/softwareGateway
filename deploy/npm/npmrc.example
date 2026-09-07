@@ -1,0 +1,27 @@
+# Copy to deploy/npm/npmrc (gitignored), fill in, then set in .env:
+#   NPM_CONFIG_FILE=./deploy/npm/npmrc
+#
+# Mounted as a BUILD SECRET, so it is never written to an image layer and
+# never appears in `docker history`. That is the whole reason it is a file
+# rather than a build argument: an ARG carrying a token is baked into the
+# image permanently and is readable by anyone who can pull it.
+
+registry=https://artifactory.corp/api/npm/npm-remote/
+
+# --- pick ONE auth style, whichever your registry documents ---
+
+# 1. Bearer / identity token (Artifactory, Nexus 3, GitHub Packages, npm Enterprise)
+//artifactory.corp/api/npm/npm-remote/:_authToken=YOUR_TOKEN_HERE
+
+# 2. Basic auth, base64 of "user:password"
+# //artifactory.corp/api/npm/npm-remote/:_auth=BASE64_OF_USER_COLON_PASSWORD
+# //artifactory.corp/api/npm/npm-remote/:email=you@corp.example
+# always-auth=true
+
+# 3. Scoped registry, when only some packages come from internally
+# @mycorp:registry=https://artifactory.corp/api/npm/npm-private/
+# //artifactory.corp/api/npm/npm-private/:_authToken=YOUR_TOKEN_HERE
+
+# If the registry presents a certificate from your own CA, put that CA in
+# deploy/certs/*.crt instead of disabling verification here. Never set
+# strict-ssl=false.

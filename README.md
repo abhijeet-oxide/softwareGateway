@@ -30,6 +30,18 @@ Three binaries, one PostgreSQL database, nothing else.
 
 Artifact bytes flow only between registries. They never enter the Coordinator, never land on a worker's disk, and never pass through the database.
 
+## Run the whole thing
+
+```bash
+docker compose up -d
+```
+
+Postgres, ZITADEL, Cerbos, the controller, workers and the web UI, seeded and
+authenticated, with no configuration. Open http://localhost:8000.
+
+**[Quick start](QUICKSTART.md)** covers every environment variable, how to add
+users, products and roles, and how to turn on Microsoft SSO.
+
 ## Documentation
 
 **Running it? [Read the Developer Guide →](docs/DEVELOPER-GUIDE.md)**

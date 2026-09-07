@@ -34,6 +34,7 @@ A cloud-native platform that continuously discovers software packages published 
 | 21 | [Security Posture](21-security-posture.md) | Is this release safer than the one it replaces: the Xray integration, the normalized model, comparison rules, caching |
 | 22 | [Promotion](22-promotion.md) | Lab to production: the promoter plugins, native JFrog relocation, and why it is a plugin rather than a branch |
 | 23 | [Custom Standards Compliance](23-compliance.md) | Does this release follow our own Kubernetes and CNF standards: policy packs, chart rendering, determinacy, per-resource findings, the vendor report |
+| 24 | [Identity and Access](24-identity-and-access.md) | Who is this and may they do it: ZITADEL for SSO and tokens, Cerbos for permissions, one compose file that seeds it all on day 0 |
 
 ## Reading order
 

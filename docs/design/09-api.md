@@ -533,6 +533,8 @@ metrics:
 
 ## 10. The authentication seam
 
+> **The replacement is designed: see [24 - Identity and Access](24-identity-and-access.md).** ZITADEL issues the token, Cerbos answers the permission question, and a one-shot bootstrap container seeds both. §10.1 below is the seam it plugs into; none of it changes.
+
 **v1 ships with no authentication.** The Coordinator is unauthenticated behind a NetworkPolicy ([14](14-deployment-and-development.md) §3).
 
 > **This is a real risk and is stated plainly:** anyone with network reach to the Coordinator can create, cancel, or re-prioritize transfers, and can read the full audit trail. The mitigating control is network isolation alone. Do not expose this service outside the cluster, and do not add an Ingress without first implementing §10.2.

@@ -222,7 +222,44 @@ testable in CI with nothing else running.
 
 ---
 
-## 5. Running under Podman
+## 5. If the build fails under Podman
+
+Symptom, most often on Windows:
+
+```
+Error: no Containerfile or Dockerfile specified or found in context directory,
+C:\...\softwareGateway: The system cannot find the file specified.
+ERROR:podman_compose:Build command failed
+```
+
+The file is there. This is podman-compose's translation of `build:` into a
+`podman build` call, not the compose file. **Build the images directly and let
+compose only run them:**
+
+```powershell
+.\scripts\build-images.ps1                    # Linux/macOS: ./scripts/build-images.sh
+
+$env:CONTROLLER_IMAGE = "software-gateway-controller"
+$env:WORKER_IMAGE     = "software-gateway-worker"
+$env:WEB_IMAGE        = "software-gateway-web"
+podman compose up -d --no-build
+```
+
+Verified: full stack healthy in 39 seconds this way.
+
+**To see what podman-compose is actually asking podman to do**, without
+running anything:
+
+```bash
+podman-compose --dry-run build
+```
+
+That prints the exact `podman build -f ... ` line. If the `-f` path it shows is
+correct and podman still cannot find it, the problem is between podman and the
+filesystem (on Windows, the podman machine not being able to see that path),
+not this repository. Please send that line and `podman-compose --version`.
+
+## 6. Running under Podman
 
 `podman compose up -d` works. Two differences worth knowing:
 
@@ -233,7 +270,7 @@ testable in CI with nothing else running.
   this stack. On Windows and macOS it almost always means the Podman machine is
   not running: `podman machine start`.
 
-## 6. Everyday commands
+## 7. Everyday commands
 
 ```bash
 docker compose up -d                    # start, in dependency order
@@ -244,7 +281,7 @@ docker compose down                     # stop; data kept
 docker compose down -v                  # stop and discard all data
 ```
 
-## 7. Behind an internal registry or proxy
+## 8. Behind an internal registry or proxy
 
 Every image is a variable with a pinned default, and nothing is tagged
 `latest`. Versions this stack is verified against:
@@ -278,14 +315,14 @@ RUNTIME_IMAGE=artifactory.corp/gcr/distroless/static-debian12:nonroot
 **ZITADEL is the one to mirror first** if your proxy reaches only one upstream:
 it is published to GHCR and nowhere else.
 
-## 8. Behind a TLS-intercepting proxy
+## 9. Behind a TLS-intercepting proxy
 
 If `docker compose build` fails with `SELF_SIGNED_CERT_IN_CHAIN` or
 `x509: certificate signed by unknown authority`, drop your proxy's CA into
 `deploy/certs/*.crt` and rebuild. The images trust anything there. Do not
 disable certificate verification.
 
-## 9. If something is wrong
+## 10. If something is wrong
 
 | Symptom | Cause |
 |---|---|
@@ -295,5 +332,6 @@ disable certificate verification.
 | Worker restarting | No valid product YAML in `deploy/products/`. A worker says so rather than leasing jobs it cannot run. |
 | `masterkey must be 32 bytes, but is 33` | `ZITADEL_MASTERKEY` is the wrong length. Count it. |
 | A wall of Python traceback from `podman compose` | Usually Podman itself. Check `podman machine start` first. |
+| `no Containerfile or Dockerfile specified or found in context directory` | podman-compose's build translation. Use `scripts/build-images.*` and `--no-build`, section 5. |
 
 Design and rationale: [docs/design/24 - Identity and Access](../docs/design/24-identity-and-access.md).

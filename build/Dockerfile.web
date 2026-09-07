@@ -14,18 +14,37 @@ ARG NGINX_IMAGE=nginx:1.27.5-alpine
 FROM ${NODE_IMAGE} AS build
 WORKDIR /src
 
+# Network configuration for a build behind a corporate proxy.
+#
+# A container gets NONE of the host's proxy settings, so without these every
+# fetch dies the same way: `ConnectTimeoutError` to registry.npmjs.org, or a
+# TLS handshake timeout. Empty by default, which is the direct-internet case.
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} NO_PROXY=${NO_PROXY} \
+    http_proxy=${HTTP_PROXY} https_proxy=${HTTPS_PROXY} no_proxy=${NO_PROXY}
+
 # Trust any CA the operator supplied. A TLS-intercepting corporate proxy makes
 # `npm ci` fail with SELF_SIGNED_CERT_IN_CHAIN, and the only correct fix is to
 # trust the proxy's CA - never to disable verification. The directory is
 # copied unconditionally because Docker cannot COPY a file that may not exist;
 # it is empty by default and the RUN below then does nothing.
 COPY deploy/certs/ /usr/local/share/ca-certificates/extra/
-RUN if ls /usr/local/share/ca-certificates/extra/*.crt >/dev/null 2>&1; then \
+# The bundle is written UNCONDITIONALLY - system CAs alone when no extra certs
+# were supplied. NODE_EXTRA_CA_CERTS below is a fixed path, so a bundle that
+# exists only sometimes produces "Ignoring extra certs ... No such file or
+# directory" on every build that did not supply one.
+RUN mkdir -p /usr/local/share/ca-certificates/extra && \
+    if ls /usr/local/share/ca-certificates/extra/*.crt >/dev/null 2>&1; then \
       cat /usr/local/share/ca-certificates/extra/*.crt /etc/ssl/certs/ca-certificates.crt \
-        > /usr/local/share/ca-certificates/bundle.pem && \
-      npm config set cafile /usr/local/share/ca-certificates/bundle.pem && \
+        > /usr/local/share/ca-certificates/bundle.pem; \
       echo "trusting operator-supplied CA certificates"; \
-    fi
+    else \
+      cp /etc/ssl/certs/ca-certificates.crt /usr/local/share/ca-certificates/bundle.pem; \
+    fi && \
+    npm config set cafile /usr/local/share/ca-certificates/bundle.pem
 # NODE_EXTRA_CA_CERTS covers anything the build itself fetches over TLS.
 ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/bundle.pem
 
@@ -36,7 +55,15 @@ COPY web/package.json web/pnpm-lock.yaml* web/pnpm-workspace.yaml* web/package-l
 # web/package-lock.json is also committed (older, and missing
 # @iconify-json/boxicons), so an npm-first build fails with EUSAGE on a tree
 # that is perfectly healthy. pnpm-lock.yaml is the one kept in step.
-RUN corepack enable && \
+# pnpm is installed with npm, NOT corepack. corepack resolves "pnpm/latest"
+# against registry.npmjs.org directly and honours neither `npm config set
+# registry` nor the proxy variables, so behind a proxy it fails with
+# UND_ERR_CONNECT_TIMEOUT before any dependency is even fetched. npm honours
+# both, so one configured registry serves the package manager and the packages.
+ARG PNPM_VERSION=12.3.4
+RUN npm config set registry "$NPM_REGISTRY" && \
+    npm install -g "pnpm@$PNPM_VERSION" && \
+    pnpm config set registry "$NPM_REGISTRY" && \
     if [ -f pnpm-lock.yaml ]; then \
       pnpm install --frozen-lockfile; \
     elif [ -f package-lock.json ]; then npm ci; else npm install; fi

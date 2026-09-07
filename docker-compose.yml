@@ -177,10 +177,8 @@ services:
   # cmd/coordinator: its koanf keys are user-facing config, so renaming them is
   # a deprecation cycle rather than a rename. See docs/design/24 section 13.
   controller:
-    # Named so a prebuilt image can be used instead of building here:
-    #   ./scripts/build-images.sh && CONTROLLER_IMAGE=software-gateway-controller docker compose up -d
-    # That is the escape hatch when a compose-driven build fails, which on
-    # Windows it can, while `podman build` with the same arguments succeeds.
+    # Named so a prebuilt or internally published image can be used instead of
+    # building here: CONTROLLER_IMAGE=registry.corp/software-gateway-controller:1.2.3
     image: ${CONTROLLER_IMAGE:-software-gateway-controller:local}
     build:
       context: .
@@ -188,6 +186,13 @@ services:
       args:
         GO_IMAGE: ${GO_IMAGE:-golang:1.25.14}
         RUNTIME_IMAGE: ${RUNTIME_IMAGE:-gcr.io/distroless/static-debian12:nonroot}
+        # A build container inherits NOTHING from the host, so a corporate
+        # proxy must be handed to it explicitly or every fetch times out.
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+        GOSUMDB: ${GOSUMDB:-sum.golang.org}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -238,6 +243,13 @@ services:
       args:
         GO_IMAGE: ${GO_IMAGE:-golang:1.25.14}
         RUNTIME_IMAGE: ${RUNTIME_IMAGE:-gcr.io/distroless/static-debian12:nonroot}
+        # A build container inherits NOTHING from the host, so a corporate
+        # proxy must be handed to it explicitly or every fetch times out.
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+        GOSUMDB: ${GOSUMDB:-sum.golang.org}
     restart: unless-stopped
     depends_on:
       controller:
@@ -261,6 +273,12 @@ services:
       args:
         NODE_IMAGE: ${NODE_IMAGE:-node:22.23.2-alpine}
         NGINX_IMAGE: ${NGINX_IMAGE:-nginx:1.27.5-alpine}
+        # A build container inherits NOTHING from the host, so a corporate
+        # proxy must be handed to it explicitly or every fetch times out.
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
     restart: unless-stopped
     depends_on:
       controller:

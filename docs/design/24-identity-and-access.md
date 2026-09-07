@@ -91,11 +91,11 @@ tools that would need a mapping layer:
 ```
 Organization  = TENANT      (default)
 │
-├── Project "platform"      = GLOBAL roles. Names no product.
-│      manager, security-admin
+├── Project "platform"      = ORG-WIDE roles. Name no product.
+│      org-admin, org-operator, org-security, org-reader
 │
 ├── Project "software-01"   = one PRODUCT
-├── Project "software-02"     roles: product-owner, product-viewer
+├── Project "software-02"     product-owner, product-operator, product-reader
 └── ...                       (one project per entry in GATEWAY_PRODUCTS)
 ```
 
@@ -107,10 +107,18 @@ expressed once, natively.
 
 | Tier | Lives on | Example | Covers |
 |---|---|---|---|
-| **Global** | `platform` project | `manager`, `security-admin` | every product in the tenant, **including ones created later** |
-| **Product** | that product's project | `product-owner`, `product-viewer` | that product only |
+| **`org-`** | `platform` project | `org-admin`, `org-operator`, `org-security`, `org-reader` | every product in the tenant, **including ones created later** |
+| **`product-`** | that product's project | `product-owner`, `product-operator`, `product-reader` | that product only |
 
-> **Decision - a global role is ONE assignment on `platform`, never N assignments across N products.**
+> **Decision - the prefix names the SCOPE, the suffix names the LEVEL.**
+>
+> `org-security` and `product-operator` each say what they cover and how much they allow, in that order, with no glossary. The earlier draft called the top role `manager`, which named a job title rather than a permission: it answered neither "over what" nor "how much", and every reader had to be told. A name that has to be explained is a name that will be assigned wrongly.
+>
+> The suffixes track the `Action` ladder already in `internal/api/middleware/scope.go` (`read` < `operate` < `apply` < `admin`), so `-reader`, `-operator` and `-owner`/`-admin` map onto verbs the code already has rather than inventing a second vocabulary beside it.
+>
+> *Watch for one collision:* ZITADEL ships its own `ORG_OWNER` and `ORG_USER_MANAGER` for administering the directory. Ours are lowercase project roles in a different namespace and grant nothing in ZITADEL. §5.2 keeps them apart deliberately.
+
+> **Decision - an org-wide role is ONE assignment on `platform`, never N assignments across N products.**
 >
 > *Alternative considered:* grant `security-admin` on each of the forty product projects.
 >
@@ -126,8 +134,8 @@ expressed once, natively.
 
 | Persona | How it is expressed | Scope |
 |---|---|---|
-| **Manager** - full access to every product | `manager` on `platform` | tenant |
-| **Security admin** - security detail across products | `security-admin` on `platform` | tenant |
+| **Oversees every product** | `org-admin` (full) or `org-operator` (no promote) on `platform` | tenant |
+| **Security admin** - security detail across products | `org-security` on `platform` | tenant |
 | **Admin** - adds users, assigns roles | ZITADEL's own `ORG_USER_MANAGER` | that org |
 | **Superadmin** - break glass | ZITADEL `IAM_OWNER`, disabled after bootstrap (§7) | instance |
 
@@ -154,8 +162,8 @@ SSO_AUTO_REDIRECT=true          # single IdP: skip ZITADEL's own login form
 
 # --- what exists ------------------------------------------------------------
 GATEWAY_PRODUCTS=software-01,software-02,software-03
-GATEWAY_PRODUCT_ROLES=product-owner,product-viewer
-GATEWAY_GLOBAL_ROLES=manager,security-admin
+GATEWAY_ORG_ROLES=org-admin,org-operator,org-security,org-reader
+GATEWAY_PRODUCT_ROLES=product-owner,product-operator,product-reader
 
 # --- break glass: set EXACTLY ONE (see §7) ----------------------------------
 BOOTSTRAP_ADMIN_EMAIL=platform-admin@example.com    # production
@@ -285,13 +293,89 @@ and easy to miss:
 5. The break-glass account is disabled, and its still being enabled is reported.
 6. `docs/design/09` §10's risk note is deleted, because it is no longer true.
 
-## 12. Evidence
+## 12. Naming: why the binary is still `coordinator`
+
+The service is called **controller** in `deploy/docker-compose.yml`, because
+that is the better name and the deployment layer is free.
+
+The Go binary is not renamed. `internal/platform/config/config.go` carries
+`koanf:"coordinator"` and `koanf:"coordinatorEndpoint"`, which are **user-facing
+configuration keys**: renaming them does not fail loudly, it makes koanf miss
+the key and fall back to a default, so an existing deployment silently starts
+talking to `http://localhost:8080` instead of its real controller. That is a
+deprecation cycle with dual-key support, not a rename. The rest is 486 mentions
+across 129 Go files, 291 across 31 documents, `cmd/coordinator`,
+`build/Dockerfile.coordinator` and the worker's wire config.
+
+> **Decision - rename at the deployment layer now, in the code never (or behind a deprecation).**
+>
+> The compose service, its DNS name and the nginx upstream all say `controller`. Anyone operating the stack sees the right word. Anyone reading the Go sees `coordinator` and one paragraph saying why.
+
+## 13. Operating it
+
+```bash
+docker compose up -d          # start, in dependency order
+docker compose down           # stop, reverse order, data kept
+docker compose down -v        # stop and discard the databases
+
+# after editing GATEWAY_PRODUCTS in .env:
+docker compose run --rm zitadel-init
+```
+
+Startup order is declared as conditions, never raced:
+
+```
+postgres --healthy--> zitadel --healthy--> zitadel-init --completed--+
+     \                                                               |
+      `--healthy-------------------------> controller <--healthy-----+
+                              cerbos ----'      |
+                                                `--started--> web
+```
+
+`controller` waits on `service_completed_successfully` for the seeder, so it
+cannot start against a ZITADEL that has no projects in it. `docker compose
+down` walks the same graph backwards, so nothing writes to a database that has
+already stopped.
+
+### 13.1 Four things that are easy to get wrong
+
+Each of these was found by running the stack, not by reading documentation.
+
+1. **ZITADEL answers 404 to a valid request with the wrong `Host`.** It
+   validates `Host` against `ZITADEL_EXTERNALDOMAIN`. Internally the seeder
+   reaches it as `zitadel:8080` but it only answers to `localhost:8090`, so
+   every call must carry that `Host` explicitly.
+2. **Node's `fetch` silently drops the `Host` header.** The Fetch standard
+   lists it as forbidden, so undici removes it and the seeder gets a 404 from a
+   healthy service with nothing in any log to explain it. `deploy/zitadel/bootstrap.mjs`
+   uses `node:http`, which permits it, and says so where it does.
+3. **nginx resolves proxy upstreams once, at startup.** A literal
+   `proxy_pass http://controller:8080` makes the web container refuse to start
+   when the controller is absent, and pin a stale IP if it is later replaced.
+   The config assigns the upstream to a variable with a `resolver`, forcing
+   per-request resolution through Docker's DNS.
+4. **The seeder must install nothing at runtime.** The obvious shell version
+   needs `curl` and `jq`, so it runs `apk add` on every boot - a call to a
+   distro CDN that fails in exactly the air-gapped estates this product targets
+   ([19](19-user-interface.md) §1). Writing it in dependency-free Node removes
+   the network call entirely.
+
+Cerbos telemetry is disabled in `deploy/cerbos/config.yaml` for the same
+air-gap reason: by default it posts to `telemetry.cerbos.dev`, which is a
+failing TLS handshake every few seconds where there is no egress.
+
+## 14. Evidence
 
 Measured against ZITADEL and Cerbos running in a container, not taken from
 documentation:
 
+**Measured against the stack in `deploy/`, brought up from an empty machine:**
+
 | Question | Answer |
 |---|---|
+| `docker compose up` to fully seeded, from clean volumes | **18 s**, seeder exit 0 |
+| Re-run seeder, nothing changed | creates nothing, reports `exists` |
+| Re-run seeder after adding `software-04` | creates only that project and its 3 roles |
 | ZITADEL cold start | 8 s (image 234 MB) |
 | Token: 6-product user, 40 audiences requested | 2,772 B, 6 role claims |
 | Token: security admin, 40 enumerated grants | **8,358 B** |
@@ -301,7 +385,26 @@ documentation:
 | JWKS without credentials | HTTP 200 |
 | Token issued before `software-41`, used against it | **ALLOW** |
 | User without a grant, same product | **DENY** |
+| `org-security` on a product created after seeding | view, export **ALLOW** |
+| `org-security` attempting a download promote | **DENY** (least privilege holds) |
+| `org-operator` request / promote | ALLOW / **DENY** |
+| `org-reader` view / request | ALLOW / **DENY** |
+| `product-owner` of software-01, promote on software-02 | **DENY** |
 
-Two things are NOT verified and must be before this is called done: the
-Microsoft Entra federation leg itself, and the size of a human token once Entra
-adds name, e-mail and profile claims.
+**Not verified, and each must be before this is called done:**
+
+- The Microsoft Entra federation leg. No Entra tenant is reachable from the
+  environment this was built in, so `SSO_ISSUER` was left empty and
+  username/password login was exercised instead. The seeder's IdP-creation path
+  is therefore written but unproven.
+- The size of a human token once Entra adds name, e-mail and profile claims.
+  Every measurement above used machine users.
+- The `web` and `controller` images were not built here: `npm ci` fails against
+  this environment's TLS-intercepting proxy with `SELF_SIGNED_CERT_IN_CHAIN`.
+  That is an environment limitation rather than a defect in the Dockerfiles,
+  but it means neither image has been built end to end. `deploy/web/nginx.conf`
+  was validated with `nginx -t` against the real image.
+- The Go middleware described in §8 **does not exist yet**. The stack seeds
+  ZITADEL correctly and Cerbos decides correctly, but the Coordinator still
+  installs `AnonymousAuthenticator`. Wiring it is the remaining code change,
+  and until it lands nothing in the API is actually enforced.

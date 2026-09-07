@@ -1,0 +1,185 @@
+# =============================================================================
+# Software Gateway - complete stack, day 0.
+#
+#   curl -O   https://raw.githubusercontent.com/abhijeet-oxide/softwareGateway/main/deploy/docker-compose.yml
+#   curl -o .env https://raw.githubusercontent.com/abhijeet-oxide/softwareGateway/main/deploy/.env.example
+#   docker compose up -d
+#
+# Open http://localhost:8000. Everything below is seeded automatically.
+#
+# STARTUP ORDER is declared, not raced. Each edge is a real condition:
+#
+#   postgres  --healthy-------> zitadel --healthy--> zitadel-init --completed-+
+#        \                                                                    |
+#         `--healthy--------------------------------> controller <--healthy---+
+#                                          cerbos ---'      |
+#                                                           `--healthy--> web
+#
+# SHUTDOWN is the exact reverse: `docker compose down` stops web first and
+# postgres last, so nothing writes to a database that has already gone.
+# Add -v to that command to discard the data as well.
+# =============================================================================
+
+name: software-gateway
+
+services:
+  # --- data ------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: swgw
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: swgw
+    # Two DATABASES in one instance, never one shared database: ZITADEL claims
+    # `public` and ~150 tables. See docs/design/24 section 3.1.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init-zitadel.sql:/docker-entrypoint-initdb.d/10-zitadel.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U swgw -d swgw"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # --- identity --------------------------------------------------------------
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:latest
+    restart: unless-stopped
+    command: start-from-init --masterkey "${ZITADEL_MASTERKEY:?set ZITADEL_MASTERKEY (32 chars)}" --tlsMode disabled
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ZITADEL_DATABASE_POSTGRES_HOST: postgres
+      ZITADEL_DATABASE_POSTGRES_PORT: 5432
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: swgw
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: ${POSTGRES_PASSWORD}
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: swgw
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      ZITADEL_EXTERNALSECURE: "false"
+      ZITADEL_EXTERNALDOMAIN: ${ZITADEL_EXTERNAL_DOMAIN:-localhost}
+      ZITADEL_EXTERNALPORT: ${ZITADEL_PORT:-8090}
+      ZITADEL_TLS_ENABLED: "false"
+      # The org created at first boot IS the default tenant. No second step.
+      ZITADEL_FIRSTINSTANCE_ORG_NAME: ${GATEWAY_TENANT:-default}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: zitadel-admin
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${ZITADEL_ROOT_PASSWORD:-RootPassw0rd!}
+      # Machine account + PAT, written to a shared volume for the seeder. It is
+      # the ONLY write credential in the stack and no long-running service sees it.
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: seeder
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: seeder
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2100-01-01T00:00:00Z"
+      ZITADEL_FIRSTINSTANCE_PATPATH: /pat/pat.txt
+    user: "0:0"          # the distroless image cannot write /pat as its default uid
+    volumes:
+      - patshare:/pat
+    ports:
+      - "${ZITADEL_PORT:-8090}:8080"
+    healthcheck:
+      test: ["CMD", "/app/zitadel", "ready", "--config", "/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+
+  # --- day-0 seeding: one shot, idempotent, then gone ------------------------
+  zitadel-init:
+    image: node:22-alpine
+    depends_on:
+      zitadel:
+        condition: service_healthy
+    environment:
+      ZITADEL_INTERNAL_URL: http://zitadel:8080
+      ZITADEL_HOST_HEADER: ${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}
+      ZITADEL_PUBLIC_URL: http://localhost:${ZITADEL_PORT:-8090}
+      WEB_PUBLIC_URL: http://localhost:${WEB_PORT:-8000}
+      GATEWAY_TENANT: ${GATEWAY_TENANT:-default}
+      GATEWAY_PRODUCTS: ${GATEWAY_PRODUCTS:-}
+      GATEWAY_ORG_ROLES: ${GATEWAY_ORG_ROLES:-org-admin,org-operator,org-security,org-reader}
+      GATEWAY_PRODUCT_ROLES: ${GATEWAY_PRODUCT_ROLES:-product-owner,product-operator,product-reader}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@example.com}
+      SSO_ISSUER: ${SSO_ISSUER:-}
+      SSO_CLIENT_ID: ${SSO_CLIENT_ID:-}
+      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:-}
+      SSO_DISPLAY_NAME: ${SSO_DISPLAY_NAME:-Microsoft}
+    volumes:
+      - patshare:/pat:ro
+      - ./zitadel/bootstrap.mjs:/bootstrap.mjs:ro
+    entrypoint: ["node", "/bootstrap.mjs"]
+    restart: on-failure:3
+
+  # --- authorization ---------------------------------------------------------
+  cerbos:
+    image: ghcr.io/cerbos/cerbos:latest
+    restart: unless-stopped
+    command: ["server", "--config=/config/config.yaml"]
+    environment:
+      # This product ships into air-gapped estates. Cerbos posts usage data to
+      # telemetry.cerbos.dev by default, which is a failed TLS handshake every
+      # few seconds in a network with no egress, and an unexpected outbound
+      # connection in one that has.
+      CERBOS_NO_TELEMETRY: "1"
+    volumes:
+      - ./cerbos/policies:/policies:ro
+      - ./cerbos/config.yaml:/config/config.yaml:ro
+    healthcheck:
+      # Defaults to the gRPC health protocol on :3593, which the REST API sits on.
+      test: ["CMD", "/cerbos", "healthcheck", "--config=/config/config.yaml"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  # --- the product -----------------------------------------------------------
+  # Named `controller` at the deployment layer. The binary is still
+  # cmd/coordinator: its koanf keys are user-facing config, so renaming them is
+  # a deprecation cycle rather than a rename. See docs/design/24 section 13.
+  controller:
+    build:
+      context: ..
+      dockerfile: build/Dockerfile.coordinator
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      cerbos:
+        condition: service_healthy
+      zitadel-init:
+        condition: service_completed_successfully
+    environment:
+      SWGW_DATABASE_DSN: postgres://swgw:${POSTGRES_PASSWORD}@postgres:5432/swgw?sslmode=disable
+      SWGW_OIDC_ISSUER: http://zitadel:8080
+      SWGW_OIDC_JWKS_URL: http://zitadel:8080/oauth/v2/keys
+      SWGW_CERBOS_ADDR: http://cerbos:3592
+      SWGW_TENANT_DEFAULT: ${GATEWAY_TENANT:-default}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "/coordinator", "--health-check"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # --- the UI ----------------------------------------------------------------
+  web:
+    build:
+      context: ..
+      dockerfile: build/Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      controller:
+        condition: service_started
+    ports:
+      - "${WEB_PORT:-8000}:80"
+
+volumes:
+  pgdata:
+  patshare:

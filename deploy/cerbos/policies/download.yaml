@@ -1,0 +1,15 @@
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: default
+  resource: software_download
+  importDerivedRoles: [gateway_common]
+  rules:
+    - actions: ["view"]
+      effect: EFFECT_ALLOW
+      derivedRoles: [org_wide_reader, product_reader]
+    - actions: ["request", "retry", "cancel"]
+      effect: EFFECT_ALLOW
+      derivedRoles: [org_wide_operator, product_operator]
+    - actions: ["promote", "apply"]
+      effect: EFFECT_ALLOW
+      derivedRoles: [org_wide_admin, product_owner]

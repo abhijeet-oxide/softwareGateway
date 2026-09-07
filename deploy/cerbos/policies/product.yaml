@@ -1,0 +1,14 @@
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: default
+  resource: product
+  importDerivedRoles: [gateway_common]
+  rules:
+    - actions: ["view"]
+      effect: EFFECT_ALLOW
+      derivedRoles: [org_wide_reader, product_reader]
+    # Products are read-only over the API (docs/design/09 section 2). This
+    # gates the DISCOVERY trigger, not editing configuration.
+    - actions: ["discover"]
+      effect: EFFECT_ALLOW
+      derivedRoles: [org_wide_operator, product_operator]

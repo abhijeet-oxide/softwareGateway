@@ -7,6 +7,17 @@
 #
 # Open http://localhost:8000. Everything below is seeded automatically.
 #
+# EVERY IMAGE IS PINNED AND OVERRIDABLE. No `latest` anywhere: a tag that moves
+# under you turns a working deployment into a support call nobody can reproduce.
+# And no registry host is hard-coded that you cannot replace - each image is a
+# variable, so an internal registry or pull-through proxy is one line in .env:
+#
+#   ZITADEL_IMAGE=artifactory.corp/ghcr-remote/zitadel/zitadel:v4.17.3
+#
+# ZITADEL is published to GHCR ONLY - it is not on Docker Hub - so its default
+# is the one image reference that names a registry. If your proxy cannot reach
+# ghcr.io, that is the one to mirror first.
+#
 # IT RUNS WITH NO .env AT ALL. Every variable has a working default, so
 # `docker compose up -d` (or `podman compose up -d`) on a fresh clone gives you
 # a running system. That is deliberate: the previous version used compose's
@@ -37,7 +48,7 @@ name: software-gateway
 services:
   # --- data ------------------------------------------------------------------
   postgres:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16.15-alpine}
     restart: unless-stopped
     environment:
       POSTGRES_USER: swgw
@@ -57,7 +68,7 @@ services:
 
   # --- identity --------------------------------------------------------------
   zitadel:
-    image: ghcr.io/zitadel/zitadel:latest
+    image: ${ZITADEL_IMAGE:-ghcr.io/zitadel/zitadel:v4.17.3}
     restart: unless-stopped
     # The masterkey must be EXACTLY 32 bytes. ZITADEL refuses to start
     # otherwise, and the message ("masterkey must be 32 bytes, but is 33")
@@ -104,7 +115,7 @@ services:
 
   # --- day-0 seeding: one shot, idempotent, then gone ------------------------
   zitadel-init:
-    image: node:22-alpine
+    image: ${SEEDER_IMAGE:-node:22.23.2-alpine}
     depends_on:
       zitadel:
         condition: service_healthy
@@ -141,7 +152,7 @@ services:
 
   # --- authorization ---------------------------------------------------------
   cerbos:
-    image: ghcr.io/cerbos/cerbos:latest
+    image: ${CERBOS_IMAGE:-cerbos/cerbos:0.55.0}
     restart: unless-stopped
     command: ["server", "--config=/config/config.yaml"]
     environment:
@@ -169,6 +180,9 @@ services:
     build:
       context: .
       dockerfile: build/Dockerfile.coordinator
+      args:
+        GO_IMAGE: ${GO_IMAGE:-golang:1.25.14}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-gcr.io/distroless/static-debian12:nonroot}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -215,6 +229,9 @@ services:
     build:
       context: .
       dockerfile: build/Dockerfile.worker
+      args:
+        GO_IMAGE: ${GO_IMAGE:-golang:1.25.14}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-gcr.io/distroless/static-debian12:nonroot}
     restart: unless-stopped
     depends_on:
       controller:
@@ -234,6 +251,9 @@ services:
     build:
       context: .
       dockerfile: build/Dockerfile.web
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:22.23.2-alpine}
+        NGINX_IMAGE: ${NGINX_IMAGE:-nginx:1.27.5-alpine}
     restart: unless-stopped
     depends_on:
       controller:

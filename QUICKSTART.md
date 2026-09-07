@@ -244,14 +244,48 @@ docker compose down                     # stop; data kept
 docker compose down -v                  # stop and discard all data
 ```
 
-## 7. Behind a TLS-intercepting proxy
+## 7. Behind an internal registry or proxy
+
+Every image is a variable with a pinned default, and nothing is tagged
+`latest`. Versions this stack is verified against:
+
+| Image | Pinned to | Registry |
+|---|---|---|
+| PostgreSQL | `16.15-alpine` | Docker Hub |
+| **ZITADEL** | `v4.17.3` | **GHCR only, not on Docker Hub** |
+| Cerbos | `0.55.0` | Docker Hub |
+| Node (seeder, web build) | `22.23.2-alpine` | Docker Hub |
+| nginx (web runtime) | `1.27.5-alpine` | Docker Hub |
+| Go (build) | `1.25.14` | Docker Hub |
+| distroless (Go runtime) | `static-debian12:nonroot` | gcr.io |
+
+If your daemon has a pull-through cache configured, change nothing. If your
+internal registry re-hosts images under its own path, set the overrides in
+`.env`:
+
+```bash
+ZITADEL_IMAGE=artifactory.corp/ghcr/zitadel/zitadel:v4.17.3
+CERBOS_IMAGE=artifactory.corp/dockerhub/cerbos/cerbos:0.55.0
+POSTGRES_IMAGE=artifactory.corp/dockerhub/postgres:16.15-alpine
+SEEDER_IMAGE=artifactory.corp/dockerhub/node:22.23.2-alpine
+# build-time bases
+GO_IMAGE=artifactory.corp/dockerhub/golang:1.25.14
+NODE_IMAGE=artifactory.corp/dockerhub/node:22.23.2-alpine
+NGINX_IMAGE=artifactory.corp/dockerhub/nginx:1.27.5-alpine
+RUNTIME_IMAGE=artifactory.corp/gcr/distroless/static-debian12:nonroot
+```
+
+**ZITADEL is the one to mirror first** if your proxy reaches only one upstream:
+it is published to GHCR and nowhere else.
+
+## 8. Behind a TLS-intercepting proxy
 
 If `docker compose build` fails with `SELF_SIGNED_CERT_IN_CHAIN` or
 `x509: certificate signed by unknown authority`, drop your proxy's CA into
 `deploy/certs/*.crt` and rebuild. The images trust anything there. Do not
 disable certificate verification.
 
-## 8. If something is wrong
+## 9. If something is wrong
 
 | Symptom | Cause |
 |---|---|

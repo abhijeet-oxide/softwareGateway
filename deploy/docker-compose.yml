@@ -109,9 +109,11 @@ services:
       SSO_CLIENT_ID: ${SSO_CLIENT_ID:-}
       SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:-}
       SSO_DISPLAY_NAME: ${SSO_DISPLAY_NAME:-Microsoft}
+      BOOTSTRAP_USERS_FILE: /bootstrap-users.json
     volumes:
       - patshare:/pat:ro
       - ./zitadel/bootstrap.mjs:/bootstrap.mjs:ro
+      - ./zitadel/users.json:/bootstrap-users.json:ro
     entrypoint: ["node", "/bootstrap.mjs"]
     restart: on-failure:3
 
@@ -155,18 +157,55 @@ services:
         condition: service_completed_successfully
     environment:
       SWGW_DATABASE_DSN: postgres://swgw:${POSTGRES_PASSWORD}@postgres:5432/swgw?sslmode=disable
-      SWGW_OIDC_ISSUER: http://zitadel:8080
-      SWGW_OIDC_JWKS_URL: http://zitadel:8080/oauth/v2/keys
-      SWGW_CERBOS_ADDR: http://cerbos:3592
-      SWGW_TENANT_DEFAULT: ${GATEWAY_TENANT:-default}
-    ports:
-      - "${API_PORT:-8080}:8080"
+      # The issuer must be the PUBLIC url: it is what ZITADEL stamps into the
+      # token's `iss`, so validating against the internal name fails.
+      SWGW_AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      # Issuer is the PUBLIC url, because that is what lands in the token's
+      # `iss`. DiscoveryURL is where this service actually fetches the keys:
+      # the browser reaches ZITADEL as localhost, a container reaches it by
+      # service name, and both must be expressible or nothing validates.
+      SWGW_AUTH_ISSUER: http://${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}
+      SWGW_AUTH_DISCOVERYURL: http://zitadel:8080
+      # ZITADEL picks its instance from Host and 404s on one it does not know.
+      SWGW_AUTH_HOSTHEADER: ${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}
+      SWGW_AUTH_CERBOSADDR: http://cerbos:3592
+    # No published port on purpose. The API is reached through the web tier at
+    # http://localhost:${WEB_PORT:-8000}/api/v1, which is same-origin (the
+    # controller ships no CORS middleware) AND lets this service scale: a fixed
+    # host port would collide the moment CONTROLLER_REPLICAS > 1.
+    volumes:
+      - ./products:/etc/softwaregateway/products:ro
+    expose:
+      - "8080"
+    deploy:
+      replicas: ${CONTROLLER_REPLICAS:-1}
     healthcheck:
       test: ["CMD", "/coordinator", "--health-check"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 15s
+
+  # --- the data plane --------------------------------------------------------
+  # Stateless by design: workers stream blobs registry to registry and hold
+  # nothing, so scaling them is only ever a number.
+  worker:
+    build:
+      context: ..
+      dockerfile: build/Dockerfile.worker
+    restart: unless-stopped
+    depends_on:
+      controller:
+        condition: service_healthy
+    environment:
+      SWGW_WORKER_COORDINATORENDPOINT: http://controller:8080
+      SWGW_DATABASE_DSN: postgres://swgw:${POSTGRES_PASSWORD}@postgres:5432/swgw?sslmode=disable
+    # A worker must see the SAME product configuration as the controller, or it
+    # leases jobs it cannot execute and says so rather than failing quietly.
+    volumes:
+      - ./products:/etc/softwaregateway/products:ro
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
 
   # --- the UI ----------------------------------------------------------------
   web:
@@ -176,7 +215,11 @@ services:
     restart: unless-stopped
     depends_on:
       controller:
-        condition: service_started
+        condition: service_healthy
+    environment:
+      # Baked into the page at request time so the SPA knows where to send the
+      # browser for login. Public values only: a public OIDC client has no secret.
+      OIDC_ISSUER: http://${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}
     ports:
       - "${WEB_PORT:-8000}:80"
 

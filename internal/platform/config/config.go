@@ -38,6 +38,44 @@ type SystemConfig struct {
 	Retention     RetentionConfig     `koanf:"retention"`
 	TLS           TLSConfig           `koanf:"tls"`
 	Concurrency   ConcurrencyConfig   `koanf:"concurrency"`
+	Auth          AuthConfig          `koanf:"auth"`
+}
+
+// AuthConfig turns on authentication and authorization.
+//
+// See docs/design/24-identity-and-access.md. Enabled defaults to FALSE so an
+// existing deployment upgrades without suddenly refusing everyone, but the
+// shipped compose file sets it true: the default is for compatibility, not a
+// recommendation.
+type AuthConfig struct {
+	// Enabled installs the OIDC authenticator in place of the anonymous one.
+	// With it off every caller is "anonymous" and holds admin, which is only
+	// safe behind the NetworkPolicy described in docs/design/14 section 3.
+	Enabled bool `koanf:"enabled"`
+	// Issuer is the OIDC issuer URL. It MUST be the address that appears in
+	// the token's `iss` claim, which is the issuer's PUBLIC url - validating
+	// against an internal service name fails every token.
+	Issuer string `koanf:"issuer"`
+	// DiscoveryURL is where keys are fetched from when that differs from
+	// Issuer - the normal case in a container network, where the browser
+	// reaches the issuer as localhost and this service reaches it by service
+	// name. The token is still validated against Issuer.
+	DiscoveryURL string `koanf:"discoveryUrl"`
+	// HostHeader is sent when fetching keys, for an issuer that selects its
+	// instance from Host. Set it to the issuer's public host:port.
+	HostHeader string `koanf:"hostHeader"`
+	// Audience is the client or project id tokens must be issued for. Empty
+	// skips the audience check, which is only correct behind a trusted proxy.
+	Audience string `koanf:"audience"`
+	// CerbosAddr is the policy decision point, e.g. http://cerbos:3592.
+	// Empty means no authorization engine: identities are established and
+	// every permission check then allows, which is a deliberate half-step for
+	// rolling authentication out before policy.
+	CerbosAddr string `koanf:"cerbosAddr"`
+	// SkipIssuerCheck tolerates reaching the issuer on an internal address
+	// that differs from the `iss` it stamps. It never skips signature
+	// verification.
+	SkipIssuerCheck bool `koanf:"skipIssuerCheck"`
 }
 
 // TLSConfig relaxes certificate handling for the WHOLE PROCESS.
@@ -578,6 +616,9 @@ func Defaults() SystemConfig {
 			MaxOpenConns:    25,
 			MaxIdleConns:    10,
 			ConnMaxLifetime: time.Hour,
+		},
+		Auth: AuthConfig{
+			Enabled: false,
 		},
 		Coordinator: CoordinatorConfig{
 			LeaderElection: LeaderElectionConfig{

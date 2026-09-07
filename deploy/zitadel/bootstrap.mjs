@@ -122,12 +122,24 @@ const PLATFORM = await ensureProject('platform');
 await ensureRoles(PLATFORM,
   list(process.env.GATEWAY_ORG_ROLES, 'org-admin,org-operator,org-security,org-reader'));
 
-/* --- 5. one project per product ------------------------------------------- */
+/* --- 5. one project per product -------------------------------------------
+ *
+ * Role keys are namespaced "<product>:<role>". ZITADEL emits roles under a
+ * claim keyed by PROJECT ID - an opaque number - so a bare `product-owner` in
+ * a token cannot say WHICH product it refers to. Putting the product in the
+ * key makes the token self-describing, which is what lets pkg/authz stay
+ * stateless: no project-id map to ship, no ZITADEL credential in any service
+ * just to resolve a name. See pkg/authz/identity.go splitProductRole.
+ */
 const products = list(process.env.GATEWAY_PRODUCTS, '');
+const productRoles = list(process.env.GATEWAY_PRODUCT_ROLES,
+  'product-owner,product-operator,product-reader');
+const projectOf = new Map();          // product name -> project id
 for (const p of products) {
   say(`product ${p}`);
-  await ensureRoles(await ensureProject(p),
-    list(process.env.GATEWAY_PRODUCT_ROLES, 'product-owner,product-operator,product-reader'));
+  const pid = await ensureProject(p);
+  projectOf.set(p, pid);
+  await ensureRoles(pid, productRoles.map(r => `${p}:${r}`));
 }
 
 /* --- 6. the web application (OIDC client) --------------------------------- */
@@ -201,6 +213,107 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
   } else {
     say(`administrator '${user}' exists`);
     if (pw) say('  WARNING: BOOTSTRAP_ADMIN_PASSWORD still set. Unset it once a real admin exists.');
+  }
+}
+
+/* --- 9. additional users, from a file that IS the deployment mechanism -----
+ *
+ * Add a person to deploy/zitadel/users.json, commit it, re-run this container.
+ * That is the whole user-provisioning story, and it is reviewable in a pull
+ * request rather than being clicks in a console that nobody can audit later.
+ */
+async function grantRoles(userId, projectId, roleKeys) {
+  if (!roleKeys.length) return;
+  const existing = await api('POST', '/management/v1/users/grants/_search',
+    { queries: [{ userIdQuery: { userId } }] });
+  const current = (existing.result || []).find(g => g.projectId === projectId);
+  const want = [...new Set([...(current?.roleKeys || []), ...roleKeys])];
+  if (current) {
+    if (want.length === (current.roleKeys || []).length) return;   // nothing new
+    await api('PUT', `/management/v1/users/${userId}/grants/${current.id}`, { roleKeys: want });
+  } else {
+    await api('POST', `/management/v1/users/${userId}/grants`, { projectId, roleKeys: want });
+  }
+}
+
+let doc = null;
+{
+  const path = process.env.BOOTSTRAP_USERS_FILE || '/bootstrap-users.json';
+  try { doc = JSON.parse(await fs.readFile(path, 'utf8')); }
+  catch { say('no users file - skipping additional users'); }
+
+  for (const u of (doc?.users || [])) {
+    if (!u.username) continue;
+    const found = await api('POST', '/management/v1/users/_search',
+      { queries: [{ userNameQuery: { userName: u.username } }] });
+    let uid = (found.result || [])[0]?.id;
+
+    if (!uid) {
+      const body = {
+        userName: u.username,
+        profile: { firstName: u.firstName || u.username, lastName: u.lastName || 'User' },
+        email: { email: u.email || `${u.username}@example.invalid`, isEmailVerified: true },
+      };
+      // A password here is for local and test use. With SSO configured the
+      // person signs in through Microsoft and never needs one.
+      if (u.password && !process.env.SSO_ISSUER) body.password = u.password;
+      const r = await api('POST', '/management/v1/users/human/_import', body);
+      uid = r.userId;
+      if (!uid) { say(`  ! could not create ${u.username}: ${JSON.stringify(r).slice(0, 160)}`); continue; }
+      say(`user ${u.username} created`);
+    } else {
+      say(`user ${u.username} exists`);
+    }
+
+    if (u.orgRoles?.length) {
+      await grantRoles(uid, PLATFORM, u.orgRoles);
+      say(`  org roles: ${u.orgRoles.join(', ')}`);
+    }
+    for (const [product, roles] of Object.entries(u.products || {})) {
+      const pid = projectOf.get(product);
+      if (!pid) { say(`  ! ${u.username}: product '${product}' is not in GATEWAY_PRODUCTS`); continue; }
+      await grantRoles(uid, pid, roles.map(r => `${product}:${r}`));
+      say(`  ${product}: ${roles.join(', ')}`);
+    }
+  }
+}
+
+/* --- 10. API users -------------------------------------------------------
+ *
+ * Machine accounts for CI and scripts. They authenticate with
+ * client_credentials - no browser, no password - and carry exactly the same
+ * roles as a person, so an automated caller is gated by the same policy.
+ * Their secrets are printed ONCE, here, because ZITADEL does not store them
+ * retrievably; capture them from these logs or re-run to rotate.
+ */
+for (const a of (doc?.apiUsers || [])) {
+  if (!a.username) continue;
+  const found = await api('POST', '/management/v1/users/_search',
+    { queries: [{ userNameQuery: { userName: a.username } }] });
+  let uid = (found.result || [])[0]?.id;
+  let created = false;
+  if (!uid) {
+    const r = await api('POST', '/management/v1/users/machine', {
+      userName: a.username, name: a.name || a.username,
+      description: a.description || 'API user',
+      accessTokenType: 'ACCESS_TOKEN_TYPE_JWT',
+    });
+    uid = r.userId;
+    if (!uid) { say(`  ! could not create API user ${a.username}`); continue; }
+    created = true;
+  }
+  if (created || a.rotateSecret) {
+    const sec = await api('PUT', `/management/v1/users/${uid}/secret`, {});
+    say(`API user ${a.username}`);
+    say(`  client_id     : ${sec.clientId}`);
+    say(`  client_secret : ${sec.clientSecret}   <-- shown once`);
+  } else {
+    say(`API user ${a.username} exists (set "rotateSecret": true to reissue)`);
+  }
+  if (a.orgRoles?.length) await grantRoles(uid, PLATFORM, a.orgRoles);
+  for (const [product, roles] of Object.entries(a.products || {})) {
+    const pid = projectOf.get(product);
+    if (pid) await grantRoles(uid, pid, roles.map(r => `${product}:${r}`));
   }
 }
 

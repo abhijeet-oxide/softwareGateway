@@ -157,6 +157,11 @@ type ConnectivityChecker interface {
 
 // Deps are the Coordinator's dependencies.
 type Deps struct {
+	// Authenticator establishes who the caller is. Nil keeps the historical
+	// behaviour - AnonymousAuthenticator, admin for everyone - so an existing
+	// deployment is unchanged until it opts in. See docs/design/24.
+	Authenticator middleware.Authenticator
+
 	Logger    *slog.Logger
 	Metrics   *metrics.Registry
 	Health    *health.Registry
@@ -334,7 +339,11 @@ func (s *Server) routes() chi.Router {
 		r.Use(middleware.Metrics(s.deps.Metrics))
 	}
 	r.Use(middleware.Recovery(internalErrorWriter(s.deps.Logger)))
-	r.Use(middleware.Auth(middleware.AnonymousAuthenticator{}, unauthenticatedWriter))
+	auth := s.deps.Authenticator
+	if auth == nil {
+		auth = middleware.AnonymousAuthenticator{}
+	}
+	r.Use(middleware.Auth(auth, unauthenticatedWriter, middleware.PublicPaths))
 	r.Use(middleware.Compress)
 
 	r.NotFound(s.handleNotFound)

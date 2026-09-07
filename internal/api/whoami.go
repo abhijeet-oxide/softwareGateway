@@ -46,7 +46,15 @@ func (s *Server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, r, http.StatusOK, out)
 }
 
-// permissionsFor lists the actions this identity may take estate-wide.
+// permissionsFor lists the actions this identity may take across ITS OWN
+// TENANT.
+//
+// The scope carries the caller's tenant rather than being empty. An empty
+// scope is the estate-wide question, which a tenant-scoped grant correctly
+// refuses to answer (scope.go: "a narrow grant cannot answer a question that
+// names nothing") - so asking it here reported NO permissions for a user who
+// holds org-admin over everything they can see, and the UI then disabled every
+// control for the most privileged person in the system.
 //
 // `*` rather than an enumeration when the caller may do everything, so a
 // client has one thing to test for the unrestricted case instead of having to
@@ -59,9 +67,10 @@ func permissionsFor(id middleware.Identity) []string {
 		middleware.ActionAdmin,
 	}
 
+	scope := middleware.Scope{Tenant: id.Tenant}
 	out := make([]string, 0, len(all))
 	for _, a := range all {
-		if id.Can(a, middleware.Scope{}) {
+		if id.Can(a, scope) {
 			out = append(out, string(a))
 		}
 	}

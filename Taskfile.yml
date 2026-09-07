@@ -156,13 +156,21 @@ tasks:
     # NOTE: unit tests MUST NOT require Docker. They run against SQLite and an
     # in-process OCI registry, because a suite that needs containers is a suite
     # developers run less often - and the difference compounds.
+    #
+    # The timeout is stated rather than inherited. Go's default is ten minutes
+    # per PACKAGE, which is a language default and not a budget anybody here
+    # chose: internal/store carries scale tests that seed a hundred and fifty
+    # thousand job rows on purpose, and under the race detector that package
+    # sat right on the ten-minute line - CI failed on the limit rather than on
+    # anything the tests said. Twenty is the budget; a package that reaches it
+    # is hung, not slow.
     cmds:
-      - go test -race ./...
+      - go test -race -timeout 20m ./...
 
   test:short:
     desc: Run unit tests without the race detector
     cmds:
-      - go test ./...
+      - go test -timeout 20m ./...
 
   test:pkg:
     desc: 'Test one package (task test:pkg -- ./internal/discovery/)'

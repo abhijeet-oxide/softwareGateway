@@ -1,12 +1,12 @@
 package download
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
 )
 
 // A TAG IS NOT AN IDENTITY, and a download that believes otherwise downloads
@@ -117,17 +117,7 @@ func newFindHarness(t *testing.T) *findHarness {
 	t.Helper()
 	ctx := t.Context()
 
-	st, err := store.Open(ctx, store.Config{
-		Driver: store.DriverSQLite,
-		DSN:    filepath.Join(t.TempDir(), "download.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := store.Migrate(ctx, st, nil); err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t)
 
 	packages := store.NewPackages(st)
 	var productID int64

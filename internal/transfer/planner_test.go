@@ -2,12 +2,12 @@ package transfer
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/generic"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
 	"github.com/abhijeet-oxide/softwareGateway/test/fakeregistry"
 )
 
@@ -28,16 +28,7 @@ func newHarness(t *testing.T) *harness {
 	reg := fakeregistry.New()
 	t.Cleanup(reg.Close)
 
-	st, err := store.Open(t.Context(), store.Config{
-		Driver: store.DriverSQLite, DSN: filepath.Join(t.TempDir(), "plan.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := store.Migrate(t.Context(), st, nil); err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t)
 
 	h := &harness{t: t, reg: reg, packages: store.NewPackages(st), st: st}
 

@@ -1,7 +1,6 @@
 package discovery
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/generic"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/transport"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
 	"github.com/abhijeet-oxide/softwareGateway/test/fakeregistry"
 )
 
@@ -30,17 +30,7 @@ func newLoopHarness(t *testing.T, interval time.Duration) *loopHarness {
 	reg := fakeregistry.New()
 	t.Cleanup(reg.Close)
 
-	s, err := store.Open(ctx, store.Config{
-		Driver: store.DriverSQLite,
-		DSN:    filepath.Join(t.TempDir(), "loop.db"),
-	})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	if err := store.Migrate(ctx, s, nil); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	s := storetest.Open(t)
 
 	p := loadProduct(t, strings.ReplaceAll(baseDoc, "REGISTRY_HOST", reg.Host()))
 

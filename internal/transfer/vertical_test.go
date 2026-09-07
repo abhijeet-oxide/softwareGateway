@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"slices"
 	"testing"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/generic"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
 	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
 	"github.com/abhijeet-oxide/softwareGateway/test/fakeregistry"
 )
@@ -75,16 +75,7 @@ func newSlice(t *testing.T, opts ...fakeregistry.Option) *slice {
 func newSliceOn(t *testing.T, src, dst *fakeregistry.Registry) *slice {
 	t.Helper()
 
-	st, err := store.Open(t.Context(), store.Config{
-		Driver: store.DriverSQLite, DSN: filepath.Join(t.TempDir(), "slice.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := store.Migrate(t.Context(), st, nil); err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t)
 
 	packages := store.NewPackages(st)
 	s := &slice{

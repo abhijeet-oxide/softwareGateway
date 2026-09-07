@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/abhijeet-oxide/softwareGateway/db/migrations"
@@ -20,23 +22,71 @@ import (
 // A file rather than :memory: because MaxOpenConns(1) plus in-memory would be
 // fine, but a file also exercises the directory-creation path that the
 // zero-setup development flow depends on.
+//
+// The schema is COPIED from a template migrated once for the whole package,
+// not replayed per test. Fifty-one migrations cost several seconds each time
+// under the race detector, this package opens a store a few hundred times, and
+// that alone put it past Go's ten-minute test timeout - CI never reached the
+// assertions at all. The migrations still run: once here, and again from
+// scratch in the Postgres job and the boot check, which is where a broken
+// migration is caught. What every other test needs is the schema, and a copied
+// file is the same schema by construction.
 func openTestStore(t *testing.T) Store {
 	t.Helper()
-	ctx := context.Background()
 
-	s, err := Open(ctx, Config{
-		Driver: DriverSQLite,
-		DSN:    filepath.Join(t.TempDir(), "test.db"),
-	})
+	dsn := filepath.Join(t.TempDir(), "test.db")
+	if err := os.WriteFile(dsn, schemaTemplate(t), 0o600); err != nil {
+		t.Fatalf("seed schema: %v", err)
+	}
+
+	s, err := Open(context.Background(), Config{Driver: DriverSQLite, DSN: dsn})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-
-	if err := Migrate(ctx, s, nil); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	return s
+}
+
+var (
+	buildOnce   sync.Once
+	schemaBytes []byte
+	buildErr    error
+)
+
+// schemaTemplate returns the bytes of a migrated, empty database.
+//
+// It is held in MEMORY rather than as a file on the side, so there is nothing
+// to clean up: the file it is built from lives in the temp directory of
+// whichever test happened to be first, and is read back before that test ends.
+// It is also CLOSED before being read - SQLite runs in WAL mode here, and the
+// checkpoint on the last connection closing is what folds the write-ahead log
+// back into the single file these bytes are.
+//
+// internal/store/storetest is this same trick for every other package. This
+// package cannot import it, because that would be a cycle.
+func schemaTemplate(t *testing.T) []byte {
+	t.Helper()
+	buildOnce.Do(func() {
+		path := filepath.Join(t.TempDir(), "template.db")
+
+		ctx := context.Background()
+		var s Store
+		if s, buildErr = Open(ctx, Config{Driver: DriverSQLite, DSN: path}); buildErr != nil {
+			return
+		}
+		if buildErr = Migrate(ctx, s, nil); buildErr != nil {
+			_ = s.Close()
+			return
+		}
+		if buildErr = s.Close(); buildErr != nil {
+			return
+		}
+		schemaBytes, buildErr = os.ReadFile(path)
+	})
+	if buildErr != nil {
+		t.Fatalf("build schema template: %v", buildErr)
+	}
+	return schemaBytes
 }
 
 func tableNames(t *testing.T, db *sql.DB) []string {

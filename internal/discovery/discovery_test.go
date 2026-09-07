@@ -15,6 +15,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/generic"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/transport"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
 	"github.com/abhijeet-oxide/softwareGateway/test/fakeregistry"
 )
 
@@ -43,18 +44,7 @@ func newHarness(t *testing.T, doc string) *harness {
 	reg := fakeregistry.New()
 	t.Cleanup(reg.Close)
 
-	s, err := store.Open(ctx, store.Config{
-		Driver: store.DriverSQLite,
-		DSN:    filepath.Join(t.TempDir(), "discovery.db"),
-	})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	if err := store.Migrate(ctx, s, nil); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	s := storetest.Open(t)
 
 	// The registry host is only known once the fake server is listening, so the
 	// document carries a placeholder.
@@ -725,17 +715,7 @@ func newHarnessWith(t *testing.T, doc string, reg *fakeregistry.Registry) *harne
 	t.Helper()
 	ctx := t.Context()
 
-	s, err := store.Open(ctx, store.Config{
-		Driver: store.DriverSQLite,
-		DSN:    filepath.Join(t.TempDir(), "discovery.db"),
-	})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	if err := store.Migrate(ctx, s, nil); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	s := storetest.Open(t)
 
 	p := loadProduct(t, strings.ReplaceAll(doc, "REGISTRY_HOST", reg.Host()))
 

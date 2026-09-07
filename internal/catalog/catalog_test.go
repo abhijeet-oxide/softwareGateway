@@ -1,32 +1,17 @@
 package catalog
 
 import (
-	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
 )
 
 // openTestStore returns a migrated SQLite store on a temp file.
 func openTestStore(t *testing.T) store.Store {
 	t.Helper()
-	ctx := context.Background()
-
-	s, err := store.Open(ctx, store.Config{
-		Driver: store.DriverSQLite,
-		DSN:    filepath.Join(t.TempDir(), "test.db"),
-	})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	if err := store.Migrate(ctx, s, nil); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	return s
+	return storetest.Open(t)
 }
 
 func testProduct(name, registry, sourcePath, targetPath string) *product.Product {

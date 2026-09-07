@@ -3,7 +3,6 @@ package promotion
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +11,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/promote"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
 	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
 )
 
@@ -49,16 +49,7 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 
-	s, err := store.Open(t.Context(), store.Config{
-		Driver: store.DriverSQLite, DSN: filepath.Join(t.TempDir(), "promotion.db"),
-	})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	if err := store.Migrate(t.Context(), s, nil); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	s := storetest.Open(t)
 
 	seed(t, s)
 

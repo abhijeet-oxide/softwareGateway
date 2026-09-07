@@ -3,13 +3,13 @@ package discovery
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 )
 
@@ -25,17 +25,7 @@ import (
 //
 // Run with -race, which is how `task test` runs.
 func TestConcurrentReconcilesStartTheLoopOnce(t *testing.T) {
-	st, err := store.Open(t.Context(), store.Config{
-		Driver: store.DriverSQLite,
-		DSN:    filepath.Join(t.TempDir(), "controller.db"),
-	})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := store.Migrate(t.Context(), st, nil); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	st := storetest.Open(t)
 
 	logs := &countingHandler{}
 	c := NewController(store.NewPackages(st), product.NewSecretResolver(t.TempDir()),

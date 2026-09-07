@@ -21,6 +21,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/generic"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
 	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
 	"github.com/abhijeet-oxide/softwareGateway/internal/worker"
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
@@ -139,16 +140,7 @@ func (g *coordinatorGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func newWireHarness(t *testing.T, src, dst *fakeregistry.Registry) *wireHarness {
 	t.Helper()
 
-	st, err := store.Open(t.Context(), store.Config{
-		Driver: store.DriverSQLite, DSN: filepath.Join(t.TempDir(), "wire.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := store.Migrate(t.Context(), st, nil); err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t)
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	packages := store.NewPackages(st)

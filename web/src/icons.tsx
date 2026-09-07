@@ -36,7 +36,7 @@
 // at runtime, which is what keeps an air-gapped deployment from rendering a
 // page full of empty boxes.
 
-import type { CSSProperties, FunctionComponent, MouseEventHandler, SVGProps } from 'react'
+import type { CSSProperties, ElementType, MouseEventHandler } from 'react'
 
 import PhArrowClockwise from '~icons/ph/arrow-clockwise'
 import PhArrowLeft from '~icons/ph/arrow-left'
@@ -48,7 +48,7 @@ import PhArrowsLeftRight from '~icons/ph/arrows-left-right'
 import PhBatteryFull from '~icons/ph/battery-full'
 import PhBell from '~icons/ph/bell'
 import BoxiconsCompare from '~icons/boxicons/compare'
-import BookIcon from '~icons/boxicons/book';
+import BookIcon from '~icons/boxicons/book'
 import PhCaretDown from '~icons/ph/caret-down'
 import PhCaretRight from '~icons/ph/caret-right'
 import PhCertificate from '~icons/ph/certificate'
@@ -58,8 +58,8 @@ import PhCheckCircle from '~icons/ph/check-circle'
 import PhCheckCircleFill from '~icons/ph/check-circle-fill'
 import PhCircleHalf from '~icons/ph/circle-half'
 import PhClock from '~icons/ph/clock'
-import ReportIcon from '@iconify-react/carbon/report';
-import KubernetesPodIcon from '@iconify-react/carbon/kubernetes-pod';
+import ReportIcon from '@iconify-react/carbon/report'
+import KubernetesPodIcon from '@iconify-react/carbon/kubernetes-pod'
 import PhClockCounterClockwise from '~icons/ph/clock-counter-clockwise'
 import PhCloudArrowDown from '~icons/ph/cloud-arrow-down'
 import PhCopy from '~icons/ph/copy'
@@ -107,7 +107,10 @@ import PhXCircle from '~icons/ph/x-circle'
 import PhXCircleFill from '~icons/ph/x-circle-fill'
 import SiHelm from '~icons/simple-icons/helm'
 
-type Glyph = FunctionComponent<SVGProps<SVGSVGElement>>
+// Icon packages do not all expose the same SVG prop type (Iconify's `width`
+// prop, for example, is string-only).  ElementType keeps the registry
+// compatible with both Phosphor and Iconify components.
+type Glyph = ElementType
 
 export interface AppIconProps {
   className?: string

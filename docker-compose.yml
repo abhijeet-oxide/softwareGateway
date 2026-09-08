@@ -226,6 +226,9 @@ services:
     expose:
       - "8080"
     deploy:
+      # podman-compose only scales when mode is explicit; docker compose
+      # defaults it to replicated but podman-compose does not.
+      mode: replicated
       replicas: ${CONTROLLER_REPLICAS:-1}
     healthcheck:
       test: ["CMD", "/coordinator", "--health-check"]
@@ -266,7 +269,16 @@ services:
     volumes:
       - ./deploy/products:/etc/softwaregateway/products:ro
     deploy:
+      # podman-compose only scales when mode is explicit; docker compose
+      # defaults it to replicated but podman-compose does not.
+      mode: replicated
       replicas: ${WORKER_REPLICAS:-2}
+    healthcheck:
+      test: ["CMD", "/worker", "--health-check"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
   # --- the UI ----------------------------------------------------------------
   web:

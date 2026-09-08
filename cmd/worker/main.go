@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,6 +40,35 @@ import (
 
 const component = "worker"
 
+// probeReadiness calls /readyz on the local listener. Used by -health-check.
+func probeReadiness() error {
+	addr := os.Getenv("SWGW_WORKER_ADDRESS")
+	if addr == "" {
+		addr = ":8081"
+	}
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+	// NewRequestWithContext rather than Client.Get: the linter forbids the
+	// context-less helpers, and a probe that cannot be cancelled is exactly
+	// the kind that hangs a container healthcheck.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/readyz", nil)
+	if err != nil {
+		return fmt.Errorf("not ready: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("not ready: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("not ready: %s", resp.Status)
+	}
+	return nil
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "worker: %v\n", err)
@@ -50,12 +80,24 @@ func run() error {
 	var (
 		configPath  = flag.String("config", "", "path to the system configuration file")
 		showVersion = flag.Bool("version", false, "print version and exit")
+		healthCheck = flag.Bool("health-check", false,
+			"probe this process's own readiness endpoint and exit 0 or 1")
 	)
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println(version.Get(component))
 		return nil
+	}
+
+	// A container healthcheck that needs no shell and no curl.
+	//
+	// The runtime image is distroless: there is no /bin/sh, no wget and no
+	// curl, so the only thing that can probe this process is this process.
+	// Without it a compose or Kubernetes healthcheck has nothing to call and
+	// dependent services cannot wait on readiness.
+	if *healthCheck {
+		return probeReadiness()
 	}
 
 	cfg, err := config.Load(*configPath)

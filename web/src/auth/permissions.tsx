@@ -83,6 +83,26 @@ export function useIdentity(): Identity {
 }
 
 /**
+ * The two letters that stand in for a person where there is no avatar.
+ *
+ * ONE derivation, because there are two places that draw them - the navigation
+ * card and the profile page - and two hand-written copies disagreed
+ * immediately: "Platform Administrator" was PL in the rail and PA on the page,
+ * so the same account was two people on one screen. Words first, not
+ * characters: an address, a login name and a display name all split on the
+ * same separators.
+ */
+export function initialsOf(of: string | undefined): string {
+  const letters = (of ?? '')
+    .split(/[\s@._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? '')
+    .join('')
+  return letters || '?'
+}
+
+/**
  * Whether this caller may do this thing, here.
  *
  * Every Download, Run Discovery, Retry, Pause, Stop, Apply and Promote control

@@ -1,20 +1,26 @@
-import { Alert, Button, Card, Col, Descriptions, Row, Space, Tag, Typography } from 'antd'
-import { useIdentity } from '../auth/permissions'
+import type { ReactNode } from 'react'
+import { Alert, Button, Space, Tag, Typography } from 'antd'
+import { initialsOf, useIdentity } from '../auth/permissions'
 import { identityClaims, isSignedIn, signOut } from '../auth/session'
-import { Value } from '../components/value'
-import { PageHeader } from '../components/layout'
-import { AppearanceSettings, InlineNotice, StatusPill } from '../uikit'
+import { AppearanceSettings, c, mono, SectionCard } from '../uikit'
 
 /**
  * Who the person signed in is, and what that gets them.
  *
- * Split out of Settings, which had grown into two pages sharing a scroll: a
- * database driver and a worker fleet on the same screen as somebody's own name
- * and the only way to sign out. They answer different questions and are opened
- * for different reasons - one of them by clicking your own name in the
- * navigation, which had led to a page about background workers.
+ * ONE surface, deliberately. This was four cards in a two-column grid, and the
+ * design system's own rule says why that was wrong: a page of identical white
+ * rectangles has no order in it, so the reader's own name, the roles they hold
+ * and a text-size control all sat at the same distance and the same weight. A
+ * profile is one subject. It reads top to bottom - who, then what that allows,
+ * then the preferences that are theirs to change.
  *
- * Everything here is about the reader. Nothing here is about the deployment.
+ * There is no page header either. A titleless one put Sign out alone in an
+ * empty band above the card, which is the page's own furniture holding an
+ * action that belongs to the ACCOUNT: it sits on the identity band beside the
+ * name it ends the session of.
+ *
+ * Split out of Settings, which had grown into two pages sharing a scroll: a
+ * database driver and a worker fleet on the same screen as somebody's own name.
  */
 export default function Profile() {
   const { who, loading } = useIdentity()
@@ -25,145 +31,257 @@ export default function Profile() {
   const claims = identityClaims()
   const name = who?.name || claims.name
   const email = who?.email || claims.email
-
+  const username = claims.preferredUsername
   const anonymous = Boolean(who && !who.authenticated)
   const productRoles = Object.entries(who?.productRoles ?? {})
+  const tenantRoles = who?.roles ?? []
+  const subtitle = [email, username && username !== name ? username : null]
+    .filter(Boolean)
+    .join('  ·  ')
 
   return (
-    <>
-      <PageHeader
-        extra={
-          isSignedIn() ? (
-            // Danger, and on its own, because it is the one control on this
-            // page that ends something. It lives here rather than in the
-            // navigation for the same reason: signing out is deliberate.
-            <Button danger onClick={() => void signOut()}>
-              Sign out
-            </Button>
-          ) : undefined
-        }
-      />
+    /* Bounded, because a profile read across fifteen hundred pixels is a label
+       at one edge and its value at the other. Flush, because the identity band
+       runs to the card's own edges - a tinted strip inset by the body padding
+       is a rectangle inside a rectangle. */
+    <SectionCard padded={false} style={{ maxWidth: 880 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 18,
+          padding: '22px 28px',
+          background: c.surface2,
+          borderBottom: `1px solid ${c.border}`,
+        }}
+      >
+        <Initials of={anonymous ? who?.subject : name || email || username} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 20, fontWeight: 600, lineHeight: 1.25, color: c.text }}>
+            {loading ? ' ' : anonymous ? 'Anonymous access' : name || username || 'Unnamed account'}
+          </div>
+          <div style={{ fontSize: 13, color: c.text2, marginTop: 3 }}>
+            {/* One line, not two rows of a table: an address and a login name
+                are how somebody recognises themselves, not facts to be looked
+                up. */}
+            {anonymous ? 'No identity was verified' : subtitle || 'No address on record'}
+          </div>
+          {!anonymous && tenantRoles.length + productRoles.length > 0 && (
+            <div style={{ marginTop: 9 }}>
+              <Space size={4} wrap>
+                {tenantRoles.map((r) => <Tag key={r} style={{ marginInlineEnd: 0 }}>{r}</Tag>)}
+                {productRoles.flatMap(([product, roles]) =>
+                  roles.map((r) => (
+                    <Tag key={`${product}:${r}`} style={{ marginInlineEnd: 0 }}>{`${product}: ${r}`}</Tag>
+                  )),
+                )}
+              </Space>
+            </div>
+          )}
+        </div>
+        {isSignedIn() && (
+          // The one control here that ENDS something, so it is the one thing
+          // said in the danger colour and the only button on the surface.
+          <Button danger onClick={() => void signOut()}>
+            Sign out
+          </Button>
+        )}
+      </div>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} xl={14}>
-          <Card title="Identity" loading={loading}>
-            {anonymous ? (
-              <Alert
-                type="info"
-                showIcon
-                message="Authentication is not enabled"
-                description={
-                  <Space direction="vertical" size={4}>
-                    <Typography.Text>
-                      This Coordinator accepts every caller as{' '}
-                      <Typography.Text code>{who?.subject}</Typography.Text> with full
-                      permissions. The only control protecting it is network isolation.
-                    </Typography.Text>
-                    <Typography.Text type="secondary">
-                      Everything this interface shows and does is already asked through a
-                      permission check, so switching authentication on changes what people
-                      can do without changing any page.
-                    </Typography.Text>
-                  </Space>
-                }
-              />
-            ) : (
-              <Descriptions column={1} size="small">
-                <Descriptions.Item label="Name">
-                  {/* The identity provider does not always assert a name, and a
-                      blank line is worse than saying so. */}
-                  <Value>{name}</Value>
-                </Descriptions.Item>
-                <Descriptions.Item label="Email"><Value>{email}</Value></Descriptions.Item>
-                {claims.preferredUsername ? (
-                  <Descriptions.Item label="Username">
-                    <Value>{claims.preferredUsername}</Value>
-                  </Descriptions.Item>
-                ) : null}
-                <Descriptions.Item label="Signed in with">
-                  {methodLabel(who?.method)}
-                </Descriptions.Item>
-                <Descriptions.Item label="Tenant">{who?.tenant || 'All tenants'}</Descriptions.Item>
-                <Descriptions.Item label="Account id">
-                  {/* Last, and named for what it is. It was the only thing this
-                      page showed, under the label "Signed in as", which made a
-                      person's own screen introduce them as a number. */}
-                  <Typography.Text type="secondary" copyable={Boolean(who?.subject)}>
-                    {who?.subject}
+      <div style={{ padding: '4px 28px 24px' }}>
+        {anonymous ? (
+          <Section label="Authentication" first>
+            <Alert
+              type="info"
+              showIcon
+              message="Authentication is not enabled"
+              description={
+                <Space direction="vertical" size={4}>
+                  <Typography.Text>
+                    This Coordinator accepts every caller as{' '}
+                    <Typography.Text code>{who?.subject}</Typography.Text> with full
+                    permissions. The only control protecting it is network isolation.
                   </Typography.Text>
-                </Descriptions.Item>
-              </Descriptions>
-            )}
-          </Card>
-        </Col>
+                  <Typography.Text type="secondary">
+                    Everything this interface shows and does is already asked through a
+                    permission check, so switching authentication on changes what people can
+                    do without changing any page.
+                  </Typography.Text>
+                </Space>
+              }
+            />
+          </Section>
+        ) : (
+          <>
+            <Section label="Sign-in" first>
+              <Field label="Method">{methodLabel(who?.method)}</Field>
+              <Field label="Tenant">{who?.tenant || 'All tenants'}</Field>
+              <Field label="Account id">
+                {/* Named for what it is. It was the only thing this page showed,
+                    under the label "Signed in as", which made a person's own
+                    screen introduce them as a number. */}
+                <Typography.Text
+                  type="secondary"
+                  copyable={Boolean(who?.subject)}
+                  style={{ fontFamily: mono, fontSize: 12.5 }}
+                >
+                  {who?.subject}
+                </Typography.Text>
+              </Field>
+            </Section>
 
-        <Col xs={24} xl={10}>
-          <Card title="Appearance">
-            <AppearanceSettings />
-          </Card>
-        </Col>
-
-        <Col xs={24}>
-          <Card title="Access">
-            <Descriptions column={1} size="small">
-              <Descriptions.Item label="Tenant roles">
+            <Section label="Access">
+              <Field label="Tenant roles">
                 {/* The two tiers are shown apart because they mean different
                     things: a tenant role covers products that do not exist yet,
-                    a product role names one. Merged, this page could not say
-                    which kind somebody held. */}
-                {who?.roles?.length ? (
-                  <Space size={4} wrap>
-                    {who.roles.map((r) => <Tag key={r}>{r}</Tag>)}
-                  </Space>
-                ) : (
-                  <Typography.Text type="secondary">None</Typography.Text>
-                )}
-              </Descriptions.Item>
-
-              <Descriptions.Item label="Product roles">
+                    a product role names one. */}
+                <Chips values={tenantRoles} />
+              </Field>
+              <Field label="Product roles">
                 {productRoles.length ? (
                   <Space direction="vertical" size={4}>
                     {productRoles.map(([product, roles]) => (
-                      <Space key={product} size={6} wrap>
-                        <StatusPill tone="neutral">{product}</StatusPill>
-                        {roles.map((r) => <Tag key={r}>{r}</Tag>)}
-                      </Space>
+                      <span key={product}>
+                        <Typography.Text strong style={{ fontSize: 13 }}>{product}</Typography.Text>
+                        <span style={{ marginLeft: 8 }}>
+                          <Chips values={roles} />
+                        </span>
+                      </span>
                     ))}
                   </Space>
                 ) : (
-                  <Typography.Text type="secondary">None</Typography.Text>
+                  <Muted>None</Muted>
                 )}
-              </Descriptions.Item>
-
-              <Descriptions.Item label="Permissions">
-                <Space size={4} wrap>
-                  {(who?.permissions ?? []).length ? (
-                    who?.permissions?.map((p) => (
-                      <Tag key={p} color={p === '*' ? 'gold' : undefined}>
-                        {p === '*' ? 'everything' : p}
-                      </Tag>
-                    ))
-                  ) : (
-                    <Typography.Text type="secondary">None</Typography.Text>
-                  )}
-                </Space>
-              </Descriptions.Item>
-
-              <Descriptions.Item label="Visible products">
+              </Field>
+              <Field label="Permissions">
+                <Chips
+                  values={(who?.permissions ?? []).map((p) => (p === '*' ? 'everything' : p))}
+                />
+              </Field>
+              <Field label="Visible products">
                 {who?.products?.length ? who.products.join(', ') : 'All products'}
-              </Descriptions.Item>
-            </Descriptions>
+              </Field>
+              <Note>
+                Roles are granted in the identity provider and arrive in the sign-in token.
+                Changing one takes effect at the next sign-in.
+              </Note>
+            </Section>
+          </>
+        )}
 
-            <div style={{ marginTop: 12 }}>
-              <InlineNotice tone="info">
-                Roles are granted in the identity provider and arrive in the sign-in
-                token. Changing one takes effect at the next sign-in.
-              </InlineNotice>
-            </div>
-          </Card>
-        </Col>
-      </Row>
-    </>
+        <Section label="Appearance">
+          <AppearanceSettings />
+        </Section>
+      </div>
+    </SectionCard>
+  )
+}
+
+/**
+ * A titled run of fields, separated from the one above by a rule rather than
+ * by another card. The label is small and quiet: it groups, it is not a
+ * heading somebody reads. The FIRST one draws no rule - the identity band
+ * above it already ends in one, and two hairlines a few pixels apart is the
+ * sort of detail that makes a page look assembled rather than designed.
+ */
+function Section({ label, first, children }: { label: string; first?: boolean; children: ReactNode }) {
+  return (
+    <div
+      style={
+        first
+          ? { marginTop: 20 }
+          : { marginTop: 22, paddingTop: 18, borderTop: `1px solid ${c.border}` }
+      }
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          color: c.text3,
+          marginBottom: 10,
+        }}
+      >
+        {label}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+/**
+ * One label and its value, on a grid so every value in the page starts at the
+ * same x. A definition list with each row sized to its own label is what makes
+ * a settings page look assembled rather than designed.
+ */
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(120px, 156px) 1fr',
+        gap: 12,
+        alignItems: 'baseline',
+        padding: '6px 0',
+        fontSize: 13.5,
+      }}
+    >
+      <div style={{ color: c.text2 }}>{label}</div>
+      <div style={{ color: c.text, minWidth: 0 }}>{children}</div>
+    </div>
+  )
+}
+
+/** A sentence about the section, not a field in it - so it is not given an
+ *  empty label and hung in the value column. */
+function Note({ children }: { children: ReactNode }) {
+  return (
+    <div style={{ marginTop: 10, fontSize: 12.5, lineHeight: 1.55, color: c.text3 }}>
+      {children}
+    </div>
+  )
+}
+
+function Chips({ values }: { values: string[] }) {
+  if (!values.length) return <Muted>None</Muted>
+  return (
+    <Space size={4} wrap>
+      {values.map((v) => <Tag key={v} style={{ marginInlineEnd: 0 }}>{v}</Tag>)}
+    </Space>
+  )
+}
+
+function Muted({ children }: { children: ReactNode }) {
+  return <span style={{ color: c.text3 }}>{children}</span>
+}
+
+/**
+ * The monogram. A profile that opens with a name and nothing else reads as a
+ * row from a table; one shape at the top is what makes it a person's page.
+ * Derived rather than stored - this product has no avatars to serve.
+ */
+function Initials({ of }: { of: string | undefined }) {
+  return (
+    <div
+      aria-hidden
+      style={{
+        width: 56,
+        height: 56,
+        flex: '0 0 56px',
+        borderRadius: '50%',
+        display: 'grid',
+        placeItems: 'center',
+        background: c.brandSoft,
+        color: c.brandStrong,
+        border: `1px solid ${c.brandBorder}`,
+        fontSize: 18,
+        fontWeight: 600,
+        letterSpacing: '0.02em',
+      }}
+    >
+      {initialsOf(of)}
+    </div>
   )
 }
 

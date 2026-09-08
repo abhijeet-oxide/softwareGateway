@@ -13,6 +13,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -271,12 +272,16 @@ func main() {
 			log.Fatalf("certificate for %v: %v", h.names, err)
 		}
 		srv := &http.Server{
-			Addr:              h.addr,
-			Handler:           proxy,
-			TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}},
+			Addr:    h.addr,
+			Handler: proxy,
+			TLSConfig: &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS12,
+			},
 			ReadHeaderTimeout: 10 * time.Second,
 		}
-		ln, err := net.Listen("tcp", h.addr)
+		var lc net.ListenConfig
+		ln, err := lc.Listen(context.Background(), "tcp", h.addr)
 		if err != nil {
 			log.Fatalf("listen %s: %v", h.addr, err)
 		}
@@ -398,10 +403,10 @@ func layerWeights(comp component) []int64 {
 	remaining := total
 	for i := range out {
 		var share int64
-		switch {
-		case i == 0:
+		switch i {
+		case 0:
 			share = total * 45 / 100
-		case i == comp.layers-1:
+		case comp.layers - 1:
 			share = remaining
 		default:
 			share = remaining / int64(comp.layers-i)

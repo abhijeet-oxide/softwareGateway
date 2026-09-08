@@ -43,10 +43,16 @@ RUN mkdir -p /usr/local/share/ca-certificates/extra && \
       echo "trusting operator-supplied CA certificates"; \
     else \
       cp /etc/ssl/certs/ca-certificates.crt /usr/local/share/ca-certificates/bundle.pem; \
-    fi && \
-    npm config set cafile /usr/local/share/ca-certificates/bundle.pem
-# NODE_EXTRA_CA_CERTS covers anything the build itself fetches over TLS.
-ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/bundle.pem
+    fi
+# Config comes from the ENVIRONMENT, not from `npm config set`.
+#
+# Two reasons, and the second is not obvious. `npm config set` WRITES to
+# /root/.npmrc, which the credentials secret is mounted over during install -
+# so the value would be silently shadowed exactly when it matters. And once
+# that path is a read-only mount, the write itself fails with a rofs error.
+# npm and pnpm both read NPM_CONFIG_*, which needs no writable file at all.
+ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/bundle.pem \
+    NPM_CONFIG_CAFILE=/usr/local/share/ca-certificates/bundle.pem
 
 # Manifests first so a source-only change does not re-install node_modules.
 COPY web/package.json web/pnpm-lock.yaml* web/pnpm-workspace.yaml* web/package-lock.json* ./
@@ -61,9 +67,22 @@ COPY web/package.json web/pnpm-lock.yaml* web/pnpm-workspace.yaml* web/package-l
 # UND_ERR_CONNECT_TIMEOUT before any dependency is even fetched. npm honours
 # both, so one configured registry serves the package manager and the packages.
 ARG PNPM_VERSION=12.3.4
-RUN npm config set registry "$NPM_REGISTRY" && \
+
+# Credentials for an authenticated registry arrive as a MOUNTED SECRET, never
+# as a build argument.
+#
+# An ARG carrying a token is written into the image's build history and is
+# readable by anyone who can pull the image - `docker history` prints it. A
+# secret mount exists only for the lifetime of this one RUN and touches no
+# layer. It is also the only mechanism that covers every auth style a registry
+# might document (_authToken, _auth, scoped registries) without this file
+# having to know which one you use.
+#
+# The mount is optional: with no credentials configured the default empty
+# npmrc is mounted and NPM_REGISTRY alone decides where packages come from.
+ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY}
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc \
     npm install -g "pnpm@$PNPM_VERSION" && \
-    pnpm config set registry "$NPM_REGISTRY" && \
     if [ -f pnpm-lock.yaml ]; then \
       pnpm install --frozen-lockfile; \
     elif [ -f package-lock.json ]; then npm ci; else npm install; fi

@@ -17,6 +17,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
@@ -116,17 +117,7 @@ func newAPIHarnessWith(t *testing.T, adjust func(*Deps), docs ...string) *apiHar
 		doc = docs[0]
 	}
 
-	st, err := store.Open(ctx, store.Config{
-		Driver: store.DriverSQLite,
-		DSN:    filepath.Join(t.TempDir(), "api.db"),
-	})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := store.Migrate(ctx, st, nil); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	st := storetest.Open(t)
 
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "vendor-a.yaml"), []byte(doc), 0o600); err != nil {
@@ -777,11 +768,8 @@ func TestAComparisonReportsProgressAndGivesUpWhenItStops(t *testing.T) {
 
 	var progress v1.CompareProgressResponse
 	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if h.get("/api/v1/comparisons/tok-1", &progress) == http.StatusOK &&
-			len(progress.Sides) == 2 {
-			break
-		}
+	for h.get("/api/v1/comparisons/tok-1", &progress) != http.StatusOK ||
+		len(progress.Sides) != 2 {
 		if time.Now().After(deadline) {
 			t.Fatal("the comparison never reported any progress")
 		}

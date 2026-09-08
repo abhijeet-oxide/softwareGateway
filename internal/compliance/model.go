@@ -507,8 +507,8 @@ type Result struct {
 	// of 1, rounded down)", "3 CPUs (Kubernetes copies the limit into the
 	// request)". Empty when the declared value is the effective one, which is
 	// most rows. See Assert.Effective.
-	Effective string `json:"effective,omitempty"`
-	Address     Address     `json:"address"`
+	Effective string  `json:"effective,omitempty"`
+	Address   Address `json:"address"`
 
 	// Observed and Expected are what the check saw and what it required, in the
 	// vendor's own units. A report that says only "failed" makes the vendor

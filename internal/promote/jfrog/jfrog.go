@@ -105,7 +105,7 @@ const (
 // a promote request is scoped to one tag (`tag`/`targetTag`); classify cannot
 // turn that into a better message, so promoteOne investigates instead of
 // merely reporting it.
-var errAmbiguousBadRequest = errors.New("Artifactory gave no further diagnosis")
+var errAmbiguousBadRequest = errors.New("no further diagnosis from Artifactory")
 
 func init() { promote.Register(Name, New) }
 
@@ -332,7 +332,7 @@ func (p *Promoter) promoteOne(
 			err, srcRepo, dstRepo)
 	}
 	if err2 := p.doPromote(ctx, client, srcRepo, targetPath, "", ""); err2 != nil {
-		return fmt.Errorf("%s (repository-level fallback also failed: %w)", err, err2)
+		return fmt.Errorf("%w (repository-level fallback also failed: %w)", err, err2)
 	}
 	return nil
 }

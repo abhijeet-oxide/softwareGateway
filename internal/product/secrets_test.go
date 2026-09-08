@@ -111,9 +111,12 @@ func TestResolverMissingSecretNamesThePath(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error")
 	}
-	// The operator needs to know where we looked.
-	if !strings.Contains(err.Error(), "/etc/softwaregateway/secrets/absent/password") {
-		t.Fatalf("error should name the expected path, got %v", err)
+	// The operator needs to know where we looked - spelled the way their own
+	// filesystem spells it, which is why the expectation is joined rather than
+	// written out with forward slashes.
+	want := filepath.Join("/etc/softwaregateway/secrets", "absent", "password")
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error should name %s, got %v", want, err)
 	}
 }
 

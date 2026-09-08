@@ -1,0 +1,13 @@
+# Copy to deploy/go/netrc (gitignored), fill in, then set in .env:
+#   GO_NETRC_FILE=./deploy/go/netrc
+#   GOPROXY=https://artifactory.corp/api/go/go,direct
+#
+# Mounted as a BUILD SECRET, so it never reaches an image layer. This is the
+# mechanism the Go toolchain itself documents for a private module proxy.
+#
+# GOSUMDB=off is usually also needed, because a private proxy cannot serve
+# checksums for modules the public sum database has never seen.
+
+machine artifactory.corp
+  login YOUR_USERNAME
+  password YOUR_API_TOKEN

@@ -1,7 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -41,6 +43,13 @@ import (
 // One transaction, and no store call inside it, because the SQLite pool is a
 // single connection: a BeginTx nested inside another waits for a connection the
 // same goroutine is holding, and never returns. See internal/store/sqlite.go.
+//
+// Rows go in BATCHED, several hundred to a statement, because these tests seed
+// a quarter of a million of them between them and a statement per row is not
+// free: under the race detector each round trip through the pure-Go SQLite
+// driver costs enough that the package as a whole passed Go's ten-minute test
+// timeout and CI never reached the assertions. The estate seeded is exactly the
+// same one - only the number of statements it takes to build it changed.
 func seedJobs(t *testing.T, h *activeHarness, ids []string, each int) {
 	t.Helper()
 
@@ -50,12 +59,52 @@ func seedJobs(t *testing.T, h *activeHarness, ids []string, each int) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	insert := h.packages.dialect.Rewrite(
-		`INSERT INTO jobs (transfer_id, kind, digest, size_bytes, source_repo_id,
-		                   target_repo_id, state, wave, attempts, max_attempts,
-		                   bytes_transferred, started_at, completed_at)
-		 VALUES (?, 'blob', ?, 1048576, ?, ?, ?, 0, 1, 8, 1048576, ?, ?)`)
+	const (
+		cols = 7 // the placeholders one row spends
+		// Rows per statement. 500*7 = 3,500 parameters, comfortably inside
+		// both SQLite's variable limit and Postgres' 65,535.
+		perStatement = 500
+	)
+	head := `INSERT INTO jobs (transfer_id, kind, digest, size_bytes, source_repo_id,
+	                           target_repo_id, state, wave, attempts, max_attempts,
+	                           bytes_transferred, started_at, completed_at)
+	         VALUES `
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+
+	// One prepared statement per batch SIZE, not per batch: every full batch
+	// has the same shape, so the driver parses it once and the tail statement
+	// is the only extra.
+	stmts := map[int]*sql.Stmt{}
+	prepared := func(rows int) *sql.Stmt {
+		if st, ok := stmts[rows]; ok {
+			return st
+		}
+		var b strings.Builder
+		b.WriteString(head)
+		for i := range rows {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString("(?, 'blob', ?, 1048576, ?, ?, ?, 0, 1, 8, 1048576, ?, ?)")
+		}
+		st, err := tx.PrepareContext(t.Context(), h.packages.dialect.Rewrite(b.String()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		stmts[rows] = st
+		return st
+	}
+
+	args := make([]any, 0, perStatement*cols)
+	flush := func() {
+		if len(args) == 0 {
+			return
+		}
+		if _, err := prepared(len(args)/cols).ExecContext(t.Context(), args...); err != nil {
+			t.Fatal(err)
+		}
+		args = args[:0]
+	}
 
 	for i, id := range ids {
 		for j := range each {
@@ -63,13 +112,15 @@ func seedJobs(t *testing.T, h *activeHarness, ids []string, each int) {
 			if j%17 == 0 {
 				state = "skipped"
 			}
-			if _, err := tx.ExecContext(t.Context(), insert,
-				id, fmt.Sprintf("sha256:%064x", i*1_000_000+j),
-				h.repoID, h.repoID, state, now, now); err != nil {
-				t.Fatal(err)
+			args = append(args, id, fmt.Sprintf("sha256:%064x", i*1_000_000+j),
+				h.repoID, h.repoID, state, now, now)
+			if len(args) == perStatement*cols {
+				flush()
 			}
 		}
 	}
+	flush()
+
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}

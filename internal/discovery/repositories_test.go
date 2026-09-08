@@ -15,6 +15,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/generic"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/transport"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
 	"github.com/abhijeet-oxide/softwareGateway/test/fakeregistry"
 )
 
@@ -232,17 +233,7 @@ func newMultiRepoHarness(t *testing.T, doc string) *multiRepoHarness {
 	reg := fakeregistry.New()
 	t.Cleanup(reg.Close)
 
-	st, err := store.Open(ctx, store.Config{
-		Driver: store.DriverSQLite,
-		DSN:    filepath.Join(t.TempDir(), "multi.db"),
-	})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := store.Migrate(ctx, st, nil); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	st := storetest.Open(t)
 
 	p := loadProduct(t, strings.ReplaceAll(doc, "REGISTRY_HOST", reg.Host()))
 	rec, err := catalog.NewCatalog(st).Reconcile(ctx, []*product.Product{p})

@@ -3,7 +3,6 @@ package discovery
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
 )
 
 // blockingCatalog holds a scan open until it is released, so a test can be
@@ -205,16 +205,6 @@ func recvScan(t *testing.T, ch <-chan ScanResult) ScanResult {
 func newCollapseStore(t *testing.T) *store.Packages {
 	t.Helper()
 
-	st, err := store.Open(t.Context(), store.Config{
-		Driver: store.DriverSQLite,
-		DSN:    filepath.Join(t.TempDir(), "collapse.db"),
-	})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := store.Migrate(t.Context(), st, nil); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	st := storetest.Open(t)
 	return store.NewPackages(st)
 }

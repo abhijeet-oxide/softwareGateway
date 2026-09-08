@@ -13,6 +13,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 	"github.com/abhijeet-oxide/softwareGateway/test/fakeregistry"
 )
@@ -210,16 +211,7 @@ spec:
 	}
 	p := res.Valid[0]
 
-	st, err := store.Open(t.Context(), store.Config{
-		Driver: store.DriverSQLite, DSN: filepath.Join(t.TempDir(), "g.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := store.Migrate(t.Context(), st, nil); err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t)
 	rec, err := catalog.NewCatalog(st).Reconcile(t.Context(), res.Valid)
 	if err != nil {
 		t.Fatal(err)
@@ -498,16 +490,7 @@ spec:
 	}
 	p := res.Valid[0]
 
-	st, err := store.Open(t.Context(), store.Config{
-		Driver: store.DriverSQLite, DSN: filepath.Join(t.TempDir(), "plain.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := store.Migrate(t.Context(), st, nil); err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t)
 	rec, err := catalog.NewCatalog(st).Reconcile(t.Context(), res.Valid)
 	if err != nil {
 		t.Fatal(err)
@@ -940,16 +923,7 @@ spec:
 	}
 	p := res.Valid[0]
 
-	st, err := store.Open(t.Context(), store.Config{
-		Driver: store.DriverSQLite, DSN: filepath.Join(t.TempDir(), "f.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := store.Migrate(t.Context(), st, nil); err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t)
 	rec, err := catalog.NewCatalog(st).Reconcile(t.Context(), res.Valid)
 	if err != nil {
 		t.Fatal(err)

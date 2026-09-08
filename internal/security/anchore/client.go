@@ -191,15 +191,6 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	return err
 }
 
-// doService calls Anchore's service API, used only for image submission. This
-// deployment accepts submissions there with a flat tag request, while the v2
-// image endpoint rejects the same registry image by digest.
-func (c *Client) doService(ctx context.Context, method, path string, body, out any) error {
-	service := *c
-	service.endpoint = c.service
-	return service.do(ctx, method, path, body, out)
-}
-
 // raw performs one request and returns the response body untouched.
 //
 // # Why the bytes and not a decoded value

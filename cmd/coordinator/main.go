@@ -74,8 +74,16 @@ func probeReadiness() error {
 	if strings.HasPrefix(addr, ":") {
 		addr = "127.0.0.1" + addr
 	}
-	c := &http.Client{Timeout: 3 * time.Second}
-	resp, err := c.Get("http://" + addr + "/readyz")
+	// NewRequestWithContext rather than Client.Get: the linter forbids the
+	// context-less helpers, and a probe that cannot be cancelled is exactly
+	// the kind that hangs a container healthcheck.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/readyz", nil)
+	if err != nil {
+		return fmt.Errorf("not ready: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("not ready: %w", err)
 	}

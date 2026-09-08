@@ -193,6 +193,8 @@ services:
         NO_PROXY: ${NO_PROXY:-}
         GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
         GOSUMDB: ${GOSUMDB:-sum.golang.org}
+      secrets:
+        - netrc
     restart: unless-stopped
     depends_on:
       postgres:
@@ -250,6 +252,8 @@ services:
         NO_PROXY: ${NO_PROXY:-}
         GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
         GOSUMDB: ${GOSUMDB:-sum.golang.org}
+      secrets:
+        - netrc
     restart: unless-stopped
     depends_on:
       controller:
@@ -279,6 +283,10 @@ services:
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-}
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
+      # Credentials as a mounted secret, never a build arg - an ARG with a
+      # token is permanently readable in `docker history`.
+      secrets:
+        - npmrc
     restart: unless-stopped
     depends_on:
       controller:
@@ -293,3 +301,14 @@ services:
 volumes:
   pgdata:
   patshare:
+
+secrets:
+  # Points at an empty file by default, because compose refuses to start when
+  # a declared secret's source is missing and most builds need no credentials.
+  # For an authenticated registry: copy deploy/npm/npmrc.example to
+  # deploy/npm/npmrc, fill it in, and set NPM_CONFIG_FILE=./deploy/npm/npmrc
+  npmrc:
+    file: ${NPM_CONFIG_FILE:-./deploy/npm/npmrc.default}
+  # Same mechanism for a private Go module proxy.
+  netrc:
+    file: ${GO_NETRC_FILE:-./deploy/go/netrc.default}

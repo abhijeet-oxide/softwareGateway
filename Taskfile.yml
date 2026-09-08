@@ -85,8 +85,12 @@ tasks:
     deps: [build:backend, build:frontend]
 
   build:backend:
-    desc: Build the coordinator and worker binaries into bin/
-    deps: [build:coordinator, build:worker]
+    desc: Build the coordinator, worker and transferctl binaries into bin/
+    # transferctl belongs here: it is one of the three binaries this product
+    # ships (docs/design/00 section 5.3), CI asserts all three are runnable
+    # after `task build`, and build:all cross-compiles all three. Leaving it
+    # out made `task build` disagree with every other definition of "built".
+    deps: [build:coordinator, build:worker, build:transferctl]
 
   build:frontend:
     desc: Build the frontend production bundle
@@ -152,13 +156,21 @@ tasks:
     # NOTE: unit tests MUST NOT require Docker. They run against SQLite and an
     # in-process OCI registry, because a suite that needs containers is a suite
     # developers run less often - and the difference compounds.
+    #
+    # The timeout is stated rather than inherited. Go's default is ten minutes
+    # per PACKAGE, which is a language default and not a budget anybody here
+    # chose: internal/store carries scale tests that seed a hundred and fifty
+    # thousand job rows on purpose, and under the race detector that package
+    # sat right on the ten-minute line - CI failed on the limit rather than on
+    # anything the tests said. Twenty is the budget; a package that reaches it
+    # is hung, not slow.
     cmds:
-      - go test -race ./...
+      - go test -race -timeout 20m ./...
 
   test:short:
     desc: Run unit tests without the race detector
     cmds:
-      - go test ./...
+      - go test -timeout 20m ./...
 
   test:pkg:
     desc: 'Test one package (task test:pkg -- ./internal/discovery/)'
@@ -336,11 +348,20 @@ tasks:
 
   validate:
     desc: Validate the sample product configuration
+    # dev/products.example/ is the COMMITTED reference. dev/products/ is a
+    # developer's own working copy and is gitignored, so validating that path
+    # fails on any fresh checkout - CI included, which is how this was found.
     cmds:
-      - go run ./cmd/transferctl config validate ./dev/products
+      - go run ./cmd/transferctl config validate ./dev/products.example
 
   validate:rejects-broken:
     desc: Confirm the validator actually rejects bad configuration
+    # Unix-only, deliberately: this is a shell fixture - heredoc, mktemp, trap
+    # - and rewriting it to be portable would obscure what it asserts. The
+    # three error classes it covers each have a unit test in
+    # internal/product/validate_test.go that pins the exact field path, so
+    # nothing is unchecked on Windows; only this CLI-level smoke test is.
+    platforms: [linux, darwin]
     # A validator that passes everything is worse than none, because it is
     # trusted. This asserts the negative case.
     #

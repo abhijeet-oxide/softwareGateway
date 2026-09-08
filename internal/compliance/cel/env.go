@@ -105,6 +105,7 @@ const (
 	FnRuntimeKey   = "runtimeLabelKey"
 	FnBuiltinGroup = "builtinApiGroup"
 	FnDecode64     = "decodeBase64"
+	// #nosec G101 -- the NAME of a CEL function, not a credential.
 	FnCredClass    = "credentialClass"
 	FnConfigRefs   = "configRefs"
 	FnSorted       = "sorted"

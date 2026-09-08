@@ -3,7 +3,6 @@ package discovery
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
 )
 
 // gate records the highest number of callers inside it at once.
@@ -267,17 +267,7 @@ func newGatedScanner(
 	// Real catalog rows: `repositories` has a NOT NULL product_id, so a scanner
 	// pointed at an unreconciled product fails on the foreign key before it
 	// reaches the registry at all.
-	st, err := store.Open(t.Context(), store.Config{
-		Driver: store.DriverSQLite,
-		DSN:    filepath.Join(t.TempDir(), "concurrency.db"),
-	})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := store.Migrate(t.Context(), st, nil); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	st := storetest.Open(t)
 	rec, err := catalog.NewCatalog(st).Reconcile(t.Context(), []*product.Product{p})
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)

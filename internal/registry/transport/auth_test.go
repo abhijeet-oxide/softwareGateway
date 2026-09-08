@@ -30,13 +30,13 @@ func TestARefusedTokenIsRetriedRatherThanTrustedForever(t *testing.T) {
 	})
 	mux.HandleFunc("/v2/repo/manifests/orb_1.0", func(w http.ResponseWriter, r *http.Request) {
 		n := resourceHits.Add(1)
-		switch {
-		case n == 1:
+		switch n {
+		case 1:
 			// No token attached yet: the ordinary first challenge.
 			w.Header().Set("WWW-Authenticate",
 				fmt.Sprintf(`Bearer realm="%s",service="registry",scope="repository:repo:pull,push"`, realmURL))
 			w.WriteHeader(http.StatusUnauthorized)
-		case n == 2:
+		case 2:
 			// A brand-new token, refused anyway — the replication-lag case.
 			w.Header().Set("WWW-Authenticate",
 				fmt.Sprintf(`Bearer realm="%s",service="registry",scope="repository:repo:pull,push"`, realmURL))
@@ -56,7 +56,12 @@ func TestARefusedTokenIsRetriedRatherThanTrustedForever(t *testing.T) {
 	realmURL = srv.URL + "/token"
 
 	c := mustClient(t, Config{Registry: "test-registry", Repository: "repo"})
-	resp, err := c.Get(srv.URL + "/v2/repo/manifests/orb_1.0")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		srv.URL+"/v2/repo/manifests/orb_1.0", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := c.Do(req)
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -96,7 +101,12 @@ func TestAGenuinelyBadCredentialStillFailsFast(t *testing.T) {
 	realmURL = srv.URL + "/token"
 
 	c := mustClient(t, Config{Registry: "test-registry", Repository: "repo"})
-	resp, err := c.Get(srv.URL + "/v2/repo/manifests/orb_1.0")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		srv.URL+"/v2/repo/manifests/orb_1.0", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := c.Do(req)
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -155,7 +165,7 @@ func TestABodyWriteCanReauthenticateAfterTokenExpiry(t *testing.T) {
 	c := mustClient(t, Config{Registry: "test-registry", Repository: "repo"})
 
 	// A body reader with NO GetBody, as ORAS constructs a manifest PUT.
-	req, err := http.NewRequest(http.MethodPut, srv.URL+"/v2/repo/manifests/orb_1.0",
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/v2/repo/manifests/orb_1.0",
 		nopGetBody{strings.NewReader(manifest)})
 	if err != nil {
 		t.Fatal(err)

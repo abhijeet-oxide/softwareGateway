@@ -150,7 +150,13 @@ func run(ctx context.Context, checks []namedCheck) Report {
 			res := c.check(ctx)
 			res.Name = c.name
 			if res.Latency == 0 {
-				res.Latency = time.Since(start)
+				// A zero latency is the sentinel for "the check did not report
+				// one", so a measurement that rounds to zero must not be left
+				// looking like an absent one. Windows' clock ticks coarsely
+				// enough that an instantaneous check really does measure 0.
+				if res.Latency = time.Since(start); res.Latency == 0 {
+					res.Latency = time.Nanosecond
+				}
 			}
 			results[i] = res
 		}(i, c)

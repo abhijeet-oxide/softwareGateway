@@ -319,6 +319,14 @@ services:
       zitadel-init:
         condition: service_completed_successfully
     environment:
+      # THE DRIVER AS WELL AS THE DSN. They are two settings and the driver
+      # defaults to sqlite, so a DSN on its own gave a Coordinator that opened
+      # a LOCAL FILE, migrated it, served from it and wrote the whole estate
+      # into the container - while this Postgres sat empty and the only clue
+      # was one startup line saying "DEVELOPMENT ONLY" beside the Postgres URL
+      # it had ignored. `docker compose down` then took the data with it.
+      # A mismatch is refused at startup now rather than defaulted around.
+      SWGW_DATABASE_DRIVER: postgres
       SWGW_DATABASE_DSN: postgres://swgw:${POSTGRES_PASSWORD:-INSECURE-local-dev-password}@postgres:5432/swgw?sslmode=disable
       # The issuer must be the PUBLIC url: it is what ZITADEL stamps into the
       # token's `iss`, so validating against the internal name fails.
@@ -346,11 +354,25 @@ services:
       mode: replicated
       replicas: ${CONTROLLER_REPLICAS:-1}
     healthcheck:
+      # READINESS, not liveness, and that is what every depends_on in this file
+      # is waiting for. `--health-check` asks this process's own /readyz over
+      # the loopback - the runtime image is distroless, so there is no shell,
+      # no wget and no curl, and the only thing that can probe this process is
+      # this process. Ready here means: the database answers, its schema is the
+      # one this build expects, and the product configuration loaded.
+      #
+      # Liveness is a separate endpoint (/healthz, /livez) and is deliberately
+      # NOT used here: compose does not restart on unhealthy, so wiring the
+      # weaker probe in would only make dependents start against a Coordinator
+      # that cannot serve them.
       test: ["CMD", "/coordinator", "--health-check"]
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 15s
+      # Migrations run at startup and a first boot applies all of them.
+      # Failures inside the start period do not count against retries, so this
+      # is a budget for a slow first start rather than added latency.
+      start_period: 30s
 
   # --- the data plane --------------------------------------------------------
   # Stateless by design: workers stream blobs registry to registry and hold
@@ -378,7 +400,11 @@ services:
         condition: service_healthy
     environment:
       SWGW_WORKER_COORDINATORENDPOINT: http://controller:8080
-      SWGW_DATABASE_DSN: postgres://swgw:${POSTGRES_PASSWORD:-INSECURE-local-dev-password}@postgres:5432/swgw?sslmode=disable
+      # NO DATABASE. A worker holds no database credentials and contains no
+      # SQL (docs/design/00 section 5.2) - it leases over HTTP and streams
+      # blobs registry to registry. The DSN that used to be here was never
+      # read, and handing the data plane a database password to ignore is a
+      # credential in one more place for no reason at all.
     # A worker must see the SAME product configuration as the controller, or it
     # leases jobs it cannot execute and says so rather than failing quietly.
     volumes:
@@ -389,6 +415,17 @@ services:
       mode: replicated
       replicas: ${WORKER_REPLICAS:-2}
     healthcheck:
+      # Readiness: the control plane is reachable and there is product
+      # configuration to work against. Deliberately NOT "is this worker being
+      # given work" - an idle queue is not an unhealthy worker, and a
+      # Coordinator that refuses this worker's credentials is not something
+      # restarting this container would fix. That one is reported by the deep
+      # check at /api/v1/system:healthCheck on this container's probe port.
+      #
+      # A wedged lease loop IS caught, by liveness rather than by this: see
+      # internal/worker/pulse.go. Compose does not act on it, but Kubernetes
+      # does, which is the deployment where a silently dead worker holding a
+      # slot in the fleet costs the most.
       test: ["CMD", "/worker", "--health-check"]
       interval: 10s
       timeout: 5s
@@ -431,6 +468,11 @@ services:
       - oidcshare:/oidc:ro
     ports:
       - "${WEB_PORT:-8000}:80"
+    # No healthcheck here: this image declares its own, and it is a better one
+    # than a line in this file could be. See build/Dockerfile.web - it proves
+    # nginx is serving, that the entrypoint published the SPA's runtime
+    # configuration, and that the Coordinator answers through this tier's own
+    # proxy. Overriding it here would replace three facts with one.
 
 volumes:
   pgdata:

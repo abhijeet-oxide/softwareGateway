@@ -1,0 +1,82 @@
+# The Microsoft directory, replaced by one whose answers can be read.
+#
+#   ./deploy/mock-entra/mkcerts.sh
+#   docker compose -f docker-compose.yml -f docker-compose.mock-entra.yml up -d --force-recreate
+#
+# NEVER part of a deployment. It is a second file, named explicitly on the
+# command line, and it exists so that a sign-in failure can be reproduced on a
+# laptop instead of diagnosed by redeploying against a live tenant.
+#
+# What it changes, and why each one is needed:
+#
+#   mock-entra          answers as login.microsoftonline.com and
+#                       graph.microsoft.com. Those two names are compiled into
+#                       ZITADEL's Microsoft connector, so a network ALIAS is
+#                       how a mock gets to be them: Docker's embedded DNS hands
+#                       every container on this network the mock's address for
+#                       both. Nothing about the connector is reconfigured, which
+#                       is the point - the code path under test is the real one.
+#   SSL_CERT_FILE       Go reads it, and it is how the two containers that call
+#                       the mock come to trust a certificate issued by
+#                       mkcerts.sh. It REPLACES the system roots rather than
+#                       adding to them; in this overlay nothing else is called
+#                       over TLS, so that is contained.
+#   ZITADEL_HTTPCLIENT_DENYLIST
+#                       ZITADEL refuses to make outbound calls to private
+#                       address space, which is exactly where a mock on a
+#                       compose network lives. An inert value is the documented
+#                       way to stand the check down; an EMPTY value reads as
+#                       unset and leaves the default in place, which is the
+#                       shape of this that wastes an afternoon.
+#   8443 published      the browser is redirected to login.microsoftonline.com
+#                       as well, so a test driving a real browser needs a route
+#                       to the mock from the host. See deploy/mock-entra/README.md
+#                       for the resolver rule that does it.
+services:
+  mock-entra:
+    image: ${SEEDER_IMAGE:-node:22.23.2-alpine}
+    restart: unless-stopped
+    volumes:
+      - ./deploy/mock-entra:/mock:ro
+    environment:
+      MOCK_DIRECTORY: /mock/directory.json
+      MOCK_TLS_KEY: /mock/certs/mock.key
+      MOCK_TLS_CERT: /mock/certs/mock.crt
+      MOCK_PORT: "443"
+    entrypoint: ["node", "/mock/server.mjs"]
+    ports:
+      - "${MOCK_ENTRA_PORT:-8443}:443"
+    networks:
+      default:
+        aliases:
+          - login.microsoftonline.com
+          - graph.microsoft.com
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('node:tls').connect({host:'127.0.0.1',port:443,rejectUnauthorized:false},function(){process.exit(0)}).on('error',function(){process.exit(1)})"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  zitadel:
+    depends_on:
+      mock-entra:
+        condition: service_started
+    environment:
+      SSL_CERT_FILE: /mock/certs/ca.crt
+      ZITADEL_HTTPCLIENT_DENYLIST: '255.255.255.255/32'
+    volumes:
+      - ./deploy/mock-entra/certs:/mock/certs:ro
+
+  zitadel-init:
+    depends_on:
+      mock-entra:
+        condition: service_healthy
+    environment:
+      # Node has its own trust store and does not read SSL_CERT_FILE.
+      NODE_EXTRA_CA_CERTS: /mock/certs/ca.crt
+      SSO_DISPLAY_NAME: ${SSO_DISPLAY_NAME:-Microsoft}
+      SSO_ISSUER: https://login.microsoftonline.com/${MOCK_ENTRA_TENANT:-11111111-2222-3333-4444-555555555555}/v2.0
+      SSO_CLIENT_ID: ${MOCK_ENTRA_CLIENT_ID:-mock-entra-app}
+      SSO_CLIENT_SECRET: ${MOCK_ENTRA_CLIENT_SECRET:-aBc8Q~mock.secret_value-0123456789}
+    volumes:
+      - ./deploy/mock-entra/certs:/mock/certs:ro

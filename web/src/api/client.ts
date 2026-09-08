@@ -1,4 +1,5 @@
 import type { Problem, ErrorCode } from './types'
+import { authorization, renewSession, requireSignIn } from '../auth/session'
 
 /**
  * The HTTP client, mirroring pkg/apis/softwaregateway/v1/client.go.
@@ -94,8 +95,17 @@ function release(): void {
   inFlight--
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * One call, with the session's bearer token on it and one renewal in reserve.
+ *
+ * `renewed` is how the retry ends: a 401 is worth exactly one attempt to renew
+ * the token and try again, because the common cause is a token that expired
+ * between two clicks and the uncommon one is a Coordinator that will reject
+ * every token this browser can produce. See ../auth/session.
+ */
+async function request<T>(path: string, init?: RequestInit, renewed = false): Promise<T> {
   let response: Response
+  const auth = await authorization()
   await acquire()
   try {
     response = await fetch(BASE + path, {
@@ -103,6 +113,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       headers: {
         Accept: 'application/json',
         ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+        ...auth,
         ...init?.headers,
       },
     })
@@ -114,6 +125,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // and releasing here means a slow parse cannot hold a connection nobody is
     // using any more.
     release()
+  }
+
+  if (response.status === 401 && !renewed && (await renewSession())) {
+    return request<T>(path, init, true)
   }
 
   if (!response.ok) {
@@ -130,6 +145,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         detail: `The server answered ${response.status} without an error document.`,
       }
     }
+    // Signing in is decided HERE and nowhere else, because this is the only
+    // place that sees every unauthenticated answer. A page that handled its
+    // own 401 would send the browser to the identity provider once per read on
+    // screen, and PERMISSION_DENIED would join in - which is a person who is
+    // signed in and not allowed, and no amount of signing in again fixes it.
+    if (problem.code === 'UNAUTHENTICATED') requireSignIn()
     throw new ApiError(problem, response.status)
   }
 
@@ -180,7 +201,7 @@ export async function fetchText(url: string): Promise<string> {
   let response: Response
   await acquire()
   try {
-    response = await fetch(url, { headers: { Accept: '*/*' } })
+    response = await fetch(url, { headers: { Accept: '*/*', ...(await authorization()) } })
   } catch (cause) {
     throw new UnreachableError(cause)
   } finally {
@@ -215,7 +236,7 @@ export async function download(url: string): Promise<void> {
   let response: Response
   await acquire()
   try {
-    response = await fetch(url, { headers: { Accept: '*/*' } })
+    response = await fetch(url, { headers: { Accept: '*/*', ...(await authorization()) } })
   } catch (cause) {
     throw new UnreachableError(cause)
   } finally {

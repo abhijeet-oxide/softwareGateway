@@ -443,30 +443,21 @@ tasks:
   # ----------------------------------------------------------------- docker --
 
   images:
-    desc: Build the stack's images with the right flags for this engine
+    desc: Build the stack's images with whichever engine is installed
     summary: |
       Builds the three images docker-compose.yml declares.
 
-      Under podman this passes --parallel 1, and that is not a preference.
-      podman's remote client copies each build secret INTO the build context
-      as `podman-build-secret-*` and ships it in the context tar, so three
-      concurrent builds over one context race: one build's tar walker reaches
-      another's secret between the file being created at zero bytes and the
-      content being written, and archive/tar refuses the copy with
-      "write too long". Building one at a time removes the overlap.
-
-      Docker needs no such flag: buildx streams secrets over its session
-      rather than through the context.
-
       Extra arguments are passed through:  task images -- --no-cache
+
+      If a podman build fails with "archive/tar: write too long", the cause is
+      a build secret whose file is not empty - see deploy/STACK.md. It is not
+      concurrency, and building serially does not help.
     cmds:
       - |
         if docker compose version >/dev/null 2>&1; then
-          echo "docker compose build {{.CLI_ARGS}}"
           docker compose build {{.CLI_ARGS}}
         elif command -v podman-compose >/dev/null 2>&1; then
-          echo "podman-compose --parallel 1 build {{.CLI_ARGS}}"
-          podman-compose --parallel 1 build {{.CLI_ARGS}}
+          podman-compose build {{.CLI_ARGS}}
         else
           echo "no docker compose and no podman-compose on PATH" >&2
           exit 1

@@ -1,3 +1,0 @@
-# Intentionally empty. See deploy/npm/npmrc.default for why a default file
-# must exist. For an authenticated Go module proxy, copy netrc.example to
-# deploy/go/netrc and set GO_NETRC_FILE=./deploy/go/netrc in .env

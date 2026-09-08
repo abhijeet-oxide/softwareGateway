@@ -6,7 +6,7 @@ import {
   ScaleOutlined, SettingOutlined,
 } from './icons'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { useIdentity } from './auth/permissions'
+import { initialsOf, useIdentity } from './auth/permissions'
 import { identityClaims } from './auth/session'
 import { useTransferActivity, useVersion, useWorkers } from './api/queries'
 import { describeFleet, summariseFleet } from './domain/fleet'
@@ -229,9 +229,14 @@ export function Shell({ children }: { children: ReactNode }) {
   // not - so in practice this falls through to the ID token, which is where
   // OpenID Connect puts who somebody is. See auth/session identityClaims.
   const claims = identityClaims()
+  const navName = who?.name || claims.name || who?.email || claims.email
+    || claims.preferredUsername || who?.subject || 'Not signed in'
   const profile: NavProfile = {
-    name: who?.name || claims.name || who?.email || claims.email
-      || claims.preferredUsername || who?.subject || 'Not signed in',
+    name: navName,
+    // Derived HERE rather than by the shared kit, which falls back to the
+    // first two characters of the name: that reads "Platform Administrator"
+    // as PL while the profile page says PA, and one account looks like two.
+    initials: initialsOf(navName),
     sub: who?.authenticated
       ? heldRoles.join(', ') || 'No roles'
       : 'Not signed in',

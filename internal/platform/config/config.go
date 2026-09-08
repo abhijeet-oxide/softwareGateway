@@ -1058,6 +1058,26 @@ func (c SystemConfig) Validate() error {
 	if c.Database.DSN == "" {
 		return fmt.Errorf("database.dsn: required")
 	}
+	// THE DRIVER AND THE DSN HAVE TO AGREE, and nothing else notices when they
+	// do not.
+	//
+	// They are two settings, and the driver defaults to sqlite, so handing this
+	// service a Postgres DSN and nothing else produces a process that opens a
+	// LOCAL FILE, applies every migration to it, serves happily, and writes the
+	// entire estate somewhere that disappears with the container - while the
+	// Postgres database it was pointed at sits empty and the only clue is one
+	// startup line saying "DEVELOPMENT ONLY" next to the Postgres URL it
+	// ignored. That is not a configuration this can accept and guess about.
+	if postgresDSN(c.Database.DSN) && c.Database.Driver != "postgres" {
+		return fmt.Errorf(
+			"database.driver is %q but database.dsn names a PostgreSQL server (%s): set database.driver to postgres, or SWGW_DATABASE_DRIVER=postgres",
+			c.Database.Driver, redactDSN(c.Database.DSN))
+	}
+	if c.Database.Driver == "postgres" && !postgresDSN(c.Database.DSN) {
+		return fmt.Errorf(
+			"database.driver is postgres but database.dsn is not a PostgreSQL connection string (%s)",
+			redactDSN(c.Database.DSN))
+	}
 	if c.Server.Address == "" {
 		return fmt.Errorf("server.address: required")
 	}
@@ -1096,3 +1116,38 @@ func (c SystemConfig) SecretsDir() string { return c.ConfigDir + "/secrets" }
 // IsProduction reports whether the store is production-grade. Used to warn at
 // startup that SQLite is a development convenience only.
 func (c SystemConfig) IsProduction() bool { return c.Database.Driver == "postgres" }
+
+// postgresDSN reports whether a DSN names a PostgreSQL server.
+//
+// Both spellings lib/pq accepts: a URL, and the keyword/value form. Anything
+// else - a path, a file: URL, ":memory:" - is SQLite's.
+func postgresDSN(dsn string) bool {
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		return true
+	}
+	// The keyword form has no scheme, so it is recognised by its keywords.
+	// `host=` alone is enough and cannot appear in a file path.
+	return strings.Contains(dsn, "host=") && strings.Contains(dsn, "dbname=")
+}
+
+// redactDSN renders a DSN safely enough to put in an error a user will see.
+//
+// An error message about the database is exactly the message somebody pastes
+// into a ticket, so the password never travels with it.
+func redactDSN(dsn string) string {
+	at := strings.LastIndex(dsn, "@")
+	scheme := strings.Index(dsn, "://")
+	if at < 0 || scheme < 0 || at < scheme {
+		if i := strings.Index(dsn, "password="); i >= 0 {
+			end := strings.IndexByte(dsn[i:], ' ')
+			if end < 0 {
+				return dsn[:i] + "password=REDACTED"
+			}
+			return dsn[:i] + "password=REDACTED" + dsn[i+end:]
+		}
+		return dsn
+	}
+	// Keep the scheme and everything from the host on; the credentials are
+	// what sits between them.
+	return dsn[:scheme+3] + "REDACTED@" + dsn[at+1:]
+}

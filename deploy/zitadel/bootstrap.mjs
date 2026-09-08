@@ -32,6 +32,7 @@ if (process.env.SSO_ISSUER && process.env.BOOTSTRAP_ADMIN_PASSWORD) {
 
 const fs   = await import('node:fs/promises');
 const http = await import('node:http');
+const { createHash } = await import('node:crypto');
 const say = (...a) => console.log('  ' + a.join(' '));
 const list = (v, d) => (v ?? d).split(',').map(s => s.trim()).filter(Boolean);
 
@@ -338,25 +339,64 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
      * seeder said "exists", the old credentials stayed, and every sign-in kept
      * failing with a Microsoft error about a secret that had already been
      * fixed. .env is the source of truth for these three values, and re-running
-     * this container is how they are applied. */
+     * this container is how they are applied.
+     *
+     * ALWAYS a write, never a write-if-different. The client id and issuer can
+     * be read back and compared; the secret cannot, and skipping the write
+     * when the two readable fields happen to match would leave a secret
+     * changed by hand in the console standing in place of the one in .env. */
     const stored = existing.oidcConfig || {};
     const r = await api('PUT', `/management/v1/idps/${idpId}/oidc_config`, oidc);
     if (r.__status >= 400) {
       console.error(`FATAL: could not update the '${name}' connector:`, JSON.stringify(r));
       process.exit(1);
     }
-    say(`SSO connector '${name}' updated from .env`);
+    say(`SSO connector '${name}' reconciled from .env`);
     if (stored.clientId && stored.clientId !== oidc.clientId) {
-      say(`  client id changed: ${stored.clientId} -> ${oidc.clientId}`);
+      say(`  client id CHANGED: ${stored.clientId} -> ${oidc.clientId}`);
     }
     if (stored.issuer && stored.issuer !== oidc.issuer) {
-      say(`  issuer changed: ${stored.issuer} -> ${oidc.issuer}`);
+      say(`  issuer CHANGED: ${stored.issuer} -> ${oidc.issuer}`);
     }
   }
 
+  /* Whether the SECRET moved, which is the one thing here that cannot be
+   * answered by reading it back: ZITADEL returns a connector's client id and
+   * issuer and never its secret, by design.
+   *
+   * So the seeder remembers a FINGERPRINT of what it last wrote and compares
+   * that. A truncated SHA-256 of a forty character high-entropy secret says
+   * "the same" or "not the same" and nothing else - it cannot be turned back
+   * into the secret, and it lives in the same volume as the machine tokens,
+   * which is already the most privileged thing in this stack.
+   *
+   * Without it the seeder printed "updated from .env" on every run whether or
+   * not anything had moved, which is the kind of line people stop reading
+   * exactly before the run where it mattered. */
+  const fingerprintFile = '/pat/sso-fingerprint.json';
+  const fingerprint = createHash('sha256')
+    .update(`${oidc.issuer}\n${oidc.clientId}\n${secret}`)
+    .digest('hex').slice(0, 16);
+  const previous = await fs.readFile(fingerprintFile, 'utf8')
+    .then(t => { try { return JSON.parse(t); } catch { return {}; } })
+    .catch(() => ({}));
+
+  if (!previous.secret) {
+    say(`  client secret RECORDED (${secret.length} characters)`);
+  } else if (previous.secret !== fingerprint) {
+    say(`  client secret CHANGED (${secret.length} characters)`);
+  } else {
+    say(`  client secret unchanged (${secret.length} characters)`);
+  }
+  await writeShared(fingerprintFile,
+    JSON.stringify({ secret: fingerprint, clientId: oidc.clientId, issuer: oidc.issuer }, null, 2) + '\n',
+    0o600);
+
   /* What was actually sent, in terms that can be checked against the portal
    * without the secret itself reaching a log or a support ticket. The length
-   * is the useful part: a secret ID is 36 characters, a secret value is not. */
+   * is the useful part twice over: a secret ID is 36 characters and a value is
+   * not, and a value shortened by .env expanding a $ inside it comes out
+   * shorter than the portal shows. */
   say(`  client id     : ${oidc.clientId}`);
   say(`  client secret : ${secret.length} characters`);
   if (/login\.microsoftonline\.com/.test(oidc.issuer) && !/\/v2\.0\/?$/.test(oidc.issuer)) {

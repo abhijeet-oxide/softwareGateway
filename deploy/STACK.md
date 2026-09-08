@@ -128,14 +128,33 @@ been lost, add a new client secret; it cannot be recovered.
 created on the first run and never touched again, so correcting
 `SSO_CLIENT_SECRET` and re-running changed nothing: the seeder said
 `SSO connector 'Microsoft' exists` and moved on while the old credentials
-stayed in place. It now reconciles on every run and says which values moved:
+stayed in place.
+
+It now writes the issuer, client id and secret on every run, and says which of
+them moved:
 
 ```
-SSO connector 'Microsoft' updated from .env
-  client id changed: 0000... -> bc69a09a-6358-414b-b52e-1a562a38cba7
+SSO connector 'Microsoft' reconciled from .env
+  client id CHANGED: 0000... -> bc69a09a-6358-414b-b52e-1a562a38cba7
+  client secret CHANGED (38 characters)
   client id     : bc69a09a-6358-414b-b52e-1a562a38cba7
-  client secret : 39 characters
+  client secret : 38 characters
 ```
+
+The secret line reads `RECORDED` the first time, then `unchanged` or `CHANGED`.
+That last one is the line to look for after correcting `.env`: **if a re-run
+does not say `CHANGED`, the file was not what was read.**
+
+Knowing that at all takes a little work, because ZITADEL returns a connector's
+client id and issuer and never its secret. The seeder keeps a truncated
+SHA-256 of what it last wrote in `/pat/sso-fingerprint.json` and compares
+against that - which is why it can tell two different secrets of the same
+length apart, and why the file contains a sixteen character digest rather than
+anything usable.
+
+The write itself is unconditional. Comparing only decides what to print: the
+secret is pushed every run regardless, so a value changed by hand in the
+console is put back to what `.env` says.
 
 So after any change to `SSO_*`:
 

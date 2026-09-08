@@ -389,7 +389,13 @@ Each of these was found by running the stack, not by reading documentation.
    about a secret that had already been fixed. `.env` is the source of truth
    for the connector's issuer, client id and secret, and re-running the seeder
    is how they are applied - so it now PUTs them every run and names the ones
-   that moved. The same rule already applies to the web client's redirect URI
+   that moved. Naming the SECRET takes a fingerprint: ZITADEL returns a
+   connector's client id and issuer and never its secret, so the seeder keeps a
+   truncated SHA-256 of what it last wrote beside the machine tokens and
+   compares against that. Without it the only honest line was "written", which
+   on every run is a line nobody reads by the time it matters. The write stays
+   unconditional - comparing decides what to print, not whether to push - so a
+   secret changed by hand in the console is still put back to what `.env` says. The same rule already applies to the web client's redirect URI
    (§6): anything derived from `.env` has to be reconciled, not merely created,
    or the second run of a config file is a no-op that looks like success.
 

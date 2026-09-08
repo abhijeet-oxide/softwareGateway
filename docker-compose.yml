@@ -300,10 +300,24 @@ services:
     volumes:
       - ./deploy/zitadel/nginx.conf:/etc/nginx/templates/zitadel.conf:ro
       - ./deploy/zitadel/docker-entrypoint.sh:/docker-entrypoint.sh:ro
-    # Invoked through sh so the script runs whatever mode it was checked out
-    # with. A bind-mounted file keeps the host's permission bits, and a clone
-    # that lost the executable bit would fail at container start.
-    entrypoint: ["/bin/sh", "/docker-entrypoint.sh"]
+    # BOTH things a bind mount inherits from the host are worked around here.
+    #
+    # A bind-mounted file keeps the host's permission bits, so a clone that lost
+    # the executable bit cannot be run directly - hence `sh <script>` rather than
+    # the script itself. And it keeps the host's BYTES, so a Windows checkout
+    # made before .gitattributes existed carries CRLF: every line then ends in a
+    # carriage return, `set -eu` becomes an illegal option and `nginx` becomes a
+    # command not found, none of which mentions line endings. Stripping into
+    # /tmp costs one copy at start and makes the container independent of how the
+    # repository happens to be checked out.
+    entrypoint:
+      - /bin/sh
+      - -c
+      # `tr` rather than `sed 's/\r$//'` on purpose: the sed form contains a `$`,
+      # and this string is interpolated by compose before any shell sees it.
+      # docker compose survives it; podman-compose has its own substitution and
+      # this is not the place to find out whose it is.
+      - tr -d '\r' < /docker-entrypoint.sh > /tmp/entrypoint.sh && exec /bin/sh /tmp/entrypoint.sh
     ports:
       - "${ZITADEL_PORT:-8090}:80"
     healthcheck:

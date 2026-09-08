@@ -94,7 +94,22 @@ FROM ${NGINX_IMAGE} AS runtime
 RUN rm /etc/nginx/conf.d/default.conf
 COPY deploy/web/nginx.conf /etc/nginx/conf.d/app.conf
 COPY deploy/web/docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+# CARRIAGE RETURNS ARE STRIPPED, and the executable bit is set, because neither
+# survives every checkout.
+#
+# A clone made on Windows without .gitattributes carries CRLF, and this script
+# is the ENTRYPOINT, so it is exec'd through its shebang: `#!/bin/sh\r` asks the
+# kernel for a program named `/bin/sh\r`, which does not exist, and the container
+# dies with
+#
+#	exec /docker-entrypoint.sh: no such file or directory
+#
+# naming the one file that is definitely present. .gitattributes now prevents
+# this at checkout; this line means an existing clone that predates it still
+# builds an image that runs, rather than needing the reader to know both facts.
+RUN tr -d '\r' < /docker-entrypoint.sh > /tmp/entrypoint.sh \
+    && mv /tmp/entrypoint.sh /docker-entrypoint.sh \
+    && chmod +x /docker-entrypoint.sh
 COPY --from=build /src/dist /usr/share/nginx/html
 
 EXPOSE 80

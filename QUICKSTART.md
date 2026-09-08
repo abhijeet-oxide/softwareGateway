@@ -233,6 +233,30 @@ testable in CI with nothing else running.
   this stack. On Windows and macOS it almost always means the Podman machine is
   not running: `podman machine start`.
 
+## 5.1 Cloning on Windows
+
+Nothing to configure. `.gitattributes` pins every text file to LF, which beats
+`core.autocrlf` because it is a per-path instruction a client setting cannot
+override, so a Windows clone gets the same bytes as any other.
+
+**In a clone made before that file existed**, the working tree is still whatever
+it was checked out as:
+
+```bash
+git add --renormalize .
+git status          # shows the files whose endings changed
+```
+
+This matters because the artifacts are Linux containers and a shell script with
+CRLF does not run: the shebang becomes `#!/bin/sh\r`, the kernel looks for a
+program of that name, and the container dies reporting that the script is
+missing. It is not.
+
+Three things now have to fail before that reaches a container: the checkout
+(above), the image build (Dockerfiles strip carriage returns from any script
+they copy), the container start (bind-mounted entrypoints are stripped in
+place), and `go test ./deploy/...` fails on any script committed with CRLF.
+
 ## 6. Everyday commands
 
 ```bash
@@ -436,6 +460,8 @@ disable certificate verification.
 | `EROFS` / "rofs that don't support symlinks" during install | Something ran `npm config set` while `/root/.npmrc` was a read-only secret mount. Configure via `NPM_CONFIG_*` env instead. |
 | `proxyconnect tcp: dial tcp 127.0.0.1:PORT: connection refused` | The proxy is set to localhost, which inside a container is the container. Section 9. |
 | `masterkey must be 32 bytes, but is 33` | `ZITADEL_MASTERKEY` is the wrong length. Count it. |
+| `exec /docker-entrypoint.sh: no such file or directory`, on a file that is plainly there | CRLF line endings. The shebang reads `#!/bin/sh\r`, so the kernel looks for an interpreter named `/bin/sh\r` and the message names the script instead of the thing it could not find. Fixed at the root by `.gitattributes`; in a clone made before it, run `git add --renormalize .`. Images built from this repository strip carriage returns anyway, so rebuilding also clears it. |
+| A bind-mounted script fails with `set: illegal option` or `nginx: not found` | The same CRLF, one layer along: the script is read by `sh` rather than exec'd, so every line ends in a carriage return instead. Same fix. |
 | A wall of Python traceback from `podman compose` | Usually Podman itself. Check `podman machine start` first. |
 
 Design and rationale: [docs/design/24 - Identity and Access](../docs/design/24-identity-and-access.md).

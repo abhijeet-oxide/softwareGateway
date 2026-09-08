@@ -37,6 +37,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
 	"github.com/abhijeet-oxide/softwareGateway/internal/worker"
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
+	"github.com/abhijeet-oxide/softwareGateway/pkg/authz"
 )
 
 const component = "worker"
@@ -195,8 +196,49 @@ func run() error {
 		"products", products.Count(), "invalid", len(products.Invalid()),
 		"dir", cfg.ProductsDir())
 
-	coordinator := v1.NewClient(cfg.Worker.CoordinatorEndpoint,
-		v1.WithUserAgent("softwaregateway-worker/"+info.Version))
+	/* ---- who this worker is, to the Coordinator ----------------------------
+	 *
+	 * A worker leases jobs over the same authenticated API a person uses, so
+	 * with authentication on it needs a credential of its own or it gets
+	 * `UNAUTHENTICATED: no bearer token` every five seconds forever: a process
+	 * that is up, probes green, and never does any work.
+	 *
+	 * It authenticates as a MACHINE ACCOUNT in the identity provider, using the
+	 * client credentials grant, and receives a short-lived token the
+	 * Coordinator verifies with exactly the same keys and the same code as a
+	 * person's. Nothing is configured here by hand: the credentials are written
+	 * by the deployment's seeder and mounted read-only, so `replicas: 20` needs
+	 * no conversation with anybody. See pkg/authz/workload.go.
+	 *
+	 * ABSENT CREDENTIALS ARE NOT FATAL. A Coordinator with authentication
+	 * switched off wants no token at all, and that is a supported deployment;
+	 * refusing to start would make this the one component that cannot run in
+	 * it. The condition is logged once, in the words that name the fix, and the
+	 * worker's own deep health reports it for as long as it lasts. */
+	clientOpts := []v1.ClientOption{
+		v1.WithUserAgent("softwaregateway-worker/" + info.Version),
+	}
+	var tokens *authz.TokenSource
+	if path := cfg.Worker.CredentialsFile; path != "" {
+		creds, err := authz.LoadWorkloadCredentials(path)
+		switch {
+		case err != nil:
+			logger.Warn("no workload credentials: this worker will call the Coordinator "+
+				"with no token, which only works where authentication is off",
+				"error", err)
+		default:
+			ts, err := authz.NewTokenSource(creds, nil)
+			if err != nil {
+				return fmt.Errorf("workload credentials at %s: %w", path, err)
+			}
+			tokens = ts
+			clientOpts = append(clientOpts, v1.WithTokenSource(tokens))
+			logger.Info("authenticating to the Coordinator",
+				"issuer", creds.Issuer, "client_id", creds.ClientID)
+		}
+	}
+
+	coordinator := v1.NewClient(cfg.Worker.CoordinatorEndpoint, clientOpts...)
 
 	loop := worker.NewLoop(
 		coordinator,
@@ -280,6 +322,23 @@ func run() error {
 	// credentials - are neither of them fixed by taking this container out of
 	// anything. It is here so that "no work is moving" has an answer that
 	// names the cause.
+	// ---- diagnostics: can this worker prove who it is at all ----
+	//
+	// Beside leasing rather than inside it, because they fail differently and
+	// the difference is the whole diagnosis. A Coordinator that is refusing
+	// this worker and an identity provider that will not issue it a token look
+	// identical from the lease loop - "could not lease work" - and have nothing
+	// in common to do about them.
+	if tokens != nil {
+		hreg.AddDeep("credentials", func(context.Context) health.Result {
+			ok, detail := tokens.Health()
+			if ok {
+				return health.OK(detail)
+			}
+			return health.Degraded(detail)
+		})
+	}
+
 	hreg.AddDeep("leasing", func(context.Context) health.Result {
 		ok, at, detail := loop.LeaseHealth()
 		if ok {

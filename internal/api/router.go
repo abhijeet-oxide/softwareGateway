@@ -356,6 +356,11 @@ func (s *Server) routes() chi.Router {
 		auth = middleware.AnonymousAuthenticator{}
 	}
 	r.Use(middleware.Auth(auth, unauthenticatedWriter, middleware.PublicPaths))
+	// Immediately after Auth, because it is the first thing that can be said
+	// once a caller has a name: the data plane's credential reaches the data
+	// plane's routes and nothing else, and nothing else reaches those. See
+	// internal/api/middleware/workload.go.
+	r.Use(middleware.Confine(permissionDeniedWriter))
 	r.Use(middleware.Compress)
 
 	r.NotFound(s.handleNotFound)

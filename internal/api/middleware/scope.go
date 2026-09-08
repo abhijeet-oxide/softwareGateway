@@ -37,8 +37,17 @@ const (
 	// the replication apply. Separate from operate because it changes
 	// something outside this system that outlives the request.
 	ActionApply Action = "apply"
-	// ActionAdmin covers the worker plane and anything estate-wide.
+	// ActionAdmin covers anything estate-wide.
 	ActionAdmin Action = "admin"
+	// ActionWork is the data plane's own conversation with the Coordinator:
+	// leasing jobs, reporting their progress and their results, heartbeating.
+	//
+	// Its own action rather than a corner of admin, because it is the only one
+	// held by something that is not a person. A worker must be able to take
+	// work and say what happened to it, and must not be able to do a single
+	// other thing this API offers - which cannot be said at all while "may
+	// lease a job" and "may read the audit trail" are the same permission.
+	ActionWork Action = "work"
 )
 
 // Scope is what an action is being attempted ON.

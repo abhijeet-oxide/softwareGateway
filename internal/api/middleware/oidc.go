@@ -86,11 +86,18 @@ func fromAuthz(a authz.Identity) Identity {
 func actionsFor(role string) []Action {
 	switch suffix(role) {
 	case "admin", "owner":
-		return []Action{ActionRead, ActionOperate, ActionApply, ActionAdmin}
+		return []Action{ActionRead, ActionOperate, ActionApply, ActionAdmin, ActionWork}
 	case "operator":
 		return []Action{ActionRead, ActionOperate, ActionApply}
 	case "security", "reader", "viewer":
 		return []Action{ActionRead}
+	// The data plane. ONE action and deliberately not ActionRead as well: a
+	// worker is told everything it needs in the lease response, so a credential
+	// that could also list products, read the audit trail or enumerate
+	// transfers would be carrying reach it has no use for. See
+	// middleware/workload.go for the fence this makes enforceable.
+	case "worker":
+		return []Action{ActionWork}
 	default:
 		return nil
 	}

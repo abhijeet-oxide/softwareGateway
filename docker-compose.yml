@@ -208,6 +208,14 @@ services:
       BRANDING_LOGO_DARK_FILE: ${BRANDING_LOGO_DARK_FILE:-}
       BRANDING_LANGUAGES: ${BRANDING_LANGUAGES:-en}
       BOOTSTRAP_USERS_FILE: /bootstrap-users.json
+      # Who the worker credentials are written FOR. This container is root and
+      # the worker image is distroless nonroot, so a 0600 file written here is
+      # unreadable there unless it is handed over. 65532 is the nonroot uid in
+      # gcr.io/distroless/*; change it with RUNTIME_IMAGE.
+      WORKER_UID: ${WORKER_UID:-65532}
+      # Set to anything to reissue the worker credentials on this run. The old
+      # ones stop working at once; workers take the new ones on restart.
+      WORKER_ROTATE_SECRET: ${WORKER_ROTATE_SECRET:-}
       # Only so the banner can name what is still at its default. Never used
       # to authenticate anything.
       STACK_POSTGRES_PASSWORD_SET: ${POSTGRES_PASSWORD:+yes}
@@ -217,6 +225,8 @@ services:
       # ISSUES the login service's token as well as reading its own.
       - patshare:/pat
       - oidcshare:/oidc
+      # The data plane's credentials. Its own volume: see the volumes block.
+      - workercreds:/workercreds
       - ./deploy/zitadel/bootstrap.mjs:/bootstrap.mjs:ro
       - ./deploy/zitadel/users.json:/bootstrap-users.json:ro
       # The sign-in screen's logo. Mount another directory here to brand it
@@ -440,6 +450,12 @@ services:
     depends_on:
       controller:
         condition: service_healthy
+      # For the credentials below. A worker that starts before they are written
+      # authenticates with nothing, is refused, and retries until it happens to
+      # succeed - which works, and spends the first minutes of every fresh
+      # stack looking broken.
+      zitadel-init:
+        condition: service_completed_successfully
     environment:
       SWGW_WORKER_COORDINATORENDPOINT: http://controller:8080
       # NO DATABASE. A worker holds no database credentials and contains no
@@ -451,6 +467,12 @@ services:
     # leases jobs it cannot execute and says so rather than failing quietly.
     volumes:
       - ./deploy/products:/etc/softwaregateway/products:ro
+      # WHO THIS WORKER IS. A machine account in the identity provider, written
+      # by the seeder, mounted read-only, identical for every replica. Nothing
+      # to configure and nothing to rotate by hand: scaling the fleet is a
+      # number. See pkg/authz/workload.go for why it is a mounted file rather
+      # than an environment variable.
+      - workercreds:/etc/softwaregateway/credentials:ro
     deploy:
       # podman-compose only scales when mode is explicit; docker compose
       # defaults it to replicated but podman-compose does not.
@@ -523,6 +545,10 @@ volumes:
   # sees. Public values only - a public client has no secret - and a separate
   # volume from patshare so the web tier never mounts a credential.
   oidcshare:
+  # The data plane's machine-account credentials, written by the seeder and
+  # mounted read-only into every worker. Its own volume rather than a file in
+  # oidcshare, which the web tier mounts and which is public values only.
+  workercreds:
 
 # Build credentials. See BUILDING UNDER PODMAN at the top of this file before
 # changing anything here: under podman these files are copied into the build

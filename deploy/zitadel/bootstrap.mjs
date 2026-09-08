@@ -388,6 +388,134 @@ for (const p of products) {
   }
 }
 
+/* --- 6c. the data plane's own account -------------------------------------
+ *
+ * WHY WORKERS NEED ONE AT ALL, and why it is not a token somebody types in.
+ *
+ * A worker leases jobs from the Coordinator over the same authenticated API a
+ * person uses. With authentication on and no credential of its own it got
+ * `UNAUTHENTICATED: no bearer token` five seconds apart forever, which is a
+ * fleet that looks healthy - the process is up, its probes are green, the
+ * queue simply never moves.
+ *
+ * The obvious fixes are both wrong. A shared static token in .env is a
+ * password that never expires, is copied into every deployment manifest, and
+ * cannot be revoked without a redeploy. Exempting the worker plane from
+ * authentication is worse: those routes hand out work and accept its results,
+ * so an unauthenticated one lets anything that can reach the Coordinator claim
+ * every job in the queue and report it finished.
+ *
+ * So the data plane gets what the CI accounts already get: a MACHINE USER in
+ * the identity provider, authenticating with client_credentials and holding
+ * exactly one role. The token it receives is a short-lived JWT the Coordinator
+ * verifies with the same keys and the same code path as a person's - no second
+ * trust root, no separate verification to keep in step.
+ *
+ * ONE identity for the whole fleet, deliberately. A worker is not a security
+ * principal: it holds no data, decides nothing, and is interchangeable with
+ * every other worker by design. Its id names it in the queue, which is
+ * scheduling rather than authorization. Per-worker credentials would buy no
+ * containment - they would all carry the same grant - and would cost the one
+ * property the fleet exists for, which is that `replicas: 20` needs no
+ * conversation with anybody.
+ *
+ * The credentials are written to the volume the other service accounts already
+ * use, and mounted read-only into the workers. Nothing is configured by hand
+ * and nothing is committed: a worker that starts finds them or says why not.
+ */
+{
+  const WORKER_ROLE = 'org-worker';
+  /* Its OWN volume, not the one carrying the SPA's client id. That one is
+   * mounted into the web tier, and its stated invariant is that it holds
+   * public values only - a public client has no secret. This file does have
+   * one, so it goes where only the seeder and the workers can see it. */
+  const path = '/workercreds/worker.json';
+
+  /* Ensured separately from GATEWAY_ORG_ROLES, which an operator may replace
+   * wholesale. This role is not a choice about how the estate is organised -
+   * without it the data plane cannot authenticate at all. */
+  await ensureRoles(PLATFORM, [WORKER_ROLE]);
+
+  const found = await api('POST', '/management/v1/users/_search',
+    { queries: [{ userNameQuery: { userName: 'swgw-worker' } }] });
+  let uid = (found.result || [])[0]?.id;
+  let created = false;
+  if (!uid) {
+    const r = await api('POST', '/management/v1/users/machine', {
+      userName: 'swgw-worker', name: 'Software Gateway worker',
+      description: 'the data plane: leases jobs, reports results',
+      /* A JWT rather than an opaque token, because the Coordinator verifies it
+       * OFFLINE against the issuer's public keys. An opaque one would have to
+       * be introspected, which puts a network call to the identity provider in
+       * front of every lease and makes a blip there stop the fleet. */
+      accessTokenType: 'ACCESS_TOKEN_TYPE_JWT',
+    });
+    uid = r.userId;
+    if (!uid) {
+      console.error('FATAL: could not create the worker account:', JSON.stringify(r));
+      process.exit(1);
+    }
+    created = true;
+    say('worker service account created');
+  } else {
+    say('worker service account exists');
+  }
+
+  /* The ONE role it holds. org-worker maps to leasing work and reporting on
+   * it, and to nothing else at all - see internal/api/middleware/oidc.go. A
+   * stolen worker credential can therefore take jobs and lie about their
+   * results, which is bad, and cannot read the audit trail, request a
+   * download, or see a product it was not handed work for. */
+  await grantRoles(uid, PLATFORM, [WORKER_ROLE]);
+
+  /* The secret is REISSUED whenever the file the workers read is missing.
+   *
+   * ZITADEL stores a hash and will not show a secret twice, so a lost file
+   * cannot be recovered - only replaced. That is safe precisely because this
+   * credential belongs to the fleet rather than to a person: nothing else
+   * holds it, and a worker that is restarted with the new one loses no work
+   * it had not already reported. It is also the recovery procedure, which is
+   * `docker compose run --rm zitadel-init` and nothing more.
+   */
+  const have = await fs.readFile(path, 'utf8').then(t => JSON.parse(t)).catch(() => null);
+  if (have?.clientSecret && !created && !process.env.WORKER_ROTATE_SECRET) {
+    say('  credentials already published for the data plane');
+  } else {
+    const sec = await api('PUT', `/management/v1/users/${uid}/secret`, {});
+    if (!sec.clientId || !sec.clientSecret) {
+      console.error('FATAL: could not issue worker credentials:', JSON.stringify(sec));
+      process.exit(1);
+    }
+    /* The project id travels WITH the credentials because the worker cannot
+     * derive it. ZITADEL keys its role claim by project id and asserts roles
+     * only for a project that is in the token's audience, which is requested
+     * as a scope - so a token fetched without it verifies perfectly and
+     * arrives carrying no roles, which reads as a permission problem rather
+     * than as a missing scope. */
+    await writeShared(path, JSON.stringify({
+      issuer: process.env.ZITADEL_PUBLIC_URL || 'http://localhost:8090',
+      tokenUrl: (process.env.ZITADEL_INTERNAL_URL || 'http://zitadel:8080') + '/oauth/v2/token',
+      clientId: sec.clientId,
+      clientSecret: sec.clientSecret,
+      projectId: PLATFORM,
+    }, null, 2) + '\n', 0o600);
+    /* Mode 0600 belongs to the user that will READ it, and this container is
+     * root while the worker image is distroless nonroot. Without this the file
+     * is perfectly written, perfectly mounted, and unreadable by the only
+     * process that wants it - which surfaces as a permission error naming a
+     * path that plainly exists. */
+    const owner = Number(process.env.WORKER_UID ?? 65532);
+    try {
+      await fs.chown(path, owner, owner);
+    } catch (e) {
+      say(`  ! could not give ${path} to uid ${owner}: ${e.message}`);
+      say('    the worker runs as a non-root user and will not be able to read it');
+    }
+    say(`  credentials published for the data plane (client_id ${sec.clientId})`);
+    if (!created) say('  workers pick the new secret up on their next restart');
+  }
+}
+
 /* --- 7. Sign-in: the connector, and what the login screen offers ----------
  *
  * THREE things, and only the first is obvious.
@@ -717,17 +845,17 @@ for (const p of products) {
 
 /* --- 8. the first administrator ------------------------------------------- */
 {
-  const user = process.env.BOOTSTRAP_ADMIN_USERNAME || 'admin';
-  const pw   = process.env.BOOTSTRAP_ADMIN_PASSWORD || '';
-  const found = await api('POST', '/management/v1/users/_search',
-    { queries: [{ userNameQuery: { userName: user } }] });
-  let id = (found.result || [])[0]?.id;
+  const user  = process.env.BOOTSTRAP_ADMIN_USERNAME || 'admin';
+  const pw    = process.env.BOOTSTRAP_ADMIN_PASSWORD || '';
+  const email = process.env.BOOTSTRAP_ADMIN_EMAIL || 'admin@example.com';
+  const found = await findUserId(user, email);
+  let id = found.id;
 
   if (!id) {
     const body = {
       userName: user,
       profile: { firstName: 'Platform', lastName: 'Administrator' },
-      email: { email: process.env.BOOTSTRAP_ADMIN_EMAIL || 'admin@example.com', isEmailVerified: true },
+      email: { email, isEmailVerified: true },
     };
     if (pw) body.password = pw;
     const r = await api('POST', '/management/v1/users/human/_import', body);
@@ -739,8 +867,43 @@ for (const p of products) {
     await api('POST', '/management/v1/orgs/me/members', { userId: id, roles: ['ORG_OWNER'] });
     say('  granted org-admin + ORG_OWNER');
   } else {
-    say(`administrator '${user}' exists`);
+    say(`administrator '${user}' exists (matched on ${found.by})`);
+    /* GRANTED EVERY RUN, not only at creation.
+     *
+     * The account may not be the one this seeder made. When somebody signs in
+     * through Microsoft before the seeder has ever run - or with an address
+     * this file did not know about - ZITADEL creates the account itself, and
+     * it creates it with no project grant at all. Found here by email, that
+     * person is the administrator and simply has not been told so: every
+     * screen works, holds no permissions, and says "No roles" under their own
+     * name. Granting is idempotent, so doing it unconditionally costs one
+     * search on a run that changes nothing. */
+    await grantRoles(id, PLATFORM, ['org-admin']);
+    await api('POST', '/management/v1/orgs/me/members', { userId: id, roles: ['ORG_OWNER'] });
     if (pw) say('  WARNING: BOOTSTRAP_ADMIN_PASSWORD still set. Unset it once a real admin exists.');
+  }
+
+  /* Auto-linking is by EMAIL ADDRESS, so an address that cannot match is a
+   * guaranteed second account.
+   *
+   * The connector is configured with AUTO_LINKING_OPTION_EMAIL (§7): somebody
+   * arriving through Microsoft is joined to the account already holding their
+   * address. Leave the administrator on the example address and there is
+   * nothing to join them to, so ZITADEL does the other thing it is configured
+   * to do - creates the user - and the new account holds no roles. What that
+   * looks like is two entries in the account switcher, one of which cannot be
+   * signed in to, and a profile page reporting no permissions. It is worth
+   * one loud paragraph here rather than an afternoon there. */
+  if (process.env.SSO_ISSUER && email === 'admin@example.com') {
+    say('');
+    say('  ! BOOTSTRAP_ADMIN_EMAIL is still admin@example.com while SSO is on.');
+    say('    Sign-ins are matched to existing accounts by email address, and');
+    say('    nobody at the identity provider has that one - so the first person');
+    say('    to sign in gets a brand new account holding no roles, beside this');
+    say('    one holding all of them.');
+    say('    Fix: set BOOTSTRAP_ADMIN_EMAIL to the address that signs in, or add');
+    say('    that person to deploy/zitadel/users.json, then re-run this container.');
+    say('');
   }
 }
 
@@ -750,6 +913,36 @@ for (const p of products) {
  * That is the whole user-provisioning story, and it is reviewable in a pull
  * request rather than being clicks in a console that nobody can audit later.
  */
+/* Find a person by either of the two things they are known by.
+ *
+ * THE EMAIL LOOKUP IS THE POINT, and it is what makes this file the
+ * deployment mechanism for an estate that signs in through Microsoft. A person
+ * who arrives through SSO is created by ZITADEL, not by this seeder, and it
+ * names them whatever the connector hands over - usually their address. Search
+ * by username alone and they are never found: the run reports success, creates
+ * a SECOND account for the same human, and grants the roles to the copy nobody
+ * signs in as. The symptom is a person looking at their own profile page
+ * reading "Tenant roles: none" while `users.json` plainly says otherwise.
+ *
+ * Username first, because that is the identifier an operator chose. Email
+ * second, case-insensitively, because an address is.
+ */
+async function findUserId(username, email) {
+  if (username) {
+    const r = await api('POST', '/management/v1/users/_search',
+      { queries: [{ userNameQuery: { userName: username } }] });
+    const id = (r.result || [])[0]?.id;
+    if (id) return { id, by: 'username' };
+  }
+  if (email) {
+    const r = await api('POST', '/management/v1/users/_search',
+      { queries: [{ emailQuery: { emailAddress: email, method: 'TEXT_QUERY_METHOD_EQUALS_IGNORE_CASE' } }] });
+    const id = (r.result || [])[0]?.id;
+    if (id) return { id, by: 'email' };
+  }
+  return { id: '', by: '' };
+}
+
 async function grantRoles(userId, projectId, roleKeys) {
   if (!roleKeys.length) return;
   const existing = await api('POST', '/management/v1/users/grants/_search',
@@ -772,9 +965,8 @@ let doc = null;
 
   for (const u of (doc?.users || [])) {
     if (!u.username) continue;
-    const found = await api('POST', '/management/v1/users/_search',
-      { queries: [{ userNameQuery: { userName: u.username } }] });
-    let uid = (found.result || [])[0]?.id;
+    const found = await findUserId(u.username, u.email);
+    let uid = found.id;
 
     if (!uid) {
       const body = {
@@ -790,7 +982,9 @@ let doc = null;
       if (!uid) { say(`  ! could not create ${u.username}: ${JSON.stringify(r).slice(0, 160)}`); continue; }
       say(`user ${u.username} created`);
     } else {
-      say(`user ${u.username} exists`);
+      // Which identifier matched, because it is the difference between "the
+      // account this file made" and "the account Microsoft made for them".
+      say(`user ${u.username} exists (matched on ${found.by})`);
     }
 
     if (u.orgRoles?.length) {
@@ -816,9 +1010,10 @@ let doc = null;
  */
 for (const a of (doc?.apiUsers || [])) {
   if (!a.username) continue;
-  const found = await api('POST', '/management/v1/users/_search',
-    { queries: [{ userNameQuery: { userName: a.username } }] });
-  let uid = (found.result || [])[0]?.id;
+  // Machine accounts have no email, so this is the username lookup it always
+  // was. It goes through the same function so there is one way to find a user.
+  const found = await findUserId(a.username, '');
+  let uid = found.id;
   let created = false;
   if (!uid) {
     const r = await api('POST', '/management/v1/users/machine', {

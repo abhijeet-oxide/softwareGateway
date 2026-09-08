@@ -1,0 +1,40 @@
+# Keep Podman/Docker build contexts small and free of host-only state.
+.git/
+.github/
+.claude/
+.task/
+.vscode/
+.idea/
+
+# Local stack state, generated databases, secrets, and logs.
+.env
+dev/
+failed.logs
+tmp*/
+
+# Build and test output.
+bin/
+dist/
+coverage.*
+*.out
+*.test
+coordinator
+worker
+transferctl
+fakeregistry
+smoketmp
+
+# Web dependency and build output; the image installs/builds these itself.
+node_modules/
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Local credential files. The compose file supplies these through build secrets.
+deploy/npm/npmrc
+deploy/npm/.npmrc
+deploy/go/netrc
+
+# Editor and OS noise.
+*.swp
+.DS_Store

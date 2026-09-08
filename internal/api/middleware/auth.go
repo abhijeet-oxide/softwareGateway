@@ -44,7 +44,21 @@ type Identity struct {
 	// Subject is recorded as the audit actor. "anonymous" until authentication
 	// is enabled.
 	Subject string
-	Roles   []Role
+
+	// Name and Email are who the SUBJECT IS, and they are carried for the
+	// interface rather than for any decision made here: Subject is an opaque
+	// identifier that never changes, which is exactly right for an audit record
+	// and unreadable on a screen. Without them the navigation showed a person
+	// their own user id, which is a number.
+	Name  string
+	Email string
+
+	Roles []Role
+	// ProductRoles maps a product to the roles held ON that product, e.g.
+	// {"software-01": ["product-owner"]}. Roles above holds the tenant-wide
+	// tier only, so a caller whose access is entirely per-product had an empty
+	// role list and a screen that said they held none.
+	ProductRoles map[string][]string
 	// Method records how the identity was established ("none", "oidc",
 	// "kubernetes", "token") so an audit record shows the trust path.
 	Method string

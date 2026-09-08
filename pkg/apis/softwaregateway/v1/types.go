@@ -2745,6 +2745,13 @@ type DailyVolume struct {
 // will fill in (docs/design/09 §10).
 type WhoAmIResponse struct {
 	Subject string `json:"subject"`
+	// Name and Email are who the subject IS. Subject is an opaque identifier
+	// that never changes, which is right for an audit record and unreadable on
+	// a screen: without these the interface showed a person their own user id.
+	// Both are absent when the identity provider did not assert them, so a
+	// client falls back rather than rendering an empty line.
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email,omitempty"`
 	// Method records how the identity was established: "none", "oidc",
 	// "kubernetes" or "token". A client shows "Authentication is not enabled"
 	// on "none" rather than implying a real session.
@@ -2757,7 +2764,15 @@ type WhoAmIResponse struct {
 	// exists; a client treats empty as "the whole estate".
 	Tenant string `json:"tenant,omitempty"`
 
+	// Roles are the TENANT-WIDE roles only. A caller whose access is entirely
+	// per-product holds none of these, which is not the same as holding none
+	// at all - see ProductRoles.
 	Roles []string `json:"roles,omitempty"`
+	// ProductRoles maps a product to the roles held on THAT product. Reported
+	// separately from Roles because the two tiers mean different things: a
+	// tenant-wide role covers products that do not exist yet, a product role
+	// names one. A screen that merged them could not say which was which.
+	ProductRoles map[string][]string `json:"productRoles,omitempty"`
 	// Permissions are the actions this caller may perform. `["*"]` means
 	// everything, which is what an unauthenticated deployment reports.
 	Permissions []string `json:"permissions"`

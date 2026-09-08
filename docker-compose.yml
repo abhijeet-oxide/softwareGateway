@@ -196,6 +196,17 @@ services:
       SSO_CLIENT_ID: ${SSO_CLIENT_ID:-}
       SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:-}
       SSO_DISPLAY_NAME: ${SSO_DISPLAY_NAME:-Microsoft}
+      # Password sign-in is switched OFF once SSO is configured, which locks
+      # out `zitadel-admin` as well: it is in the same organization and has no
+      # Microsoft account. Recoverable, always - this container authenticates
+      # with a machine token rather than through the sign-in screen, so setting
+      # this and re-running it puts the password box back.
+      SSO_ALLOW_PASSWORD_LOGIN: ${SSO_ALLOW_PASSWORD_LOGIN:-false}
+      BRANDING_PRIMARY_COLOR: ${BRANDING_PRIMARY_COLOR:-}
+      BRANDING_PRIMARY_COLOR_DARK: ${BRANDING_PRIMARY_COLOR_DARK:-}
+      BRANDING_LOGO_FILE: ${BRANDING_LOGO_FILE:-}
+      BRANDING_LOGO_DARK_FILE: ${BRANDING_LOGO_DARK_FILE:-}
+      BRANDING_LANGUAGES: ${BRANDING_LANGUAGES:-en}
       BOOTSTRAP_USERS_FILE: /bootstrap-users.json
       # Only so the banner can name what is still at its default. Never used
       # to authenticate anything.
@@ -208,6 +219,9 @@ services:
       - oidcshare:/oidc
       - ./deploy/zitadel/bootstrap.mjs:/bootstrap.mjs:ro
       - ./deploy/zitadel/users.json:/bootstrap-users.json:ro
+      # The sign-in screen's logo. Mount another directory here to brand it
+      # without touching the repository - see deploy/zitadel/branding/README.md.
+      - ${BRANDING_DIR:-./deploy/zitadel/branding}:/branding:ro
     entrypoint: ["node", "/bootstrap.mjs"]
     restart: on-failure:3
 

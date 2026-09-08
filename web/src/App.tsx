@@ -41,6 +41,7 @@ const Repositories = lazyRoute(() => import('./pages/Repositories'))
 const Activity = lazyRoute(() => import('./pages/Activity'))
 const Reports = lazyRoute(() => import('./pages/Reports'))
 const Settings = lazyRoute(() => import('./pages/Settings'))
+const Profile = lazyRoute(() => import('./pages/Profile'))
 
 /**
  * In the order a person is likely to want them.
@@ -172,6 +173,7 @@ export function App() {
               <Route path="/activity" element={<Activity.Component />} />
               <Route path="/reports" element={<Reports.Component />} />
               <Route path="/settings" element={<Settings.Component />} />
+              <Route path="/profile" element={<Profile.Component />} />
               {/*
                 Everything else. A redirect here would hide the mistake; see
                 `NotFound` above for why that cost more than it saved.

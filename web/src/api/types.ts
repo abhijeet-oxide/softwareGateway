@@ -1405,10 +1405,20 @@ export interface ReportSummary {
 
 export interface WhoAmIResponse {
   subject: string
+  /** Who the subject IS. Absent when the identity provider asserted neither:
+   *  `subject` is an opaque id, right for an audit record and unreadable on a
+   *  screen, so a client falls back rather than rendering a blank. */
+  name?: string
+  email?: string
   method: string
   authenticated: boolean
   tenant?: string
+  /** TENANT-WIDE roles only. Product-scoped access is in `productRoles`. */
   roles?: string[]
+  /** Product name to the roles held on that product. Kept apart from `roles`
+   *  because the tiers differ: a tenant role covers products that do not exist
+   *  yet, a product role names one. */
+  productRoles?: Record<string, string[]>
   /** `["*"]` means everything, which is what an unauthenticated deployment reports. */
   permissions: string[]
   /** Empty means every product. */

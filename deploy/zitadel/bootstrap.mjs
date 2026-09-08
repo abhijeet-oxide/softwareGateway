@@ -36,6 +36,12 @@ const { createHash } = await import('node:crypto');
 const say = (...a) => console.log('  ' + a.join(' '));
 const list = (v, d) => (v ?? d).split(',').map(s => s.trim()).filter(Boolean);
 
+/* A credential, shown well enough to recognise and not well enough to use. */
+function mask(v) {
+  if (v.length < 12) return `${v.length} characters (too short to show safely)`;
+  return `${v.slice(0, 3)}...${v.slice(-3)} (${v.length} characters)`;
+}
+
 /* Writes a file another container reads, and says so when it cannot.
  *
  * The volume is mounted read-only into some of this stack's containers and
@@ -51,6 +57,87 @@ async function writeShared(path, contents, mode = 0o644) {
   }
 }
 
+/* Ask the identity provider whether these credentials are real.
+ *
+ * # Why the seeder does this rather than leaving it to the first sign-in
+ *
+ * A wrong client secret does not fail here. It fails at the identity provider,
+ * in the identity provider's vocabulary, AFTER somebody has typed their
+ * password - `AADSTS7000215: Invalid client secret provided` - and it looks
+ * identical whether the secret is wrong, stale, or was never written. Nothing
+ * in this stack can tell those apart afterwards, because ZITADEL returns a
+ * connector's client id and issuer and never its secret.
+ *
+ * A client_credentials request answers it in one call. Only `invalid_client`
+ * is treated as proof of failure: it means the provider rejected the client
+ * AUTHENTICATION, which is exactly the question being asked. Any other error -
+ * an unsupported grant, a missing scope, no consent - happened after the
+ * credentials were accepted, so it says the secret is good and says nothing
+ * about the rest.
+ *
+ * Being unable to reach the provider is reported and is NOT fatal, and it is
+ * worth reading rather than skipping: ZITADEL needs the same network path from
+ * the same network, so a seeder that cannot reach the issuer is a sign-in that
+ * will not work either.
+ */
+async function verifyIdpCredentials(issuer, clientId, clientSecret) {
+  const base = issuer.replace(/\/+$/, '');
+  let tokenEndpoint;
+  try {
+    const disc = await fetch(`${base}/.well-known/openid-configuration`, {
+      headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(15000),
+    });
+    if (!disc.ok) return { unreachable: `${base} answered ${disc.status} for its discovery document` };
+    tokenEndpoint = (await disc.json()).token_endpoint;
+    if (!tokenEndpoint) return { unreachable: `${base} published no token endpoint` };
+  } catch (e) {
+    return { unreachable: `${base}: ${e.message}` };
+  }
+
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret,
+  });
+  // Entra's v2 endpoint requires a scope; an app's own `.default` needs no
+  // consent and no permissions, so it tests authentication and nothing else.
+  if (/login\.microsoftonline\.com/.test(base)) body.set('scope', `${clientId}/.default`);
+
+  try {
+    const r = await fetch(tokenEndpoint, {
+      method: 'POST', body,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (r.ok) return { ok: true, detail: 'a token was issued' };
+    const doc = await r.json().catch(() => ({}));
+    if (doc.error === 'invalid_client') {
+      return { rejected: true, detail: (doc.error_description || 'invalid_client').split(/\r?\n/)[0] };
+    }
+    return { ok: true, detail: `the provider accepted them and answered ${doc.error || r.status} to the rest` };
+  } catch (e) {
+    return { unreachable: `${tokenEndpoint}: ${e.message}` };
+  }
+}
+
+/* Uploads a file to one of ZITADEL's asset endpoints.
+ *
+ * Multipart is assembled by hand because fetch would be simpler and drops the
+ * Host header, which ZITADEL answers 404 without - the same reason the rest of
+ * this file uses node:http. Returns "missing" when there is no such file,
+ * which is not an error: a deployment that supplies no logo keeps ZITADEL's.
+ */
+async function uploadAsset(path, file) {
+  let body;
+  try { body = await fs.readFile(file); } catch { return 'missing'; }
+  const b = '----swgw' + Date.now();
+  const type = file.endsWith('.svg') ? 'image/svg+xml'
+    : file.endsWith('.jpg') || file.endsWith('.jpeg') ? 'image/jpeg' : 'image/png';
+  const payload = Buffer.concat([
+    Buffer.from(`--${b}\r\nContent-Disposition: form-data; name="file"; filename="${file.split('/').pop()}"\r\nContent-Type: ${type}\r\n\r\n`),
+    body, Buffer.from(`\r\n--${b}--\r\n`)]);
+  const r = await request('POST', path, payload, `multipart/form-data; boundary=${b}`);
+  return r.status;
+}
+
 let PAT = '', ORG_ID = '';
 
 /* node:http rather than fetch, and this is not a style choice: the Fetch spec
@@ -58,12 +145,15 @@ let PAT = '', ORG_ID = '';
  * sees Host: zitadel:8080, does not recognise it as its external domain, and
  * answers 404 to every call while being perfectly healthy. node:http is the
  * only built-in that lets us set it. */
-function request(method, path, body) {
+function request(method, path, body, contentType) {
   const u = new URL(Z + path);
-  const payload = body === undefined ? null : JSON.stringify(body);
+  // A Buffer is sent as it is - that is an asset upload, whose body is already
+  // encoded. Anything else is this API's JSON.
+  const payload = body === undefined ? null
+    : Buffer.isBuffer(body) ? body : JSON.stringify(body);
   const headers = {
     'Host': ZHOST,
-    'Content-Type': 'application/json',
+    'Content-Type': contentType || 'application/json',
     'Authorization': `Bearer ${PAT}`,
   };
   if (payload) headers['Content-Length'] = Buffer.byteLength(payload);
@@ -81,6 +171,12 @@ function request(method, path, body) {
     req.end();
   });
 }
+
+/* ZITADEL answers a write that changes nothing with an ERROR - "has not been
+ * changed" - so on a seeder that is run repeatedly by design, the second run
+ * of a correct configuration reports failures. Treated as success, because it
+ * is: the desired state is the state. */
+const unchanged = r => r.__status >= 400 && /not\s*been\s*changed|NotChanged/i.test(r.message || '');
 
 async function api(method, path, body) {
   const r = await request(method, path, body);
@@ -190,6 +286,19 @@ for (const p of products) {
     devMode: String(process.env.OIDC_DEV_MODE ?? 'true') === 'true',
     accessTokenType: 'OIDC_TOKEN_TYPE_JWT',
     accessTokenRoleAssertion: true, idTokenRoleAssertion: true,
+    /* WHO the person is, in the ID token.
+     *
+     * Without this ZITADEL asserts the subject and the roles and nothing else,
+     * in either token, and the interface can say what somebody may do while
+     * being unable to say their name - so the navigation showed a person their
+     * own user id, which is a nineteen digit number.
+     *
+     * It belongs on the ID TOKEN and not on the access token, which is the
+     * split OpenID Connect draws: the access token is for the Coordinator and
+     * says what the bearer may do, the ID token is for the client and says who
+     * they are. Putting a name in the access token would send it to the API on
+     * every request for the benefit of a card in a sidebar. */
+    idTokenUserinfoAssertion: true,
   };
   const apps = await api('POST', `/management/v1/projects/${PLATFORM}/apps/_search`, {});
   const existing = (apps.result || []).find(a => a.name === 'software-gateway-web');
@@ -209,11 +318,17 @@ for (const p of products) {
      * saying the redirect_uri is invalid - true, unhelpful, and impossible to
      * connect back to a .env edit made a week ago. So it is RECONCILED rather
      * than only created. */
-    if (!(existing.oidcConfig?.redirectUris || []).includes(redirectUri)) {
-      const r = await api('PUT',
-        `/management/v1/projects/${PLATFORM}/apps/${existing.id}/oidc_config`, oidc);
-      if (r.__status >= 400) say(`  ! could not update redirect URI to ${redirectUri}`);
-      else say(`  redirect URI updated to ${redirectUri}`);
+    /* RECONCILED unconditionally, like every other thing this file derives
+     * from configuration. It used to be written only when the redirect URI had
+     * drifted, so any OTHER setting on the app - the claims it asserts, the
+     * grant types - stayed at whatever the first run created and a change here
+     * reached no stack that had ever been seeded. */
+    const r = await api('PUT',
+      `/management/v1/projects/${PLATFORM}/apps/${existing.id}/oidc_config`, oidc);
+    if (r.__status >= 400 && !unchanged(r)) {
+      say(`  ! could not update the web client: ${JSON.stringify(r).slice(0, 120)}`);
+    } else if (!(existing.oidcConfig?.redirectUris || []).includes(redirectUri)) {
+      say(`  redirect URI updated to ${redirectUri}`);
     }
   }
 
@@ -273,185 +388,331 @@ for (const p of products) {
   }
 }
 
-/* --- 7. Microsoft SSO, only when configured -------------------------------
+/* --- 7. Sign-in: the connector, and what the login screen offers ----------
  *
- * TWO steps, and the second one is the one that is easy to miss: creating the
- * connector does not put it on the sign-in screen. An identity provider is
- * OFFERED to a person because it is attached to the organization's LOGIN
+ * THREE things, and only the first is obvious.
+ *
+ * Creating a connector does not put it on the sign-in screen: an identity
+ * provider is OFFERED because it is attached to the organization's LOGIN
  * POLICY, and an organization that has never been given one of its own
- * inherits the instance's, which cannot name an org-owned connector. So the
- * connector existed, the configuration read as correct in the console, and the
- * sign-in screen showed a username box and nothing else - which is exactly the
- * "SSO does not appear" this stack shipped with.
+ * inherits the instance's, which cannot name an org-owned connector. That is
+ * why the connector could exist, read as correct in the console, and the
+ * screen still show a username box and nothing else.
+ *
+ * And the login policy is also what decides what ELSE the screen offers. A
+ * gateway whose people arrive through Microsoft has no use for a registration
+ * link or a password box, and both are on by default.
  */
-if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
-  const name = process.env.SSO_DISPLAY_NAME || 'Microsoft';
-  const secret = process.env.SSO_CLIENT_SECRET || '';
-  const oidc = {
-    issuer: process.env.SSO_ISSUER,
-    clientId: process.env.SSO_CLIENT_ID,
-    clientSecret: secret,
-    scopes: ['openid', 'profile', 'email'],
-  };
-
-  /* Checked HERE, where the answer is one line, rather than at the identity
-   * provider, where it is an opaque code after somebody has already typed
-   * their password. Both of these produce the same Microsoft failure:
-   *
-   *   AADSTS7000215: Invalid client secret provided. Ensure the secret being
-   *   sent in the request is the client secret VALUE, not the client secret ID
-   *
-   * A secret ID is a GUID; a secret value never is. Azure's portal shows the
-   * two side by side, the ID is the one that stays on screen, and the value is
-   * shown once and then hidden forever - so copying the wrong column is the
-   * normal mistake rather than a careless one. */
-  if (!secret) {
-    console.error(`FATAL: SSO_CLIENT_ID is set but SSO_CLIENT_SECRET is empty.`);
-    console.error('       This connector authenticates to the identity provider with a');
-    console.error('       secret; without one every sign-in fails at the token exchange.');
-    process.exit(1);
-  }
-  if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(secret)) {
-    console.error('FATAL: SSO_CLIENT_SECRET is a GUID, so it is the secret ID rather than');
-    console.error('       the secret VALUE. In the Azure portal, App registrations ->');
-    console.error('       Certificates and secrets, the Value column is the one to copy,');
-    console.error('       and it is only shown when the secret is created. If it has been');
-    console.error('       lost, add a new client secret and copy the Value.');
-    process.exit(1);
-  }
-
-  const idps = await api('POST', '/management/v1/idps/_search', {});
-  const existing = (idps.result || []).find(i => i.name === name);
-  let idpId = existing?.id;
-  if (!idpId) {
-    const r = await api('POST', '/management/v1/idps/oidc', {
-      name, ...oidc,
-      isCreationAllowed: true, isLinkingAllowed: true,
-      isAutoCreation: true, isAutoUpdate: true,
-    });
-    // The create response names it `idpId`; a search result names it `id`.
-    idpId = r.idpId;
-    if (!idpId) { console.error('FATAL: could not create the SSO connector:', JSON.stringify(r)); process.exit(1); }
-    say(`SSO connector '${name}' created`);
-  } else {
-    /* RECONCILED, not merely found. The connector used to be created once and
-     * never touched again, so a corrected secret in .env reached nothing: the
-     * seeder said "exists", the old credentials stayed, and every sign-in kept
-     * failing with a Microsoft error about a secret that had already been
-     * fixed. .env is the source of truth for these three values, and re-running
-     * this container is how they are applied.
-     *
-     * ALWAYS a write, never a write-if-different. The client id and issuer can
-     * be read back and compared; the secret cannot, and skipping the write
-     * when the two readable fields happen to match would leave a secret
-     * changed by hand in the console standing in place of the one in .env. */
-    const stored = existing.oidcConfig || {};
-    const r = await api('PUT', `/management/v1/idps/${idpId}/oidc_config`, oidc);
-    if (r.__status >= 400) {
-      console.error(`FATAL: could not update the '${name}' connector:`, JSON.stringify(r));
-      process.exit(1);
-    }
-    say(`SSO connector '${name}' reconciled from .env`);
-    if (stored.clientId && stored.clientId !== oidc.clientId) {
-      say(`  client id CHANGED: ${stored.clientId} -> ${oidc.clientId}`);
-    }
-    if (stored.issuer && stored.issuer !== oidc.issuer) {
-      say(`  issuer CHANGED: ${stored.issuer} -> ${oidc.issuer}`);
-    }
-  }
-
-  /* Whether the SECRET moved, which is the one thing here that cannot be
-   * answered by reading it back: ZITADEL returns a connector's client id and
-   * issuer and never its secret, by design.
-   *
-   * So the seeder remembers a FINGERPRINT of what it last wrote and compares
-   * that. A truncated SHA-256 of a forty character high-entropy secret says
-   * "the same" or "not the same" and nothing else - it cannot be turned back
-   * into the secret, and it lives in the same volume as the machine tokens,
-   * which is already the most privileged thing in this stack.
-   *
-   * Without it the seeder printed "updated from .env" on every run whether or
-   * not anything had moved, which is the kind of line people stop reading
-   * exactly before the run where it mattered. */
-  const fingerprintFile = '/pat/sso-fingerprint.json';
-  const fingerprint = createHash('sha256')
-    .update(`${oidc.issuer}\n${oidc.clientId}\n${secret}`)
-    .digest('hex').slice(0, 16);
-  const previous = await fs.readFile(fingerprintFile, 'utf8')
-    .then(t => { try { return JSON.parse(t); } catch { return {}; } })
-    .catch(() => ({}));
-
-  if (!previous.secret) {
-    say(`  client secret RECORDED (${secret.length} characters)`);
-  } else if (previous.secret !== fingerprint) {
-    say(`  client secret CHANGED (${secret.length} characters)`);
-  } else {
-    say(`  client secret unchanged (${secret.length} characters)`);
-  }
-  await writeShared(fingerprintFile,
-    JSON.stringify({ secret: fingerprint, clientId: oidc.clientId, issuer: oidc.issuer }, null, 2) + '\n',
-    0o600);
-
-  /* What was actually sent, in terms that can be checked against the portal
-   * without the secret itself reaching a log or a support ticket. The length
-   * is the useful part twice over: a secret ID is 36 characters and a value is
-   * not, and a value shortened by .env expanding a $ inside it comes out
-   * shorter than the portal shows. */
-  say(`  client id     : ${oidc.clientId}`);
-  say(`  client secret : ${secret.length} characters`);
-  if (/login\.microsoftonline\.com/.test(oidc.issuer) && !/\/v2\.0\/?$/.test(oidc.issuer)) {
-    say(`  ! issuer is ${oidc.issuer}`);
-    say('    Microsoft Entra expects https://login.microsoftonline.com/<tenant>/v2.0');
-  }
+{
+  const ssoName = process.env.SSO_DISPLAY_NAME || 'Microsoft';
+  const ssoOn = Boolean(process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID);
 
   /* The organization's own login policy, COPIED from whatever it is
-   * inheriting rather than invented here. This step exists only so the
-   * connector below can be attached to something; deciding on this
-   * deployment's registration, MFA or password rules is not its business,
-   * and a policy written from a fresh set of opinions would quietly change
-   * all three. */
-  const policy = await api('GET', '/management/v1/policies/login');
-  if (policy.isDefault) {
-    const p = policy.policy || {};
-    const r = await api('POST', '/management/v1/policies/login', {
-      allowUsernamePassword: p.allowUsernamePassword ?? true,
-      allowRegister: p.allowRegister ?? false,
-      allowExternalIdp: true,
-      forceMfa: p.forceMfa ?? false,
-      forceMfaLocalOnly: p.forceMfaLocalOnly ?? false,
-      passwordlessType: p.passwordlessType || 'PASSWORDLESS_TYPE_ALLOWED',
-      hidePasswordReset: p.hidePasswordReset ?? false,
-      ignoreUnknownUsernames: p.ignoreUnknownUsernames ?? false,
-      allowDomainDiscovery: p.allowDomainDiscovery ?? true,
-      disableLoginWithEmail: p.disableLoginWithEmail ?? false,
-      disableLoginWithPhone: p.disableLoginWithPhone ?? false,
-    });
-    if (r.__status >= 400) { console.error('FATAL: could not give the tenant its own login policy:', JSON.stringify(r)); process.exit(1); }
-    say('  tenant login policy created (copied from the instance default)');
+   * inheriting rather than invented here, then amended in the two places this
+   * product has an opinion about. Writing a policy from a fresh set of
+   * opinions would quietly change this deployment's MFA and password rules as
+   * a side effect of configuring SSO. */
+  const current = await api('GET', '/management/v1/policies/login');
+  const p = current.policy || {};
+  /* Password sign-in is off once SSO is configured, unless asked for.
+   *
+   * This locks out `zitadel-admin` too - it is a member of this same
+   * organization and has no Microsoft account - so it is worth knowing that it
+   * is RECOVERABLE: this seeder authenticates with a machine token rather than
+   * through the login screen, so re-running it with
+   * SSO_ALLOW_PASSWORD_LOGIN=true always puts the password box back. */
+  const allowPassword = ssoOn
+    ? String(process.env.SSO_ALLOW_PASSWORD_LOGIN ?? 'false') === 'true'
+    : true;
+  const policy = {
+    allowUsernamePassword: allowPassword,
+    // Never. Everyone who may use this gateway is provisioned, by the seeder
+    // or by users.json; a self-service registration link on the sign-in screen
+    // of a software distribution system offers something nobody should take.
+    allowRegister: false,
+    allowExternalIdp: true,
+    forceMfa: p.forceMfa ?? false,
+    forceMfaLocalOnly: p.forceMfaLocalOnly ?? false,
+    passwordlessType: p.passwordlessType || 'PASSWORDLESS_TYPE_ALLOWED',
+    hidePasswordReset: ssoOn ? true : (p.hidePasswordReset ?? false),
+    ignoreUnknownUsernames: p.ignoreUnknownUsernames ?? false,
+    allowDomainDiscovery: p.allowDomainDiscovery ?? true,
+    disableLoginWithEmail: p.disableLoginWithEmail ?? false,
+    disableLoginWithPhone: p.disableLoginWithPhone ?? false,
+  };
+  const wrote = current.isDefault
+    ? await api('POST', '/management/v1/policies/login', policy)
+    : await api('PUT', '/management/v1/policies/login', policy);
+  if (wrote.__status >= 400 && !unchanged(wrote)) {
+    console.error('FATAL: could not set the sign-in policy:', JSON.stringify(wrote));
+    process.exit(1);
+  }
+  say('sign-in policy set');
+  say(`  self-registration: off      password sign-in: ${allowPassword ? 'on' : 'off'}`);
+  if (ssoOn && !allowPassword) {
+    say(`    'zitadel-admin' can no longer sign in with a password either. To put`);
+    say('    it back: SSO_ALLOW_PASSWORD_LOGIN=true and re-run this container,');
+    say('    which authenticates with a machine token rather than that screen.');
   }
 
-  const attached = await api('POST', '/management/v1/policies/login/idps/_search', {});
-  if (!(attached.result || []).some(i => i.idpId === idpId)) {
-    const r = await api('POST', '/management/v1/policies/login/idps',
-      { idpId, ownerType: 'IDP_OWNER_TYPE_ORG' });
-    if (r.__status >= 400) { console.error(`FATAL: could not offer '${name}' on the sign-in screen:`, JSON.stringify(r)); process.exit(1); }
-    say(`  '${name}' offered on the sign-in screen`);
-  } else say(`  '${name}' already offered on the sign-in screen`);
+  if (!ssoOn) {
+    say('SSO not configured - username/password sign-in is active');
+  } else {
+    const secret = process.env.SSO_CLIENT_SECRET || '';
+    const issuer = process.env.SSO_ISSUER;
 
-  /* The one value the identity provider needs and this container cannot set
-   * for it. Printed every run, because the alternative is finding it in
-   * ZITADEL's documentation while looking at an error that does not mention
-   * it: a redirect URI that is not registered fails LATE, after a person has
-   * typed their password, and the message comes back from the identity
-   * provider in its own vocabulary. */
-  const zitadelURL = process.env.ZITADEL_PUBLIC_URL || 'http://localhost:8090';
-  say(`  register this redirect URI at '${name}': ${zitadelURL}/idps/callback`);
-  say('    Microsoft Entra: register it under the WEB platform, not');
-  say('    Single-page application. ZITADEL redeems the code server side with');
-  say('    a client secret, and Entra requires PKCE for anything registered as');
-  say('    an SPA - which is the AADSTS9002325 sign-in failure.');
-} else {
-  say('SSO not configured - username/password login is active');
+    /* Checked HERE, where the answer is one line, rather than at the identity
+     * provider, where it is an opaque code after somebody has already typed
+     * their password. Both of these produce the same Microsoft failure:
+     *
+     *   AADSTS7000215: Invalid client secret provided. Ensure the secret being
+     *   sent in the request is the client secret VALUE, not the client secret ID
+     *
+     * A secret ID is a GUID; a secret value never is. Azure's portal shows the
+     * two side by side, the ID is the one that stays on screen, and the value
+     * is shown once and then hidden forever - so copying the wrong column is
+     * the normal mistake rather than a careless one. */
+    if (!secret) {
+      console.error('FATAL: SSO_CLIENT_ID is set but SSO_CLIENT_SECRET is empty.');
+      console.error('       This connector authenticates to the identity provider with a');
+      console.error('       secret; without one every sign-in fails at the token exchange.');
+      process.exit(1);
+    }
+    if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(secret)) {
+      console.error('FATAL: SSO_CLIENT_SECRET is a GUID, so it is the secret ID rather than');
+      console.error('       the secret VALUE. In the Azure portal, App registrations ->');
+      console.error('       Certificates and secrets, the Value column is the one to copy,');
+      console.error('       and it is only shown when the secret is created. If it has been');
+      console.error('       lost, add a new client secret and copy the Value.');
+      process.exit(1);
+    }
+
+    /* Microsoft gets ZITADEL's OWN Microsoft connector rather than a generic
+     * OIDC one, and the difference is visible: the generic connector renders
+     * as a plain button with the provider's name, the Microsoft one renders
+     * with Microsoft's mark, which is what a person is looking for on a
+     * sign-in screen. It also knows Entra's endpoints, so it needs the tenant
+     * rather than a discovery URL.
+     *
+     * Anything else stays generic OIDC, which is the whole point of
+     * configuring an issuer. */
+    const tenantSeg = /login\.microsoftonline\.com\/([^/]+)/.exec(issuer)?.[1];
+    const azure = Boolean(tenantSeg);
+    const options = {
+      isLinkingAllowed: true, isCreationAllowed: true,
+      isAutoCreation: true, isAutoUpdate: true,
+      /* THE ONE THAT MATTERS for a stack whose people are provisioned before
+       * they ever sign in. Without it, signing in through Microsoft creates a
+       * SECOND, brand new user with no roles, and asks them to invent a
+       * username - while the account seeded for them, holding org-admin, sits
+       * beside it untouched. Linking on the e-mail address means the person
+       * who was granted a role is the person who arrives. */
+      autoLinking: 'AUTO_LINKING_OPTION_EMAIL',
+    };
+    const shared = {
+      name: ssoName,
+      clientId: process.env.SSO_CLIENT_ID,
+      clientSecret: secret,
+      scopes: ['openid', 'profile', 'email'],
+      providerOptions: options,
+    };
+    const body = azure
+      ? { ...shared, emailVerified: true, tenant:
+          ['common', 'organizations', 'consumers'].includes(tenantSeg)
+            ? { tenantType: `AZURE_AD_TENANT_TYPE_${tenantSeg === 'consumers' ? 'CONSUMERS' : tenantSeg === 'common' ? 'COMMON' : 'ORGANISATIONS'}` }
+            : { tenantId: tenantSeg } }
+      : { ...shared, issuer, usePkce: false };
+    const kind = azure ? 'azure' : 'generic_oidc';
+
+    /* Found through the LOGIN POLICY, not through /management/v1/idps/_search.
+     * That search only lists connectors of the legacy type, so a connector
+     * created through any of the current endpoints is invisible to it and the
+     * seeder would make a second one on every run. The policy's list carries
+     * every attached connector whatever its type, which is also the only list
+     * that matters: attached is what "offered on the sign-in screen" means. */
+    const attached = await api('POST', '/management/v1/policies/login/idps/_search', {});
+    const legacy = await api('POST', '/management/v1/idps/_search', {});
+    let idpId = (attached.result || []).find(i => i.idpName === ssoName)?.idpId
+      || (legacy.result || []).find(i => i.name === ssoName)?.id;
+
+    let before = {};
+    if (idpId) {
+      before = (await api('GET', `/v2/idps/${idpId}`)).idp || {};
+      /* A connector created as one type cannot become another, so a stack
+       * seeded before this change keeps its generic connector unless it is
+       * replaced. Replacing it is safe and is what gets the Microsoft mark
+       * onto the button: the connector holds no user data, only configuration
+       * that .env is the source of truth for. */
+      const wantType = azure ? 'IDP_TYPE_AZURE_AD' : 'IDP_TYPE_OIDC';
+      if (before.type && before.type !== wantType && azure) {
+        await api('DELETE', `/management/v1/idps/${idpId}`);
+        await api('DELETE', `/v2/idps/${idpId}`);
+        say(`SSO connector '${ssoName}' replaced with ZITADEL's Microsoft connector`);
+        idpId = '';
+      }
+    }
+
+    if (!idpId) {
+      const r = await api('POST', `/management/v1/idps/${kind}`, body);
+      idpId = r.id || r.idpId;
+      if (!idpId) { console.error('FATAL: could not create the SSO connector:', JSON.stringify(r)); process.exit(1); }
+      say(`SSO connector '${ssoName}' created`);
+    } else {
+      /* RECONCILED, not merely found. The connector used to be created once
+       * and never touched again, so a corrected secret in .env reached
+       * nothing: the seeder said "exists", the old credentials stayed, and
+       * every sign-in kept failing with a Microsoft error about a secret that
+       * had already been fixed.
+       *
+       * ALWAYS a write, never a write-if-different. The client id can be read
+       * back and compared; the secret cannot, and skipping the write when the
+       * readable fields happen to match would leave a secret changed by hand
+       * in the console standing in place of the one in .env. */
+      const r = await api('PUT', `/management/v1/idps/${kind}/${idpId}`, body);
+      if (r.__status >= 400 && !unchanged(r)) {
+        console.error(`FATAL: could not update the '${ssoName}' connector:`, JSON.stringify(r));
+        process.exit(1);
+      }
+      say(`SSO connector '${ssoName}' reconciled from .env`);
+      const storedId = before.config?.azureAd?.clientId || before.config?.oidc?.clientId;
+      if (storedId && storedId !== body.clientId) {
+        say(`  client id CHANGED: ${storedId} -> ${body.clientId}`);
+      }
+    }
+
+    const stillAttached = await api('POST', '/management/v1/policies/login/idps/_search', {});
+    if (!(stillAttached.result || []).some(i => i.idpId === idpId)) {
+      const r = await api('POST', '/management/v1/policies/login/idps',
+        { idpId, ownerType: 'IDP_OWNER_TYPE_ORG' });
+      if (r.__status >= 400) { console.error(`FATAL: could not offer '${ssoName}' on the sign-in screen:`, JSON.stringify(r)); process.exit(1); }
+      say(`  '${ssoName}' offered on the sign-in screen`);
+    } else say(`  '${ssoName}' already offered on the sign-in screen`);
+    say('  people are matched to their existing account by e-mail address');
+
+    /* Whether the SECRET moved, which is the one thing here that cannot be
+     * answered by reading it back: ZITADEL returns a connector's client id and
+     * never its secret, by design.
+     *
+     * So the seeder remembers a FINGERPRINT of what it last wrote and compares
+     * that. A truncated SHA-256 of a forty character high-entropy secret says
+     * "the same" or "not the same" and nothing else - it cannot be turned back
+     * into the secret, and it lives in the same volume as the machine tokens,
+     * which is already the most privileged thing in this stack. */
+    const fingerprintFile = '/pat/sso-fingerprint.json';
+    const fingerprint = createHash('sha256')
+      .update(`${issuer}\n${body.clientId}\n${secret}`)
+      .digest('hex').slice(0, 16);
+    const previous = await fs.readFile(fingerprintFile, 'utf8')
+      .then(t => { try { return JSON.parse(t); } catch { return {}; } })
+      .catch(() => ({}));
+    if (!previous.secret) say(`  client secret RECORDED (${secret.length} characters)`);
+    else if (previous.secret !== fingerprint) say(`  client secret CHANGED (${secret.length} characters)`);
+    else say(`  client secret unchanged (${secret.length} characters)`);
+    await writeShared(fingerprintFile,
+      JSON.stringify({ secret: fingerprint, clientId: body.clientId, issuer }, null, 2) + '\n', 0o600);
+
+    /* What was actually sent, in terms that can be checked against the portal.
+     *
+     * A length alone turned out not to be enough: a count that disagrees with
+     * the portal says something is wrong and nothing about what, and the
+     * obvious next question - "is that even my secret?" - had no answer. So
+     * the ends are shown and the middle is not. */
+    say(`  client id     : ${body.clientId}`);
+    say(`  client secret : ${mask(secret)}`);
+
+    const check = await verifyIdpCredentials(issuer, body.clientId, secret);
+    if (check.rejected) {
+      console.error(`\nFATAL: ${issuer} rejected these credentials.`);
+      console.error(`       ${check.detail}`);
+      console.error('       The connector was written, and every sign-in through it will');
+      console.error('       fail until SSO_CLIENT_ID and SSO_CLIENT_SECRET are correct.');
+      console.error('       In the Azure portal, App registrations -> Certificates and');
+      console.error('       secrets, copy the VALUE column, not the Secret ID; the value');
+      console.error('       is shown once, when the secret is created.');
+      process.exit(1);
+    }
+    if (check.unreachable) {
+      say(`  ! could not verify the credentials: ${check.unreachable}`);
+      say('    ZITADEL needs this same network path to sign anybody in, so this is');
+      say('    worth fixing even though the seeding itself succeeded.');
+    } else {
+      say(`  credentials verified: ${check.detail}`);
+    }
+
+    const zitadelURL = process.env.ZITADEL_PUBLIC_URL || 'http://localhost:8090';
+    say(`  register this redirect URI at '${ssoName}': ${zitadelURL}/idps/callback`);
+    say('    Microsoft Entra: register it under the WEB platform, not');
+    say('    Single-page application. ZITADEL redeems the code server side with');
+    say('    a client secret, and Entra requires PKCE for anything registered as');
+    say('    an SPA - which is the AADSTS9002325 sign-in failure.');
+  }
+}
+
+/* --- 7b. what the sign-in screen looks like -------------------------------
+ *
+ * The screen a person meets before they are anybody is the product's, not
+ * ZITADEL's. Without this it carries ZITADEL's mark and ZITADEL's palette, and
+ * the first thing somebody sees of this system is a name they have never heard
+ * of asking for their password.
+ *
+ * The colours come from the same brand as everything else. The logo is a file
+ * so it can be replaced without touching code; BRANDING_LOGO_FILE points at
+ * another one.
+ */
+{
+  const brand = {
+    primaryColor: process.env.BRANDING_PRIMARY_COLOR || '#0b7285',
+    backgroundColor: '#ffffff', warnColor: '#c92a2a', fontColor: '#111827',
+    primaryColorDark: process.env.BRANDING_PRIMARY_COLOR_DARK || '#22b8cf',
+    backgroundColorDark: '#111827', warnColorDark: '#ff6b6b', fontColorDark: '#f8f9fa',
+    // The suffix is the ZITADEL organization's domain, which means nothing to
+    // the person reading it and is not part of what they type.
+    hideLoginNameSuffix: true,
+    // ZITADEL's own "powered by" mark. This screen is the product's.
+    disableWatermark: true,
+    themeMode: 'THEME_MODE_AUTO',
+  };
+  const current = await api('GET', '/management/v1/policies/label');
+  const r = current.isDefault
+    ? await api('POST', '/management/v1/policies/label', brand)
+    : await api('PUT', '/management/v1/policies/label', brand);
+  if (r.__status >= 400 && !unchanged(r)) {
+    say(`  ! could not set the sign-in branding: ${JSON.stringify(r).slice(0, 140)}`);
+  } else {
+    for (const [file, path] of [
+      [process.env.BRANDING_LOGO_FILE || '/branding/logo.svg', '/assets/v1/org/policy/label/logo'],
+      [process.env.BRANDING_LOGO_DARK_FILE || process.env.BRANDING_LOGO_FILE || '/branding/logo-dark.svg',
+       '/assets/v1/org/policy/label/logo/dark'],
+    ]) {
+      const up = await uploadAsset(path, file);
+      if (up === 'missing') continue;
+      if (up >= 400) say(`  ! could not upload ${file}: ${up}`);
+    }
+    /* Nothing is visible until the draft is activated, which is the step that
+     * is easy to leave out: every write above succeeds, the console shows the
+     * new colours, and the sign-in screen keeps the old ones. */
+    await api('POST', '/management/v1/policies/label/_activate', {});
+    say('sign-in screen branded');
+  }
+
+  /* One language, so the picker on the sign-in screen cannot change anything.
+   * ZITADEL's login still draws the control - there is no setting that removes
+   * it - but with a single allowed language it has nothing to offer. */
+  const langs = list(process.env.BRANDING_LANGUAGES, 'en');
+  const lr = await api('PUT', '/admin/v1/restrictions', { allowedLanguages: { list: langs } });
+  if (lr.__status >= 400 && !unchanged(lr)) say(`  ! could not restrict languages: ${JSON.stringify(lr).slice(0, 120)}`);
+  else say(`  languages: ${langs.join(', ')}`);
+
+  /* The sign-in service CACHES all of this.
+   *
+   * On a first run the ordering already handles it - zitadel-login does not
+   * start until this container has finished - so this only matters when the
+   * seeder is re-run against a stack that is already up, which is exactly what
+   * somebody does after changing any of these settings. Without the restart
+   * every write above succeeds, the console shows the new values, and the
+   * sign-in screen keeps the old ones, which reads as the change not having
+   * worked. */
+  say('  changes to the sign-in screen need: docker compose restart zitadel-login');
 }
 
 /* --- 8. the first administrator ------------------------------------------- */

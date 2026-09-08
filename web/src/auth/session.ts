@@ -54,8 +54,30 @@ interface Endpoints {
 interface Tokens {
   accessToken: string
   refreshToken: string | undefined
+  /**
+   * The ID token, kept for one purpose: WHO the person is, for the screen.
+   *
+   * The access token is what the Coordinator validates, and it carries the
+   * subject and the roles and nothing else - no name, no e-mail. That is not
+   * an oversight in ZITADEL, it is the split OpenID Connect draws: an access
+   * token is for the API and says what the bearer may do, an ID token is for
+   * the client and says who they are. Reading a name off the access token is
+   * the mistake this comment exists to prevent somebody making later.
+   *
+   * Nothing here is trusted for a DECISION. Every permission comes from the
+   * Coordinator, which checks a signature; these claims only decide what
+   * a person's own name looks like on their own screen.
+   */
+  idToken: string | undefined
   /** epoch milliseconds */
   expiresAt: number
+}
+
+/** The claims worth showing. Absent when the provider asserted none. */
+export interface IdentityClaims {
+  name?: string
+  email?: string
+  preferredUsername?: string
 }
 
 const TOKENS_KEY = 'swgw.auth.tokens'
@@ -397,6 +419,7 @@ export async function completeSignIn(): Promise<string> {
 interface TokenResponse {
   access_token: string
   refresh_token?: string
+  id_token?: string
   expires_in?: number
 }
 
@@ -406,6 +429,9 @@ function store(body: TokenResponse): void {
     // A response that renews without reissuing keeps the refresh token it was
     // given; dropping it here would end the session at the next expiry.
     refreshToken: body.refresh_token ?? tokens?.refreshToken,
+    // Same rule: a refresh commonly returns no new ID token, and dropping it
+    // would make somebody's name disappear an hour into their session.
+    idToken: body.id_token ?? tokens?.idToken,
     // A response with no expires_in is treated as five minutes rather than as
     // forever: a token believed valid forever is one the Coordinator rejects
     // and nothing here renews.
@@ -505,4 +531,39 @@ export async function signOut(): Promise<void> {
     return
   }
   window.location.assign('/')
+}
+
+
+/**
+ * Who this session belongs to, for display.
+ *
+ * Read from the ID token, which is the only place these claims are: the access
+ * token the Coordinator validates carries the subject and the roles, so
+ * /whoami can report an opaque id and what it may do, and cannot report a name.
+ *
+ * NOT VERIFIED HERE, and it does not need to be. The token arrived on a
+ * response to a request this code made to an endpoint it discovered from the
+ * configured issuer, and nothing it says is used for a decision - every
+ * permission is the Coordinator's answer, checked against a signature there.
+ * It decides what a person's own name looks like on their own screen.
+ */
+export function identityClaims(): IdentityClaims {
+  const jwt = tokens?.idToken
+  if (!jwt) return {}
+  const payload = jwt.split('.')[1]
+  if (!payload) return {}
+  try {
+    const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'))
+    const claims = JSON.parse(json) as Record<string, unknown>
+    const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
+    return {
+      name: str(claims.name) ?? str(claims.given_name),
+      email: str(claims.email),
+      preferredUsername: str(claims.preferred_username),
+    }
+  } catch {
+    // A provider that returns something other than a JWT here is not a reason
+    // to break the session; it costs a name on a card.
+    return {}
+  }
 }

@@ -98,6 +98,26 @@ RUN chmod +x /docker-entrypoint.sh
 COPY --from=build /src/dist /usr/share/nginx/html
 
 EXPOSE 80
-HEALTHCHECK --interval=10s --timeout=3s --retries=5 \
-  CMD wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1
+
+# Three questions, because the obvious one-liner answers none of them.
+#
+# `wget http://127.0.0.1/` was the healthcheck, and it passes on a container
+# whose upstream is gone and whose runtime configuration was never written:
+# every unknown path falls through to index.html, so the router fallback
+# answers 200 for anything at all. What this tier is FOR is serving the
+# application and putting it in touch with the Coordinator, so it is healthy
+# when all three of those are true:
+#
+#   /healthz             nginx is serving (matched exactly, no fallback)
+#   /runtime-config.json docker-entrypoint.sh ran and published the sign-in
+#                        configuration the SPA reads before it can authenticate
+#   /readyz              the Coordinator answers its own liveness endpoint
+#                        through this tier's proxy
+#
+# Retries rather than a long timeout: a Coordinator restart should not flap
+# this container's health, and five attempts at ten seconds tolerates one.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=5 \
+  CMD wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1 \
+   && wget -qO- http://127.0.0.1/runtime-config.json >/dev/null 2>&1 \
+   && wget -qO- http://127.0.0.1/readyz >/dev/null 2>&1 || exit 1
 ENTRYPOINT ["/docker-entrypoint.sh"]

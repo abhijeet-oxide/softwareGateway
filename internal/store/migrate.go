@@ -3,7 +3,10 @@ package store
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pressly/goose/v3"
@@ -118,4 +121,52 @@ func (g gooseLogger) Printf(format string, v ...any) {
 
 func (g gooseLogger) Fatalf(format string, v ...any) {
 	g.log.Error(fmt.Sprintf(format, v...), "source", "goose")
+}
+
+// ExpectedSchemaVersion is the highest migration EMBEDDED IN THIS BINARY.
+//
+// Compared against SchemaVersion, it answers the question a readiness probe
+// actually has to ask: not "is the database reachable" but "is it the shape
+// this code was written against". A replica whose schema is behind reaches a
+// working database and then fails on the first query that names a column
+// nobody has added yet, which surfaces as a scattering of 500s rather than as
+// a replica that never went ready.
+//
+// It reads the embedded filenames rather than asking goose, deliberately.
+// goose's dialect and base filesystem are PROCESS-GLOBAL, so calling into it
+// from a probe that runs on every readiness interval would race whatever else
+// is migrating. Filenames are pure.
+func ExpectedSchemaVersion(driver Driver) (int64, error) {
+	fsys, err := migrations.FS(string(driver))
+	if err != nil {
+		return 0, fmt.Errorf("load embedded migrations: %w", err)
+	}
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil {
+		return 0, fmt.Errorf("read embedded migrations: %w", err)
+	}
+	var highest int64
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		// goose names a migration "<version>_<description>.sql".
+		digits := e.Name()
+		if i := strings.IndexByte(digits, '_'); i > 0 {
+			digits = digits[:i]
+		}
+		v, err := strconv.ParseInt(digits, 10, 64)
+		if err != nil {
+			// Not a versioned migration. Skipped rather than fatal: goose
+			// itself ignores anything it cannot parse a version out of.
+			continue
+		}
+		if v > highest {
+			highest = v
+		}
+	}
+	if highest == 0 {
+		return 0, fmt.Errorf("no versioned migrations embedded for %s", driver)
+	}
+	return highest, nil
 }

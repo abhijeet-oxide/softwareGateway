@@ -48,11 +48,23 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := http.StatusOK
-	if rep.Status != health.StatusHealthy {
+	if rep.Status == health.StatusDown {
 		// 503 pulls the replica out of the Service endpoints without killing
 		// it, which is the whole point of separating readiness from liveness.
 		status = http.StatusServiceUnavailable
 	}
+	// DEGRADED IS STILL READY, and the body says what is degraded.
+	//
+	// This used to answer 503 for anything short of healthy, which quietly
+	// contradicted the rule the rest of the service is built on: a directory
+	// failure is fatal, an individual invalid product is not, and the
+	// Coordinator must keep serving the API so that somebody can be told which
+	// product is broken (docs/design/02 section 7). One malformed product file
+	// took every replica out of the Service, and the screen that would have
+	// named the file went with them.
+	//
+	// Down is reserved for a dependency without which nothing can be served at
+	// all: the database, or a schema this build cannot use.
 	WriteJSON(w, r, status, resp)
 }
 

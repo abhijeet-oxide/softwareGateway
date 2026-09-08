@@ -363,6 +363,14 @@ func (s *Server) routes() chi.Router {
 
 	// ---- Probes and metrics (unversioned; scraped by infrastructure) ----
 	r.Get("/healthz", s.handleLiveness)
+	// The same probe under Kubernetes' own spelling. Both names exist because
+	// both are what somebody reaches for: /healthz is what this project's own
+	// documentation and charts have always said, /livez is what kubelet's
+	// component conventions use. /livez was already listed as a path that must
+	// answer WITHOUT credentials, and was answering 404 instead - a probe that
+	// is documented, exempted from authentication, covered by a test, and not
+	// registered.
+	r.Get("/livez", s.handleLiveness)
 	r.Get("/readyz", s.handleReadiness)
 	if s.deps.Metrics != nil {
 		r.Handle("/metrics", promhttp.HandlerFor(

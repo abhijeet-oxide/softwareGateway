@@ -681,7 +681,17 @@ for (const p of products) {
     const options = {
       isLinkingAllowed: true, isCreationAllowed: false,
       isAutoCreation: false, isAutoUpdate: true,
-      autoLinking: 'AUTO_LINKING_OPTION_EMAIL',
+      /* WHICH FIELD the provider's assertion is matched against.
+       *
+       * The e-mail address by default, because it is the one string both
+       * systems hold and the one a directory reliably asserts. Some do not:
+       * an Entra tenant whose users have no `mail` attribute asserts the
+       * user principal name and nothing else, and then matching on address
+       * can never succeed however correct the configuration looks. Set
+       * SSO_LINK_ON=username to match the ZITADEL username instead. */
+      autoLinking: (process.env.SSO_LINK_ON || 'email').toLowerCase() === 'username'
+        ? 'AUTO_LINKING_OPTION_USERNAME'
+        : 'AUTO_LINKING_OPTION_EMAIL',
     };
     const shared = {
       name: ssoName,
@@ -1275,9 +1285,9 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
    * These are the placeholder domains this file and its examples emit; a real
    * one that happens to be unroutable is beyond what can be checked here. */
   const placeholder = /@(example\.(com|org|net|invalid)|localhost|.*\.localhost)$/i;
-  const signInAddresses = (all.result || [])
-    .filter(u => u.human?.email?.email && !placeholder.test(u.human.email.email))
-    .map(u => u.human.email.email);
+  const matchable = (all.result || [])
+    .filter(u => u.human?.email?.email && !placeholder.test(u.human.email.email));
+  const signInAddresses = matchable.map(u => u.human.email.email);
 
   if (signInAddresses.length === 0 && !passwordLoginOn) {
     console.error('');
@@ -1303,10 +1313,20 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
   /* WHO CAN GET IN, listed. A closed system should be able to say who it is
    * closed to, and this is the answer to "why can this person not sign in"
    * without anybody having to open a console. */
+  const linkOn = (process.env.SSO_LINK_ON || 'email').toLowerCase() === 'username' ? 'username' : 'address';
   say('');
-  say(`these ${signInAddresses.length} address(es) can sign in through ${process.env.SSO_DISPLAY_NAME || 'Microsoft'}:`);
-  for (const a of signInAddresses.slice(0, 20)) say(`    ${a}`);
-  if (signInAddresses.length > 20) say(`    ... and ${signInAddresses.length - 20} more`);
+  say(`${signInAddresses.length} account(s) can sign in through ${process.env.SSO_DISPLAY_NAME || 'Microsoft'}, matched on ${linkOn}:`);
+  /* Username AND address, because the failure this is meant to catch is that
+   * the provider asserts one and this directory holds the other. Printing
+   * only the matched field hides exactly the mismatch worth seeing. */
+  for (const u of matchable.slice(0, 20)) {
+    say(`    ${String(u.userName).padEnd(28)} ${u.human?.email?.email || ''}`);
+  }
+  if (matchable.length > 20) say(`    ... and ${matchable.length - 20} more`);
+  say('');
+  say('  A sign-in is refused unless the provider asserts one of these exactly.');
+  say('  If it does and the sign-in still fails, the provider is asserting a');
+  say('  different value: try SSO_LINK_ON=username, or correct the address here.');
   if (passwordLoginOn) say('  (password sign-in is also on)');
   say('');
 }

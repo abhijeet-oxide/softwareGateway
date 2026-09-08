@@ -311,13 +311,32 @@ their address.
 > advice "set BOOTSTRAP_ADMIN_EMAIL and re-run" quietly untrue on any stack that
 > had ever been seeded.
 
-> **Not verified end to end here.** Read back from ZITADEL, a connector this
-> seeder creates carries creation and auto-creation off. The refusal ITSELF - an
-> unknown address reaching the sign-in screen and being turned away - was not
-> reproduced: it needs a real external provider, and ZITADEL refuses to dial the
-> private address range a throwaway one lives on. The behaviour is ZITADEL's
-> documented semantics for those flags, and that is a weaker statement than the
-> rest of this document makes.
+> **Verified end to end, against a mock identity provider.** A Keycloak realm
+> stood in for the corporate directory, with two users: one whose address
+> matched a provisioned ZITADEL account, one nobody had heard of.
+>
+> - the provisioned one **signed straight in**, silently linked, and landed on
+>   the application holding `org-admin`. Auto-linking works with creation off;
+>   turning creation off does not lock out people who were provisioned.
+> - the unknown one was **stopped at ZITADEL's own screen**: "Account Not Found
+>   - We couldn't find an account associated with your identity provider
+>   credentials." No account was created and no token was issued.
+>
+> Getting there needed one thing worth recording: ZITADEL refuses to dial
+> private address ranges when reaching an identity provider, which is every
+> address a local mock can have. The knob is `ZITADEL_HTTPCLIENT_DENYLIST`, and
+> `ZITADEL_ACTIONS_HTTP_DENYLIST` is deprecated and MERGED into it - so clearing
+> only the second changes nothing. An empty value reads as unset and the
+> shipped defaults apply; it has to be replaced with an inert entry. That is a
+> test-rig setting and appears in no committed file.
+
+> **When a provisioned person still cannot sign in, the address is the suspect.**
+> Linking compares one string on each side, and a directory that does not assert
+> the one this side holds can never match however correct both look. The seeder
+> prints the username AND the address of every account that can sign in, because
+> printing only the matched field hides exactly the mismatch worth seeing. Where
+> a directory asserts a user principal name and no `mail` attribute,
+> `SSO_LINK_ON=username` matches on the username instead.
 
 ### 5.1b The address is the identity, not the username
 

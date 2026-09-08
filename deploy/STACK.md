@@ -143,6 +143,21 @@ So after any change to `SSO_*`:
 docker compose run --rm zitadel-init      # podman-compose run --rm zitadel-init
 ```
 
+### `.env` can silently shorten a secret
+
+Compose expands variables inside `.env` values, so a `$` in a secret is read as
+the start of a variable name and the rest of the word disappears:
+
+```
+.env:          SSO_CLIENT_SECRET=aBc8Q~with$dollar.and_more
+container gets: aBc8Q~with.and_more
+```
+
+Nothing warns about it. Write `$$` for a literal `$`, and avoid a ` #` inside
+the value, which starts a comment. This is what the seeder's character count is
+for: compare it with the length of the secret in the Azure portal, and if they
+differ, `.env` ate part of it.
+
 ### Checking what ZITADEL actually holds
 
 The seeder's output above is the quickest answer, and the character count is

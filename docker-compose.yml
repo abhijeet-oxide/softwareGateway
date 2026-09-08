@@ -53,37 +53,33 @@
 # postgres last, so nothing writes to a database that has already gone.
 # Add -v to that command to discard the data as well.
 #
-# BUILDING UNDER PODMAN: BUILD ONE IMAGE AT A TIME.
+# BUILD SECRETS UNDER PODMAN: THE DEFAULT FILES MUST STAY ZERO BYTES.
 #
-#   podman-compose --parallel 1 build
-#   podman-compose --parallel 1 up -d --build
-#
-# `podman-compose build` on its own fails, intermittently, with
+# podman's remote client - podman machine, so every Windows and macOS host -
+# cannot pass a build secret to the server over the wire. It copies each secret
+# INTO THE BUILD CONTEXT, keeps the handle open, and tars the context
+# (containers/podman, pkg/bindings/images/build.go: os.CreateTemp with a
+# `defer Close`). On Windows the size in the tar header comes from the
+# directory entry, which still reads zero while podman's writes sit unflushed,
+# so the copy delivers the real bytes and archive/tar refuses them:
 #
 #   archive/tar: write too long
 #   Error: Post "http://d/v5.5.2/libpod/build?...": io: read/write on closed pipe
 #
-# and the reason is not this file's contents. It is that podman's REMOTE client
-# (podman machine, so every Windows and macOS host) cannot hand a build secret
-# to the server over the wire: it copies each one INTO THE BUILD CONTEXT
-# DIRECTORY as `podman-build-secret-*` and ships it inside the context tar
-# (containers/podman, pkg/bindings/images/build.go, prepareSecrets). Three
-# services here build from the same context, podman-compose runs them
-# concurrently, and the tar walker of one build reaches another's secret file
-# in the instant between os.CreateTemp creating it at zero bytes and the
-# content being written. The header says zero, the copy delivers the whole
-# file, and archive/tar refuses it. The build is then retried three times
-# (retry=3 in that URL), which is why the same step appears more than once.
+# A ZERO BYTE secret is immune, because zero is what the header promised.
+# See containers/podman#26914, #17899 and #23815: the bug is open, and empty
+# secret files are the only ones that work.
 #
-# `--parallel 1` is the fix because it removes the overlap: a build only ever
-# sees the secret it wrote itself, and podman finishes writing that before the
-# tar starts. It is also the one lever that does not depend on which podman is
-# installed. A smaller context is not a fix - size decides how often the
-# windows overlap, not whether they can - and ignoring `podman-build-secret*`
-# is not one either: whether podman applies the ignore list to the secret it
-# just added changed between releases, so the rule either does nothing or
-# hides the build's own secret. Docker is unaffected: buildx streams secrets
-# over its session rather than through the context.
+# So deploy/npm/npmrc.default and deploy/go/netrc.default are zero bytes, and
+# deploy/deploy_test.go fails if either grows. They used to carry a comment
+# saying "Intentionally empty" while being 423 and 215 bytes, which broke every
+# build on Windows on an error that names neither podman nor the file.
+# Anything worth saying about them is in the README beside them.
+#
+# A CREDENTIALED file is not empty and therefore still hits this. See
+# deploy/STACK.md for what to do about that; it is podman's bug to fix, not
+# something this file can work around. Docker is unaffected: buildx streams
+# secrets over its session rather than through the context.
 # =============================================================================
 
 name: software-gateway

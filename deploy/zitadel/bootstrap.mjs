@@ -512,7 +512,10 @@ for (const p of products) {
       say('    the worker runs as a non-root user and will not be able to read it');
     }
     say(`  credentials published for the data plane (client_id ${sec.clientId})`);
-    if (!created) say('  workers pick the new secret up on their next restart');
+    // No restart. A worker reads this file when it needs a token rather than
+    // once at boot, so the fleet moves over on its own within one lease
+    // interval - and a worker that started before this ran recovers by itself.
+    if (!created) say('  running workers take the new secret within a few seconds');
   }
 }
 

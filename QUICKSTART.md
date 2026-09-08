@@ -244,6 +244,48 @@ docker compose down                     # stop; data kept
 docker compose down -v                  # stop and discard all data
 ```
 
+### Upgrading a stack that is already running
+
+Pulling new code needs **no `down`**, and specifically no `down -v`: that
+discards the database and the whole identity provider, so every user, role and
+grant would have to be seeded again. Nothing here needs it.
+
+```bash
+git pull
+docker compose build controller worker web   # only the images whose code moved
+docker compose run --rm zitadel-init         # apply anything new in the seeder
+docker compose up -d                         # recreate what changed
+```
+
+Read it as three separate facts:
+
+- **Build only what moved.** Go changes are `controller` and `worker`; anything
+  under `web/src` is `web`. The seeder is a bind-mounted script, not an image,
+  so a change to `deploy/zitadel/bootstrap.mjs` needs no build at all.
+- **Run the seeder before `up`, not after.** It is idempotent, safe on a running
+  stack, and it is what creates anything new in the identity provider - a role,
+  a machine account, a set of credentials. Running it first means the services
+  come up to a directory that already has what they are about to ask for.
+  Nothing is lost if you get the order wrong: see the next point.
+- **`up -d` recreates only containers whose image or definition changed.**
+  Postgres and ZITADEL keep their volumes and are not restarted unless you
+  changed them.
+
+> **Under podman, run the seeder explicitly.** `depends_on` conditions are not
+> implemented by podman-compose, so `podman compose up -d` will not run
+> `zitadel-init` for you and will not wait for it. The command above does it by
+> hand, which is correct on both runtimes.
+>
+> It is not fragile either way: a worker reads its credentials when it needs a
+> token rather than once at startup, so one that comes up before the seeder has
+> written them retries every five seconds, logs
+> `no workload credentials yet`, and starts leasing on its own within seconds of
+> the file appearing. No restart, no ordering to get right.
+
+Build **sequentially**, not with `--parallel`, if any of your build secrets are
+non-empty: podman copies each secret into the build context, and concurrent
+builds sharing that context corrupt each other (§8).
+
 ## 7. Behind an internal registry or proxy
 
 Every image is a variable with a pinned default, and nothing is tagged

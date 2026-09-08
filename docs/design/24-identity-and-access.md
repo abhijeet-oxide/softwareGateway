@@ -264,6 +264,55 @@ are written to their own volume and mounted read-only into every worker.
 > compose and a mechanism with no deployment to run in is a mechanism nobody
 > tests.
 
+### 5.1b The address is the identity, not the username
+
+A person who signs in through Microsoft is created by **ZITADEL**, not by the
+seeder, and named by whatever the connector hands over - usually their address.
+The account the seeder made for them carries a different name, and often a
+different address, so one human ends up with two accounts.
+
+> **Decision - lookups match on EMAIL first, username second.**
+>
+> The address is the durable identity: it is what the identity provider
+> asserts, it is what ZITADEL's auto-linking keys on, and it is the same string
+> on both systems. A username is a local artifact of whichever side created the
+> account first.
+>
+> Matching on username first looks equivalent and is not. It finds the seeder's
+> own account every time and grants it the roles; the person then signs in
+> through Microsoft, lands on the other account, and reads "Tenant roles: none"
+> on their own profile - with the roles sitting on an account they cannot sign
+> in to, because it has no identity at the provider and password sign-in is off
+> once SSO is configured. *This is what shipped*, and username-first is why the
+> first attempt at this fixed nothing.
+
+> **Decision - the seeder reports the mess, and does not clean it up.**
+>
+> Two checks, both at the end of the run where they cannot be lost in
+> scrollback:
+>
+> - **people who can sign in and hold no roles** - a direct check for the
+>   symptom rather than an inference from it, because the duplicate check below
+>   cannot see the commonest shape of it: when the seeded administrator carries
+>   the DEFAULT address, both lookups land on that same account, so there is no
+>   duplicate to notice while the person's real account sits beside it
+>   ungranted. Directory administrators are excluded - ZITADEL's own break-glass
+>   account holds an instance membership and no project grant by design, and a
+>   warning whose first line is always wrong is one people learn to skip.
+> - **two accounts for one person** - named with both ids and which one now
+>   holds the roles.
+>
+> Neither deletes anything. Removing somebody's account is not a decision a
+> re-runnable seeding script should take on its own, and the leftover is
+> harmless: it cannot sign in, which is the whole reason it is confusing rather
+> than dangerous.
+
+> **Operationally: `down` keeps the directory.** ZITADEL's users live in the
+> `pgdata` volume, and only `docker compose down -v` discards it. A duplicate
+> created once survives every rebuild until somebody removes it, which is why
+> the reports above matter more than they would in a stack that started empty
+> each time.
+
 ### 5.2 The four personas
 
 | Persona | How it is expressed | Scope |

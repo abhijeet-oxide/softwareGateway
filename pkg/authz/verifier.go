@@ -177,6 +177,22 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Identity, error) {
 		id.Subject = tok.Subject
 	}
 
+	readRoles(all, &id)
+	return id, nil
+}
+
+// readRoles decodes every role claim in the token onto the identity.
+//
+// ZITADEL emits the same role under MORE THAN ONE claim: one per project
+// (`urn:zitadel:iam:org:project:<projectID>:roles`) and one flattened across
+// all of them (`urn:zitadel:iam:org:project:roles`). Both match the shape this
+// reads, which is deliberate - a deployment may have either - so the same
+// grant arrives twice and has to be counted once. Left undeduplicated it
+// reached the policy engine twice and reached the Settings page as
+// "org-admin, org-admin", which reads as a misconfigured grant rather than as
+// one role named twice.
+func readRoles(all map[string]json.RawMessage, id *Identity) {
+	seen := map[string]bool{}
 	for claim, raw := range all {
 		if !strings.HasPrefix(claim, "urn:zitadel:iam:org:project:") || !strings.HasSuffix(claim, ":roles") {
 			continue
@@ -194,6 +210,10 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Identity, error) {
 				}
 				break
 			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
 			if product, role, ok := splitProductRole(key); ok {
 				id.Products[product] = append(id.Products[product], role)
 			} else {
@@ -201,7 +221,6 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Identity, error) {
 			}
 		}
 	}
-	return id, nil
 }
 
 // BearerToken extracts the token from an Authorization header.

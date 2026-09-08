@@ -640,15 +640,47 @@ for (const p of products) {
      * configuring an issuer. */
     const tenantSeg = /login\.microsoftonline\.com\/([^/]+)/.exec(issuer)?.[1];
     const azure = Boolean(tenantSeg);
+    /* NOBODY IS CREATED BY SIGNING IN.
+     *
+     * This is a closed system: who may use this gateway is decided by an
+     * administrator, in deploy/zitadel/users.json, reviewable in a pull
+     * request. It is not decided by who happens to hold an account at the
+     * identity provider - which, federating a corporate directory, is
+     * everybody who works here.
+     *
+     * With creation ALLOWED, which is what this used to say, an unprovisioned
+     * person signing in through Microsoft got a brand new ZITADEL account with
+     * no roles on it, and - the part that matters - a VALID TOKEN. Every
+     * defence after that point is then working to contain a caller who should
+     * never have been issued a credential at all. Authorization has to hold
+     * that line anyway, and it does; but the line belongs here, at the front
+     * door, where the answer is "we have never heard of you" rather than "you
+     * may do nothing".
+     *
+     * What each flag does, because three of them look interchangeable and are
+     * not:
+     *
+     *   isCreationAllowed  a NEW ZITADEL user may be created from this
+     *                      connector, with the person filling in a form. Off.
+     *   isAutoCreation     the same thing without even the form, done silently
+     *                      on first sign-in. Off. This is the one that was
+     *                      minting the accounts.
+     *   isLinkingAllowed   an external identity may be attached to a user that
+     *                      ALREADY EXISTS. On - this is the whole mechanism by
+     *                      which a provisioned person signs in.
+     *   autoLinking        which field to match them on. The e-mail address:
+     *                      it is what the provider asserts and what the seeder
+     *                      writes, so the person granted the role is the person
+     *                      who arrives.
+     *   isAutoUpdate       keep the linked account's name and address in step
+     *                      with the directory afterwards. On.
+     *
+     * So: provisioned first, then sign in. An unknown address reaches the
+     * identity provider and stops there, with no user created and no token
+     * issued. */
     const options = {
-      isLinkingAllowed: true, isCreationAllowed: true,
-      isAutoCreation: true, isAutoUpdate: true,
-      /* THE ONE THAT MATTERS for a stack whose people are provisioned before
-       * they ever sign in. Without it, signing in through Microsoft creates a
-       * SECOND, brand new user with no roles, and asks them to invent a
-       * username - while the account seeded for them, holding org-admin, sits
-       * beside it untouched. Linking on the e-mail address means the person
-       * who was granted a role is the person who arrives. */
+      isLinkingAllowed: true, isCreationAllowed: false,
+      isAutoCreation: false, isAutoUpdate: true,
       autoLinking: 'AUTO_LINKING_OPTION_EMAIL',
     };
     const shared = {
@@ -787,6 +819,53 @@ for (const p of products) {
     say('    Single-page application. ZITADEL redeems the code server side with');
     say('    a client secret, and Entra requires PKCE for anything registered as');
     say('    an SPA - which is the AADSTS9002325 sign-in failure.');
+  }
+}
+
+/* --- 7a. no connector, anywhere, may create users -------------------------
+ *
+ * Section 7 configures the connector this file MANAGES, which is the one whose
+ * display name matches SSO_DISPLAY_NAME. Any other connector attached to the
+ * sign-in policy is left exactly as it was found - including, on a stack
+ * seeded before this rule existed, with creation switched on.
+ *
+ * That is the same silent hole in a different place: the screen offers it, an
+ * unprovisioned person signs in through it, and ZITADEL makes them an account
+ * with no roles and issues a token. So every attached connector is checked,
+ * not just ours, and one that can still mint accounts is named.
+ *
+ * It is REPORTED rather than corrected. Updating a connector requires the
+ * endpoint for its own type, and guessing that for a connector this file did
+ * not create is how a seeder deletes somebody's working SSO on a Tuesday. The
+ * fix is one line of configuration and it is printed with the finding.
+ */
+{
+  const attached = await api('POST', '/management/v1/policies/login/idps/_search', {});
+  const offenders = [];
+  for (const a of (attached.result || [])) {
+    const d = await api('GET', `/v2/idps/${a.idpId}`);
+    const o = d.idp?.config?.options || {};
+    // Absent means false: protobuf JSON omits default values, so a connector
+    // written with these off comes back with the keys simply missing.
+    if (o.isCreationAllowed || o.isAutoCreation) {
+      offenders.push({ name: a.idpName, id: a.idpId });
+    }
+  }
+  if (offenders.length) {
+    console.log('\n  ' + '-'.repeat(66));
+    console.log('  A SIGN-IN CONNECTOR CAN STILL CREATE ACCOUNTS:');
+    for (const o of offenders) console.log(`    ${o.name}  (${o.id})`);
+    console.log('');
+    console.log('  Anybody at that identity provider can sign in and be given a brand new');
+    console.log('  account with no roles - and a valid token with it. This stack decides who');
+    console.log('  may use it in deploy/zitadel/users.json, not the directory.');
+    console.log('');
+    console.log('  Fix: re-run this container with SSO_DISPLAY_NAME set to the name above,');
+    console.log('  which reconciles that connector, or delete it in the console under');
+    console.log('  Settings, Identity Providers.');
+    console.log('  ' + '-'.repeat(66));
+  } else {
+    say('no connector can create accounts: people are provisioned first, then sign in');
   }
 }
 

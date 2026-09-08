@@ -1,0 +1,21 @@
+# Mirroring a product into a third-party registry.
+#
+# `apply` is admin and owner only, and that is the same line download.yaml
+# draws: it writes CONFIGURATION into somebody else's registry, and what it
+# writes outlives the request that made it. `sync` moves content under
+# configuration that is already there, which is an operator's job.
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: default
+  resource: replication
+  importDerivedRoles: [gateway_common]
+  rules:
+    - actions: ["view"]
+      effect: EFFECT_ALLOW
+      derivedRoles: [org_wide_reader, product_reader]
+    - actions: ["sync", "cancel_sync"]
+      effect: EFFECT_ALLOW
+      derivedRoles: [org_wide_operator, product_operator]
+    - actions: ["apply"]
+      effect: EFFECT_ALLOW
+      derivedRoles: [org_wide_admin, product_owner]

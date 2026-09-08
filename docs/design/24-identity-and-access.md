@@ -264,6 +264,45 @@ are written to their own volume and mounted read-only into every worker.
 > compose and a mechanism with no deployment to run in is a mechanism nobody
 > tests.
 
+### 5.1c Nobody is created by signing in
+
+The connector is configured with `isCreationAllowed: false` and
+`isAutoCreation: false`, so an account at the identity provider that this
+gateway has never been told about **cannot sign in and is never issued a
+token**. Linking stays on: that is how a person the seeder already provisioned
+attaches their Microsoft identity to the account holding their roles, matched on
+their address.
+
+> **Decision - the line is drawn at the front door, not behind it.**
+>
+> With creation allowed, which is what shipped, an unprovisioned person signing
+> in got a brand new ZITADEL account with no roles - and a valid token. Every
+> defence after that is then working to contain a caller who should never have
+> held a credential. Authorization has to hold that line anyway and does (§8.2),
+> but "we have never heard of you" is a better answer than "you may do nothing",
+> and it is the only one that produces no token at all.
+>
+> Who may use this gateway is decided by an administrator in
+> `deploy/zitadel/users.json`, reviewable in a pull request. It is not decided
+> by who happens to hold an account in the corporate directory, which is
+> everybody.
+
+> **Every attached connector is checked, not only the managed one.** The seeder
+> reconciles the connector whose display name matches `SSO_DISPLAY_NAME` and
+> leaves any other alone - including, on a stack seeded before this rule, one
+> with creation switched on. So it inspects them all and names any that can
+> still mint accounts. Reported rather than corrected: updating a connector
+> needs the endpoint for its own type, and guessing that for one this file did
+> not create is how a seeder deletes somebody's working SSO.
+
+> **Not verified end to end here.** Read back from ZITADEL, a connector this
+> seeder creates carries creation and auto-creation off. The refusal ITSELF - an
+> unknown address reaching the sign-in screen and being turned away - was not
+> reproduced: it needs a real external provider, and ZITADEL refuses to dial the
+> private address range a throwaway one lives on. The behaviour is ZITADEL's
+> documented semantics for those flags, and that is a weaker statement than the
+> rest of this document makes.
+
 ### 5.1b The address is the identity, not the username
 
 A person who signs in through Microsoft is created by **ZITADEL**, not by the
@@ -485,6 +524,54 @@ consulted. **A permission model no handler asks is documentation.**
 > disagreement cost nothing while nothing consulted the ladder, and would have
 > handed every operator the one action that writes into somebody else's
 > registry the moment something did.
+
+### 8.3 Cerbos decides, and it decides everything
+
+The policy engine was constructed at startup and never consulted; the decision
+came from a role ladder compiled into the binary. That is the opposite of why a
+PDP is in this stack. `deploy/cerbos/policies` is now the only answer whenever
+an engine is configured - not a second opinion layered over the ladder, which
+would be two answers that can disagree and a shipped behaviour decided by
+whichever was checked last.
+
+`internal/api/middleware/resource.go` maps each route to a resource kind and an
+action in the policies' own vocabulary. Thirteen policy files cover the whole
+API surface: `product`, `package`, `software_download`, `security_report`,
+`compliance_report`, `replication`, `download_rule`, and the estate resources
+`audit_event`, `report`, `worker`, `policy_catalogue`, `system`.
+
+> **Decision - the ladder survives only where there is no engine.**
+>
+> Authentication without a PDP is a real deployment and the half-step this
+> document already describes. With `SWGW_AUTH_CERBOSADDR` set, the ladder is not
+> consulted at all.
+
+> **Decision - an engine that cannot answer refuses.**
+>
+> Cannot know is not yes. This is a deliberate availability trade: a Cerbos
+> outage refuses the API rather than opening it, for administrators too.
+> *Verified:* with the PDP stopped, an administrator's `GET /products` answers
+> 403 naming the policy engine as the cause.
+
+> **Decision - the estate resources have no product tier.**
+>
+> A fleet is a fleet; the rulebook is what WILL be checked, which a vendor
+> asking before they ship has no release to point at. A caller holding only
+> product roles is refused, because the alternative is handing them the whole
+> estate so they can see their corner of it. The audit trail is the exception
+> that proves it: it CAN be narrowed, the handler narrows it by product, so a
+> product reader may view it.
+
+> **One PDP call in the ordinary case.** The tenant-wide question is asked
+> first and every org-tier caller stops there. Only a product-tier caller on a
+> listing route pays more - one call per product they hold - because "may you
+> list products" is not "may you act on the estate", and that is the one
+> question a single check cannot express.
+
+*Verified against the running PDP*, not against a table: the matrix in
+`policy_test.go` runs with `CERBOS_ADDR` set, and covers the boundaries that
+matter - operator may `sync` and may not `apply`, a product owner reaches their
+own product and not another, an account with no roles reaches nothing.
 
 **The refusal is written for the person reading it.** "This account holds no
 roles" is a different problem from "you hold the wrong ones", and only the first

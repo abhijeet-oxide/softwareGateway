@@ -74,7 +74,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 		operator = identity("default", []string{"org-operator"}, nil)
 		reader   = identity("default", []string{"org-reader"}, nil)
 		security = identity("default", []string{"org-security"}, nil)
-		owner    = identity("default", nil, map[string][]string{"software-01": {"software-01:product-owner"}})
+		owner    = identity("default", nil, map[string][]string{"software-01": {"product-owner"}})
 	)
 
 	cases := []struct {
@@ -183,7 +183,7 @@ func TestProductIn(t *testing.T) {
 func attempt(id Identity, method, path string) (bool, string) {
 	reached := false
 	var denied string
-	h := Authorize(func(w http.ResponseWriter, _ *http.Request, detail string) {
+	h := Authorize(nil, func(w http.ResponseWriter, _ *http.Request, detail string) {
 		denied = detail
 		w.WriteHeader(http.StatusForbidden)
 	})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))

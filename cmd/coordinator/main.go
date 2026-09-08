@@ -560,6 +560,7 @@ func run() error {
 	// than at the first request is deliberate: a Coordinator that starts with
 	// broken auth configuration looks healthy while refusing everyone.
 	var authenticator middleware.Authenticator
+	var policyEngine authz.Engine
 	if cfg.Auth.Enabled {
 		a, err := middleware.NewOIDCAuthenticator(ctx,
 			cfg.Auth.Issuer, cfg.Auth.DiscoveryURL, cfg.Auth.HostHeader, cfg.Auth.Audience,
@@ -568,6 +569,7 @@ func run() error {
 			return fmt.Errorf("authentication is enabled but not usable: %w", err)
 		}
 		authenticator = a
+		policyEngine = a.Engine
 		logger.Info("authentication enabled",
 			"issuer", cfg.Auth.Issuer,
 			"authorization", map[bool]string{true: "cerbos", false: "roles only"}[cfg.Auth.CerbosAddr != ""])
@@ -611,12 +613,17 @@ func run() error {
 
 	srv := api.NewServer(api.Deps{
 		Authenticator: authenticator,
-		Logger:        logger,
-		Metrics:       mreg,
-		Health:        hreg,
-		Products:      products,
-		Store:         st,
-		Packages:      packages,
+		// The policy engine, if one is configured. Handed to the API rather
+		// than kept on the authenticator: establishing WHO somebody is and
+		// deciding WHAT they may do are two jobs, and only the second belongs
+		// in front of every route.
+		Engine:   policyEngine,
+		Logger:   logger,
+		Metrics:  mreg,
+		Health:   hreg,
+		Products: products,
+		Store:    st,
+		Packages: packages,
 		// The vendor layouts, so an artifact listing can report a vendor's
 		// Helm charts as charts rather than as images. See
 		// Server.artifactClassifier.

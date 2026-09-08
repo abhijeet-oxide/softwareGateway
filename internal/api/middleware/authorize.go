@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/abhijeet-oxide/softwareGateway/pkg/authz"
 )
 
 // Authorization: what an authenticated caller may actually reach.
@@ -145,11 +147,31 @@ func productIn(path string) string {
 	return seg
 }
 
-// Authorize refuses a request the caller's grants do not cover.
+// Authorize refuses a request the caller is not permitted to make.
+//
+// # Who decides
+//
+// The POLICY ENGINE, whenever one is configured, and it is the only decision -
+// not a second opinion on top of the role ladder. Cerbos exists in this
+// deployment precisely so that "who may do what" is data in
+// deploy/cerbos/policies, reviewable and changeable without a rebuild; asking
+// it and then also consulting a hard-coded ladder would mean two answers that
+// can disagree, and the one that shipped would be whichever was checked last.
+//
+// The ladder remains for a deployment with no engine. That is a real
+// configuration - authentication without a PDP - and it is exactly the
+// half-step docs/design/24 describes.
+//
+// # It fails closed on an engine that cannot answer
+//
+// An unreachable PDP means we cannot know whether this is allowed, and cannot
+// know is not yes. That is a deliberate availability trade: a Cerbos outage
+// refuses the API rather than opening it. Cerbos runs beside the Coordinator
+// and its own health is reported separately, so the state is diagnosable.
 //
 // deny writes the refusal, and is passed in so this package keeps knowing
 // nothing about the API's error format.
-func Authorize(deny func(http.ResponseWriter, *http.Request, string)) func(http.Handler) http.Handler {
+func Authorize(engine authz.Engine, deny func(http.ResponseWriter, *http.Request, string)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// The data plane is governed by Confine, which has already run and
@@ -161,10 +183,33 @@ func Authorize(deny func(http.ResponseWriter, *http.Request, string)) func(http.
 			id := IdentityFrom(r.Context())
 			req := RequiredFor(r)
 
-			// Scoped to the caller's OWN tenant, never to the estate: a grant
-			// carries the tenant it was made in, and an estate-wide question is
-			// the strictest there is (see Scope.covers), so asking one here
-			// would refuse the very identity that holds the role.
+			if engine != nil {
+				// An anonymous deployment has authentication off and holds
+				// admin; it has no roles a policy could match, and asking
+				// would refuse every request on a stack that is deliberately
+				// open. The engine governs identities that came from a token.
+				if id.Method == "" || id.Method == "none" {
+					next.ServeHTTP(w, r)
+					return
+				}
+				allowed, err := decide(r, engine, id, req)
+				switch {
+				case err != nil:
+					deny(w, r, "The policy engine could not be reached, so this request "+
+						"cannot be authorized. Nothing is permitted while that is true.")
+				case allowed:
+					next.ServeHTTP(w, r)
+				default:
+					deny(w, r, Refusal(id, req))
+				}
+				return
+			}
+
+			// No engine: the role ladder, scoped to the caller's OWN tenant.
+			// Never to the estate - a grant carries the tenant it was made in,
+			// and an estate-wide question is the strictest there is (see
+			// Scope.covers), so asking one here would refuse the very identity
+			// that holds the role.
 			if id.Can(req.Action, Scope{Tenant: id.Tenant, Product: req.Product}) {
 				next.ServeHTTP(w, r)
 				return
@@ -176,6 +221,66 @@ func Authorize(deny func(http.ResponseWriter, *http.Request, string)) func(http.
 			deny(w, r, Refusal(id, req))
 		})
 	}
+}
+
+// decide asks the policy engine about this request.
+//
+// One call in the ordinary case. The extra calls happen only for a caller who
+// holds product-tier roles AND is on a route that lists across products, which
+// is the one question a single check cannot express: "may you list products" is
+// not "may you act on the estate", and a caller granted one product cannot
+// answer the second while still needing to see the first. So the tenant-wide
+// question is asked first - every org-tier caller passes there and stops - and
+// only then is it re-asked once per product they actually hold.
+//
+// The handler still narrows the ANSWER to Identity.VisibleProducts. This
+// decides whether the door opens; that decides what is behind it.
+func decide(r *http.Request, engine authz.Engine, id Identity, req Requirement) (bool, error) {
+	principal := id.principal()
+	res := PolicyFor(r)
+
+	ok, err := authz.Allowed(r.Context(), engine, principal, authz.Resource{
+		Kind: res.Kind, ID: res.ID, Product: res.Product,
+	}, res.Action)
+	if err != nil || ok || !req.AnyScope {
+		return ok, err
+	}
+	for _, product := range principal.ProductNames() {
+		ok, err := authz.Allowed(r.Context(), engine, principal, authz.Resource{
+			Kind: res.Kind, ID: res.ID, Product: product,
+		}, res.Action)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// principal rebuilds the identity the policy engine takes.
+//
+// Rebuilt rather than carried, because this type is what every handler reads
+// and adding a second copy of the same facts to it is how the two drift. The
+// two role tiers are already here in the shape the derived roles expect: bare
+// role names, and the products they were granted on.
+func (i Identity) principal() authz.Identity {
+	out := authz.Identity{
+		Subject:  i.Subject,
+		Tenant:   i.Tenant,
+		Email:    i.Email,
+		Name:     i.Name,
+		Products: map[string][]string{},
+		Method:   i.Method,
+	}
+	for _, r := range i.Roles {
+		out.OrgRoles = append(out.OrgRoles, string(r))
+	}
+	for product, roles := range i.ProductRoles {
+		out.Products[product] = append(out.Products[product], roles...)
+	}
+	return out
 }
 
 // Refusal is what the caller is told, and the two cases are worth telling

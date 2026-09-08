@@ -46,3 +46,4 @@ deploy/.env
 deploy/npm/npmrc
 deploy/npm/.npmrc
 deploy/go/netrc
+podman-build-secret*

@@ -283,8 +283,6 @@ services:
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-}
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
-      # Credentials as a mounted secret, never a build arg - an ARG with a
-      # token is permanently readable in `docker history`.
       secrets:
         - npmrc
     restart: unless-stopped

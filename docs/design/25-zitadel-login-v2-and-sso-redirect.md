@@ -1,324 +1,272 @@
-# 25. ZITADEL Login V2 service and the SPA's missing login redirect
+# 25. Signing in: ZITADEL Login V2, the SPA's OIDC flow, and what a 401 means
 
-Status: **not implemented**. This document is a handoff: it records two
-confirmed, related gaps found while debugging a fresh `podman-compose up` of
-this stack, with enough detail for another agent to implement both without
-re-diagnosing from scratch. Neither fix has been started; no code below has
-been written into the repository yet.
+Status: **implemented**. This document was originally a handoff naming two
+confirmed gaps; it now records what was built for each, the three faults that
+turned up while building it, and how the whole path was verified. Section 6
+lists what is still open.
 
-## Symptom this was debugging
+## 1. The symptom
 
 On a fresh stack (`docker-compose.yml` at the repo root, `.env` with
 `SSO_ISSUER`/`SSO_CLIENT_ID`/`SSO_CLIENT_SECRET` set so Microsoft SSO is
-configured), opening `http://localhost:${WEB_PORT}` shows the SPA's
-"Service unavailable / The Coordinator did not respond" screen forever, even
-though `controller`, `zitadel`, `postgres`, `cerbos` are all healthy. Network
-tab shows `GET /api/v1/system/version` and `GET /api/v1/whoami` both
-returning `401`. Separately, following a link ZITADEL itself generated —
-`http://localhost:${ZITADEL_PORT}/ui/v2/login/login?authRequest=...` — shows
-a bare JSON body `{"code":5,"message":"Not Found"}` instead of a login page.
+configured), opening `http://localhost:${WEB_PORT}` showed the SPA's
+"Service unavailable / The Coordinator did not respond" screen forever, while
+`controller`, `zitadel`, `postgres` and `cerbos` were all healthy. The network
+tab showed `GET /api/v1/system/version` and `GET /api/v1/whoami` both answering
+`401`. Following a link ZITADEL itself generated -
+`http://localhost:${ZITADEL_PORT}/ui/v2/login/login?authRequest=...` - showed a
+bare `{"code":5,"message":"Not Found"}` instead of a login page.
 
-These are two different bugs with one connection: **nothing in this stack
-can currently get a user from "not logged in" to "holds a valid token"**,
-because (1) the SPA never asks ZITADEL to authenticate anyone and (2) even if
-it asked, ZITADEL has nowhere to send the browser for the login page it
-wants to use.
+Nothing in the stack could get a person from "not signed in" to "holds a valid
+token", and the one screen that could have said so said the opposite.
 
----
+## 2. Gap 1 - the sign-in screens are a service this stack never deployed
 
-## Gap 1 — ZITADEL's Login V2 UI is a separate service we never deploy
+### What was wrong
 
-### What's happening
+Since v3, ZITADEL's login screens are **not served by the `zitadel` binary**.
+They are a standalone Next.js service published as
+`ghcr.io/zitadel/zitadel-login`; the core container serves `/ui/console` and
+the APIs, and something in front of both routes `/ui/v2/login/*` to the login
+service. This repository deployed only the core.
 
-Since ZITADEL v3/v4, the login screen is **not served by the core `zitadel`
-binary**. It was split out into a standalone Next.js microservice,
-published as `ghcr.io/zitadel/zitadel-login`. The core API container only
-serves `/ui/console` (the admin console) and the gRPC/REST APIs; a reverse
-proxy in front of both containers is expected to route:
-
-- `/ui/v2/login/*` → the `zitadel-login` container (port `3000` by default)
-- everything else → the core `zitadel` API container (port `8080`)
-
-Confirmed against ZITADEL's own documentation and its official Docker
-Compose reference (`https://zitadel.com/docs/self-hosting/deploy/compose`,
-which states: *"The base stack runs: Traefik (reverse proxy) → ZITADEL API
-(Go) + ZITADEL Login (Next.js) → PostgreSQL"*) and the upstream compose file
-at `github.com/zitadel/zitadel/blob/main/deploy/compose/docker-compose.yml`.
-
-This repository's `docker-compose.yml` only defines a `zitadel` service
-(the core API/Go binary). There is no `zitadel-login` service and no proxy
-rule for `/ui/v2/login/*`. So when ZITADEL generates a login URL under
-`/ui/v2/login/login?authRequest=...` (which it does by default — see below),
-that path is requested against the core API container, which does not own
-it, and its gRPC-gateway answers the generic `{"code":5,"message":"Not
-Found"}` (gRPC code 5 = `NOT_FOUND`) instead of a page.
-
-### Why ZITADEL is generating `/ui/v2/login` URLs at all
-
-The upstream compose file sets, on the core `zitadel-api` container:
+Verified against the running v4.17.3 image rather than assumed. Hitting
+`/oauth/v2/authorize` on the deployed instance answers:
 
 ```
-ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: true
-ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_BASEURI: ${scheme}://${domain}:${port}/ui/v2/login/
-ZITADEL_OIDC_DEFAULTLOGINURLV2: ${scheme}://${domain}:${port}/ui/v2/login/login?authRequest=
-ZITADEL_OIDC_DEFAULTLOGOUTURLV2: ${scheme}://${domain}:${port}/ui/v2/login/logout?post_logout_redirect=
-ZITADEL_SAML_DEFAULTLOGINURLV2: ${scheme}://${domain}:${port}/ui/v2/login/login?samlRequest=
+HTTP/1.1 302 Found
+Location: /ui/v2/login/login?authRequest=V2_389806231822270470
 ```
 
-This repository's `docker-compose.yml` `zitadel` service sets none of these,
-yet a v4.17.3 instance is still handing back `/ui/v2/login/...` URLs — Login
-V2 is evidently the default UI for a v4.x first-instance even without
-`LOGINV2_REQUIRED` explicitly set. Whoever implements this should verify the
-exact behavior on the pinned version (`ghcr.io/zitadel/zitadel:v4.17.3`,
-see `ZITADEL_IMAGE` in `docker-compose.yml`) before deciding whether to
-suppress Login V2 (see Option B) or embrace it (Option A).
+so Login V2 is the default on v4 whether or not `LOGINV2_REQUIRED` is set, and
+- decisively for the shape of the fix - **that redirect is RELATIVE**. The
+login screens have to answer on ZITADEL's own origin.
 
-### Fix option A (recommended) — deploy `zitadel-login` and route to it
+### What was built
 
-This is what ZITADEL's own compose reference does, minus Traefik (this
-stack's web tier is already nginx and already does path-based proxying for
-`/api/`, see `deploy/web/nginx.conf`, so extending it is more consistent
-with this codebase than adding Traefik just for ZITADEL).
+Three containers, one address.
 
-1. **New service** in `docker-compose.yml`, alongside `zitadel`:
+- **`zitadel-login`** runs the sign-in screens. It talks to the core
+  server-to-server at `http://zitadel:8080` and carries `CUSTOM_REQUEST_HEADERS:
+  Host:<external domain>:<port>`, because ZITADEL identifies its instance by
+  the Host header and answers 404 to a name it does not know. That value
+  contains a colon of its own and is safe: upstream splits the pair on the
+  FIRST colon (`apps/login/src/lib/custom-headers.ts`).
+- **`zitadel-proxy`** (nginx, `deploy/zitadel/nginx.conf`) publishes
+  `${ZITADEL_PORT}` and splits it: `/ui/v2/login` to the login service,
+  everything else to the core. `zitadel` no longer publishes a port itself.
+- The core gets the four `LOGINV2_*` / `OIDC_DEFAULT*URLV2` variables from
+  ZITADEL's own compose reference, pointed at that one address.
 
-   ```yaml
-   zitadel-login:
-     image: ${ZITADEL_LOGIN_IMAGE:-ghcr.io/zitadel/zitadel-login:v4.17.3}
-     restart: unless-stopped
-     depends_on:
-       zitadel:
-         condition: service_healthy
-     environment:
-       ZITADEL_API_URL: http://zitadel:8080
-       NEXT_PUBLIC_BASE_PATH: /ui/v2/login
-       # A service-user PAT with the rights to drive the login flow.
-       # The upstream compose mounts one written during first-instance setup
-       # (ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_USERNAME etc. — see
-       # below). This stack's zitadel-init seeder currently creates only the
-       # `seeder` machine user (deploy/zitadel/bootstrap.mjs); a second
-       # machine user + PAT for the login client needs the same treatment,
-       # OR the `seeder` PAT can be reused if its grants are broad enough
-       # (verify — the upstream compose uses a DEDICATED login-client user,
-       # which is the safer default: this PAT is exposed to a
-       # public-facing container, unlike the seeder's).
-       ZITADEL_SERVICE_USER_TOKEN_FILE: /pat/login-client.pat
-       CUSTOM_REQUEST_HEADERS: "Host:${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090},X-Forwarded-Proto:http"
-     volumes:
-       - patshare:/pat:ro
-     healthcheck:
-       test: ["CMD", "/bin/sh", "-c",
-              "node /app/healthcheck.mjs http://localhost:3000/ui/v2/login/healthy"]
-       interval: 10s
-       timeout: 5s
-       retries: 12
-       start_period: 20s
-   ```
+**Why one origin rather than a second published port**, which would have been a
+smaller diff: the core's redirect to the login screens is relative, the login
+screens' redirect back into the core is absolute from ZITADEL's external URL,
+and `SWGW_AUTH_ISSUER`, `SWGW_AUTH_HOSTHEADER`, the seeder's `ZHOST` and the
+SPA's issuer all already agree on a single ZITADEL address. A second port makes
+that four values to keep in step instead of one, for the sake of not running
+nginx twice.
 
-   Exact env var names (`ZITADEL_API_URL`, `NEXT_PUBLIC_BASE_PATH`,
-   `ZITADEL_SERVICE_USER_TOKEN_FILE`, `CUSTOM_REQUEST_HEADERS`) were read
-   from the upstream compose file via a truncated fetch and should be
-   **re-verified against `ghcr.io/zitadel/zitadel-login`'s own
-   documentation/image tag** before writing code — the version fetched
-   during this investigation did not show the complete environment block.
+### The login service's own credential
 
-2. **PAT for the login client.** `zitadel`'s `ZITADEL_FIRSTINSTANCE_*` env
-   vars support declaring a second machine user at first boot, e.g.:
+The login service drives the flow as a service user holding `IAM_LOGIN_CLIENT`
+(confirmed present in v4.17.3 via `POST /admin/v1/members/roles/_search`).
 
-   ```
-   ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_USERNAME: login-client
-   ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_NAME: login-client
-   ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_PAT_EXPIRATIONDATE: "2100-01-01T00:00:00Z"
-   ```
+ZITADEL can create that account at first boot with
+`ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_*`, and this stack deliberately does
+**not** use it. First-instance settings are ignored on an instance that already
+exists, so that mechanism fixes a fresh stack and leaves every stack that has
+ever been started before unable to show a login page - which is every stack
+that would be upgrading into this fix. `deploy/zitadel/bootstrap.mjs` creates
+the machine user, grants the instance-level role and issues the PAT instead, on
+the same idempotent path as everything else it does. The PAT is a separate,
+narrower credential from the seeder's own on purpose: the login container is
+the one service in this stack that a signed-out browser talks to.
 
-   (mirroring the existing `ZITADEL_FIRSTINSTANCE_ORG_MACHINE_*` block for
-   `seeder` in `docker-compose.yml`'s `zitadel` service). Confirm ZITADEL
-   writes this PAT to a configurable path analogous to
-   `ZITADEL_FIRSTINSTANCE_PATPATH` (currently `/pat/pat.txt` for the
-   seeder) — if it's the same fixed mechanism, both users' PATs may need
-   distinct `PATPATH` values or ZITADEL's docs may show a different
-   mechanism entirely (e.g. one shared bootstrap directory with multiple
-   files, as the upstream compose's
-   `ZITADEL_SERVICE_USER_TOKEN_FILE: /zitadel/bootstrap/login-client.pat`
-   suggests — note the different volume path, `/zitadel/bootstrap`, versus
-   this repo's `/pat`). **This needs verifying against the actual image
-   behavior, not assumed.**
+## 3. Gap 2 - the SPA never asked anyone to sign in
 
-3. **Route `/ui/v2/login/*` through the web tier's nginx**, OR directly
-   expose `zitadel-login` on its own port and have ZITADEL's
-   `LOGINV2_BASEURI` point at it directly. The simpler change for this
-   codebase: publish `zitadel-login` on its own host port (e.g.
-   `ZITADEL_LOGIN_PORT:-8091`) and set
-   `ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_BASEURI` /
-   `ZITADEL_OIDC_DEFAULTLOGINURLV2` etc. on the `zitadel` service to point
-   at `http://${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_LOGIN_PORT:-8091}/ui/v2/login/`
-   instead of trying to share `ZITADEL_PORT`. This avoids nginx-side
-   path-splitting entirely and keeps this change scoped to the `zitadel`
-   and `zitadel-login` services only. Whoever implements this should weigh
-   this against the "one origin for ZITADEL" approach the upstream compose
-   uses (single port, Traefik path-splits) — either is defensible, but the
-   choice affects `SWGW_AUTH_ISSUER`/`SWGW_AUTH_HOSTHEADER` on `controller`
-   and the browser-facing URLs the seeder and SPA construct, so pick one
-   and apply it consistently everywhere ZITADEL's external URL is
-   referenced (`docker-compose.yml`'s `zitadel`, `zitadel-init`, and
-   `controller` services all reference `ZITADEL_EXTERNAL_DOMAIN`/
-   `ZITADEL_PORT` today).
+### What was wrong
 
-4. Set the `LOGINV2_*` and `OIDC_DEFAULTLOGIN*URLV2` env vars on the
-   `zitadel` service in `docker-compose.yml` explicitly (currently unset),
-   using whichever URL scheme was decided in step 3.
+`OIDC_ISSUER` was declared on the `web` service with a comment saying it was
+"baked into the page at request time", and nothing baked it into anything.
+`web/src` had no OIDC code of any kind, no `Authorization` header on any
+request, and no way for the client id - which ZITADEL GENERATES, and which the
+seeder printed to its own container log and nowhere else - to reach a browser.
 
-### Fix option B — fall back to Login V1 (smaller change, but going against upstream direction)
+### What was built
 
-ZITADEL's docs reference an "Adopt Login V2" guide implying V1 (the
-Angular UI baked into the core binary, served at `/ui/login`) still exists
-as of v4.x and V2 is opt-in via `LOGINV2_REQUIRED`. If v4.17.3 turns out to
-default to V2 regardless, there may be an instance-level feature flag to
-force V1 (verify via ZITADEL's Admin/System API — an instance feature
-setting, not an env var, based on the docs' phrasing "Deploy and enable
-Hosted Login V2 for self-hosted ZITADEL v4 instances that currently use
-Login V1" implying V1 is the default absent the flag). If confirmed, no new
-service is needed, but Login V1's UI is on ZITADEL's own deprecation path,
-so this is the short-term option, not the recommended one.
+**Runtime configuration.** The seeder writes `{issuer, clientId, redirectUri}`
+to a shared `oidcshare` volume; `deploy/web/docker-entrypoint.sh` renders it
+into `/runtime-config.json` at container start, with `OIDC_ISSUER` /
+`OIDC_CLIENT_ID` / `OIDC_REDIRECT_URI` as overrides for a deployment that
+provisions its identity provider some other way. Public values only: a public
+OIDC client has no secret, which is why this is a file served to every browser
+rather than a mounted secret. The entrypoint says on stdout whether sign-in is
+configured, so "why can nobody sign in" has an answer in `docker logs web`.
 
-**Whoever picks up this doc must decide A vs B** — this write-up stops
-short of that decision because it depends on live verification against
-`ghcr.io/zitadel/zitadel:v4.17.3`'s actual default behavior, which was not
-performed.
+The seeder also RECONCILES the registered redirect URI rather than only
+creating it. It is derived from `WEB_PORT`; change that port on a stack that
+has already been seeded and every login used to end on ZITADEL's own error page
+about an invalid `redirect_uri`, a week after the `.env` edit that caused it.
 
----
+**The flow itself** is in `web/src/auth/session.ts`: authorization code with
+PKCE, hand-rolled, no new dependency. Tokens live in `sessionStorage` - scoped
+to the tab, gone when the browser closes - and the refresh token with them,
+which is a deliberate trade recorded in that file's own header.
 
-## Gap 2 — the SPA never redirects to ZITADEL for login
+**The server decides whether authentication is required.** Nothing in the
+browser guesses. The application loads, makes its first read, and a `401` is
+what starts a sign-in; a Coordinator running with `SWGW_AUTH_ENABLED=false`
+needs no flag in the SPA to keep working. That decision lives in ONE place,
+`web/src/api/client.ts`, because it is the only code that sees every
+unauthenticated answer - a page handling its own 401 would send the browser to
+the identity provider once per read on screen.
 
-### What's happening
+Two guards matter more than the happy path:
 
-`docker-compose.yml`'s `web` service sets:
+- **One renewal, then stop.** A 401 buys exactly one refresh-and-retry. The
+  refresh is single-flight, because an identity provider that rotates refresh
+  tokens invalidates the previous one and a second concurrent attempt would
+  end the session.
+- **A token the Coordinator refuses is not a reason to sign in again.** A
+  mismatched issuer, audience or clock produces a valid token that is rejected,
+  and redirecting would obtain the same token again. Within a minute of a
+  completed sign-in, a 401 flips to a screen naming that as the fault instead
+  of bouncing the reader between two services forever.
 
-```yaml
-environment:
-  OIDC_ISSUER: http://${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}
-```
+**`SessionGate`** (`web/src/auth/SessionGate.tsx`) sits above every read in
+`main.tsx`, and that order is load-bearing: the callback address carries a
+single-use code, and anything that fires a request while it is being exchanged
+gets a 401, starts a second sign-in, and navigates away before the first
+finished.
 
-with the comment *"Baked into the page at request time so the SPA knows
-where to send the browser for login."* But nothing bakes it into anything,
-and nothing sends the browser anywhere:
+**Decision recorded, not implied:** the SPA holds the token; there is no
+backend session and no `/api/v1/auth/callback` on the Coordinator. What the
+seeder already provisions is a public `OIDC_APP_TYPE_USER_AGENT` client with
+PKCE and no secret; `pkg/authz` already validates bearer tokens and the
+Coordinator is stateless. A backend-mediated flow would have meant new routes,
+cookies, CSRF and a token store, against the grain of both.
 
-- `web/src` has **zero** references to `OIDC_ISSUER`, `oidc`, `authorize`,
-  `signinRedirect`, or any `window.location` assignment aimed at a login
-  page (checked with a full-repo search across `web/src/**`).
-- [`web/src/BootGate.tsx`](../../web/src/BootGate.tsx) probes
-  `GET /system/version` once at boot and gates the entire app behind it
-  succeeding. It branches only on `ApiError.code === 'UNAVAILABLE'`
-  (maintenance) vs. everything else (generic "Service unavailable"/
-  "Coordinator did not respond" screen). A `401` from an unauthenticated
-  browser falls into the generic branch and is indistinguishable, to the
-  user, from the Coordinator being down.
-- [`internal/api/middleware/auth.go`](../../internal/api/middleware/auth.go)
-  and
-  [`internal/api/middleware/oidc.go`](../../internal/api/middleware/oidc.go)
-  only **validate** a bearer token already present on the request; there is
-  no server-side redirect for browser navigations either.
-- No `web/index.html` placeholder or nginx `envsubst`/entrypoint mechanism
-  exists to inject `OIDC_ISSUER` (or any runtime config) into the built
-  SPA at container start. Contrast with `deploy/web/docker-entrypoint.sh`,
-  added separately to fix DNS-resolver portability — that script does NOT
-  touch `OIDC_ISSUER` and was not intended to.
+## 4. Three faults found while building it
 
-So: `AUTH_ENABLED=true` on the `controller` correctly requires a valid
-token, but nothing in this codebase currently gets a user from zero to a
-token. `OIDC_ISSUER` is declared but dead configuration.
+### 4.1 The SSO connector was never offered on the sign-in screen
 
-### What needs to be built
+The seeder created the Microsoft IdP and stopped there. An identity provider is
+offered to a person because it is attached to the organization's **login
+policy**, and an organization that has never been given one of its own inherits
+the instance's, which cannot name an org-owned connector. Confirmed live:
+`POST /management/v1/policies/login/idps` answered `404 Login Policy not found
+(Org-Ffgw2)`, and the sign-in screen showed a username box and nothing else.
 
-1. **Runtime config injection.** The SPA is a static Vite build
-   (`web/vite.config.ts`, `build/Dockerfile.web`); `OIDC_ISSUER` is only
-   known at container start (it can vary per deployment), so it cannot be
-   a Vite build-time env var. Follow the same pattern as the nginx
-   DNS-resolver fix: either
-   - extend `deploy/web/docker-entrypoint.sh` to render a small
-     `window.__RUNTIME_CONFIG__ = { oidcIssuer: "...", ... }` script tag (or
-     a `/config.json` static file fetched at app start) from the
-     `OIDC_ISSUER` env var before starting nginx, or
-   - add an nginx location (e.g. `/runtime-config.json`) served by a tiny
-     substitution at container start, fetched once by the SPA before
-     rendering `BootGate`.
+So the connector existed, the console read as correctly configured, and SSO
+did not appear. That is the second half of "the UI was not redirecting to SSO
+login", and it would have survived the Login V2 fix untouched.
 
-2. **An OIDC Authorization Code + PKCE flow in the SPA.** This is not
-   present in any form today; there is no `oidc-client-ts` (or similar)
-   dependency in `web/package.json` — confirm and add one, or hand-roll
-   the redirect using ZITADEL's `/oauth/v2/authorize` endpoint directly
-   (simpler, since this stack already has a public client — see
-   `deploy/zitadel/bootstrap.mjs`'s `web client created` step, which
-   creates a public OIDC client with `accessTokenRoleAssertion`/
-   `idTokenRoleAssertion` — its `client_id` needs to reach the SPA the same
-   way `OIDC_ISSUER` does, and today it does not: nothing captures or
-   surfaces that client ID at deploy time either. It is printed to the
-   `zitadel-init` container's logs and nowhere else).
+The seeder now gives the tenant its own login policy - **copied from whatever
+it was inheriting**, not written from a fresh set of opinions, because
+deciding this deployment's registration, MFA and password rules is not that
+step's business - and attaches the connector to it. After the fix the login
+screen reads "or sign in with / Microsoft".
 
-3. **Distinguish "unauthenticated" from "down" in `BootGate.tsx`.** A
-   `401`/`403` on the boot probe should redirect to the login flow built in
-   step 2, not render the generic outage screen. `q.error instanceof
-   ApiError` already exists as a pattern
-   ([`web/src/BootGate.tsx`](../../web/src/BootGate.tsx) L70-L73) — extend
-   it with an `UNAUTHENTICATED`/`PERMISSION_DENIED` branch (both codes
-   already exist in
-   [`web/src/api/types.ts`](../../web/src/api/types.ts) L2248) that
-   triggers the redirect instead of showing `ServiceUnavailable`.
+### 4.2 The login image cannot start on a host without IPv6
 
-4. **Handle the callback.** After ZITADEL authenticates the user it
-   redirects back to the SPA's origin with either a code (PKCE — exchange
-   it for tokens client-side) or, if this codebase prefers a
-   confidential/backend-mediated flow, the `controller` would need a new
-   `/api/v1/auth/callback`-style route to exchange the code and set a
-   session cookie instead of the SPA holding a bearer token in memory.
-   **This is a real architectural decision** (SPA-held token vs.
-   backend session) that affects `internal/api/middleware/oidc.go` and
-   should be made deliberately, not implied by this document — flagging
-   it here so the implementing agent makes it explicitly rather than by
-   accident.
+`ghcr.io/zitadel/zitadel-login` ships `HOSTNAME=::` in the image, and its
+Next.js server listens on exactly what that says. On an engine or host without
+IPv6 the container restart-loops on `listen EAFNOSUPPORT ... :::3000`, a
+message that names neither ZITADEL nor IPv6 as the problem. The compose file
+sets `HOSTNAME: 0.0.0.0`; nothing in this stack talks IPv6 to it.
 
-5. Store/attach whatever token or session results to every
-   `web/src/api/client.ts` request (currently that client has no auth
-   header logic at all — confirm before assuming, since this was not
-   fully audited).
+### 4.3 Every role was held twice
 
-### Dependency between Gap 1 and Gap 2
+ZITADEL emits the same grant under more than one claim: one per project
+(`urn:zitadel:iam:org:project:<projectID>:roles`) and one flattened across all
+of them (`urn:zitadel:iam:org:project:roles`). Both match the shape
+`pkg/authz` reads, so each role was counted twice - reaching the policy engine
+twice and the Settings page as `org-admin, org-admin`, which reads as a
+misconfigured grant rather than as one role named twice. `readRoles` now
+deduplicates, with `TestRoleClaimedTwiceIsHeldOnce` over the real claim shape.
 
-Gap 2's redirect target IS gap 1's fix. Building the SPA's redirect flow
-against `/ui/v2/login/...` before gap 1 is fixed will redirect users into
-the same `{"code":5,"message":"Not Found"}` dead end described above.
-**Fix gap 1 first, or build gap 2 against whatever login URL gap 1's
-chosen option (A or B) actually produces**, and verify end-to-end (click
-through from the SPA's login redirect to a real ZITADEL login form and
-back) before considering either done.
+## 5. The nitpick that was not one: what a boot failure screen may say
 
----
+The original complaint was that "Service unavailable" appeared for a `401`.
+That is worth stating as a rule rather than as a patch, because the screen was
+wrong in every word: the Coordinator responded, promptly, and said exactly what
+was missing. Somebody reading that screen has no reason to suspect a sign-in is
+needed and every reason to go and look at a healthy service.
 
-## Suggested order of work
+`BootGate` now branches on the problem code and nothing else:
 
-1. Decide and implement Gap 1, Option A or B (needs live verification
-   against `ghcr.io/zitadel/zitadel:v4.17.3` first — do not assume the env
-   var names or default behavior documented above are exact; they were
-   read from a partially-truncated fetch of ZITADEL's own docs/compose
-   file during this investigation).
-2. Confirm, by hand, that visiting ZITADEL's login URL directly in a
-   browser (no SPA involved) now renders a working login form and
-   completes a login.
-3. Only then build Gap 2 (runtime config injection, OIDC/PKCE flow,
-   `BootGate.tsx` branching, callback handling, token attachment).
-4. Verify end-to-end: fresh `podman-compose up -d --wait`, open the web
-   UI, get redirected to ZITADEL, log in (via the seeded
-   `BOOTSTRAP_ADMIN_*` user or SSO if `SSO_ISSUER` is set), land back on
-   the SPA authenticated, and confirm `/api/v1/whoami` returns `200`.
+| what came back | screen |
+|---|---|
+| `UNAUTHENTICATED` | signing in, or the two states where signing in cannot help |
+| `PERMISSION_DENIED` | no access: signed in, and not for this. No retry - only a grant fixes it |
+| `UNAVAILABLE` (503) | maintenance, unchanged |
+| 500 | service unavailable: "The Coordinator answered 500. It received the request and failed on it." |
+| 502 / 504 | service unavailable: "The web tier answered 502: it could not reach the Coordinator." |
+| no answer at all | service unavailable: "The Coordinator did not respond." |
+| any other 4xx | unexpected answer, naming the status - almost always an origin whose `/api/v1` is proxied somewhere else |
 
-## Related files touched or read while investigating this
+The outage screen is for an outage. The three 5xx wordings are separated
+because the sentence a reader quotes into a ticket is what decides who picks it
+up: silence is a stopped container or a network, a 502 is the web tier saying
+it could not reach the Coordinator, and a 500 is the Coordinator failing a
+request it did receive - which is a bug, and a different team's.
 
-- [`docker-compose.yml`](../../docker-compose.yml) — `zitadel`, `zitadel-init`, `controller`, `web` services
-- [`deploy/zitadel/bootstrap.mjs`](../../deploy/zitadel/bootstrap.mjs) — seeder; creates the `seeder` machine user and the SPA's public OIDC client
-- [`deploy/web/nginx.conf`](../../deploy/web/nginx.conf) — existing `/api/` proxy pattern to follow for any new routing
-- [`deploy/web/docker-entrypoint.sh`](../../deploy/web/docker-entrypoint.sh) — existing runtime-templating pattern to follow for injecting `OIDC_ISSUER`
-- [`web/src/BootGate.tsx`](../../web/src/BootGate.tsx) — boot probe and error branching
-- [`web/src/api/client.ts`](../../web/src/api/client.ts) — `ApiError`, request plumbing
-- [`web/src/api/types.ts`](../../web/src/api/types.ts) — `UNAUTHENTICATED`/`PERMISSION_DENIED` error codes
-- [`internal/api/middleware/auth.go`](../../internal/api/middleware/auth.go), [`oidc.go`](../../internal/api/middleware/oidc.go) — server-side token validation only, no redirect
-- [`docs/design/24-identity-and-access.md`](24-identity-and-access.md) — existing identity/SSO design doc; this document supersedes nothing in it but should be cross-referenced from there once Gap 1/2 are implemented
+Signing out lives beside the identity it ends, on Settings, and is absent when
+there is no session to end. It ends the session at the issuer too: clearing
+only the tab's tokens would put the reader straight back in at the next
+redirect, which reads as a button that does nothing.
+
+## 6. How this was verified, and what is still open
+
+Verified on a stack brought up from empty volumes (`docker compose down -v`
+then `docker compose up -d`), driven through a real browser:
+
+- the first read answers 401 and the browser lands on
+  `http://localhost:8090/ui/v2/login/loginname?requestId=oidc_V2_...`, a
+  rendered ZITADEL login form titled "Welcome back!";
+- with SSO configured, that form offers "or sign in with / Microsoft";
+- signing in returns to `http://localhost:8000/auth/callback?code=...&state=...`,
+  the code is exchanged, and the address is replaced with where the reader was;
+- `GET /api/v1/whoami` answers `200` with
+  `{"method":"oidc","authenticated":true,"tenant":"default","roles":["org-admin"]}`;
+- a reload holds the session with no further trip to the issuer and no failed
+  request;
+- the refresh grant returns a new access token;
+- signing out clears the tab and ends the ZITADEL session;
+- stopping the controller renders "The web tier answered 502", not a 401 story.
+
+**Still open, and not addressed here:**
+
+- **A worker cannot authenticate to the Coordinator.** With
+  `SWGW_AUTH_ENABLED=true` - the default - every lease is refused with
+  `UNAUTHENTICATED: no bearer token` and the data plane does nothing. Workers
+  need a machine identity (ZITADEL client credentials, which the seeder
+  already issues for its `apiUsers`) the way a person needs a browser flow.
+  This is the next piece of the same work.
+- **`/worker --health-check` does not exist.** The compose healthcheck invokes
+  a flag `cmd/worker` never defined, so every worker is permanently unhealthy
+  and `docker compose up -d --wait` fails on a stack that is otherwise
+  entirely up. The flag belongs on the binary, next to the Coordinator's.
+- **The seeder logs "tenant 'default' created" on a fresh stack when it did
+  not create one.** ZITADEL's org projection has not caught up when the seeder
+  first searches, so the search misses, the create fails on the duplicate name,
+  and `ORG_ID` is left empty. Everything then lands in the PAT's own
+  organization, which happens to be the right one - so the outcome is correct
+  and the log is not. It would stop being correct the moment `GATEWAY_TENANT`
+  names an org the seeder's PAT does not already belong to.
+- The login screen's Content-Security-Policy carries `http://zitadel:8080` for
+  `font-src`/`img-src`, taken from `ZITADEL_API_URL`. Custom branding assets
+  will not load in a browser, which cannot reach that name. Upstream's own
+  compose has the same shape; default styling is unaffected.
+
+## 7. Files
+
+- [`docker-compose.yml`](../../docker-compose.yml) - `zitadel`, `zitadel-login`, `zitadel-proxy`, `zitadel-init`, `web`
+- [`deploy/zitadel/nginx.conf`](../../deploy/zitadel/nginx.conf), [`docker-entrypoint.sh`](../../deploy/zitadel/docker-entrypoint.sh) - ZITADEL's front door
+- [`deploy/zitadel/bootstrap.mjs`](../../deploy/zitadel/bootstrap.mjs) - login-client PAT, published client id, redirect reconciliation, login policy
+- [`deploy/web/docker-entrypoint.sh`](../../deploy/web/docker-entrypoint.sh), [`nginx.conf`](../../deploy/web/nginx.conf) - `/runtime-config.json`
+- [`web/src/auth/session.ts`](../../web/src/auth/session.ts), [`SessionGate.tsx`](../../web/src/auth/SessionGate.tsx) - the flow
+- [`web/src/api/client.ts`](../../web/src/api/client.ts) - the bearer header, the one renewal, the one place a 401 is acted on
+- [`web/src/BootGate.tsx`](../../web/src/BootGate.tsx) - the six screens
+- [`pkg/authz/verifier.go`](../../pkg/authz/verifier.go) - `readRoles`
+- [`docs/design/24-identity-and-access.md`](24-identity-and-access.md) - the identity model this implements

@@ -961,6 +961,30 @@ for (const p of products) {
     say('  granted org-admin + ORG_OWNER');
   } else {
     say(`administrator '${user}' exists (matched on ${found.by})`);
+
+    /* THE ADDRESS IS RECONCILED, like everything else this file derives from
+     * configuration.
+     *
+     * It used to be written only at creation, so changing BOOTSTRAP_ADMIN_EMAIL
+     * on a stack that had ever been seeded did nothing at all: the run reported
+     * success and the account kept the address it was born with. That is not a
+     * cosmetic field - with SSO it is the SIGN-IN IDENTITY, the string
+     * auto-linking matches on - so an address that cannot be corrected is an
+     * administrator who cannot be let in, and the advice "set
+     * BOOTSTRAP_ADMIN_EMAIL and re-run" quietly did not work.
+     *
+     * Verified rather than merely set: an unverified address does not match. */
+    const current = await api('GET', `/management/v1/users/${id}`);
+    const held = current.user?.human?.email?.email || '';
+    if (held.toLowerCase() !== email.toLowerCase()) {
+      const r = await api('PUT', `/management/v1/users/${id}/email`,
+        { email, isEmailVerified: true });
+      if (r.__status >= 400 && !unchanged(r)) {
+        say(`  ! could not set the address to ${email}: ${JSON.stringify(r).slice(0, 120)}`);
+      } else {
+        say(`  address ${held || '(none)'} -> ${email}`);
+      }
+    }
     /* GRANTED EVERY RUN, not only at creation.
      *
      * The account may not be the one this seeder made. When somebody signs in
@@ -1219,6 +1243,72 @@ console.log(`  console  : ${process.env.ZITADEL_PUBLIC_URL || 'http://localhost:
     console.log('  administrator, BOOTSTRAP_ADMIN_EMAIL is the same thing.');
     console.log('  ' + '-'.repeat(66));
   }
+}
+
+/* --- 10a2. can ANYBODY actually sign in? ----------------------------------
+ *
+ * THE CHECK THAT STOPS THIS FILE PRODUCING AN UNUSABLE STACK.
+ *
+ * With SSO configured, password sign-in off, and the connector refusing to
+ * create accounts, the ONLY way anybody gets in is by holding an address the
+ * identity provider will assert and that a ZITADEL user already carries.
+ * Seed a stack where no user carries such an address and the result is a
+ * deployment nobody can sign in to at all - the person picks their account,
+ * the provider authenticates them perfectly, and ZITADEL answers
+ * `Errors.User.NotFound` because there is nothing to link them to.
+ *
+ * That is what happened: `BOOTSTRAP_ADMIN_EMAIL` was left at its example
+ * default, so the administrator this file created carried an address nobody
+ * can sign in with, and the first sign-in after a rebuild was locked out.
+ *
+ * Refusing to seed is the right answer rather than a warning, because the
+ * remedy is one line of configuration and this is the last moment anybody is
+ * looking. A warning at this point is read after the lockout, if at all.
+ */
+if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
+  /* Only when there is no other way in. With password sign-in deliberately
+   * left on, a stack with no linkable address is awkward rather than dead. */
+  const passwordLoginOn = String(process.env.SSO_ALLOW_PASSWORD_LOGIN ?? 'false') === 'true';
+
+  const all = await api('POST', '/management/v1/users/_search', { query: { limit: 500 } });
+  /* An address nobody at the identity provider can hold is not a way in.
+   * These are the placeholder domains this file and its examples emit; a real
+   * one that happens to be unroutable is beyond what can be checked here. */
+  const placeholder = /@(example\.(com|org|net|invalid)|localhost|.*\.localhost)$/i;
+  const signInAddresses = (all.result || [])
+    .filter(u => u.human?.email?.email && !placeholder.test(u.human.email.email))
+    .map(u => u.human.email.email);
+
+  if (signInAddresses.length === 0 && !passwordLoginOn) {
+    console.error('');
+    console.error('FATAL: this would seed a stack that nobody can sign in to.');
+    console.error('');
+    console.error(`  SSO is configured (${process.env.SSO_ISSUER}) and password sign-in is off,`);
+    console.error('  so the only way in is an account whose e-mail address the identity');
+    console.error('  provider will assert. No user here has one - every address is a');
+    console.error('  placeholder, which nobody can sign in with.');
+    console.error('');
+    console.error('  A sign-in would reach the provider, authenticate correctly, and come');
+    console.error('  back Errors.User.NotFound, because accounts are provisioned here and');
+    console.error('  are deliberately never created by signing in.');
+    console.error('');
+    console.error('  Fix, then re-run this container:');
+    console.error('    BOOTSTRAP_ADMIN_EMAIL=<the address you sign in with>');
+    console.error('  or add that person to deploy/zitadel/users.json with their address.');
+    console.error('  To keep the password box instead: SSO_ALLOW_PASSWORD_LOGIN=true');
+    console.error('');
+    process.exit(1);
+  }
+
+  /* WHO CAN GET IN, listed. A closed system should be able to say who it is
+   * closed to, and this is the answer to "why can this person not sign in"
+   * without anybody having to open a console. */
+  say('');
+  say(`these ${signInAddresses.length} address(es) can sign in through ${process.env.SSO_DISPLAY_NAME || 'Microsoft'}:`);
+  for (const a of signInAddresses.slice(0, 20)) say(`    ${a}`);
+  if (signInAddresses.length > 20) say(`    ... and ${signInAddresses.length - 20} more`);
+  if (passwordLoginOn) say('  (password sign-in is also on)');
+  say('');
 }
 
 /* --- 10b. two accounts for one person -------------------------------------

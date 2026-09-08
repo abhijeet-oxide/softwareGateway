@@ -1,11 +1,12 @@
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense } from 'react'
 import {
   Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams,
 } from 'react-router-dom'
 import { Shell } from './Shell'
 import brand from './brand'
 import { useIdentity } from './auth/permissions'
-import { identityClaims, signOut, supportContact } from './auth/session'
+import { AccessRoute, useSupportContact } from './auth/contact'
+import { identityClaims, signOut } from './auth/session'
 import { c, mono, NotFoundPage, PageTransition, StatusScreen } from './uikit'
 import {
   lazyRoute, PageLoading, RouteErrorBoundary, usePreloadRoutes, type RouteModule,
@@ -129,13 +130,7 @@ function NotFound() {
 function NoAccess() {
   const { who } = useIdentity()
   const claims = identityClaims()
-  const [contact, setContact] = useState('')
-
-  useEffect(() => {
-    let live = true
-    void supportContact().then((c) => { if (live) setContact(c) })
-    return () => { live = false }
-  }, [])
+  const contact = useSupportContact()
 
   const account = who?.email || claims.email || claims.preferredUsername || who?.subject
 
@@ -164,24 +159,6 @@ function NoAccess() {
         )}
       </>
     </StatusScreen>
-  )
-}
-
-/**
- * Who to ask, when the deployment has said.
- *
- * A configured contact is rendered as something clickable, because an address
- * somebody has to retype is an address somebody mistypes. With none configured
- * the sentence still completes and simply names no route: inventing one sends
- * people to a mailbox nobody reads.
- */
-function AccessRoute({ contact }: { contact: string }) {
-  if (!contact) return <>Request access from an administrator.</>
-  const href = /^https?:\/\//i.test(contact) ? contact : `mailto:${contact}`
-  return (
-    <>
-      Request access from <a href={href}>{contact}</a>.
-    </>
   )
 }
 

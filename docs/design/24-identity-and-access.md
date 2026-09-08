@@ -337,7 +337,7 @@ cannot start against a ZITADEL that has no projects in it. `docker compose
 down` walks the same graph backwards, so nothing writes to a database that has
 already stopped.
 
-### 13.1 Six things that are easy to get wrong
+### 13.1 Seven things that are easy to get wrong
 
 Each of these was found by running the stack, not by reading documentation.
 
@@ -381,6 +381,24 @@ Each of these was found by running the stack, not by reading documentation.
    side can be configured around it. The seeder prints the exact URI on every
    run, because a value this product cannot set for itself and cannot validate
    is a value it should at least say out loud.
+
+7. **The SSO connector was created once and never reconciled.** A corrected
+   `SSO_CLIENT_SECRET` in `.env` reached nothing: the seeder found the
+   connector by name, said "exists", and left the old credentials in place, so
+   sign-in kept failing with `AADSTS7000215: Invalid client secret provided`
+   about a secret that had already been fixed. `.env` is the source of truth
+   for the connector's issuer, client id and secret, and re-running the seeder
+   is how they are applied - so it now PUTs them every run and names the ones
+   that moved. The same rule already applies to the web client's redirect URI
+   (§6): anything derived from `.env` has to be reconciled, not merely created,
+   or the second run of a config file is a no-op that looks like success.
+
+   The seeder also refuses a `SSO_CLIENT_SECRET` shaped like a GUID. Azure
+   shows a secret's ID and its value side by side; the ID stays on screen and
+   the value is shown once, so the column still available to copy is the wrong
+   one. A secret ID is a GUID and a secret value is not, which makes it
+   checkable in one line at seed time instead of an opaque code after somebody
+   has typed their password.
 
 Cerbos telemetry is disabled in `deploy/cerbos/config.yaml` for the same
 air-gap reason: by default it posts to `telemetry.cerbos.dev`, which is a

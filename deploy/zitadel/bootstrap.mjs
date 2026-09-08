@@ -285,14 +285,46 @@ for (const p of products) {
  */
 if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
   const name = process.env.SSO_DISPLAY_NAME || 'Microsoft';
+  const secret = process.env.SSO_CLIENT_SECRET || '';
+  const oidc = {
+    issuer: process.env.SSO_ISSUER,
+    clientId: process.env.SSO_CLIENT_ID,
+    clientSecret: secret,
+    scopes: ['openid', 'profile', 'email'],
+  };
+
+  /* Checked HERE, where the answer is one line, rather than at the identity
+   * provider, where it is an opaque code after somebody has already typed
+   * their password. Both of these produce the same Microsoft failure:
+   *
+   *   AADSTS7000215: Invalid client secret provided. Ensure the secret being
+   *   sent in the request is the client secret VALUE, not the client secret ID
+   *
+   * A secret ID is a GUID; a secret value never is. Azure's portal shows the
+   * two side by side, the ID is the one that stays on screen, and the value is
+   * shown once and then hidden forever - so copying the wrong column is the
+   * normal mistake rather than a careless one. */
+  if (!secret) {
+    console.error(`FATAL: SSO_CLIENT_ID is set but SSO_CLIENT_SECRET is empty.`);
+    console.error('       This connector authenticates to the identity provider with a');
+    console.error('       secret; without one every sign-in fails at the token exchange.');
+    process.exit(1);
+  }
+  if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(secret)) {
+    console.error('FATAL: SSO_CLIENT_SECRET is a GUID, so it is the secret ID rather than');
+    console.error('       the secret VALUE. In the Azure portal, App registrations ->');
+    console.error('       Certificates and secrets, the Value column is the one to copy,');
+    console.error('       and it is only shown when the secret is created. If it has been');
+    console.error('       lost, add a new client secret and copy the Value.');
+    process.exit(1);
+  }
+
   const idps = await api('POST', '/management/v1/idps/_search', {});
-  let idpId = (idps.result || []).find(i => i.name === name)?.id;
+  const existing = (idps.result || []).find(i => i.name === name);
+  let idpId = existing?.id;
   if (!idpId) {
     const r = await api('POST', '/management/v1/idps/oidc', {
-      name, issuer: process.env.SSO_ISSUER,
-      clientId: process.env.SSO_CLIENT_ID,
-      clientSecret: process.env.SSO_CLIENT_SECRET || '',
-      scopes: ['openid', 'profile', 'email'],
+      name, ...oidc,
       isCreationAllowed: true, isLinkingAllowed: true,
       isAutoCreation: true, isAutoUpdate: true,
     });
@@ -300,7 +332,37 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
     idpId = r.idpId;
     if (!idpId) { console.error('FATAL: could not create the SSO connector:', JSON.stringify(r)); process.exit(1); }
     say(`SSO connector '${name}' created`);
-  } else say(`SSO connector '${name}' exists`);
+  } else {
+    /* RECONCILED, not merely found. The connector used to be created once and
+     * never touched again, so a corrected secret in .env reached nothing: the
+     * seeder said "exists", the old credentials stayed, and every sign-in kept
+     * failing with a Microsoft error about a secret that had already been
+     * fixed. .env is the source of truth for these three values, and re-running
+     * this container is how they are applied. */
+    const stored = existing.oidcConfig || {};
+    const r = await api('PUT', `/management/v1/idps/${idpId}/oidc_config`, oidc);
+    if (r.__status >= 400) {
+      console.error(`FATAL: could not update the '${name}' connector:`, JSON.stringify(r));
+      process.exit(1);
+    }
+    say(`SSO connector '${name}' updated from .env`);
+    if (stored.clientId && stored.clientId !== oidc.clientId) {
+      say(`  client id changed: ${stored.clientId} -> ${oidc.clientId}`);
+    }
+    if (stored.issuer && stored.issuer !== oidc.issuer) {
+      say(`  issuer changed: ${stored.issuer} -> ${oidc.issuer}`);
+    }
+  }
+
+  /* What was actually sent, in terms that can be checked against the portal
+   * without the secret itself reaching a log or a support ticket. The length
+   * is the useful part: a secret ID is 36 characters, a secret value is not. */
+  say(`  client id     : ${oidc.clientId}`);
+  say(`  client secret : ${secret.length} characters`);
+  if (/login\.microsoftonline\.com/.test(oidc.issuer) && !/\/v2\.0\/?$/.test(oidc.issuer)) {
+    say(`  ! issuer is ${oidc.issuer}`);
+    say('    Microsoft Entra expects https://login.microsoftonline.com/<tenant>/v2.0');
+  }
 
   /* The organization's own login policy, COPIED from whatever it is
    * inheriting rather than invented here. This step exists only so the

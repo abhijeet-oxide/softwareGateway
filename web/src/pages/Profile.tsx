@@ -35,7 +35,14 @@ export default function Profile() {
   const anonymous = Boolean(who && !who.authenticated)
   const productRoles = Object.entries(who?.productRoles ?? {})
   const tenantRoles = who?.roles ?? []
-  const subtitle = [email, username && username !== name ? username : null]
+  /* The login name is shown only when it ADDS something.
+   *
+   * An identity provider is free to make the preferred username the address,
+   * and Microsoft does: the page then introduced somebody as
+   * `ap999e@att.com  ·  ap999e@att.com`, which reads as a rendering fault and
+   * is one. Compared against the address as well as the name, because those
+   * are the two things already on screen. */
+  const subtitle = [email, extraIdentifier(username, name, email)]
     .filter(Boolean)
     .join('  ·  ')
 
@@ -231,6 +238,21 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       <div style={{ color: c.text, minWidth: 0 }}>{children}</div>
     </div>
   )
+}
+
+/**
+ * The login name, when it is not already being shown under another heading.
+ *
+ * Case-insensitive because an address is, and a capitalisation difference
+ * between two spellings of one identifier is not a second fact about a person.
+ */
+function extraIdentifier(
+  username: string | undefined, name: string | undefined, email: string | undefined,
+): string | null {
+  if (!username) return null
+  const same = (other: string | undefined) =>
+    Boolean(other) && other!.toLowerCase() === username.toLowerCase()
+  return same(name) || same(email) ? null : username
 }
 
 /** A sentence about the section, not a field in it - so it is not given an

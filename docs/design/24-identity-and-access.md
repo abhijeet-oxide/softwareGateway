@@ -130,6 +130,88 @@ expressed once, natively.
 >
 > *Verified:* a token minted **before** `software-41` existed authorized a request against `software-41` immediately after creation, with no new token and no re-login. That is the requirement, and it is a property of the role naming no product.
 
+### 5.1a The data plane is a WORKLOAD, not a person
+
+A worker leases jobs over the same authenticated API a person uses. With
+authentication on and nothing of its own to present it received
+`UNAUTHENTICATED: no bearer token` every five seconds, forever: a container
+that is up, whose probes are green, and that never moves a byte.
+
+| Tier | Lives on | Role | Covers |
+|---|---|---|---|
+| **workload** | `platform` project | `org-worker` | leasing jobs and reporting on them, and nothing else |
+
+It is a machine account in ZITADEL (`swgw-worker`), authenticating with the
+**client credentials grant** (RFC 6749 §4.4) and receiving a short-lived JWT the
+Coordinator verifies with the same keys, the same package and the same code path
+as a person's. Provisioning is `deploy/zitadel/bootstrap.mjs`; the credentials
+are written to their own volume and mounted read-only into every worker.
+
+> **Decision - a machine account at the identity provider, not a token in the environment.**
+>
+> *Alternatives considered.*
+>
+> **A shared static token in `.env`.** A password that never expires, copied into
+> every manifest that mentions the service, revocable only by redeploying
+> everything holding it. It also has no roles, so nothing downstream can bound
+> what it reaches.
+>
+> **Exempting the worker plane from authentication.** Worse than it sounds. Those
+> routes hand out work and accept its results, so an unauthenticated worker plane
+> lets anything with network reach claim every job in the queue and report each
+> one finished - a denial of service on the only thing this system does, launched
+> from a curl.
+>
+> *Chosen because* it adds no second trust root. The Coordinator already
+> verifies OIDC tokens; this is the same token, from the same issuer, carrying
+> real roles, expiring on its own, and revoked by disabling one account in a
+> console that keeps an audit trail of the disabling.
+
+> **Decision - ONE identity for the whole fleet.**
+>
+> A worker holds no data, decides nothing, and is interchangeable with every
+> other worker by design. Its `workerId` names it in the QUEUE, which is
+> scheduling and not authorization. Per-worker credentials would all carry the
+> same grant, so they would contain nothing, and would cost the property the
+> fleet exists for: that `replicas: 20` is a number rather than a conversation
+> with whoever issues credentials.
+
+> **Decision - the credential is a mounted FILE, never an environment variable.**
+>
+> The environment of a process is readable through the container runtime by
+> anyone who can inspect it, is inherited by every child process, and turns up
+> whole in a crash report. A file is mounted with a mode and an owner, read
+> once, and can be rotated under a running fleet. The seeder writes it `0600`
+> and chowns it to the runtime image's non-root uid, because a `0600` file
+> written by root is otherwise perfectly delivered and unreadable by the one
+> process that wants it.
+
+> **Decision - the workload is CONFINED, in both directions.**
+>
+> `org-worker` maps to one action, `work`, and to nothing else - not even
+> `read`. `internal/api/middleware/workload.go` then enforces two rules in one
+> place: a request to the worker plane must hold `work`, and a request to
+> anything else must not come from an identity that holds ONLY `work`.
+>
+> So the worst a stolen worker credential can do is take jobs and lie about
+> their results. It cannot read the audit trail, request a transfer, or
+> enumerate products it was never handed work for. *Verified against the running
+> stack:* that credential gets `PERMISSION_DENIED` on `/products`,
+> `/auditEvents`, `/workers` and `POST /transfers`, and is served on
+> `jobs:lease` and `workers/{id}:heartbeat`.
+>
+> This does NOT make the human routes authorized - they remain open to any
+> authenticated caller, exactly as they were. That gap is older than this
+> change and is item 7 in §11; closing the half that arrived with this
+> credential is not a claim to have closed the other half.
+
+> **Where this goes next.** In Kubernetes the same fence should be reached by a
+> projected ServiceAccount token and a TokenReview: no credential to provision
+> at all, rotation handled by the kubelet. The seam is `v1.TokenSource`, which
+> is an interface for that reason. It is not built, because this deployment is
+> compose and a mechanism with no deployment to run in is a mechanism nobody
+> tests.
+
 ### 5.2 The four personas
 
 | Persona | How it is expressed | Scope |
@@ -292,6 +374,14 @@ and easy to miss:
 4. A user with no grant on a product is refused it.
 5. The break-glass account is disabled, and its still being enabled is reported.
 6. `docs/design/09` §10's risk note is deleted, because it is no longer true.
+7. **Still open.** The human routes authenticate and do not authorize: any
+   caller with a valid token reaches every one of them whatever roles they
+   hold. The machinery is all present - `Identity.Can`, scoped grants, Cerbos
+   wired - and no handler asks it. The data plane is fenced (§5.1a) because its
+   credential is new and its blast radius is bounded and known; a person with
+   no roles is currently refused nothing.
+8. A worker authenticates with no configuration by hand and no credential in
+   the repository, and `WORKER_REPLICAS=20` needs no extra step.
 
 ## 12. Naming: why the binary is still `coordinator`
 

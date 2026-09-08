@@ -22,6 +22,12 @@ import (
 // for something invalid".
 var ErrUnreachable = errors.New("coordinator unreachable")
 
+// ErrNoCredentials means no access token could be obtained, so the request was
+// never made. Distinct from the Coordinator answering 401: the fault is at the
+// identity provider or in this process's own credentials, and reporting it as
+// "unauthorized" sends an operator to look at the Coordinator's configuration.
+var ErrNoCredentials = errors.New("no access token")
+
 // ErrTimeout means the Coordinator was reached but did not answer within the
 // client's timeout.
 //
@@ -41,7 +47,23 @@ type Client struct {
 	endpoint string
 	http     *http.Client
 	token    string
+	tokens   TokenSource
 	ua       string
+}
+
+// TokenSource supplies a bearer token per request, and is told when one was
+// refused.
+//
+// A static token cannot express what a machine account needs. Tokens obtained
+// from an identity provider expire, so a long-lived process holding one is a
+// process that works for twelve hours and then stops; and a token can stop
+// being accepted BEFORE it expires, when the account is disabled or a role is
+// withdrawn, so a client that trusted the expiry it was given would spend the
+// rest of that token's life retrying with a credential that was just refused.
+// Invalidate is how the source is told to go and get another.
+type TokenSource interface {
+	Token(ctx context.Context) (string, error)
+	Invalidate()
 }
 
 // ClientOption configures a Client.
@@ -59,6 +81,15 @@ func WithHTTPClient(h *http.Client) ClientOption {
 // on. See docs/design/09-api.md section 10.
 func WithToken(t string) ClientOption {
 	return func(c *Client) { c.token = t }
+}
+
+// WithTokenSource authenticates every request with a token fetched on demand.
+//
+// This is how the data plane authenticates: the worker holds a machine
+// account's credentials and exchanges them for short-lived tokens, rather than
+// holding a bearer token that never expires. Overrides WithToken.
+func WithTokenSource(t TokenSource) ClientOption {
+	return func(c *Client) { c.tokens = t }
 }
 
 // WithUserAgent sets the User-Agent.
@@ -402,6 +433,12 @@ func (c *Client) Calibrate(
 // "context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
 // - names neither the timeout that was in force nor the flag that changes it.
 func (c *Client) transportError(err error) error {
+	// A credential that could not be obtained is not a transport fault, and
+	// dressing it as one sends somebody to look at the network. It arrives
+	// here because send() reports it on the same return as a dial failure.
+	if errors.Is(err, ErrNoCredentials) {
+		return err
+	}
 	var nerr net.Error
 	timedOut := errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, os.ErrDeadlineExceeded) ||
@@ -417,6 +454,63 @@ func (c *Client) transportError(err error) error {
 	return fmt.Errorf("%w: %s did not answer in time: %w", ErrTimeout, c.endpoint, err)
 }
 
+// authorize attaches the caller's credentials.
+//
+// A token source is consulted per request rather than once at construction,
+// which is what lets a process run longer than the token it started with.
+func (c *Client) authorize(req *http.Request) error {
+	if c.tokens != nil {
+		tok, err := c.tokens.Token(req.Context())
+		if err != nil {
+			// Named as what it is. Without this the caller sees the Coordinator
+			// refusing an empty Authorization header and goes to look at the
+			// Coordinator, which is healthy and correct; the fault is here, at
+			// the identity provider, and this is the only place that knows it.
+			return fmt.Errorf("%w: %w", ErrNoCredentials, err)
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+		return nil
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	return nil
+}
+
+// send performs the request, and repeats it ONCE with a fresh token if the
+// first attempt was refused.
+//
+// A token can stop being accepted before it expires: the signing keys rotate,
+// the account is disabled and re-enabled, the Coordinator is restarted against
+// a provider that has been reseeded. Without this the process keeps presenting
+// the credential that was just refused until the cached token's own expiry,
+// which for a twelve hour token is a fleet that stops for half a day and
+// recovers on its own with nothing in between to explain it.
+//
+// Exactly once, and only when a source can produce a different answer. A retry
+// loop against an identity provider that is refusing the credential is how a
+// misconfiguration becomes a denial of service on the thing everybody else
+// needs in order to sign in.
+func (c *Client) send(req *http.Request, body []byte) (*http.Response, error) {
+	resp, err := c.http.Do(req)
+	if err != nil || c.tokens == nil || resp.StatusCode != http.StatusUnauthorized {
+		return resp, err
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	_ = resp.Body.Close()
+
+	c.tokens.Invalidate()
+	retry := req.Clone(req.Context())
+	if body != nil {
+		retry.Body = io.NopCloser(bytes.NewReader(body))
+		retry.ContentLength = int64(len(body))
+	}
+	if err := c.authorize(retry); err != nil {
+		return nil, err
+	}
+	return c.http.Do(retry)
+}
+
 func (c *Client) post(ctx context.Context, path string, in, out any) error {
 	body, err := json.Marshal(in)
 	if err != nil {
@@ -430,11 +524,11 @@ func (c *Client) post(ctx context.Context, path string, in, out any) error {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", c.ua)
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if err := c.authorize(req); err != nil {
+		return err
 	}
 
-	resp, err := c.http.Do(req)
+	resp, err := c.send(req, body)
 	if err != nil {
 		return c.transportError(err)
 	}
@@ -462,11 +556,11 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", c.ua)
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if err := c.authorize(req); err != nil {
+		return err
 	}
 
-	resp, err := c.http.Do(req)
+	resp, err := c.send(req, nil)
 	if err != nil {
 		return c.transportError(err)
 	}

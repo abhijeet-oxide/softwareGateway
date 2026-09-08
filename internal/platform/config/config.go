@@ -710,6 +710,20 @@ type WorkerConfig struct {
 	// clock on every progress report, so a large blob may legitimately run for
 	// hours. It bounds only silence.
 	StallTimeout time.Duration `koanf:"stallTimeout"`
+
+	// CredentialsFile is where this worker's machine-account credentials are
+	// mounted. Empty means the worker sends no token, which is correct only
+	// against a Coordinator that has authentication switched off.
+	//
+	// A FILE and never an environment variable, because the two are not equally
+	// safe holding the same string: the environment of a process is readable
+	// through the container runtime by anyone who can inspect it, is copied
+	// into every child process, and turns up whole in a crash report. A file is
+	// mounted with a mode, read once, and can be rotated under a running fleet.
+	//
+	// It is written by the deployment's seeder, so nothing here is configured
+	// by hand and nothing is committed: see deploy/zitadel/bootstrap.mjs.
+	CredentialsFile string `koanf:"credentialsFile"`
 }
 
 type ObservabilityConfig struct {
@@ -934,6 +948,11 @@ func Defaults() SystemConfig {
 			CopyBufferSize:      1 << 20, // 1 MiB
 			HeartbeatInterval:   20 * time.Second,
 			StallTimeout:        15 * time.Minute,
+			// The path the shipped deployment mounts them at. Defaulted rather
+			// than required so a worker started with no configuration at all
+			// still finds them; a worker running against a Coordinator with
+			// authentication off simply finds nothing there and says so once.
+			CredentialsFile: "/etc/softwaregateway/credentials/worker.json",
 		},
 		Observability: ObservabilityConfig{
 			Log:     LogConfig{Level: "info", Format: "json"},

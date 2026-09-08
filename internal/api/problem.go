@@ -87,6 +87,20 @@ func internalErrorWriter(logger *slog.Logger) func(http.ResponseWriter, *http.Re
 // unauthenticatedWriter is installed in the Auth middleware. Unreachable while
 // AnonymousAuthenticator is in place, but wired so that switching on real
 // authentication needs no change here.
+// permissionDeniedWriter refuses an authenticated caller.
+//
+// A separate writer from the one above because the two are separate answers
+// and an operator reads them as such: UNAUTHENTICATED means "I do not know who
+// you are, sign in", PERMISSION_DENIED means "I know exactly who you are and
+// the answer is no". Collapsing them sends somebody to re-issue a credential
+// that was working perfectly.
+func permissionDeniedWriter(w http.ResponseWriter, r *http.Request, detail string) {
+	if detail == "" {
+		detail = "This credential does not permit that."
+	}
+	Error(w, r, v1.CodePermissionDenied, detail)
+}
+
 func unauthenticatedWriter(w http.ResponseWriter, r *http.Request, err error) {
 	detail := "Authentication is required."
 	if err != nil {

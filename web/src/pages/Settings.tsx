@@ -2,33 +2,32 @@ import { useState } from 'react'
 import { Alert, Button, Card, Col, Descriptions, Row, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import { ThunderboltOutlined } from '../icons'
 import { useDeepHealth, useProducts, useVersion, useWorkers } from '../api/queries'
-import { useIdentity } from '../auth/permissions'
-import { isSignedIn, signOut } from '../auth/session'
 import { formatCount, formatRelative } from '../domain/format'
 import { Value } from '../components/value'
 import { ManagedInGit, TimeAgo } from '../components/chips'
 import { ErrorState, PageHeader } from '../components/layout'
 import { SpeedTest } from '../components/speedtest'
-import { AppearanceSettings, c, mono, StatusPill } from '../uikit'
+import { c, mono, StatusPill } from '../uikit'
 
 /**
  * Page 10 - Settings.
  *
- * Answers: how is this instance configured, and is it healthy?
+ * Answers: how is this deployment configured, and is it healthy?
+ *
+ * WHO IS READING IT is a different question, and it lives on Profile. This page
+ * had both, so clicking your own name in the navigation opened a screen about
+ * database drivers and background workers, and the only way to sign out was
+ * three cards down a page about the fleet.
  *
  * Everything configurable here is read-only and says why: configuration is
  * GitOps, and a write from this interface would create a second source of
  * truth that Flux reverts minutes later with nothing in any log to explain it
  * (docs/design/19 §4).
- *
- * The Users and roles section renders whatever /whoami reports rather than a
- * role model baked into this file - which is the point of that endpoint.
  */
 export default function Settings() {
   const version = useVersion()
   const workers = useWorkers()
   const products = useProducts()
-  const { who, loading } = useIdentity()
   const [probing, setProbing] = useState(false)
   const health = useDeepHealth(probing)
 
@@ -57,84 +56,6 @@ export default function Settings() {
       />
 
       <Row gutter={[16, 16]}>
-        {/*
-          Appearance, first, because it is the only thing on this page a person
-          can actually change: everything below it is managed in Git and shown
-          here to be read. The section is the shared design system's, copy
-          included - two products that explain the same control in different
-          words are two products.
-        */}
-        <Col xs={24}>
-          <Card title="Appearance">
-            <AppearanceSettings />
-          </Card>
-        </Col>
-
-        <Col xs={24} xl={12}>
-          <Card
-            title="Users and roles"
-            /*
-              Ending the session belongs beside the identity it ends, and this
-              is the only place in the application that shows one. It is absent
-              when there is no session to end, which is every deployment
-              running without authentication.
-            */
-            extra={
-              <Space size={8}>
-                {isSignedIn() && (
-                  <Button size="small" onClick={() => void signOut()}>
-                    Sign out
-                  </Button>
-                )}
-                <ManagedInGit />
-              </Space>
-            }
-            loading={loading}
-          >
-            {who && !who.authenticated ? (
-              <Alert
-                type="info"
-                showIcon
-                message="Authentication is not enabled"
-                description={
-                  <Space direction="vertical" size={4}>
-                    <Typography.Text>
-                      This Coordinator accepts every caller as{' '}
-                      <Typography.Text code>{who.subject}</Typography.Text> with full permissions.
-                      The only control protecting it is network isolation.
-                    </Typography.Text>
-                    <Typography.Text type="secondary">
-                      Everything this interface shows and does is already asked through a permission
-                      check, so switching authentication on changes what people can do without
-                      changing any page.
-                    </Typography.Text>
-                  </Space>
-                }
-              />
-            ) : (
-              <Descriptions column={1} size="small">
-                <Descriptions.Item label="Signed in as"><Value>{who?.subject}</Value></Descriptions.Item>
-                <Descriptions.Item label="Method"><Value>{who?.method}</Value></Descriptions.Item>
-                <Descriptions.Item label="Tenant">{who?.tenant || 'All'}</Descriptions.Item>
-                <Descriptions.Item label="Roles"><Value>{who?.roles?.join(', ')}</Value></Descriptions.Item>
-              </Descriptions>
-            )}
-
-            <Descriptions column={1} size="small" style={{ marginTop: 12 }}>
-              <Descriptions.Item label="Permissions">
-                <Space size={4} wrap>
-                  {(who?.permissions ?? []).map((p) => (
-                    <Tag key={p}>{p === '*' ? 'everything' : p}</Tag>
-                  ))}
-                </Space>
-              </Descriptions.Item>
-              <Descriptions.Item label="Visible products">
-                {who?.products?.length ? who.products.join(', ') : 'All products'}
-              </Descriptions.Item>
-            </Descriptions>
-          </Card>
-        </Col>
-
         <Col xs={24} xl={12}>
           <Card title="System health" loading={version.isLoading}>
             <Descriptions column={2} size="small">

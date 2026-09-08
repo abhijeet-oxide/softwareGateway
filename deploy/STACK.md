@@ -111,6 +111,43 @@ The rest of the app registration:
 - `SSO_ISSUER` is `https://login.microsoftonline.com/<tenant-id>/v2.0`
 - API permissions: `openid`, `profile`, `email` (delegated) are enough
 
+### What the sign-in screen shows, and who arrives
+
+The seeder configures the screen as well as the connector:
+
+- **Self-registration is off, always.** Everyone who may use this gateway is
+  provisioned - by the seeder, or by `deploy/zitadel/users.json`.
+- **Password sign-in is off once SSO is configured.** `SSO_ALLOW_PASSWORD_LOGIN=true`
+  keeps it. Note that switching it off locks out `zitadel-admin` as well: it is
+  in the same organization and has no Microsoft account. That is recoverable at
+  any time, because the seeder authenticates with a machine token rather than
+  through the sign-in screen - set the variable and re-run it.
+- **Microsoft gets ZITADEL's Microsoft connector**, not a generic OIDC one, so
+  the button carries Microsoft's mark. Anything else stays generic OIDC.
+- **People are matched to their existing account by e-mail address**
+  (`AUTO_LINKING_OPTION_EMAIL`). Without it, signing in through Microsoft
+  creates a SECOND, brand new user with no roles and asks them to invent a
+  username, while the account seeded for them sits beside it holding the roles.
+  If a stack already has both, delete the empty duplicate in the ZITADEL
+  console; from then on the linking is automatic.
+- **The screen is branded** with `deploy/zitadel/branding/logo.svg` and this
+  product's colours, and ZITADEL's watermark is off. See
+  [zitadel/branding/README.md](zitadel/branding/README.md).
+- **One language.** ZITADEL's login still draws the picker - there is no
+  setting that removes it - but with a single allowed language it has nothing
+  to offer.
+
+**Re-running the seeder against a stack that is already up needs a restart:**
+
+```bash
+docker compose run --rm zitadel-init
+docker compose restart zitadel-login      # it caches all of the above
+```
+
+Without the restart every write succeeds, the ZITADEL console shows the new
+values, and the sign-in screen keeps the old ones. On a first run the ordering
+already handles it: `zitadel-login` does not start until seeding has finished.
+
 ### `AADSTS7000215: Invalid client secret provided`
 
 Two causes, and the first is the common one.

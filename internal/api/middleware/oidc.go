@@ -46,6 +46,8 @@ func (a OIDCAuthenticator) Authenticate(r *http.Request) (Identity, error) {
 func fromAuthz(a authz.Identity) Identity {
 	out := Identity{
 		Subject: a.Subject,
+		Name:    a.Name,
+		Email:   a.Email,
 		Tenant:  a.Tenant,
 		Method:  "oidc",
 	}
@@ -59,6 +61,10 @@ func fromAuthz(a authz.Identity) Identity {
 		out.Roles = append(out.Roles, Role(role))
 	}
 	for product, roles := range a.Products {
+		if out.ProductRoles == nil {
+			out.ProductRoles = map[string][]string{}
+		}
+		out.ProductRoles[product] = append(out.ProductRoles[product], roles...)
 		for _, role := range roles {
 			for _, act := range actionsFor(role) {
 				out.Grants = append(out.Grants, Grant{

@@ -7,6 +7,7 @@ import {
 } from './icons'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useIdentity } from './auth/permissions'
+import { identityClaims } from './auth/session'
 import { useTransferActivity, useVersion, useWorkers } from './api/queries'
 import { describeFleet, summariseFleet } from './domain/fleet'
 import brand from './brand'
@@ -193,6 +194,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const UNLISTED: [string, string][] = [
     ['/packages/compare', 'Compare releases'],
     ['/security', 'Security'],
+    ['/profile', 'Profile'],
   ]
   const section = NAV.find((n) => n.key === selected)?.label
     ?? UNLISTED.filter(([path]) => location.pathname.startsWith(path))
@@ -207,14 +209,34 @@ export function Shell({ children }: { children: ReactNode }) {
     onClick: () => navigate(n.key),
   }))
 
-  // The person at the navigation's foot, in the same card the sibling tool
-  // uses: who you are, and one click to Settings, where every personal
-  // preference lives.
+  /*
+    The person at the navigation's foot, in the same card the sibling tool uses.
+
+    NAME, not subject. `subject` is the identity provider's opaque id - a long
+    number - and it was what this card showed, so the one place in the product
+    that says who you are said it as a number. The identity provider does not
+    always assert a name, so email is the fallback and the id is the last
+    resort rather than the first choice.
+
+    The second line is what the person HOLDS, and it has to cope with both
+    tiers: somebody whose access is entirely per-product holds no tenant role
+    at all, and this card used to invent "Product Owner" for them.
+  */
+  const productRoles = Object.values(who?.productRoles ?? {}).flat()
+  const heldRoles = [...(who?.roles ?? []), ...productRoles]
+  // The Coordinator's answer first, because it is the one that was verified.
+  // It only has a name when the ACCESS token carried one, which ZITADEL's does
+  // not - so in practice this falls through to the ID token, which is where
+  // OpenID Connect puts who somebody is. See auth/session identityClaims.
+  const claims = identityClaims()
   const profile: NavProfile = {
-    name: who?.subject ?? 'Not signed in',
-    sub: who?.authenticated ? (who.roles?.join(', ') || 'Product Owner') : 'Not signed in',
-    active: selected === '/settings',
-    onClick: () => navigate('/settings'),
+    name: who?.name || claims.name || who?.email || claims.email
+      || claims.preferredUsername || who?.subject || 'Not signed in',
+    sub: who?.authenticated
+      ? heldRoles.join(', ') || 'No roles'
+      : 'Not signed in',
+    active: location.pathname.startsWith('/profile'),
+    onClick: () => navigate('/profile'),
   }
 
   return (

@@ -31,10 +31,13 @@ func (s *Server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 
 	out := v1.WhoAmIResponse{
 		Subject:       id.Subject,
+		Name:          id.Name,
+		Email:         id.Email,
 		Method:        id.Method,
 		Authenticated: id.Method != "" && id.Method != "none",
 		Tenant:        id.Tenant,
 		Products:      id.VisibleProducts(),
+		ProductRoles:  id.ProductRoles,
 		Permissions:   permissionsFor(id),
 		Features: v1.Features{
 			FileDownloads: s.deps.FileDownloadsEnabled,

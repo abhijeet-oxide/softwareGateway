@@ -337,7 +337,7 @@ cannot start against a ZITADEL that has no projects in it. `docker compose
 down` walks the same graph backwards, so nothing writes to a database that has
 already stopped.
 
-### 13.1 Seven things that are easy to get wrong
+### 13.1 Eight things that are easy to get wrong
 
 Each of these was found by running the stack, not by reading documentation.
 
@@ -405,6 +405,22 @@ Each of these was found by running the stack, not by reading documentation.
    one. A secret ID is a GUID and a secret value is not, which makes it
    checkable in one line at seed time instead of an opaque code after somebody
    has typed their password.
+
+8. **A variable exported in the shell beats `.env`, for the whole session.**
+   Compose applies the real environment last, so `SSO_CLIENT_SECRET=x` set once
+   while testing wins over the file for every subsequent run, and correcting
+   the file changes nothing. Reproduced through podman-compose's own
+   substitution: a 39 character value in `.env` arrives as one character. This
+   is indistinguishable from every other cause of a rejected secret, so the
+   seeder now shows the MASKED value it was handed rather than only its length
+   - three characters at each end identify a secret at a glance and leave it
+   unusable - and it asks the identity provider, with a `client_credentials`
+   request, whether the credentials it just wrote actually work. Only
+   `invalid_client` is treated as failure: that is the provider rejecting the
+   client authentication, which is the question. Anything else happened after
+   the credentials were accepted. A provider that cannot be reached is reported
+   and is not fatal, and is worth reading anyway, because ZITADEL needs the
+   same network path from the same network to sign anybody in.
 
 Cerbos telemetry is disabled in `deploy/cerbos/config.yaml` for the same
 air-gap reason: by default it posts to `telemetry.cerbos.dev`, which is a

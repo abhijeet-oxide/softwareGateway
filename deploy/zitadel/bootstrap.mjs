@@ -36,6 +36,12 @@ const { createHash } = await import('node:crypto');
 const say = (...a) => console.log('  ' + a.join(' '));
 const list = (v, d) => (v ?? d).split(',').map(s => s.trim()).filter(Boolean);
 
+/* A credential, shown well enough to recognise and not well enough to use. */
+function mask(v) {
+  if (v.length < 12) return `${v.length} characters (too short to show safely)`;
+  return `${v.slice(0, 3)}...${v.slice(-3)} (${v.length} characters)`;
+}
+
 /* Writes a file another container reads, and says so when it cannot.
  *
  * The volume is mounted read-only into some of this stack's containers and
@@ -373,6 +379,67 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
    * Without it the seeder printed "updated from .env" on every run whether or
    * not anything had moved, which is the kind of line people stop reading
    * exactly before the run where it mattered. */
+/* Ask the identity provider whether these credentials are real.
+ *
+ * # Why the seeder does this rather than leaving it to the first sign-in
+ *
+ * A wrong client secret does not fail here. It fails at the identity provider,
+ * in the identity provider's vocabulary, AFTER somebody has typed their
+ * password - `AADSTS7000215: Invalid client secret provided` - and it looks
+ * identical whether the secret is wrong, stale, or was never written. Nothing
+ * in this stack can tell those apart afterwards, because ZITADEL returns a
+ * connector's client id and issuer and never its secret.
+ *
+ * A client_credentials request answers it in one call. Only `invalid_client`
+ * is treated as proof of failure: it means the provider rejected the client
+ * AUTHENTICATION, which is exactly the question being asked. Any other error -
+ * an unsupported grant, a missing scope, no consent - happened after the
+ * credentials were accepted, so it says the secret is good and says nothing
+ * about the rest.
+ *
+ * Being unable to reach the provider is reported and is NOT fatal, and it is
+ * worth reading rather than skipping: ZITADEL needs the same network path from
+ * the same network, so a seeder that cannot reach the issuer is a sign-in that
+ * will not work either.
+ */
+async function verifyIdpCredentials(issuer, clientId, clientSecret) {
+  const base = issuer.replace(/\/+$/, '');
+  let tokenEndpoint;
+  try {
+    const disc = await fetch(`${base}/.well-known/openid-configuration`, {
+      headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(15000),
+    });
+    if (!disc.ok) return { unreachable: `${base} answered ${disc.status} for its discovery document` };
+    tokenEndpoint = (await disc.json()).token_endpoint;
+    if (!tokenEndpoint) return { unreachable: `${base} published no token endpoint` };
+  } catch (e) {
+    return { unreachable: `${base}: ${e.message}` };
+  }
+
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret,
+  });
+  // Entra's v2 endpoint requires a scope; an app's own `.default` needs no
+  // consent and no permissions, so it tests authentication and nothing else.
+  if (/login\.microsoftonline\.com/.test(base)) body.set('scope', `${clientId}/.default`);
+
+  try {
+    const r = await fetch(tokenEndpoint, {
+      method: 'POST', body,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (r.ok) return { ok: true, detail: 'a token was issued' };
+    const doc = await r.json().catch(() => ({}));
+    if (doc.error === 'invalid_client') {
+      return { rejected: true, detail: (doc.error_description || 'invalid_client').split(/\r?\n/)[0] };
+    }
+    return { ok: true, detail: `the provider accepted them and answered ${doc.error || r.status} to the rest` };
+  } catch (e) {
+    return { unreachable: `${tokenEndpoint}: ${e.message}` };
+  }
+}
+
   const fingerprintFile = '/pat/sso-fingerprint.json';
   const fingerprint = createHash('sha256')
     .update(`${oidc.issuer}\n${oidc.clientId}\n${secret}`)
@@ -392,13 +459,37 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
     JSON.stringify({ secret: fingerprint, clientId: oidc.clientId, issuer: oidc.issuer }, null, 2) + '\n',
     0o600);
 
-  /* What was actually sent, in terms that can be checked against the portal
-   * without the secret itself reaching a log or a support ticket. The length
-   * is the useful part twice over: a secret ID is 36 characters and a value is
-   * not, and a value shortened by .env expanding a $ inside it comes out
-   * shorter than the portal shows. */
+  /* What was actually sent, in terms that can be checked against the portal.
+   *
+   * A length alone turned out not to be enough: a count that disagrees with
+   * the portal tells somebody that something is wrong and nothing about what,
+   * and the obvious next question - "is that even my secret?" - had no answer
+   * short of adding a print statement. So the ends are shown and the middle is
+   * not. Three characters at each end of a forty character high-entropy secret
+   * identify it at a glance and leave it unusable, which is the trade every
+   * tool that prints a masked credential makes. A secret too short to mask
+   * safely is one that is already wrong, so only its length is given. */
   say(`  client id     : ${oidc.clientId}`);
-  say(`  client secret : ${secret.length} characters`);
+  say(`  client secret : ${mask(secret)}`);
+
+  const check = await verifyIdpCredentials(oidc.issuer, oidc.clientId, secret);
+  if (check.rejected) {
+    console.error(`\nFATAL: ${oidc.issuer} rejected these credentials.`);
+    console.error(`       ${check.detail}`);
+    console.error('       The connector was written, and every sign-in through it will');
+    console.error('       fail until SSO_CLIENT_ID and SSO_CLIENT_SECRET are correct.');
+    console.error('       In the Azure portal, App registrations -> Certificates and');
+    console.error('       secrets, copy the VALUE column, not the Secret ID; the value');
+    console.error('       is shown once, when the secret is created.');
+    process.exit(1);
+  }
+  if (check.unreachable) {
+    say(`  ! could not verify the credentials: ${check.unreachable}`);
+    say('    ZITADEL needs this same network path to sign anybody in, so this is');
+    say('    worth fixing even though the seeding itself succeeded.');
+  } else {
+    say(`  credentials verified: ${check.detail}`);
+  }
   if (/login\.microsoftonline\.com/.test(oidc.issuer) && !/\/v2\.0\/?$/.test(oidc.issuer)) {
     say(`  ! issuer is ${oidc.issuer}`);
     say('    Microsoft Entra expects https://login.microsoftonline.com/<tenant>/v2.0');

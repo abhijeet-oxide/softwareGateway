@@ -162,6 +162,39 @@ So after any change to `SSO_*`:
 docker compose run --rm zitadel-init      # podman-compose run --rm zitadel-init
 ```
 
+### A variable in the shell beats `.env`, silently and permanently
+
+If `SSO_CLIENT_SECRET` exists in the shell, `.env` is ignored. Compose applies
+the real environment last, so a value exported once - while testing, or in a
+profile - wins over the file for every run in that session, and editing the
+file changes nothing:
+
+```
+.env:                     SSO_CLIENT_SECRET=aBc8Q~the.long.correct.value-1234567890
+shell:                    SSO_CLIENT_SECRET=x
+what the container gets:  x        (1 character)
+```
+
+This is the explanation for a secret that stays what it was however many times
+`.env` is corrected. Check it before anything else:
+
+```powershell
+$env:SSO_CLIENT_SECRET            # anything printed here is beating .env
+Remove-Item Env:SSO_CLIENT_SECRET
+```
+
+```bash
+echo "$SSO_CLIENT_SECRET"         # same question on a shell
+unset SSO_CLIENT_SECRET
+```
+
+The seeder shows the masked value it was handed, so the count and the ends can
+be compared against the portal without pasting the secret anywhere:
+
+```
+  client secret : aBc...890 (37 characters)
+```
+
 ### `.env` can silently shorten a secret
 
 Compose expands variables inside `.env` values, so a `$` in a secret is read as
@@ -176,6 +209,43 @@ Nothing warns about it. Write `$$` for a literal `$`, and avoid a ` #` inside
 the value, which starts a comment. This is what the seeder's character count is
 for: compare it with the length of the secret in the Azure portal, and if they
 differ, `.env` ate part of it.
+
+### The seeder asks the identity provider whether the credentials work
+
+A wrong secret does not fail at seeding time. It fails at Microsoft, in
+Microsoft's vocabulary, after somebody has typed their password. So the seeder
+now makes a `client_credentials` request with the client id and secret it just
+wrote, and refuses to finish if the provider rejects them:
+
+```
+FATAL: https://login.microsoftonline.com/<tenant>/v2.0 rejected these credentials.
+       AADSTS7000215: Invalid client secret provided. Ensure the secret being
+       sent in the request is the client secret value, not the client secret ID.
+```
+
+and says so plainly when they are good:
+
+```
+  credentials verified: a token was issued
+```
+
+Only `invalid_client` counts as failure: that is the provider rejecting the
+client authentication, which is the question being asked. Any other error
+happened after the credentials were accepted, so it proves the secret is right
+and says nothing about the rest.
+
+Being unable to reach the provider is reported and is not fatal, and it is
+worth reading rather than skipping:
+
+```
+  ! could not verify the credentials: https://login.microsoftonline.com/...: fetch failed
+    ZITADEL needs this same network path to sign anybody in, so this is
+    worth fixing even though the seeding itself succeeded.
+```
+
+Behind a corporate proxy the seeder has no proxy configured, so this is
+expected there. It still matters: ZITADEL reaches the provider from the same
+network.
 
 ### Checking what ZITADEL actually holds
 

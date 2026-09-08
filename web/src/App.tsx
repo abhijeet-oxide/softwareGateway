@@ -3,7 +3,9 @@ import {
   Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams,
 } from 'react-router-dom'
 import { Shell } from './Shell'
-import { NotFoundPage, PageTransition } from './uikit'
+import { useIdentity } from './auth/permissions'
+import { identityClaims } from './auth/session'
+import { NotFoundPage, PageTransition, StatePage } from './uikit'
 import {
   lazyRoute, PageLoading, RouteErrorBoundary, usePreloadRoutes, type RouteModule,
 } from './routing'
@@ -109,9 +111,54 @@ function NotFound() {
   )
 }
 
+/**
+ * Signed in, and granted nothing.
+ *
+ * The Coordinator refuses every route to an account with no roles, which is
+ * correct and, left to itself, unreadable: ten pages each reporting their own
+ * failure, none of them saying the one thing that is actually true. The person
+ * has done nothing wrong and cannot fix it themselves, so the screen says who
+ * they are, what is missing, and who has to do something about it.
+ *
+ * It renders INSIDE the shell. The navigation stays correct and Profile keeps
+ * working - that is where the account id lives, which is the thing an
+ * administrator needs in order to grant anything, and where signing out is.
+ * Taking the chrome away would leave them on a dead end.
+ */
+function NoAccess() {
+  const { who } = useIdentity()
+  const claims = identityClaims()
+  const navigate = useNavigate()
+  return (
+    <StatePage
+      code="No roles"
+      title="This account has no access yet"
+      subject={who?.email || claims.email || who?.subject}
+      actions={[
+        { label: 'Go to your profile', primary: true, onClick: () => void navigate('/profile') },
+      ]}
+      note="Roles arrive in the sign-in token, so a new one takes effect at the next sign-in rather than on this page."
+    >
+      Sign-in worked. What is missing is a role: they are granted in the identity
+      provider, and this account holds none, so nothing here can be read or
+      changed. Send the address above to whoever administers this gateway.
+    </StatePage>
+  )
+}
+
 export function App() {
   const { pathname } = useLocation()
+  const { who } = useIdentity()
   usePreloadRoutes(ROUTES)
+
+  /*
+    Gated on AUTHENTICATED, not on the permission list alone. A deployment with
+    authentication switched off reports `authenticated: false` and permissions
+    of `["*"]`, and one that is still fetching reports nothing at all; neither
+    is a person who has been granted nothing, and showing this page to either
+    would be the application inventing a problem.
+  */
+  const noAccess = Boolean(who?.authenticated && (who.permissions ?? []).length === 0)
 
   /*
     ONE KEY, doing two jobs.
@@ -137,6 +184,32 @@ export function App() {
     eventually animate one thing while remounting another.
   */
   const page = pathname.split('/').slice(0, 3).join('/')
+
+  /*
+    A SEPARATE ROUTE TABLE, not an extra entry in the one below.
+
+    The obvious spelling - a `path="*"` route added before the others - does
+    nothing at all: React Router ranks routes by how specific they are rather
+    than taking the first that matches, and `*` scores lowest, so every real
+    page still won and the gate only ever showed on an address that already
+    404ed. Two routes and no competition is the version that works.
+
+    Profile stays reachable because it is the one page that still functions:
+    it reads /whoami, which is never gated, and it carries the account id an
+    administrator needs plus the way to sign out.
+  */
+  if (noAccess) {
+    return (
+      <Shell>
+        <Suspense fallback={<PageLoading />}>
+          <Routes>
+            <Route path="/profile" element={<Profile.Component />} />
+            <Route path="*" element={<NoAccess />} />
+          </Routes>
+        </Suspense>
+      </Shell>
+    )
+  }
 
   return (
     <Shell>

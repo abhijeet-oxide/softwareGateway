@@ -415,6 +415,85 @@ are read from ZITADEL's API and cached for 60 seconds.
 >
 > *Failure behaviour:* on a ZITADEL error, serve the stale cache entry. Refuse only when there is no cached entry at all. **Never fail open.**
 
+### 8.2 Authorization is enforced, and where
+
+Authentication and authorization are two questions, and for several releases
+only the first was asked. Every route was reachable by anybody holding a valid
+token, whatever roles they held. Federating a corporate directory made that
+much larger than it sounds: **any account in the directory** could sign in and
+read every product, every transfer and the audit trail. It was found exactly
+that way - somebody signed in through Microsoft, was provisioned nothing, and
+saw everything.
+
+The machinery had been there the whole time and nothing called it:
+`Identity.Can`, scoped grants, a policy engine constructed at startup and never
+consulted. **A permission model no handler asks is documentation.**
+
+`internal/api/middleware/authorize.go` is the gate.
+
+> **Decision - one middleware, not a check in every handler.**
+>
+> A check inside each handler is the same decision written eighty times, and
+> its failure mode is a route added later with the check left out: silent, and
+> exactly how this gap would come back. Here the DEFAULT decides, so a new
+> route is governed the day it is registered and the only way to weaken one is
+> to edit a file whose whole subject is permissions.
+
+> **Decision - it fails closed, by construction.**
+>
+> There is no "route I do not recognise" branch that permits. An unknown path
+> gets the rule for its method: `read` for a GET, `operate` for anything that
+> writes. A caller holding neither is refused.
+
+| | requires |
+|---|---|
+| `GET`, `HEAD` | `read` |
+| any write | `operate` |
+| a path ending `:apply` | `apply` |
+| the worker plane | `work` (§5.1a) |
+| `/whoami`, `/system/version` | nothing beyond a valid token |
+
+> **Decision - two routes answer whatever the caller holds.**
+>
+> The SPA probes `/system/version` before it renders anything and reads
+> `/whoami` to learn what it may offer. Gate either and a person with no roles
+> gets a service-unavailable screen or a blank one instead of a page naming the
+> problem. A security control whose effect is that nobody can be told why they
+> were refused produces a support ticket, not a fix. Neither route carries
+> anything worth withholding: build metadata, and a description of the caller's
+> own permissions.
+
+> **Decision - a listing may only widen its door if it narrows its answer.**
+>
+> "May you list products" is not "may you act on the estate": a caller granted
+> one product cannot answer the second and must still see the first. Those
+> routes are marked `AnyScope` and admit anybody holding the action on ANY
+> product - and each one filters its own results through
+> `Identity.VisibleProducts`. The filtering is what makes the wider door safe,
+> so the two are one change. Marking a route `AnyScope` without filtering it
+> hands a caller scoped to one product the contents of all of them.
+>
+> Today that is `GET /products`, `GET /auditEvents` and `POST /transfers` -
+> which cannot be scoped in a middleware at all, because its product is in the
+> BODY, so `handleCreateTransfer` re-asks with the product it decoded.
+> Everything else that cannot narrow its answer stays tenant-wide and fails
+> closed, which is why a product-scoped caller cannot list every transfer.
+
+> **Corrected while doing this:** the role ladder gave `operator` `ActionApply`.
+> `deploy/cerbos/policies/download.yaml` grants `apply` to `org_wide_admin` and
+> `product_owner` only, and §5.2 describes org-operator in the same terms. The
+> disagreement cost nothing while nothing consulted the ladder, and would have
+> handed every operator the one action that writes into somebody else's
+> registry the moment something did.
+
+**The refusal is written for the person reading it.** "This account holds no
+roles" is a different problem from "you hold the wrong ones", and only the first
+has an answer they can act on - it is also by far the likelier one, because an
+account the identity provider created at a first sign-in is the shape this gate
+was written for. The SPA turns it into a screen: signed in, no roles, here is
+your address, send it to an administrator. Profile stays reachable, because it
+carries the account id an administrator needs and the way to sign out.
+
 ## 9. Policy lives in this repository
 
 Cerbos policies are YAML under `deploy/auth/policies/`, versioned with the code
@@ -475,12 +554,9 @@ and easy to miss:
 4. A user with no grant on a product is refused it.
 5. The break-glass account is disabled, and its still being enabled is reported.
 6. `docs/design/09` §10's risk note is deleted, because it is no longer true.
-7. **Still open.** The human routes authenticate and do not authorize: any
-   caller with a valid token reaches every one of them whatever roles they
-   hold. The machinery is all present - `Identity.Can`, scoped grants, Cerbos
-   wired - and no handler asks it. The data plane is fenced (§5.1a) because its
-   credential is new and its blast radius is bounded and known; a person with
-   no roles is currently refused nothing.
+7. The human routes authorize, not only authenticate. **Closed** - see §8.2.
+   It was open long enough to be found in production: a person signed in
+   through Microsoft, provisioned nothing, and could read the whole estate.
 8. A worker authenticates with no configuration by hand and no credential in
    the repository, and `WORKER_REPLICAS=20` needs no extra step.
 

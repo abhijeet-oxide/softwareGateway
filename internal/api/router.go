@@ -361,6 +361,12 @@ func (s *Server) routes() chi.Router {
 	// plane's routes and nothing else, and nothing else reaches those. See
 	// internal/api/middleware/workload.go.
 	r.Use(middleware.Confine(permissionDeniedWriter))
+	// And then what an authenticated PERSON may reach. Separate from Confine
+	// above because they answer different questions about different kinds of
+	// caller: that one fences the data plane in, this one decides whether a
+	// human's roles cover the route they asked for. Until this existed, they
+	// always did. See internal/api/middleware/authorize.go.
+	r.Use(middleware.Authorize(permissionDeniedWriter))
 	r.Use(middleware.Compress)
 
 	r.NotFound(s.handleNotFound)

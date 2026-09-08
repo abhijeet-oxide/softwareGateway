@@ -87,8 +87,14 @@ func actionsFor(role string) []Action {
 	switch suffix(role) {
 	case "admin", "owner":
 		return []Action{ActionRead, ActionOperate, ActionApply, ActionAdmin, ActionWork}
+	// NOT ActionApply. deploy/cerbos/policies/download.yaml puts `apply`
+	// alongside `promote` and grants both to org_wide_admin and product_owner
+	// only, and docs/design/24 section 5.2 describes org-operator in the same
+	// terms. This ladder disagreed with both, which cost nothing while nothing
+	// consulted it and would have handed every operator the one action that
+	// writes into somebody else's registry the moment something did.
 	case "operator":
-		return []Action{ActionRead, ActionOperate, ActionApply}
+		return []Action{ActionRead, ActionOperate}
 	case "security", "reader", "viewer":
 		return []Action{ActionRead}
 	// The data plane. ONE action and deliberately not ActionRead as well: a

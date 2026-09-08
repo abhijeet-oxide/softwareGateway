@@ -1,6 +1,7 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { api, fetchText, query, packageRef } from './client'
+import { useIdentity } from '../auth/permissions'
 import type {
   CalibrateRequest, CalibrateResponse,
   CancelAnalysisResponse, CancelSecuritySyncResponse, ReplicateSecurityResponse,
@@ -499,9 +500,18 @@ export function useTransfers(
  * tight poll on the page they are on.
  */
 export function useTransferActivity() {
+  const { can } = useIdentity()
   return useQuery({
     queryKey: ['transfer-activity'],
     queryFn: () => api.get<TransferActivity>('/transfers:activity'),
+    // Not asked at all by somebody who may not read.
+    //
+    // These two live in the SHELL, so they poll on every page for as long as
+    // the tab is open. Against an account with no roles that is a refusal
+    // every ten seconds for the whole session, and - worse - the status pill
+    // fell back to its default and told that person "Downloads completed",
+    // which is a confident statement about an estate they cannot see.
+    enabled: can('read'),
     refetchInterval: 10_000,
     // A status line that briefly disagrees with a page is better than one that
     // vanishes: the previous numbers stay on screen while the next arrive.
@@ -872,9 +882,11 @@ export function useReports(params: { period?: string; product?: string } = {}) {
 }
 
 export function useWorkers() {
+  const { can } = useIdentity()
   return useQuery({
     queryKey: ['workers'],
     queryFn: () => api.get<ListWorkersResponse>('/workers'),
+    enabled: can('read'),
     refetchInterval: 15_000,
   })
 }

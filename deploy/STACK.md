@@ -111,6 +111,69 @@ The rest of the app registration:
 - `SSO_ISSUER` is `https://login.microsoftonline.com/<tenant-id>/v2.0`
 - API permissions: `openid`, `profile`, `email` (delegated) are enough
 
+### `AADSTS7000215: Invalid client secret provided`
+
+Two causes, and the first is the common one.
+
+**The Value was not what got copied.** Azure's Certificates and secrets page
+shows a Secret ID and a Secret Value side by side. The ID stays on screen
+forever; the Value is shown once, when the secret is created, and is hidden
+from then on. So the column that is still there to copy is the wrong one. A
+secret ID is a GUID and a secret value is not, which is the check the seeder
+now makes: it refuses to run rather than letting the mistake surface as a
+Microsoft error code after somebody has typed their password. If the Value has
+been lost, add a new client secret; it cannot be recovered.
+
+**Or the secret in `.env` never reached ZITADEL.** The connector used to be
+created on the first run and never touched again, so correcting
+`SSO_CLIENT_SECRET` and re-running changed nothing: the seeder said
+`SSO connector 'Microsoft' exists` and moved on while the old credentials
+stayed in place. It now reconciles on every run and says which values moved:
+
+```
+SSO connector 'Microsoft' updated from .env
+  client id changed: 0000... -> bc69a09a-6358-414b-b52e-1a562a38cba7
+  client id     : bc69a09a-6358-414b-b52e-1a562a38cba7
+  client secret : 39 characters
+```
+
+So after any change to `SSO_*`:
+
+```bash
+docker compose run --rm zitadel-init      # podman-compose run --rm zitadel-init
+```
+
+### `.env` can silently shorten a secret
+
+Compose expands variables inside `.env` values, so a `$` in a secret is read as
+the start of a variable name and the rest of the word disappears:
+
+```
+.env:          SSO_CLIENT_SECRET=aBc8Q~with$dollar.and_more
+container gets: aBc8Q~with.and_more
+```
+
+Nothing warns about it. Write `$$` for a literal `$`, and avoid a ` #` inside
+the value, which starts a comment. This is what the seeder's character count is
+for: compare it with the length of the secret in the Azure portal, and if they
+differ, `.env` ate part of it.
+
+### Checking what ZITADEL actually holds
+
+The seeder's output above is the quickest answer, and the character count is
+the useful part: an Entra secret **ID** is 36 characters, a secret **value** is
+not.
+
+To read it back independently, open the ZITADEL console at
+`http://localhost:8090/ui/console`, sign in as `zitadel-admin` with
+`ZITADEL_ROOT_PASSWORD`, and go to the organization's Identity Providers. The
+client ID and issuer are shown there.
+
+**The client secret is not readable, by design** - ZITADEL's API returns the
+client ID and issuer for a connector and never the secret. There is no way to
+confirm a stored secret is correct except by using it, which is why the seeder
+pushes `.env` into the connector on every run rather than trying to compare.
+
 ## Podman: `archive/tar: write too long`
 
 ```

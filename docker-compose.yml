@@ -132,7 +132,7 @@ services:
       # Defaulted so a zero-config run has an admin who can actually sign in.
       # Setting SSO_ISSUER makes the seeder REFUSE this, so the convenience
       # cannot follow you into production.
-      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-INSECURE-local-admin-Passw0rd!}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD-INSECURE-local-admin-Passw0rd!}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@example.com}
       SSO_ISSUER: ${SSO_ISSUER:-}
       SSO_CLIENT_ID: ${SSO_CLIENT_ID:-}

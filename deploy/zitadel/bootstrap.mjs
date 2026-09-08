@@ -20,6 +20,16 @@ const PAT_FILE = process.env.PAT_FILE || '/pat/pat.txt';
  * to its external name, so every request carries that Host explicitly. */
 const ZHOST    = process.env.ZITADEL_HOST_HEADER || 'localhost:8090';
 
+/* Validated before anything else touches the network: this is a config
+ * error, not a transient one, so failing here prints one clear message
+ * instead of the same FATAL buried under a wait-and-retry loop on every one
+ * of the container's `restart: on-failure` attempts. */
+if (process.env.SSO_ISSUER && process.env.BOOTSTRAP_ADMIN_PASSWORD) {
+  console.error('FATAL: BOOTSTRAP_ADMIN_PASSWORD is set while SSO is configured.');
+  console.error('       The password shortcut is for local use only. Unset it.');
+  process.exit(1);
+}
+
 const fs   = await import('node:fs/promises');
 const http = await import('node:http');
 const say = (...a) => console.log('  ' + a.join(' '));
@@ -191,11 +201,6 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
   let id = (found.result || [])[0]?.id;
 
   if (!id) {
-    if (process.env.SSO_ISSUER && pw) {
-      console.error('FATAL: BOOTSTRAP_ADMIN_PASSWORD is set while SSO is configured.');
-      console.error('       The password shortcut is for local use only. Unset it.');
-      process.exit(1);
-    }
     const body = {
       userName: user,
       profile: { firstName: 'Platform', lastName: 'Administrator' },

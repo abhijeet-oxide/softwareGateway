@@ -27,6 +27,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/security"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
+	"github.com/abhijeet-oxide/softwareGateway/pkg/authz"
 )
 
 // Leadership reports whether this replica holds the leader lock. Satisfied by
@@ -157,6 +158,11 @@ type ConnectivityChecker interface {
 
 // Deps are the Coordinator's dependencies.
 type Deps struct {
+	// Engine DECIDES what an authenticated caller may do. Nil falls back to the
+	// role ladder in middleware, which is the correct behaviour for a
+	// deployment that runs authentication without a policy engine. When one is
+	// supplied it is the ONLY decision - see middleware.Authorize.
+	Engine authz.Engine
 	// Authenticator establishes who the caller is. Nil keeps the historical
 	// behaviour - AnonymousAuthenticator, admin for everyone - so an existing
 	// deployment is unchanged until it opts in. See docs/design/24.
@@ -361,6 +367,12 @@ func (s *Server) routes() chi.Router {
 	// plane's routes and nothing else, and nothing else reaches those. See
 	// internal/api/middleware/workload.go.
 	r.Use(middleware.Confine(permissionDeniedWriter))
+	// And then what an authenticated PERSON may reach. Separate from Confine
+	// above because they answer different questions about different kinds of
+	// caller: that one fences the data plane in, this one decides whether a
+	// human's roles cover the route they asked for. Until this existed, they
+	// always did. See internal/api/middleware/authorize.go.
+	r.Use(middleware.Authorize(s.deps.Engine, permissionDeniedWriter))
 	r.Use(middleware.Compress)
 
 	r.NotFound(s.handleNotFound)

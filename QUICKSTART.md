@@ -244,6 +244,38 @@ docker compose down                     # stop; data kept
 docker compose down -v                  # stop and discard all data
 ```
 
+### What `ps` actually tells you
+
+```bash
+docker compose ps      # podman ps
+```
+
+**A green worker means the Coordinator has accepted it**, not merely that the
+process started: healthy here means the worker reached the Coordinator,
+authenticated, and had a lease call served, so it is in the fleet and will be
+given work. An idle queue is still green - being told there is nothing to do is
+the Coordinator accepting the request, which is the whole test.
+
+That is a deliberate reversal. It used to mean only that the process was up and
+the control plane answered a probe, which reported a green fleet over a
+deployment where every lease was being refused for want of a credential. If `ps`
+is green now, the deployment works.
+
+It takes up to 45 seconds after start for a worker to go green, and up to 50
+seconds of refusal for it to go red, so a Coordinator being restarted does not
+flap the fleet.
+
+Two things `ps` does NOT tell you, on purpose:
+
+- **The Coordinator is not unhealthy for having no workers.** It serves the API
+  and the UI perfectly well with an empty fleet; that is a scale question, not a
+  fault. Green controller plus red workers is the honest picture of exactly that
+  situation.
+- **Nothing here is a liveness verdict.** A worker the Coordinator refuses is
+  reported red and is deliberately never restarted for it: restarting fixes none
+  of the causes, and would turn one bad credential into a crash loop across the
+  fleet.
+
 ### Upgrading a stack that is already running
 
 Pulling new code needs **no `down`**, and specifically no `down -v`: that
@@ -394,6 +426,11 @@ disable certificate verification.
 | ZITADEL answers 404 to a healthy service | The `Host` header does not match `ZITADEL_EXTERNAL_DOMAIN`. |
 | `controller` unhealthy at boot | It fails fast on broken auth config rather than starting and refusing everyone. Read its logs. |
 | Worker restarting | No valid product YAML in `deploy/products/`. A worker says so rather than leasing jobs it cannot run. |
+| Signed in and every page says "This account has no access yet" | Correct, and the point: routes are refused to an account holding no roles. Grant one - the row below - and sign in again. |
+| Signed in, but the profile says "Tenant roles: none" | The roles are on a different account. A sign-in through the identity provider creates its own account when nothing already holds that address, so the seeded one keeps the roles and the one you actually sign in as holds none. Set `BOOTSTRAP_ADMIN_EMAIL` to the address you sign in with, or add yourself to `deploy/zitadel/users.json` with that address, and re-run the seeder - it matches on the address, so the roles land on the account you use. Roles arrive in the token, so sign out and back in. |
+| Two accounts for you in ZITADEL's account switcher, one you cannot sign in to | Same cause. The seeder now names both at the end of its run. The leftover has no identity at the provider and password sign-in is off, which is exactly why it cannot be signed in to; delete it in the console under Users. |
+| Accounts still there after `docker compose down` | `down` keeps volumes - only `down -v` discards them. ZITADEL's whole directory lives in the `pgdata` volume, so every user, role and grant survives a rebuild. That is what you want almost always, and it is why a duplicate made once stays until somebody removes it. |
+| Worker `unhealthy` | The Coordinator is not accepting it, and the worker's own log says why: `docker compose logs worker`. `UNAUTHENTICATED: no bearer token` means its credentials have not been published - run `docker compose run --rm zitadel-init` and it recovers by itself within seconds, no restart. The full report is at `:8081/readyz` on the worker, which names the failing check. |
 | `go mod download` TLS handshake timeout, or `UND_ERR_CONNECT_TIMEOUT` to registry.npmjs.org | The build container has no proxy. Section 9. |
 | npm `E401`/`E403` against an internal registry | Credentials are missing. Section 9, `NPM_CONFIG_FILE`. |
 | `EROFS` / "rofs that don't support symlinks" during install | Something ran `npm config set` while `/root/.npmrc` was a read-only secret mount. Configure via `NPM_CONFIG_*` env instead. |

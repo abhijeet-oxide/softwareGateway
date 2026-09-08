@@ -1,0 +1,17 @@
+# One of the ESTATE resources: the things that belong to the deployment rather
+# than to any one product.
+#
+# THERE IS NO PRODUCT TIER on most of them, and that is the point rather than an
+# omission. A fleet is a fleet; the rulebook is what WILL be checked, which a
+# vendor asking before they ship has no release to point at yet. A caller
+# holding only product roles is refused, because the alternative is handing them
+# the whole estate so they can see their corner of it.
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: default
+  resource: worker
+  importDerivedRoles: [gateway_common]
+  rules:
+    - actions: ["view"]
+      effect: EFFECT_ALLOW
+      derivedRoles: [org_wide_reader]

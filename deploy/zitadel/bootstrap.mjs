@@ -34,6 +34,17 @@ const fs   = await import('node:fs/promises');
 const http = await import('node:http');
 const { createHash } = await import('node:crypto');
 const say = (...a) => console.log('  ' + a.join(' '));
+
+/* Two accounts found for one person, collected while looking them up and
+ * reported together at the end.
+ *
+ * Declared HERE rather than beside findUserId, which is where it belongs and
+ * where it does not work: a function declaration is hoisted and this file
+ * calls findUserId from a section that runs well before that point, while a
+ * const is not hoisted with it. Left there, the first duplicate this ever
+ * found threw a ReferenceError instead of reporting itself - a crash in the
+ * one code path written to explain a confusing situation. */
+const duplicates = [];
 const list = (v, d) => (v ?? d).split(',').map(s => s.trim()).filter(Boolean);
 
 /* A credential, shown well enough to recognise and not well enough to use. */
@@ -629,15 +640,47 @@ for (const p of products) {
      * configuring an issuer. */
     const tenantSeg = /login\.microsoftonline\.com\/([^/]+)/.exec(issuer)?.[1];
     const azure = Boolean(tenantSeg);
+    /* NOBODY IS CREATED BY SIGNING IN.
+     *
+     * This is a closed system: who may use this gateway is decided by an
+     * administrator, in deploy/zitadel/users.json, reviewable in a pull
+     * request. It is not decided by who happens to hold an account at the
+     * identity provider - which, federating a corporate directory, is
+     * everybody who works here.
+     *
+     * With creation ALLOWED, which is what this used to say, an unprovisioned
+     * person signing in through Microsoft got a brand new ZITADEL account with
+     * no roles on it, and - the part that matters - a VALID TOKEN. Every
+     * defence after that point is then working to contain a caller who should
+     * never have been issued a credential at all. Authorization has to hold
+     * that line anyway, and it does; but the line belongs here, at the front
+     * door, where the answer is "we have never heard of you" rather than "you
+     * may do nothing".
+     *
+     * What each flag does, because three of them look interchangeable and are
+     * not:
+     *
+     *   isCreationAllowed  a NEW ZITADEL user may be created from this
+     *                      connector, with the person filling in a form. Off.
+     *   isAutoCreation     the same thing without even the form, done silently
+     *                      on first sign-in. Off. This is the one that was
+     *                      minting the accounts.
+     *   isLinkingAllowed   an external identity may be attached to a user that
+     *                      ALREADY EXISTS. On - this is the whole mechanism by
+     *                      which a provisioned person signs in.
+     *   autoLinking        which field to match them on. The e-mail address:
+     *                      it is what the provider asserts and what the seeder
+     *                      writes, so the person granted the role is the person
+     *                      who arrives.
+     *   isAutoUpdate       keep the linked account's name and address in step
+     *                      with the directory afterwards. On.
+     *
+     * So: provisioned first, then sign in. An unknown address reaches the
+     * identity provider and stops there, with no user created and no token
+     * issued. */
     const options = {
-      isLinkingAllowed: true, isCreationAllowed: true,
-      isAutoCreation: true, isAutoUpdate: true,
-      /* THE ONE THAT MATTERS for a stack whose people are provisioned before
-       * they ever sign in. Without it, signing in through Microsoft creates a
-       * SECOND, brand new user with no roles, and asks them to invent a
-       * username - while the account seeded for them, holding org-admin, sits
-       * beside it untouched. Linking on the e-mail address means the person
-       * who was granted a role is the person who arrives. */
+      isLinkingAllowed: true, isCreationAllowed: false,
+      isAutoCreation: false, isAutoUpdate: true,
       autoLinking: 'AUTO_LINKING_OPTION_EMAIL',
     };
     const shared = {
@@ -776,6 +819,53 @@ for (const p of products) {
     say('    Single-page application. ZITADEL redeems the code server side with');
     say('    a client secret, and Entra requires PKCE for anything registered as');
     say('    an SPA - which is the AADSTS9002325 sign-in failure.');
+  }
+}
+
+/* --- 7a. no connector, anywhere, may create users -------------------------
+ *
+ * Section 7 configures the connector this file MANAGES, which is the one whose
+ * display name matches SSO_DISPLAY_NAME. Any other connector attached to the
+ * sign-in policy is left exactly as it was found - including, on a stack
+ * seeded before this rule existed, with creation switched on.
+ *
+ * That is the same silent hole in a different place: the screen offers it, an
+ * unprovisioned person signs in through it, and ZITADEL makes them an account
+ * with no roles and issues a token. So every attached connector is checked,
+ * not just ours, and one that can still mint accounts is named.
+ *
+ * It is REPORTED rather than corrected. Updating a connector requires the
+ * endpoint for its own type, and guessing that for a connector this file did
+ * not create is how a seeder deletes somebody's working SSO on a Tuesday. The
+ * fix is one line of configuration and it is printed with the finding.
+ */
+{
+  const attached = await api('POST', '/management/v1/policies/login/idps/_search', {});
+  const offenders = [];
+  for (const a of (attached.result || [])) {
+    const d = await api('GET', `/v2/idps/${a.idpId}`);
+    const o = d.idp?.config?.options || {};
+    // Absent means false: protobuf JSON omits default values, so a connector
+    // written with these off comes back with the keys simply missing.
+    if (o.isCreationAllowed || o.isAutoCreation) {
+      offenders.push({ name: a.idpName, id: a.idpId });
+    }
+  }
+  if (offenders.length) {
+    console.log('\n  ' + '-'.repeat(66));
+    console.log('  A SIGN-IN CONNECTOR CAN STILL CREATE ACCOUNTS:');
+    for (const o of offenders) console.log(`    ${o.name}  (${o.id})`);
+    console.log('');
+    console.log('  Anybody at that identity provider can sign in and be given a brand new');
+    console.log('  account with no roles - and a valid token with it. This stack decides who');
+    console.log('  may use it in deploy/zitadel/users.json, not the directory.');
+    console.log('');
+    console.log('  Fix: re-run this container with SSO_DISPLAY_NAME set to the name above,');
+    console.log('  which reconciles that connector, or delete it in the console under');
+    console.log('  Settings, Identity Providers.');
+    console.log('  ' + '-'.repeat(66));
+  } else {
+    say('no connector can create accounts: people are provisioned first, then sign in');
   }
 }
 
@@ -918,31 +1008,51 @@ for (const p of products) {
  */
 /* Find a person by either of the two things they are known by.
  *
- * THE EMAIL LOOKUP IS THE POINT, and it is what makes this file the
- * deployment mechanism for an estate that signs in through Microsoft. A person
- * who arrives through SSO is created by ZITADEL, not by this seeder, and it
- * names them whatever the connector hands over - usually their address. Search
- * by username alone and they are never found: the run reports success, creates
- * a SECOND account for the same human, and grants the roles to the copy nobody
- * signs in as. The symptom is a person looking at their own profile page
- * reading "Tenant roles: none" while `users.json` plainly says otherwise.
+ * THE EMAIL DECIDES, and that ordering is the whole of this function.
  *
- * Username first, because that is the identifier an operator chose. Email
- * second, case-insensitively, because an address is.
+ * A person who signs in through Microsoft is created by ZITADEL, not by this
+ * seeder, and ZITADEL names them whatever the connector hands over - usually
+ * their address, which is almost never the username an operator typed into
+ * .env. So two accounts exist for one human: the one this file made, and the
+ * one they actually sign in as.
+ *
+ * Searching by username first finds the seeder's own account every time, and
+ * grants it the roles. The person then signs in through Microsoft, lands on
+ * the OTHER account, and reads "Tenant roles: none" on their own profile page
+ * while users.json plainly says otherwise - with the roles sitting on an
+ * account they cannot sign in to, because it has no Microsoft identity and
+ * password sign-in is off. That is not a hypothetical: it is what shipped, and
+ * username-first is why the previous attempt at this fixed nothing.
+ *
+ * The address is the durable identity. It is what the identity provider
+ * asserts, it is what ZITADEL's auto-linking keys on, and it is the same
+ * string on both systems. A username is a local artifact of whichever side
+ * created the account first. So email wins, case-insensitively, because an
+ * address is; username is the fallback for accounts that have no address to
+ * match on, which is every machine account.
  */
 async function findUserId(username, email) {
-  if (username) {
-    const r = await api('POST', '/management/v1/users/_search',
-      { queries: [{ userNameQuery: { userName: username } }] });
-    const id = (r.result || [])[0]?.id;
-    if (id) return { id, by: 'username' };
-  }
+  let byEmail = '';
   if (email) {
     const r = await api('POST', '/management/v1/users/_search',
       { queries: [{ emailQuery: { emailAddress: email, method: 'TEXT_QUERY_METHOD_EQUALS_IGNORE_CASE' } }] });
-    const id = (r.result || [])[0]?.id;
-    if (id) return { id, by: 'email' };
+    byEmail = (r.result || [])[0]?.id || '';
   }
+  let byName = '';
+  if (username) {
+    const r = await api('POST', '/management/v1/users/_search',
+      { queries: [{ userNameQuery: { userName: username } }] });
+    byName = (r.result || [])[0]?.id || '';
+  }
+
+  /* BOTH matched, and they are different people as far as ZITADEL is
+   * concerned. Recorded rather than resolved: deleting somebody's account is
+   * not a thing a seeder should decide to do on a re-run. */
+  if (byEmail && byName && byEmail !== byName) {
+    duplicates.push({ username, email, keep: byEmail, leftover: byName });
+  }
+  if (byEmail) return { id: byEmail, by: 'email' };
+  if (byName) return { id: byName, by: 'username' };
   return { id: '', by: '' };
 }
 
@@ -1055,6 +1165,95 @@ console.log(`  console  : ${process.env.ZITADEL_PUBLIC_URL || 'http://localhost:
  * demo ends up on a network. This names each one, once, where it cannot be
  * missed.
  */
+/* --- 10a. people who can sign in and do nothing ---------------------------
+ *
+ * THE SYMPTOM THIS FILE EXISTS TO PREVENT, checked directly rather than
+ * inferred. A human account with no project grant can sign in perfectly well
+ * and holds no permission at all: every screen loads, the profile page says
+ * "Tenant roles: none", and nothing anywhere says why.
+ *
+ * Worth checking on its own because the duplicate detection above cannot see
+ * this case. When the seeded administrator carries the DEFAULT address, the
+ * lookup by address and the lookup by username both land on that same seeded
+ * account - one account, no duplicate to report - while the person's real
+ * account, created by their first sign-in, sits beside it ungranted and
+ * unmentioned.
+ *
+ * Machine accounts are excluded: theirs is a different question, and the ones
+ * this file creates are granted a few lines above.
+ */
+{
+  const all = await api('POST', '/management/v1/users/_search', { query: { limit: 500 } });
+  const humans = (all.result || []).filter(u => u.human);
+  const granted = new Set();
+  const gr = await api('POST', '/management/v1/users/grants/_search', { query: { limit: 1000 } });
+  for (const g of (gr.result || [])) granted.add(g.userId);
+
+  /* Somebody who administers the DIRECTORY is not a person who can sign in
+   * and do nothing - they can do rather a lot. ZITADEL's own break-glass
+   * account holds an instance membership and no project grant by design, so
+   * without this the banner opens by reporting the one account that is
+   * supposed to look like that, every single run. A warning that is wrong on
+   * its first line is a warning people learn to skip. */
+  for (const path of ['/management/v1/orgs/me/members/_search', '/admin/v1/members/_search']) {
+    const m = await api('POST', path, { query: { limit: 500 } });
+    for (const x of (m.result || [])) granted.add(x.userId);
+  }
+
+  const ungranted = humans.filter(u => !granted.has(u.id));
+  if (ungranted.length) {
+    console.log('\n  ' + '-'.repeat(66));
+    console.log('  THESE PEOPLE CAN SIGN IN AND HOLD NO ROLES:');
+    for (const u of ungranted.slice(0, 20)) {
+      console.log(`    ${u.userName}   ${u.human?.email?.email || '(no address)'}`);
+    }
+    if (ungranted.length > 20) console.log(`    ... and ${ungranted.length - 20} more`);
+    console.log('');
+    console.log('  Their screens will load and every permission will be denied. Usually');
+    console.log('  this is an account the identity provider created at somebody\'s first');
+    console.log('  sign-in, which this file has never been told about.');
+    console.log('');
+    console.log('  Fix: add each of them to deploy/zitadel/users.json WITH THE ADDRESS');
+    console.log('  THEY SIGN IN WITH - that address is what matches them to the account');
+    console.log('  that already exists - then re-run this container. For the');
+    console.log('  administrator, BOOTSTRAP_ADMIN_EMAIL is the same thing.');
+    console.log('  ' + '-'.repeat(66));
+  }
+}
+
+/* --- 10b. two accounts for one person -------------------------------------
+ *
+ * Said here, at the end, in full, because it explains a symptom that otherwise
+ * reads as the product being broken: signing in and finding no roles at all,
+ * on a stack whose configuration plainly grants them.
+ *
+ * ZITADEL keeps its directory in the database, and `docker compose down` keeps
+ * volumes - only `down -v` discards them. So an account created by an earlier
+ * sign-in survives every rebuild, and a duplicate made once is there until
+ * somebody removes it.
+ */
+if (duplicates.length) {
+  console.log('\n  ' + '-'.repeat(66));
+  console.log('  TWO ACCOUNTS FOR THE SAME PERSON:');
+  for (const d of duplicates) {
+    console.log(`    ${d.email}`);
+    console.log(`      roles granted to the account holding that address  (${d.keep})`);
+    console.log(`      a second account named '${d.username}' also exists (${d.leftover})`);
+  }
+  console.log('');
+  console.log('  This is what a sign-in through the identity provider leaves behind when');
+  console.log('  the account seeded for that person carried a different address: ZITADEL');
+  console.log('  matches on the address, finds nothing, and creates one. The roles are on');
+  console.log('  the account that signs in, so nobody is locked out.');
+  console.log('');
+  console.log('  The leftover cannot sign in - it has no identity at the provider, and');
+  console.log('  password sign-in is off - so it is safe to delete, and this file will not');
+  console.log('  do it for you. In the console: Users, open it, Delete. Or re-create the');
+  console.log('  stack from empty with `docker compose down -v`, which discards the');
+  console.log('  database and every account in it.');
+  console.log('  ' + '-'.repeat(66));
+}
+
 {
   const todo = [];
   if (process.env.STACK_POSTGRES_PASSWORD_SET !== 'yes')

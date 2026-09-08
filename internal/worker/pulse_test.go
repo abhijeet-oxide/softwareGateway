@@ -84,3 +84,76 @@ func TestTheDeadlineFollowsTheChosenWait(t *testing.T) {
 		t.Fatalf("long wait wedged: %v", err)
 	}
 }
+
+// TestAnUnregisteredWorkerIsNotReady is the regression this file exists to
+// hold. It is the exact condition that shipped: authentication on, no
+// credential to present, every lease refused five seconds apart, and two
+// containers reporting themselves healthy over a deployment that had never
+// worked.
+func TestAnUnregisteredWorkerIsNotReady(t *testing.T) {
+	l := &Loop{}
+	l.pulse.sleeping(DefaultLeaseRetry)
+	l.pulse.leased(errors.New("UNAUTHENTICATED: no bearer token"))
+
+	ok, _, detail := l.Registered()
+	if ok {
+		t.Fatal("a worker the Coordinator refuses reported itself registered")
+	}
+	// The refusal has to survive into the probe's own words, because that is
+	// where somebody reads it.
+	if !strings.Contains(detail, "no bearer token") {
+		t.Errorf("the reason was dropped on the way to the probe: %q", detail)
+	}
+
+	// And it must NOT be a wedge: a refused worker is ticking correctly and
+	// restarting it fixes nothing.
+	if err := l.Wedged(); err != nil {
+		t.Errorf("a refused worker was reported as wedged, which would restart it: %v", err)
+	}
+}
+
+// A worker that has not yet asked is not registered. Compose gives it a start
+// period to get there; what it must not do is claim the fleet is complete
+// while it is still on its way.
+func TestAWorkerThatHasNotAskedYetIsNotRegistered(t *testing.T) {
+	l := &Loop{}
+	if ok, _, detail := l.Registered(); ok {
+		t.Fatalf("registered before asking anybody: %q", detail)
+	}
+}
+
+// An idle queue is a healthy worker. Being handed no work is the Coordinator
+// accepting the request and answering it, which is the whole test.
+func TestAnIdleWorkerIsRegistered(t *testing.T) {
+	l := &Loop{}
+	l.pulse.sleeping(DefaultLeaseRetry)
+	l.pulse.leased(nil)
+
+	ok, at, detail := l.Registered()
+	if !ok {
+		t.Fatalf("an accepted lease did not count as registration: %q", detail)
+	}
+	if at.IsZero() {
+		t.Error("no time recorded for the accepted lease")
+	}
+}
+
+// The second half of the gate. Without a staleness bound, a lease loop that
+// stopped calling altogether would leave the last success recorded as good
+// forever - the same false green in a different shape, and one that liveness
+// alone does not cover because compose does not act on liveness.
+func TestARegistrationGoesStale(t *testing.T) {
+	l := &Loop{}
+	l.pulse.sleeping(DefaultLeaseRetry)
+	l.pulse.leased(nil)
+	// Wound back past the bound rather than waited out.
+	l.pulse.leaseAt.Store(time.Now().Add(-RegistrationStale - time.Second).UnixNano())
+
+	ok, _, detail := l.Registered()
+	if ok {
+		t.Fatal("a worker that stopped asking still reported itself registered")
+	}
+	if !strings.Contains(detail, "stopped asking") {
+		t.Errorf("the report does not say what happened: %q", detail)
+	}
+}

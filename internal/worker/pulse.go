@@ -100,11 +100,8 @@ func (l *Loop) Wedged() error {
 
 // LeaseHealth reports what happened on the last attempt to lease work.
 //
-// A DIAGNOSTIC, deliberately not readiness. A worker that cannot lease is
-// still correctly running the jobs it already holds, and the two most common
-// reasons it cannot - a Coordinator restarting, and a Coordinator refusing
-// this worker's credentials - are neither of them fixed by anything that
-// happens to this container.
+// The raw signal. Registered is the judgement built on it, and is what the
+// readiness probe asks.
 func (l *Loop) LeaseHealth() (ok bool, at time.Time, detail string) {
 	nanos := l.pulse.leaseAt.Load()
 	if nanos == 0 {
@@ -118,4 +115,65 @@ func (l *Loop) LeaseHealth() (ok bool, at time.Time, detail string) {
 		return false, at, *msg
 	}
 	return false, at, "the last lease did not succeed"
+}
+
+// RegistrationStale is how long this worker may go without a lease call being
+// ACCEPTED before it stops claiming to be registered.
+//
+// Twelve times the idle cadence. Long enough that a Coordinator rolling a
+// replica does not flip the whole fleet on a blip; short enough that a
+// deployment which never worked says so while somebody is still watching it
+// come up.
+const RegistrationStale = 12 * DefaultLeaseRetry
+
+// Registered reports whether the Coordinator is currently accepting this
+// worker: it has been reached, it has authenticated, and its lease call was
+// served.
+//
+// # This gates READINESS, and that is a reversal
+//
+// It used to be a diagnostic, on the reasoning that a worker which cannot
+// lease is still correctly running the jobs it already holds, and that neither
+// of the usual causes - a Coordinator restarting, a Coordinator refusing this
+// worker's credentials - is fixed by anything that happens to this container.
+// Every clause of that is true and the conclusion was still wrong, because it
+// answered the wrong question.
+//
+// What it cost: with authentication switched on and no credentials to present,
+// two workers sat refused on every single lease, five seconds apart, for as
+// long as anybody left them running - and reported themselves HEALTHY the
+// whole time, because the process was up, the control plane was reachable and
+// the product configuration had loaded. `podman ps` showed a green fleet and a
+// deployment that had never worked. A probe whose green means "this container
+// started" and not "this container is doing its job" is worse than no probe:
+// it is a wrong answer where somebody expects a right one, and it is the first
+// place they look.
+//
+// Why it is safe HERE specifically: a worker serves no traffic. Readiness in
+// Kubernetes removes a pod from the endpoints of a Service, and this component
+// is behind no Service, so being unready costs it nothing and is purely a
+// statement of fact. It is also emphatically NOT liveness - a refused worker
+// must not be restarted, because restarting it fixes none of the causes above
+// and would turn a bad credential into a crash loop. Liveness stays what it
+// was: is this process's own loop still going round.
+//
+// The staleness bound is the second half. Without it a lease loop that stopped
+// calling altogether would leave the last success recorded as good forever,
+// which is the same false green in a different shape.
+func (l *Loop) Registered() (ok bool, at time.Time, detail string) {
+	ok, at, detail = l.LeaseHealth()
+	if at.IsZero() {
+		return false, at, "has not yet been accepted by the Coordinator"
+	}
+	if !ok {
+		return false, at, fmt.Sprintf("the Coordinator is not accepting this worker: %s (last attempt %s ago)",
+			detail, time.Since(at).Round(time.Second))
+	}
+	if since := time.Since(at); since > RegistrationStale {
+		return false, at, fmt.Sprintf(
+			"the last accepted lease was %s ago, more than %s: this worker has stopped asking for work",
+			since.Round(time.Second), RegistrationStale)
+	}
+	return true, at, fmt.Sprintf("registered; the Coordinator accepted this worker %s ago",
+		time.Since(at).Round(time.Second))
 }

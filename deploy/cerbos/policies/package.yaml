@@ -1,0 +1,17 @@
+# A release, and the artifacts and files inside it.
+#
+# `inspect` is separated from `view` because it is not a read: expanding a
+# package pulls manifests and blobs from a vendor registry, writes them, and
+# measures them. It costs the vendor bandwidth and it changes what is stored.
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: default
+  resource: package
+  importDerivedRoles: [gateway_common]
+  rules:
+    - actions: ["view"]
+      effect: EFFECT_ALLOW
+      derivedRoles: [org_wide_reader, product_reader]
+    - actions: ["inspect"]
+      effect: EFFECT_ALLOW
+      derivedRoles: [org_wide_operator, product_operator]

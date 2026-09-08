@@ -142,7 +142,7 @@ function ActivityPill({ moving, held, failing, hint }: {
 export function Shell({ children }: { children: ReactNode }) {
   const location = useLocation()
   const navigate = useNavigate()
-  const { who } = useIdentity()
+  const { who, can } = useIdentity()
 
   const [collapsed, setCollapsed] = useState(loadCollapsed)
   const version = useVersion()
@@ -281,12 +281,23 @@ export function Shell({ children }: { children: ReactNode }) {
           title={section}
           right={
             <>
-              <ActivityPill
-                moving={moving}
-                held={held}
-                failing={failing}
-                hint={describeFleet(fleet)}
-              />
+              {/*
+                Absent, not zeroed, for a caller who may not read.
+                The settled state is deliberately STATED rather than left blank
+                - see ActivityPill - and that reasoning holds only when the
+                counts are known. A reader who is refused the estate has counts
+                of zero because nothing answered, and the bar then told them
+                "Downloads completed": a confident claim about work they cannot
+                see, on every page, made from no data at all.
+              */}
+              {can('read') && (
+                <ActivityPill
+                  moving={moving}
+                  held={held}
+                  failing={failing}
+                  hint={describeFleet(fleet)}
+                />
+              )}
               {/*
                 Light and dark, in the one place a person looks for it. The
                 control comes from the shared kit, so both tools put the same

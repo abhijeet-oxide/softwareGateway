@@ -1,0 +1,17 @@
+# Whether a release meets the organization's own standards.
+#
+# Reading a verdict is a read even though producing one is expensive: a run
+# renders charts and reaches a registry, so it sits with the operator tier
+# beside discovery.
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: default
+  resource: compliance_report
+  importDerivedRoles: [gateway_common]
+  rules:
+    - actions: ["view", "export"]
+      effect: EFFECT_ALLOW
+      derivedRoles: [org_wide_reader, product_reader]
+    - actions: ["run", "cancel"]
+      effect: EFFECT_ALLOW
+      derivedRoles: [org_wide_operator, product_operator]

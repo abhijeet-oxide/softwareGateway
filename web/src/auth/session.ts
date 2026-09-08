@@ -202,13 +202,8 @@ let configPromise: Promise<AuthConfig | null> | undefined
 export function authConfig(): Promise<AuthConfig | null> {
   configPromise ??= (async () => {
     try {
-      const response = await fetch('/runtime-config.json', {
-        headers: { Accept: 'application/json' },
-        cache: 'no-store',
-      })
-      if (!response.ok) return null
-      const doc = (await response.json()) as { oidc?: Partial<AuthConfig> }
-      const oidc = doc.oidc
+      const doc = await runtimeConfig()
+      const oidc = doc?.oidc
       if (!oidc?.issuer || !oidc.clientId) return null
       return {
         issuer: oidc.issuer.replace(/\/$/, ''),
@@ -223,6 +218,48 @@ export function authConfig(): Promise<AuthConfig | null> {
     }
   })()
   return configPromise
+}
+
+/** The whole published document, fetched once. */
+interface RuntimeConfig {
+  oidc?: Partial<AuthConfig>
+  support?: { contact?: string }
+}
+
+let runtimePromise: Promise<RuntimeConfig | null> | undefined
+
+/**
+ * The deployment's own runtime document, read once and shared.
+ *
+ * One fetch rather than one per reader: it is a static file on this origin and
+ * the answer does not change while a tab is open.
+ */
+function runtimeConfig(): Promise<RuntimeConfig | null> {
+  runtimePromise ??= (async () => {
+    try {
+      const response = await fetch('/runtime-config.json', {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      })
+      if (!response.ok) return null
+      return (await response.json()) as RuntimeConfig
+    } catch {
+      return null
+    }
+  })()
+  return runtimePromise
+}
+
+/**
+ * Where to ask for access, when this deployment has said where.
+ *
+ * Empty is a real answer and the screen respects it: a refusal that invents a
+ * route sends somebody to a mailbox nobody reads, which is worse than naming
+ * none. See SUPPORT_CONTACT in the compose file.
+ */
+export async function supportContact(): Promise<string> {
+  const doc = await runtimeConfig()
+  return doc?.support?.contact?.trim() || ''
 }
 
 let endpointsPromise: Promise<Endpoints | null> | undefined

@@ -120,6 +120,23 @@ func roleFor(action Action) Role {
 	}
 }
 
+// CanAny reports whether the identity holds an action in ANY scope.
+//
+// The question a self-filtering listing asks. "May you list products" is not
+// answerable as "may you act on the estate" - a caller granted one product
+// cannot answer that and must still see their one product - so the route asks
+// this and the handler narrows the ANSWER to what they may see. The narrowing
+// is what makes this safe, and it lives in the handler where the data is; see
+// Requirement.AnyScope.
+func (i Identity) CanAny(action Action) bool {
+	for _, g := range i.Grants {
+		if g.Action == action {
+			return true
+		}
+	}
+	return i.HasRole(roleFor(action))
+}
+
 // VisibleProducts is the product names this identity may see, for the store
 // filters that take one.
 //

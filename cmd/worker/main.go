@@ -274,16 +274,24 @@ func run() error {
 	hreg.AddLiveness("process", func() error { return nil })
 	hreg.AddLiveness("lease-loop", loop.Wedged)
 
-	// ---- readiness: are this worker's own preconditions met? ----
+	// ---- readiness: is this worker actually part of the fleet? ----
 	//
-	// Deliberately NOT "can it lease". Whether the Coordinator hands this
-	// worker any work depends on the queue, on the Coordinator's own health
-	// and on whether it accepts this worker's credentials, and none of those
-	// is a property of this container that a restart or a deregistration would
-	// improve. What readiness answers here is the narrower question this
-	// process can answer honestly: is the control plane reachable, and is
-	// there any configuration to work against. Leasing itself is reported
-	// below as a diagnostic.
+	// READY MEANS REGISTERED. Not "the process started", not "the Coordinator
+	// answers a probe" - the Coordinator has accepted this worker's lease call,
+	// so it is reachable, this worker is authenticated, and it is in the fleet.
+	//
+	// The narrower reading cost a deployment. With authentication on and no
+	// credentials to present, two workers were refused on every lease, five
+	// seconds apart, indefinitely - and reported HEALTHY throughout, because
+	// the process was up, the control plane was reachable and the products had
+	// loaded. `podman ps` showed a green fleet over a deployment that had never
+	// worked once. Green must mean the container is doing its job, because
+	// that is what it will be read as.
+	//
+	// The checks are ordered as a diagnosis: can it reach the Coordinator at
+	// all, has it work it could execute, and is it being accepted. They run
+	// together, so the report names every failing one and the first is the
+	// cause rather than the symptom.
 	hreg.AddReadiness("control-plane", func(ctx context.Context) health.Result {
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
@@ -321,21 +329,17 @@ func run() error {
 		return health.OK(fmt.Sprintf("%d product(s) loaded", products.Count()))
 	})
 
-	// ---- diagnostics: what happened last time this worker asked for work ----
-	//
-	// Not readiness, on purpose. A worker that cannot lease is still running
-	// the jobs it already holds, and the two commonest reasons it cannot - a
-	// Coordinator restarting, and a Coordinator refusing this worker's
-	// credentials - are neither of them fixed by taking this container out of
-	// anything. It is here so that "no work is moving" has an answer that
-	// names the cause.
 	// ---- diagnostics: can this worker prove who it is at all ----
 	//
-	// Beside leasing rather than inside it, because they fail differently and
-	// the difference is the whole diagnosis. A Coordinator that is refusing
+	// Beside registration rather than inside it, because they fail differently
+	// and the difference is the whole diagnosis. A Coordinator that is refusing
 	// this worker and an identity provider that will not issue it a token look
 	// identical from the lease loop - "could not lease work" - and have nothing
 	// in common to do about them.
+	//
+	// A diagnostic and not a gate: registration below is the gate, and it
+	// already fails when this does. Two checks reporting the same outage would
+	// only make the report say it twice.
 	if tokens != nil {
 		hreg.AddDeep("credentials", func(context.Context) health.Result {
 			ok, detail := tokens.Health()
@@ -346,16 +350,24 @@ func run() error {
 		})
 	}
 
-	hreg.AddDeep("leasing", func(context.Context) health.Result {
-		ok, at, detail := loop.LeaseHealth()
+	// ---- readiness: the Coordinator is accepting this worker ----
+	//
+	// The check the two above exist to lead up to, and the one that makes a
+	// green container mean a working one. See Loop.Registered for why this
+	// gates readiness rather than sitting in the diagnostics, and for why that
+	// is safe for a component that serves no traffic and dangerous only if it
+	// were confused with liveness.
+	//
+	// DOWN rather than DEGRADED, and the distinction is the whole point: a
+	// degraded report answers the probe 200, so the container is still green in
+	// `docker ps` and `podman ps`. A worker the Coordinator will not accept is
+	// not a degraded worker. It is a worker doing nothing.
+	hreg.AddReadiness("registration", func(context.Context) health.Result {
+		ok, _, detail := loop.Registered()
 		if ok {
-			return health.OK(detail + " (last succeeded " + time.Since(at).Round(time.Second).String() + " ago)")
+			return health.OK(detail)
 		}
-		if at.IsZero() {
-			return health.Degraded(detail)
-		}
-		return health.Degraded(fmt.Sprintf("last attempt %s ago: %s",
-			time.Since(at).Round(time.Second), detail))
+		return health.Down(errors.New(detail))
 	})
 
 	mux := http.NewServeMux()

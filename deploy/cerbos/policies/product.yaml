@@ -12,3 +12,8 @@ resourcePolicy:
     - actions: ["discover"]
       effect: EFFECT_ALLOW
       derivedRoles: [org_wide_operator, product_operator]
+    # Measuring a path and probing a registry both make real outbound calls
+    # against a vendor, so they sit with discovery rather than with reading.
+    - actions: ["calibrate", "check_connectivity"]
+      effect: EFFECT_ALLOW
+      derivedRoles: [org_wide_operator, product_operator]

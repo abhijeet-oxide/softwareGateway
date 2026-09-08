@@ -1,9 +1,12 @@
-import { Suspense } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import {
   Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams,
 } from 'react-router-dom'
 import { Shell } from './Shell'
-import { NotFoundPage, PageTransition } from './uikit'
+import brand from './brand'
+import { useIdentity } from './auth/permissions'
+import { identityClaims, signOut, supportContact } from './auth/session'
+import { c, mono, NotFoundPage, PageTransition, StatusScreen } from './uikit'
 import {
   lazyRoute, PageLoading, RouteErrorBoundary, usePreloadRoutes, type RouteModule,
 } from './routing'
@@ -109,9 +112,92 @@ function NotFound() {
   )
 }
 
+/**
+ * Signed in, and not permitted to be here.
+ *
+ * A FULL SCREEN with no navigation, deliberately. The first version of this
+ * rendered inside the application frame, so a person who may open nothing was
+ * shown nine things to open, none of which would answer. Chrome that leads
+ * nowhere is not reassurance, it is a maze.
+ *
+ * It says one thing, in the register of a door rather than a diagnosis. The
+ * first version explained roles, identity providers and sign-in tokens, which
+ * are this system's internals and none of the reader's business: they are a
+ * professional who has been told no, and what they need is the fact, the
+ * account it applies to, and who to ask. Everything else belongs in a log.
+ */
+function NoAccess() {
+  const { who } = useIdentity()
+  const claims = identityClaims()
+  const [contact, setContact] = useState('')
+
+  useEffect(() => {
+    let live = true
+    void supportContact().then((c) => { if (live) setContact(c) })
+    return () => { live = false }
+  }, [])
+
+  const account = who?.email || claims.email || claims.preferredUsername || who?.subject
+
+  return (
+    <StatusScreen
+      brand={brand}
+      title="This account is not enabled"
+      actions={[{ label: 'Sign out', primary: true, onClick: () => void signOut() }]}
+      note={<AccessRoute contact={contact} />}
+    >
+      <>
+        <div>Access is granted by an administrator, and has not been granted for this account.</div>
+        {/* On its own line, quietly. It is the one fact an administrator needs
+            in order to do anything about this, and set inside the sentence it
+            read as prose and broke across the wrap. */}
+        {account && (
+          <div style={{
+            marginTop: 12,
+            fontFamily: mono,
+            fontSize: 12.5,
+            color: c.text3,
+            wordBreak: 'break-all',
+          }}>
+            {account}
+          </div>
+        )}
+      </>
+    </StatusScreen>
+  )
+}
+
+/**
+ * Who to ask, when the deployment has said.
+ *
+ * A configured contact is rendered as something clickable, because an address
+ * somebody has to retype is an address somebody mistypes. With none configured
+ * the sentence still completes and simply names no route: inventing one sends
+ * people to a mailbox nobody reads.
+ */
+function AccessRoute({ contact }: { contact: string }) {
+  if (!contact) return <>Request access from an administrator.</>
+  const href = /^https?:\/\//i.test(contact) ? contact : `mailto:${contact}`
+  return (
+    <>
+      Request access from <a href={href}>{contact}</a>.
+    </>
+  )
+}
+
 export function App() {
   const { pathname } = useLocation()
+  const { who } = useIdentity()
   usePreloadRoutes(ROUTES)
+
+  /*
+    Gated on AUTHENTICATED, not on the permission list alone. A deployment with
+    authentication switched off reports `authenticated: false` and permissions
+    of `["*"]`, and one that is still fetching reports nothing at all; neither
+    is a person who has been granted nothing, and showing this page to either
+    would be the application inventing a problem.
+  */
+  const noAccess = Boolean(who?.authenticated && (who.permissions ?? []).length === 0)
 
   /*
     ONE KEY, doing two jobs.
@@ -137,6 +223,19 @@ export function App() {
     eventually animate one thing while remounting another.
   */
   const page = pathname.split('/').slice(0, 3).join('/')
+
+  /*
+    BEFORE the router, not inside it.
+
+    Adding a `path="*"` route to the table below does nothing: React Router
+    ranks routes by how specific they are rather than taking the first that
+    matches, so every real page still won and the gate only appeared on an
+    address that already 404ed. Returning early has no such subtlety, and it
+    is also what takes the navigation off the screen.
+  */
+  if (noAccess) {
+    return <NoAccess />
+  }
 
   return (
     <Shell>

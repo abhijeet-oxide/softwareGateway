@@ -52,6 +52,24 @@ func (s *Server) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// THE PRODUCT WAS IN THE BODY, so this is where the permission can finally
+	// be asked about the thing being acted on.
+	//
+	// The gate in front of this route could only ask whether the caller may
+	// operate on ANYTHING, because a middleware cannot read a request body
+	// without consuming it. That is deliberately the weaker question, asked so
+	// a caller scoped to one product can request the one thing this system is
+	// for; it is completed here, and skipping this would let that caller start
+	// a transfer on any product in the estate.
+	id := middleware.IdentityFrom(r.Context())
+	if !id.Can(middleware.ActionOperate, middleware.Scope{Tenant: id.Tenant, Product: req.Product}) {
+		Error(w, r, v1.CodePermissionDenied,
+			middleware.Refusal(id, middleware.Requirement{
+				Action: middleware.ActionOperate, Product: req.Product,
+			}))
+		return
+	}
+
 	// The package is resolved HERE so a bad reference fails as NOT_FOUND
 	// naming what was looked for, rather than as a resolution error from
 	// deeper down that names a row ID nobody typed.

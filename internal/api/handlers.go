@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/abhijeet-oxide/softwareGateway/internal/api/middleware"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/health"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/version"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
@@ -173,6 +174,30 @@ func (s *Server) handleListProducts(w http.ResponseWriter, r *http.Request) {
 	// is re-sorted: a product's position must not depend on whether its
 	// document happens to parse today.
 	sort.Slice(out, func(i, j int) bool { return out[i].ProductID < out[j].ProductID })
+
+	// WHAT THIS CALLER MAY SEE, decided here and not negotiable from outside.
+	//
+	// The route is reachable by anybody holding read on ANY product, because a
+	// caller granted one product must still be able to list it - "may you act
+	// on the estate" is a question they cannot answer and the wrong one to ask.
+	// That wider door is only safe because of this narrowing, so the two are
+	// one change: see middleware.Requirement.AnyScope.
+	//
+	// Empty means unrestricted, which is what a tenant-wide role and an
+	// unauthenticated deployment both produce.
+	if visible := middleware.IdentityFrom(r.Context()).VisibleProducts(); len(visible) > 0 {
+		allowed := make(map[string]bool, len(visible))
+		for _, name := range visible {
+			allowed[name] = true
+		}
+		kept := out[:0]
+		for _, p := range out {
+			if allowed[p.ProductID] {
+				kept = append(kept, p)
+			}
+		}
+		out = kept
+	}
 
 	// Pagination is a no-op at this scale (products number in the tens) but
 	// the field is present from the start so adding it later is not a breaking

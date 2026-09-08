@@ -335,6 +335,19 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
     if (r.__status >= 400) { console.error(`FATAL: could not offer '${name}' on the sign-in screen:`, JSON.stringify(r)); process.exit(1); }
     say(`  '${name}' offered on the sign-in screen`);
   } else say(`  '${name}' already offered on the sign-in screen`);
+
+  /* The one value the identity provider needs and this container cannot set
+   * for it. Printed every run, because the alternative is finding it in
+   * ZITADEL's documentation while looking at an error that does not mention
+   * it: a redirect URI that is not registered fails LATE, after a person has
+   * typed their password, and the message comes back from the identity
+   * provider in its own vocabulary. */
+  const zitadelURL = process.env.ZITADEL_PUBLIC_URL || 'http://localhost:8090';
+  say(`  register this redirect URI at '${name}': ${zitadelURL}/idps/callback`);
+  say('    Microsoft Entra: register it under the WEB platform, not');
+  say('    Single-page application. ZITADEL redeems the code server side with');
+  say('    a client secret, and Entra requires PKCE for anything registered as');
+  say('    an SPA - which is the AADSTS9002325 sign-in failure.');
 } else {
   say('SSO not configured - username/password login is active');
 }

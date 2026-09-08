@@ -70,6 +70,47 @@ docker compose down            # stop; databases kept
 docker compose down -v         # stop and discard all data
 ```
 
+## Microsoft Entra: registering the app
+
+ZITADEL needs one redirect URI registered in the Entra app registration, and it
+is not any of the URLs a browser shows during a failed sign-in:
+
+```
+http://localhost:8090/idps/callback
+```
+
+That is `${ZITADEL_PUBLIC_URL}/idps/callback`. The seeder prints it on every
+run. It must match exactly, including scheme, host and port. Entra requires
+`https` for a redirect URI on anything other than `localhost`, so a deployment
+reachable by name needs TLS in front of ZITADEL before SSO will work at all.
+
+**Register it under the "Web" platform, not "Single-page application".** In the
+Azure portal: App registrations, the app, Authentication, "Add a platform",
+"Web".
+
+Getting that wrong is the most likely way for sign-in to fail after the
+password has already been typed:
+
+```
+http://localhost:8090/ui/v2/login/idp/oidc/failure?error=invalid_request
+  &error_description=AADSTS9002325: Proof Key for Code Exchange is required
+  for cross-origin authorization code redemption.
+```
+
+Entra treats a redirect URI registered as a single-page application as
+belonging to a public client, whose token endpoint is CORS-enabled and requires
+PKCE. ZITADEL is not that: it redeems the authorization code from its own
+backend, using the client secret, which in Entra's model is a confidential
+client and therefore the Web platform. Nothing on this side can be configured
+around it - the registration is what has to change.
+
+The rest of the app registration:
+
+- a client secret (Certificates and secrets), copied into `SSO_CLIENT_SECRET`
+- `SSO_CLIENT_ID` is the Application (client) ID
+- `SSO_ISSUER` is `https://login.microsoftonline.com/<tenant-id>/v2.0`
+- API permissions: `openid`, `profile`, `email` (delegated) are enough
+
 ## Podman: `archive/tar: write too long`
 
 ```

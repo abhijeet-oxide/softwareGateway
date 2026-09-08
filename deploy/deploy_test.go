@@ -3,7 +3,11 @@
 package deploy
 
 import (
+	"bytes"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -39,6 +43,69 @@ func TestBuildSecretDefaultsAreEmpty(t *testing.T) {
 			t.Errorf("%s is %d bytes and must be 0. Anything to say about it belongs in "+
 				"the README beside it: a non-empty default breaks every podman build on "+
 				"Windows. See this test's comment.", path, info.Size())
+		}
+	}
+}
+
+// TestScriptsAreLFAndExecutable guards the other fact that breaks every build
+// on Windows and names the wrong thing when it does.
+//
+// A shell script checked out with CRLF has a shebang ending `#!/bin/sh\r`. The
+// kernel takes that literally, looks for a program named `/bin/sh\r`, does not
+// find one, and reports:
+//
+//	exec /docker-entrypoint.sh: no such file or directory
+//
+// The script is present and readable. What is missing is the interpreter, and
+// nothing in that message says so - which is why this is worth a test rather
+// than a paragraph somebody reads afterwards.
+//
+// .gitattributes prevents it at checkout and the Dockerfiles strip it at build,
+// so this is the third line of defence: it catches a file committed with CRLF
+// by an editor that ignored both, before it reaches an image.
+func TestScriptsAreLFAndExecutable(t *testing.T) {
+	// Every shell script this repository ships, wherever it lives. Kept as a
+	// walk rather than a list so a script added tomorrow is covered without
+	// anybody remembering this file exists.
+	root := ".."
+	var scripts []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "dist", "bin":
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".sh") {
+			scripts = append(scripts, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if len(scripts) == 0 {
+		t.Fatal("found no shell scripts to check, which means this test is not testing anything")
+	}
+
+	for _, path := range scripts {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("%s: %v", path, err)
+			continue
+		}
+		if bytes.Contains(body, []byte("\r\n")) {
+			t.Errorf("%s has CRLF line endings. A container will fail to start with "+
+				"\"exec %s: no such file or directory\", which names the script and means "+
+				"the interpreter. Fix: git add --renormalize . (see .gitattributes)",
+				path, filepath.Base(path))
+		}
+		if !bytes.HasPrefix(body, []byte("#!")) {
+			t.Errorf("%s has no shebang, so how it runs depends on who invokes it", path)
 		}
 	}
 }

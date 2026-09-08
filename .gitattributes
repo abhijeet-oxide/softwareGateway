@@ -1,0 +1,59 @@
+# Line endings are decided HERE, once, for every clone.
+#
+# Git for Windows installs with core.autocrlf=true, which rewrites every text
+# file to CRLF on checkout. For a repository whose artifacts are Linux
+# containers that is not a cosmetic difference, and the way it fails is
+# genuinely hard to read:
+#
+#	exec /docker-entrypoint.sh: no such file or directory
+#
+# The script is right there. What is missing is the INTERPRETER. A shebang line
+# ending `#!/bin/sh\r` asks the kernel for a program literally named `/bin/sh\r`,
+# there is no such file, and the error names the script rather than the thing it
+# could not find. A bind-mounted script fails differently and no more clearly:
+# every line ends in a carriage return, so `set -eu` becomes an illegal option
+# and `nginx` becomes a command not found.
+#
+# `eol=lf` beats autocrlf: it is a per-path instruction that a client setting
+# cannot override, so a Windows checkout of this repository gets LF whatever the
+# machine is configured to do, and an editor that writes CRLF is normalised on
+# commit.
+#
+# AFTER PULLING THIS FILE INTO AN EXISTING CLONE the working tree is still
+# whatever it was checked out as. One command fixes it:
+#
+#	git add --renormalize . && git status
+#
+# The build no longer depends on this being right - Dockerfiles strip carriage
+# returns from anything they copy, and the bind-mounted entrypoints are stripped
+# at container start - but the repository should be correct at rest as well as
+# survivable.
+
+* text=auto eol=lf
+
+# Spelled out for the ones that are executed rather than read. Nothing here
+# behaves differently to the rule above; they are listed so that a change to
+# that line cannot silently take these with it.
+*.sh      text eol=lf
+*.mjs     text eol=lf
+*.bash    text eol=lf
+Dockerfile*  text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.conf    text eol=lf
+*.sql     text eol=lf
+
+# NEVER touched. A file Git guesses wrong about and "normalises" is a corrupt
+# file, and the guess is made per blob rather than per extension.
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.pdf     binary
+*.woff    binary
+*.woff2   binary
+*.ttf     binary
+*.zip     binary
+*.gz      binary
+*.tgz     binary

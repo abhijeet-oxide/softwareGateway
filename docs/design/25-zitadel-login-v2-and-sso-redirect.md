@@ -243,10 +243,11 @@ then `docker compose up -d`), driven through a real browser:
   need a machine identity (ZITADEL client credentials, which the seeder
   already issues for its `apiUsers`) the way a person needs a browser flow.
   This is the next piece of the same work.
-- **`/worker --health-check` does not exist.** The compose healthcheck invokes
-  a flag `cmd/worker` never defined, so every worker is permanently unhealthy
-  and `docker compose up -d --wait` fails on a stack that is otherwise
-  entirely up. The flag belongs on the binary, next to the Coordinator's.
+- ~~`/worker --health-check` does not exist.~~ **Wrong, and corrected here:**
+  the flag has been on the binary since `f9ee873`. The workers seen failing
+  were running an image built before that commit, so this was a stale image
+  and not a missing flag. The probe work in [09](09-api.md) §9.1 went over the
+  whole probe surface afterwards.
 - **The seeder logs "tenant 'default' created" on a fresh stack when it did
   not create one.** ZITADEL's org projection has not caught up when the seeder
   first searches, so the search misses, the create fails on the duplicate name,

@@ -190,7 +190,8 @@ Schedules are created through `POST /transfers` with `scheduleAt` - one creation
 | `GET` | `/api/v1/system:healthCheck` | Deep dependency check ([13](13-cli.md)) |
 | `GET` | `/api/v1/system/version` | Build info |
 | `GET` | `/healthz` | Liveness - **process-local only** |
-| `GET` | `/readyz` | Readiness - DB + config |
+| `GET` | `/livez` | Liveness, under Kubernetes' own spelling. The same probe |
+| `GET` | `/readyz` | Readiness - database, schema version, config |
 | `GET` | `/metrics` | Prometheus |
 
 ## 3. Listing
@@ -498,15 +499,142 @@ RFC 9457 `application/problem+json`:
 
 ### 9.1 Probes
 
-| Endpoint | Checks | Purpose |
+Three tiers, three questions, and they are not interchangeable:
+
+| Tier | Question | Endpoint | Who acts on it |
+|---|---|---|---|
+| Liveness | Is this process wedged? | `/healthz`, `/livez` | Kubernetes restarts the container |
+| Readiness | Should it be given work? | `/readyz` | Kubernetes removes it from the Service; compose `depends_on` waits for it |
+| Deep | What is wrong? | `/api/v1/system:healthCheck` | A person, `transferctl health`, the Settings page |
+
+`/healthz` and `/livez` are the SAME probe under both spellings. This project's
+documentation and charts have always said `/healthz`; kubelet's own component
+convention is `/livez`. Both are registered, both are exempt from
+authentication, and a probe that needs a token is the fastest way to make every
+replica restart-loop while the service is perfectly healthy
+(`middleware.PublicPaths`, guarded by `TestProbesAnswerWithoutCredentials`).
+
+**Coordinator**
+
+| Tier | Checks |
+|---|---|
+| Liveness | Process responsive. **Nothing external.** |
+| Readiness | `database` reachable; `schema` at the migration this build expects; `configuration` loaded |
+| Deep | The readiness set, plus `identity` (the issuer's signing keys are fetchable) and `authorization` (the Cerbos PDP reports SERVING) |
+
+**Worker** (on its own probe port, `SWGW_WORKER_ADDRESS`, default `:8081`)
+
+| Tier | Checks |
+|---|---|
+| Liveness | Process responsive, and `lease-loop` is still going round |
+| Readiness | `control-plane` reachable; `configuration` loaded |
+| Deep | The readiness set, plus `leasing` - what happened last time this worker asked for work |
+
+**Web tier** (nginx, `deploy/web/nginx.conf`)
+
+| Tier | Checks |
+|---|---|
+| Liveness | `/healthz` - nginx is serving, answered locally |
+| Readiness | `/readyz` - the Coordinator answers its own liveness endpoint through this tier's proxy |
+
+The container healthcheck adds a third: that `/runtime-config.json` exists, so
+a web tier that started before its entrypoint published the SPA's sign-in
+configuration is not reported healthy. All three are matched exactly, because
+every unmatched path in this tier falls through to `index.html` - so the
+obvious probe, `GET /`, answers 200 from a container with no upstream, no
+runtime configuration and no bundle.
+
+### 9.1.1 Four rules
+
+> **1. Liveness must never check a dependency.** A liveness probe that fails
+> when Postgres is briefly unavailable causes Kubernetes to restart every
+> Coordinator - turning a recoverable database blip into a crash-loop across
+> the fleet, at exactly the moment recovery needs the process alive to retry.
+> Liveness answers "is this process wedged"; readiness answers "should it get
+> traffic". Conflating them is one of the most common and most damaging
+> Kubernetes mistakes, which is why it is called out here rather than left to
+> reviewer instinct. `health.Registry` enforces it structurally: a liveness
+> probe is `func() error`, with no context and no arguments, so there is
+> nothing to make a call with.
+
+> **2. A worker's liveness is not the same shape as a service's.** A
+> Coordinator that answers its probe is a Coordinator that is serving. A worker
+> serves nothing: its probe server is a different goroutine from its lease
+> loop, so a loop that has deadlocked or died leaves a process that answers
+> every probe cheerfully and does no work for as long as anybody leaves it
+> running. The lease loop therefore declares, each time round, how long it
+> intends to sleep, and being late past that by more than a grace period is
+> what counts as wedged (`internal/worker/pulse.go`). The watchdog follows the
+> loop's own declared interval because that interval is the Coordinator's to
+> choose, not this process's.
+
+> **3. DEGRADED is still READY.** `/readyz` answers 503 only for `DOWN`. The
+> Coordinator is built to stay up and serve the API when a product fails to
+> load, precisely so that it can name the file that is broken
+> ([02](02-configuration.md) §7); answering 503 for anything short of healthy
+> meant one malformed product file took every replica out of the Service and
+> the screen that would have explained it went with them. `DOWN` is reserved
+> for a dependency without which nothing at all can be served: the database, or
+> a schema this build cannot use.
+
+> **4. Reachability and authorization are different questions.** A probe
+> pointed at an authenticated endpoint answers both at once and cannot say
+> which failed. The worker's `control-plane` check calls the Coordinator's
+> public `/healthz`, not its version API: with authentication enabled the
+> version API reported a Coordinator that was up, answering, and two feet away
+> as `DOWN`, because the probe was refused rather than unanswered.
+
+### 9.1.2 What is deliberately NOT a readiness check
+
+Each of these is a dependency the process tolerates losing for a while, so
+gating readiness on it would turn a blip into every replica leaving the
+endpoints at once - removing the half-working service AND the page that would
+have explained why.
+
+| Not readiness | Why | Where it is instead |
 |---|---|---|
-| `/healthz` | Process responsive. **Nothing external.** | Liveness |
-| `/readyz` | DB reachable, migrations applied, ≥1 product loaded | Readiness |
-| `/api/v1/system:healthCheck` | Everything, including every registry, SMTP, Teams | Diagnostics |
+| The identity provider | The key set is cached, so an issuer that goes away breaks nothing until a key rotates | Deep check `identity` |
+| The policy engine | `Check` already fails closed, so a Coordinator without a PDP is already refusing what it cannot authorize | Deep check `authorization` |
+| Whether a worker is leasing | An idle queue is not an unhealthy worker, and a Coordinator refusing this worker's credentials is not fixed by restarting it | Deep check `leasing` |
+| Vendor registries | A vendor's outage must not deregister this Coordinator | `preflight`, a separate endpoint, on purpose |
 
-> **`/healthz` must never check dependencies.** A liveness probe that fails when Postgres is briefly unavailable causes Kubernetes to restart every Coordinator - turning a recoverable database blip into a crash-loop across the fleet, at exactly the moment recovery needs the process alive to retry. Liveness answers "is this process wedged"; readiness answers "should it get traffic". Conflating them is one of the most common and most damaging Kubernetes mistakes, which is why it is called out here rather than left to reviewer instinct.
+Deep checks gate nothing, which is exactly what lets them be thorough and slow.
+`/api/v1/system:healthCheck` always answers 200 and carries the verdict in its
+body, because a caller that branched on the status code could not see WHICH
+dependency was unhappy.
 
-Deep checks live at a third endpoint precisely so they can be thorough and slow without a probe ever depending on them.
+### 9.1.3 How the stack leverages them
+
+`docker-compose.yml` waits on READINESS, never on liveness: every
+`depends_on: condition: service_healthy` edge is a `/readyz`. The Coordinator
+and worker images are distroless - no shell, no wget, no curl - so the only
+thing that can probe those processes is the process itself, which is what
+`--health-check` is: it calls its own `/readyz` over the loopback and exits 0
+or 1. The web image declares its own three-part healthcheck rather than having
+one written in compose, so the image is self-describing wherever it runs.
+
+Compose does not restart an unhealthy container, so liveness has no effect
+there. It is not therefore decoration: it is the probe Kubernetes acts on, and
+a silently wedged worker holding a slot in the fleet is the failure it exists
+to end.
+
+### 9.1.4 A readiness check earns its keep by saying what it checked
+
+Every check reports a DETAIL, and `/readyz` returns the whole report rather
+than a status word, because the point of a probe is not the verdict - it is
+being able to see what the verdict was about without going to a log first.
+
+Two things this repository was shipping were found by reading those details on
+a stack where every container was green:
+
+- `database` reported `sqlite` on a stack configured for PostgreSQL. The
+  driver and the DSN are two settings and only the DSN was being set, so the
+  Coordinator was writing the estate to a file in its own container
+  ([03](03-persistence.md) §2, now refused at startup).
+- the worker's `leasing` check reported
+  `UNAUTHENTICATED: no bearer token`, which is the data plane being unable to
+  authenticate to the control plane - a fault that had been in the logs for as
+  long as authentication had been enabled, and in no probe anywhere.
 
 ### 9.2 Scaling workers
 

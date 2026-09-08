@@ -227,6 +227,36 @@ are written to their own volume and mounted read-only into every worker.
 > that is a mistake somebody made rather than a deployment without an identity
 > provider.
 
+> **Decision - a worker is HEALTHY only once the Coordinator has accepted it.**
+>
+> This one was found the hard way and it is the reason the section above exists.
+> With authentication on and no credential to present, two workers were refused
+> on every lease, five seconds apart, indefinitely, and reported themselves
+> healthy the whole time: the process was up, the control plane was reachable,
+> the products had loaded. `podman ps` showed a green fleet over a deployment
+> that had never once worked.
+>
+> Readiness now means REGISTERED: reached, authenticated, lease call served. An
+> idle queue still passes, because being told there is no work is the
+> Coordinator accepting the request. A staleness bound
+> (`worker.RegistrationStale`) closes the other half, where a lease loop that
+> stopped calling would leave the last success recorded as good forever.
+>
+> The earlier reasoning was that a worker which cannot lease is still running
+> the jobs it holds, and that neither usual cause - a Coordinator restarting, a
+> Coordinator refusing the credentials - is fixed by anything happening to that
+> container. Every clause is true and the conclusion was still wrong, because it
+> answered a question nobody was asking. A probe whose green means "this
+> container started" rather than "this container is doing its job" is worse than
+> no probe: it is a confident wrong answer in the first place anybody looks.
+>
+> It is safe here specifically because a worker **serves no traffic**: readiness
+> removes a pod from a Service's endpoints, and this component is behind no
+> Service, so unready costs nothing and is purely a statement of fact. It is
+> emphatically NOT liveness, which stays "is this process's own loop still going
+> round" - a refused worker must never be restarted, or one bad credential
+> becomes a fleet-wide crash loop.
+
 > **Where this goes next.** In Kubernetes the same fence should be reached by a
 > projected ServiceAccount token and a TokenReview: no credential to provision
 > at all, rotation handled by the kubelet. The seam is `v1.TokenSource`, which

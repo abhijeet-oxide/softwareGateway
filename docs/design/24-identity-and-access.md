@@ -295,6 +295,22 @@ their address.
 > needs the endpoint for its own type, and guessing that for one this file did
 > not create is how a seeder deletes somebody's working SSO.
 
+> **The seeder refuses to produce a stack nobody can sign in to.** Creation off,
+> password sign-in off, and no user carrying an address the provider will assert
+> is a deployment that authenticates people correctly and then turns every one
+> of them away with `Errors.User.NotFound`. That happened: `BOOTSTRAP_ADMIN_EMAIL`
+> was left at its example default, so the administrator this file creates
+> carried an address nobody can sign in with. The run now FATALs with the one
+> line of configuration that fixes it, and on a successful run it LISTS the
+> addresses that can sign in - a closed system should be able to say who it is
+> closed to.
+>
+> The administrator's address is also RECONCILED now rather than written only at
+> creation. It is not a cosmetic field: with SSO it is the sign-in identity that
+> auto-linking matches on, and an address that could not be corrected made the
+> advice "set BOOTSTRAP_ADMIN_EMAIL and re-run" quietly untrue on any stack that
+> had ever been seeded.
+
 > **Not verified end to end here.** Read back from ZITADEL, a connector this
 > seeder creates carries creation and auto-creation off. The refusal ITSELF - an
 > unknown address reaching the sign-in screen and being turned away - was not

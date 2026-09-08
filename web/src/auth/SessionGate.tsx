@@ -1,7 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { completeSignIn, beginSignIn, isCallback } from './session'
+import { AccessRoute, useSupportContact } from './contact'
+import { signInFailure } from './signinfailure'
 import brand from '../brand'
-import { BootSplash, SignedOutArt, StatusScreen } from '../uikit'
+import { AccessDeniedArt, BootSplash, c, SignedOutArt, StatusScreen } from '../uikit'
 
 /**
  * The landing place after the identity provider, and nothing else.
@@ -38,20 +40,50 @@ export function SessionGate({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  if (failure) {
-    return (
-      <StatusScreen
-        brand={brand}
-        art={<SignedOutArt size={140} />}
-        title="Sign-in did not complete"
-        actions={[{ label: 'Try again', primary: true, onClick: () => void beginSignIn() }]}
-      >
-        {failure}
-      </StatusScreen>
-    )
-  }
+  if (failure) return <SignInRefused raw={failure} />
   if (!settled) return <BootSplash brand={brand} label="Signing in" />
   return <>{children}</>
+}
+
+/**
+ * The identity provider would not sign this person in.
+ *
+ * Said in the terms the reader is in - turned away at a door - rather than in
+ * the provider's own vocabulary. See signInFailure for which codes have a
+ * meaning here and why the rest keep their own words.
+ *
+ * `Try again` stays the primary action even for an account that does not
+ * exist: it is exactly what somebody does once an administrator has added
+ * them, and it is the only thing on this screen that can ever succeed.
+ */
+function SignInRefused({ raw }: { raw: string }) {
+  const contact = useSupportContact()
+  const failure = signInFailure(raw)
+  return (
+    <StatusScreen
+      brand={brand}
+      /* A refusal must not be drawn with a tick. SignedOutArt carries a green
+         check - correct for "you have signed out", wrong on a door somebody
+         was turned away from, where it reads as success. `offerContact` is
+         exactly the set of refusals: an account that was not recognised,
+         disabled, or locked. */
+      art={failure.offerContact ? <AccessDeniedArt size={140} /> : <SignedOutArt size={140} />}
+      title={failure.title}
+      actions={[{ label: 'Try again', primary: true, onClick: () => void beginSignIn() }]}
+      note={failure.offerContact ? <AccessRoute contact={contact} /> : undefined}
+    >
+      <>
+        <div>{failure.body}</div>
+        {failure.reference && (
+          /* The provider's own words, kept for whoever is called about it and
+             set apart from the sentence so it does not read as one. */
+          <div style={{ marginTop: 12, fontSize: 12, color: c.text3, wordBreak: 'break-word' }}>
+            {failure.reference}
+          </div>
+        )}
+      </>
+    </StatusScreen>
+  )
 }
 
 /**

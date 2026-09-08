@@ -44,12 +44,22 @@ REDIRECT_URI=${OIDC_REDIRECT_URI:-}
 [ -n "$CLIENT_ID" ]    || CLIENT_ID=$(field clientId)
 [ -n "$REDIRECT_URI" ] || REDIRECT_URI=$(field redirectUri)
 
+# WHO TO ASK when this deployment refuses somebody.
+#
+# An address or a URL, whatever this organization actually uses - a mailbox, a
+# service desk, a wiki page. Unset is fine and the screen simply names no
+# route; what it must never do is invent one.
+SUPPORT=${SUPPORT_CONTACT:-}
+
 cat > "$OUT" <<JSON
 {
   "oidc": {
     "issuer": "$ISSUER",
     "clientId": "$CLIENT_ID",
     "redirectUri": "$REDIRECT_URI"
+  },
+  "support": {
+    "contact": "$SUPPORT"
   }
 }
 JSON

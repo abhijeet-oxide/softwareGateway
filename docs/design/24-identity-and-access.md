@@ -575,11 +575,43 @@ own product and not another, an account with no roles reaches nothing.
 
 **The refusal is written for the person reading it.** "This account holds no
 roles" is a different problem from "you hold the wrong ones", and only the first
-has an answer they can act on - it is also by far the likelier one, because an
-account the identity provider created at a first sign-in is the shape this gate
-was written for. The SPA turns it into a screen: signed in, no roles, here is
-your address, send it to an administrator. Profile stays reachable, because it
-carries the account id an administrator needs and the way to sign out.
+has an answer that can be acted on - it is also by far the likelier one, because
+an account the identity provider created at a first sign-in is the shape this
+gate was written for.
+
+### 8.4 What a refused person sees
+
+A FULL SCREEN, with no navigation, saying one thing.
+
+> **Decision - no application frame.**
+>
+> The first version rendered inside it, so somebody who may open nothing was
+> shown nine things to open, none of which would answer. Chrome that leads
+> nowhere is not reassurance, it is a maze.
+
+> **Decision - the fact, not the mechanism.**
+>
+> The first version explained roles, identity providers and sign-in tokens.
+> Those are this system's internals and none of the reader's business: they are
+> a professional who has been told no, and what they need is the fact, the
+> account it applies to, and who to ask. The screen carries exactly those three
+> and a way out:
+>
+> > **This account is not enabled**
+> > Access is granted by an administrator, and has not been granted for this
+> > account.
+> > `somebody@example.com`
+> > [Sign out]   Request access from platform-team@example.com.
+>
+> Everything else belongs in a log. The Coordinator's own refusal still names
+> the cause precisely, because that one is read by whoever is diagnosing it.
+
+> **Decision - the contact is per deployment, and absent is a real answer.**
+>
+> `SUPPORT_CONTACT` is published in the SPA's runtime configuration and rendered
+> as a link, because an address somebody has to retype is an address somebody
+> mistypes. Unset, the sentence still completes and names no route: a refusal
+> that invents one sends people to a mailbox nobody reads.
 
 ## 9. Policy lives in this repository
 

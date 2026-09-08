@@ -350,6 +350,74 @@ ENTRYPOINT ["/coordinator"]
 
 `build_info` labels ([12](12-observability-and-audit.md) §2.7) come from the same `VERSION`/`COMMIT` args, so a dashboard can correlate behaviour with a deployment.
 
+### 6.1 Build credentials, and why podman must build one image at a time
+
+Registry credentials reach a build as a **mounted secret**, never as a build
+argument: an `ARG` carrying a token is written into the image's build history
+and `docker history` prints it for anyone who can pull the image. The mount
+exists only for the lifetime of one `RUN` and touches no layer
+(`build/Dockerfile.web`, `build/Dockerfile.coordinator`, `build/Dockerfile.worker`).
+
+That is correct, and under podman it has a consequence worth writing down,
+because the symptom names none of the parts involved:
+
+```
+archive/tar: write too long
+Error: Post "http://d/v5.5.2/libpod/build?...&secrets=["id=npmrc,src=podman-build-secret3638580003"]": io: read/write on closed pipe
+```
+
+**podman's remote client cannot pass a secret to the server over the wire.**
+`pkg/bindings/images/build.go`'s `prepareSecrets` calls
+`CreateTempFileFromReader(contextDir, "podman-build-secret-*", ...)`: every
+build secret is copied INTO THE BUILD CONTEXT DIRECTORY and shipped inside the
+context tar. That is the whole mechanism, and it applies to every Windows and
+macOS host, because those run podman machine and therefore always build
+remotely.
+
+Three services here build from `context: .`, and `podman-compose build` runs
+them concurrently (`compose_build` creates one asyncio task per service; the
+only throttle is `--parallel`, which defaults to `COMPOSE_PARALLEL_LIMIT` or
+unlimited). So up to three tar walkers traverse one directory while up to
+three temp files are created and removed in it. `nTar` takes the size from the
+`WalkDir` stat, writes a header carrying it, and only then copies the file:
+
+```
+walker stats podman-build-secret-2446760542 at 0 bytes
+owner finishes writing 218 bytes
+walker copied 0 bytes -> archive/tar: write too long
+```
+
+`os.CreateTemp` creates the file empty and the content is written afterwards,
+so a sibling that stats it in that window promises zero bytes and then
+delivers the whole secret. podman retries the build three times
+(`retry=3&retry-delay=2s` in the URL above), which is why the same step scrolls
+past more than once.
+
+**The fix is `--parallel 1`.** It removes the overlap: a build only ever meets
+the secret it wrote itself, which `prepareSecrets` finishes before the tar
+starts. `task images` passes it for whichever engine is installed.
+
+Three things that look like fixes and are not:
+
+- **A smaller build context.** Size decides how long each walk takes and
+  therefore how often the windows overlap. It cannot make the window zero.
+- **Ignoring `podman-build-secret*`.** Whether that rule reaches the build's OWN
+  secret depends on the podman version, so it is a rule that either does nothing
+  or breaks the build. `nTar` skips the exclusion check for a member whose name
+  is absolute; in v5.5.2 the appended secret keeps its absolute host path
+  (`name = filepath.ToSlash(path)`) and is therefore not matched, while on
+  `main` the path is made relative to the context first
+  (containers/podman#28334) and it is. Concurrency is the lever that behaves the
+  same on every version.
+- **`COMPOSE_PARALLEL_LIMIT` in `.env`.** podman-compose copies only `PODMAN_*`
+  keys from `.env` into the process environment, and it parses its arguments
+  before reading `.env` at all. It has to be a real environment variable or the
+  flag.
+
+Docker is unaffected: buildx streams secrets to the builder over its session
+rather than through the context, so nothing is written into the directory being
+tarred.
+
 ## 7. Operational runbook
 
 | Task | Command |

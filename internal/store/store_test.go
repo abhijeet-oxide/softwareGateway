@@ -532,3 +532,31 @@ func TestListPackagesOrdersByPublishedDate(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// TestExpectedSchemaVersionMatchesWhatMigrateApplies is what makes the
+// readiness check trustworthy: the number the probe compares against has to be
+// the number a fresh migration actually lands on, or the check either passes
+// forever or fails forever.
+func TestExpectedSchemaVersionMatchesWhatMigrateApplies(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, st, nil); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	applied, err := st.SchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("schema version: %v", err)
+	}
+	expected, err := ExpectedSchemaVersion(st.Driver())
+	if err != nil {
+		t.Fatalf("expected schema version: %v", err)
+	}
+	if applied != expected {
+		t.Fatalf("migrate landed on %d but the embedded migrations top out at %d",
+			applied, expected)
+	}
+	if expected == 0 {
+		t.Fatal("expected schema version is 0, so the check would pass against an empty database")
+	}
+}

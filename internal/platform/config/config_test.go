@@ -226,3 +226,57 @@ func TestTLSDefaultsToStrict(t *testing.T) {
 		t.Error("relaxed X.509 parsing must be opt-in")
 	}
 }
+
+// TestADriverThatDisagreesWithItsDSNIsRefused guards the failure that is worst
+// precisely because it looks like success.
+//
+// The driver defaults to sqlite and the DSN is a separate setting, so a
+// deployment that sets only the DSN gets a process that opens a local file,
+// migrates it, serves from it, and writes the whole estate somewhere the next
+// `docker compose down` removes - while the PostgreSQL database it was pointed
+// at stays empty.
+func TestADriverThatDisagreesWithItsDSNIsRefused(t *testing.T) {
+	cases := []struct {
+		name, driver, dsn string
+		wantErr           bool
+	}{
+		{"postgres url with the default sqlite driver", "sqlite", "postgres://u:p@db:5432/swgw?sslmode=disable", true},
+		{"keyword form with the sqlite driver", "sqlite", "host=db user=u password=p dbname=swgw", true},
+		{"postgres driver pointed at a file", "postgres", "./dev/swgw.db", true},
+		{"matching postgres", "postgres", "postgres://u:p@db:5432/swgw", false},
+		{"matching sqlite", "sqlite", "./dev/swgw.db", false},
+		{"sqlite in memory", "sqlite", ":memory:", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Defaults()
+			cfg.Database.Driver = tc.driver
+			cfg.Database.DSN = tc.dsn
+			err := cfg.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatal("accepted a driver and DSN that disagree")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("refused a valid pairing: %v", err)
+			}
+		})
+	}
+}
+
+// TestTheRefusalDoesNotCarryThePassword: this error is what somebody pastes
+// into a ticket.
+func TestTheRefusalDoesNotCarryThePassword(t *testing.T) {
+	cfg := Defaults()
+	cfg.Database.DSN = "postgres://swgw:hunter2@postgres:5432/swgw?sslmode=disable"
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("the error carries the password: %v", err)
+	}
+	// It still has to name the server, or the message is not actionable.
+	if !strings.Contains(err.Error(), "postgres:5432") {
+		t.Fatalf("the error does not name the server: %v", err)
+	}
+}

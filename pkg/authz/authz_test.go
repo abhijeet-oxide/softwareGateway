@@ -2,8 +2,10 @@ package authz
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 )
 
@@ -147,5 +149,37 @@ func TestBearerTokenParsing(t *testing.T) {
 		if got := BearerToken(r); got != want {
 			t.Errorf("BearerToken(%q) = %q, want %q", header, got, want)
 		}
+	}
+}
+
+// TestRoleClaimedTwiceIsHeldOnce guards the shape of a real ZITADEL token.
+//
+// The same grant arrives under both the per-project claim and the flattened
+// one, and both match the prefix the reader looks for. Counted twice it
+// reached Cerbos twice and the Settings page rendered "org-admin, org-admin",
+// which reads as two grants rather than one.
+func TestRoleClaimedTwiceIsHeldOnce(t *testing.T) {
+	all := map[string]json.RawMessage{
+		"urn:zitadel:iam:org:project:roles": json.RawMessage(
+			`{"org-admin":{"1":"default.localhost"},"software-01:product-owner":{"1":"default.localhost"}}`),
+		"urn:zitadel:iam:org:project:389770422465331204:roles": json.RawMessage(
+			`{"org-admin":{"1":"default.localhost"}}`),
+		"urn:zitadel:iam:org:project:389770422465331205:roles": json.RawMessage(
+			`{"software-01:product-owner":{"1":"default.localhost"}}`),
+		"email": json.RawMessage(`"someone@example.com"`),
+	}
+	id := Identity{Products: map[string][]string{}}
+	readRoles(all, &id)
+
+	if want := []string{"org-admin"}; !slices.Equal(id.OrgRoles, want) {
+		t.Fatalf("org roles: got %v, want %v", id.OrgRoles, want)
+	}
+	if want := []string{"product-owner"}; !slices.Equal(id.Products["software-01"], want) {
+		t.Fatalf("product roles: got %v, want %v", id.Products["software-01"], want)
+	}
+	// The org name comes off the role's own value, so a token carrying only
+	// role claims still names its tenant.
+	if id.Tenant != "default" {
+		t.Fatalf("tenant: got %q, want %q", id.Tenant, "default")
 	}
 }

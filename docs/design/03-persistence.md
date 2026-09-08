@@ -35,6 +35,8 @@ Queries live in `db/queries/postgres/*.sql` and `db/queries/sqlite/*.sql`, compi
 
 **SQLite is explicitly not supported in production**, and the Coordinator logs a startup warning saying so. It exists to make development free, not to be a second production target.
 
+**`database.driver` and `database.dsn` are two settings, and a configuration where they disagree is REFUSED at startup** (`config.Validate`). The driver defaults to SQLite, so a deployment that sets only the DSN - which is the obvious thing to set, and what this repository's own compose file did - produced a Coordinator that opened a local FILE, applied every migration to it, served from it and wrote the entire estate into a container layer, while the PostgreSQL database it had been handed sat empty. The only signal was one startup line reading `using the SQLite driver - DEVELOPMENT ONLY` beside the Postgres URL it had ignored, and `docker compose down` then removed the data. A default that silently overrides an explicit instruction is worse than no default, so this pairing is checked rather than guessed at, in both directions.
+
 ## 3. Conventions
 
 - `snake_case` identifiers; plural table names.

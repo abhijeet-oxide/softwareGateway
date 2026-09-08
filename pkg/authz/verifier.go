@@ -24,6 +24,14 @@ type Verifier struct {
 	// namespaces a product ("software-01:product-owner") is product tier;
 	// anything else is org tier.
 	orgRolePrefix string
+
+	// How the key set is actually fetched, kept so Health can ask the same
+	// question Verify silently depends on. Verify only notices an unreachable
+	// issuer once the cached keys age out and a token arrives that needs new
+	// ones, which is hours after the network broke and nowhere near the change
+	// that caused it.
+	keysURL string
+	client  *http.Client
 }
 
 // Config configures a Verifier.
@@ -135,8 +143,54 @@ func NewVerifier(ctx context.Context, cfg Config) (*Verifier, error) {
 			SkipIssuerCheck:   cfg.SkipIssuerCheck,
 		}),
 		orgRolePrefix: prefix,
+		keysURL:       keysURL,
+		client:        client,
 	}, nil
 }
+
+// Health reports whether the issuer's signing keys are still reachable.
+//
+// DIAGNOSTIC ONLY, and that is the whole point of where it is registered. A
+// remote key set is cached, so an issuer that goes away breaks nothing for
+// some time and then breaks everything at once when a key rotates. Making
+// this gate readiness would do the opposite damage: a brief blip at the
+// identity provider would deregister every replica of a service that is
+// still verifying tokens perfectly well from cache.
+//
+// It fetches the SAME url the verifier fetches, through the SAME client, so a
+// wrong DiscoveryURL, a Host header the issuer does not recognise or a
+// proxy in the way all show up here rather than in a token failure hours later.
+func (v *Verifier) Health(ctx context.Context) error {
+	if v == nil || v.keysURL == "" {
+		return fmt.Errorf("no key set configured")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.keysURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := v.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s answered %s", v.keysURL, resp.Status)
+	}
+	var keys struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&keys); err != nil {
+		return fmt.Errorf("%s answered something other than a key set: %w", v.keysURL, err)
+	}
+	// An empty key set validates nothing, and answers 200 while doing it.
+	if len(keys.Keys) == 0 {
+		return fmt.Errorf("%s published no signing keys", v.keysURL)
+	}
+	return nil
+}
+
+// KeysURL is where this verifier fetches signing keys. For diagnostics.
+func (v *Verifier) KeysURL() string { return v.keysURL }
 
 // zitadelClaims is the subset of the token this package reads.
 //
@@ -177,6 +231,22 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Identity, error) {
 		id.Subject = tok.Subject
 	}
 
+	readRoles(all, &id)
+	return id, nil
+}
+
+// readRoles decodes every role claim in the token onto the identity.
+//
+// ZITADEL emits the same role under MORE THAN ONE claim: one per project
+// (`urn:zitadel:iam:org:project:<projectID>:roles`) and one flattened across
+// all of them (`urn:zitadel:iam:org:project:roles`). Both match the shape this
+// reads, which is deliberate - a deployment may have either - so the same
+// grant arrives twice and has to be counted once. Left undeduplicated it
+// reached the policy engine twice and reached the Settings page as
+// "org-admin, org-admin", which reads as a misconfigured grant rather than as
+// one role named twice.
+func readRoles(all map[string]json.RawMessage, id *Identity) {
+	seen := map[string]bool{}
 	for claim, raw := range all {
 		if !strings.HasPrefix(claim, "urn:zitadel:iam:org:project:") || !strings.HasSuffix(claim, ":roles") {
 			continue
@@ -194,6 +264,10 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Identity, error) {
 				}
 				break
 			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
 			if product, role, ok := splitProductRole(key); ok {
 				id.Products[product] = append(id.Products[product], role)
 			} else {
@@ -201,7 +275,6 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Identity, error) {
 			}
 		}
 	}
-	return id, nil
 }
 
 // BearerToken extracts the token from an Authorization header.

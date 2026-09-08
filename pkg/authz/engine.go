@@ -43,6 +43,51 @@ func NewCerbos(addr string) *Cerbos {
 	return &Cerbos{Addr: strings.TrimRight(addr, "/"), HTTP: defaultHTTPClient()}
 }
 
+// Prober is an Engine that can report on its own reachability.
+//
+// Optional, and asserted for rather than folded into Engine: an engine that is
+// a table of answers in a test has no reachability to report, and a health
+// check is not a reason to make every implementation carry a method it cannot
+// answer honestly.
+type Prober interface {
+	Health(ctx context.Context) error
+}
+
+// Health reports whether the PDP is serving.
+//
+// DIAGNOSTIC ONLY. A PDP that has gone away is not a reason to take a
+// Coordinator out of service: Check already fails closed, so the service is
+// already refusing what it cannot authorize, and pulling every replica out of
+// the endpoints as well would turn a policy-engine blip into an outage with
+// nothing left to serve the page that explains it.
+func (c *Cerbos) Health(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Addr+"/_cerbos/health", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("cerbos at %s answered %s", c.Addr, resp.Status)
+	}
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return fmt.Errorf("cerbos at %s answered something other than a health document: %w", c.Addr, err)
+	}
+	// SERVING is Cerbos' own word, from the gRPC health protocol its REST
+	// endpoint mirrors. Anything else is a PDP that is up and not ready, which
+	// is a different fault from one that is not there.
+	if body.Status != "SERVING" {
+		return fmt.Errorf("cerbos at %s reports %s", c.Addr, body.Status)
+	}
+	return nil
+}
+
 type cerbosReq struct {
 	RequestID string          `json:"requestId"`
 	Principal cerbosPrincipal `json:"principal"`

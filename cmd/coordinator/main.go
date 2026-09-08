@@ -50,6 +50,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors/near"
+	"github.com/abhijeet-oxide/softwareGateway/pkg/authz"
 
 	// Registers the JFrog promoter with the plugin registry, via its init.
 	//
@@ -472,6 +473,40 @@ func run() error {
 		}
 		return health.OK(fmt.Sprintf("%d product(s) loaded", products.Count()))
 	})
+	// The database being REACHABLE is not the same question as it being the
+	// shape this binary was built against, and only the second one decides
+	// whether this replica can serve. A replica running ahead of its schema
+	// connects, reports itself ready, and then fails on the first query naming
+	// a column nobody has added yet - which reaches an operator as a scatter
+	// of 500s across unrelated endpoints rather than as a replica that never
+	// went ready. During a rolling deployment that is the normal case, not an
+	// exotic one.
+	wantSchema, schemaErr := store.ExpectedSchemaVersion(st.Driver())
+	hreg.AddReadiness("schema", func(ctx context.Context) health.Result {
+		if schemaErr != nil {
+			return health.Down(schemaErr)
+		}
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		have, err := st.SchemaVersion(ctx)
+		if err != nil {
+			return health.Down(err)
+		}
+		if have < wantSchema {
+			return health.Down(fmt.Errorf(
+				"database is at migration %d, this build expects %d", have, wantSchema))
+		}
+		// AHEAD is degraded rather than down, and the distinction is a rolling
+		// deployment: the new replicas migrate first and the old ones keep
+		// serving against a schema with columns they do not know about, which
+		// is exactly what a forward-only migration policy is FOR. Refusing
+		// traffic here would take the old replicas out during every upgrade.
+		if have > wantSchema {
+			return health.Degraded(fmt.Sprintf(
+				"database is at migration %d, ahead of this build's %d", have, wantSchema))
+		}
+		return health.OK(fmt.Sprintf("migration %d", have))
+	})
 
 	// ---- leader election ----
 	var elector leader.Interface
@@ -536,6 +571,39 @@ func run() error {
 		logger.Info("authentication enabled",
 			"issuer", cfg.Auth.Issuer,
 			"authorization", map[bool]string{true: "cerbos", false: "roles only"}[cfg.Auth.CerbosAddr != ""])
+
+		// DEEP, never readiness, and the reason is the same for both of them:
+		// each one is a dependency this process TOLERATES losing for a while.
+		// The key set is cached, so an identity provider that goes away breaks
+		// nothing until a key rotates; the policy engine already fails closed,
+		// so a Coordinator without one is refusing exactly what it cannot
+		// authorize. Gating readiness on either would convert a blip in a
+		// dependency into every replica leaving the endpoints at once, which
+		// removes the service that was still half working AND the page that
+		// would have explained why.
+		//
+		// They belong in the deep check because that is where an operator
+		// asking "why is nobody able to sign in" looks, and because without
+		// them the answer to that question was a token failure hours after the
+		// network change that caused it.
+		hreg.AddDeep("identity", func(ctx context.Context) health.Result {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := a.Verifier.Health(ctx); err != nil {
+				return health.Down(err)
+			}
+			return health.OK("signing keys from " + a.Verifier.KeysURL())
+		})
+		if prober, ok := a.Engine.(authz.Prober); ok {
+			hreg.AddDeep("authorization", func(ctx context.Context) health.Result {
+				ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				if err := prober.Health(ctx); err != nil {
+					return health.Down(err)
+				}
+				return health.OK("cerbos at " + cfg.Auth.CerbosAddr)
+			})
+		}
 	} else {
 		logger.Warn("AUTHENTICATION IS DISABLED - every caller holds admin. " +
 			"Safe only behind a NetworkPolicy; see docs/design/24.")

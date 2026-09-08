@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -212,35 +213,101 @@ func run() error {
 	)
 
 	hreg := health.New()
-	// Liveness is deliberately NOT a check on the Coordinator. A control-plane
-	// blip must not crash-loop the fleet: a worker that cannot reach the
-	// Coordinator keeps transferring what it already holds, which is the
-	// correct behaviour (docs/design/09 §9.1).
+
+	// ---- liveness: is this process wedged? Nothing external. ----
+	//
+	// A worker SERVES NOTHING, which is what makes its liveness probe
+	// different from the Coordinator's. Answering the probe proves the probe
+	// server is alive and says nothing whatever about the lease loop, so a
+	// loop that has deadlocked or whose goroutine has died leaves a container
+	// that reports itself perfectly healthy and does no work for as long as
+	// anybody leaves it running.
 	hreg.AddLiveness("process", func() error { return nil })
-	hreg.AddReadiness("coordinator", func(ctx context.Context) health.Result {
-		if _, err := coordinator.Version(ctx); err != nil {
+	hreg.AddLiveness("lease-loop", loop.Wedged)
+
+	// ---- readiness: are this worker's own preconditions met? ----
+	//
+	// Deliberately NOT "can it lease". Whether the Coordinator hands this
+	// worker any work depends on the queue, on the Coordinator's own health
+	// and on whether it accepts this worker's credentials, and none of those
+	// is a property of this container that a restart or a deregistration would
+	// improve. What readiness answers here is the narrower question this
+	// process can answer honestly: is the control plane reachable, and is
+	// there any configuration to work against. Leasing itself is reported
+	// below as a diagnostic.
+	hreg.AddReadiness("control-plane", func(ctx context.Context) health.Result {
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		// The Coordinator's PUBLIC liveness endpoint, not its version API.
+		// Reachability and authorization are different questions, and probing
+		// an authenticated endpoint answers them both at once: with
+		// authentication on, this check reported a Coordinator that was up,
+		// answering and two feet away as DOWN, because the probe was refused
+		// rather than unanswered.
+		endpoint := strings.TrimRight(cfg.Worker.CoordinatorEndpoint, "/") + "/healthz"
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
 			return health.Down(err)
 		}
-		return health.OK("leasing from " + cfg.Worker.CoordinatorEndpoint)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return health.Down(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			return health.Down(fmt.Errorf("%s answered %s", endpoint, resp.Status))
+		}
+		return health.OK("reachable at " + cfg.Worker.CoordinatorEndpoint)
+	})
+	hreg.AddReadiness("configuration", func(context.Context) health.Result {
+		// The SAME judgement the Coordinator makes about the SAME directory,
+		// and it has to be: a worker whose view of the products differs from
+		// the Coordinator's leases jobs it then cannot execute.
+		if bad := products.Invalid(); len(bad) > 0 {
+			return health.Degraded(fmt.Sprintf("%d product(s) failed to load", len(bad)))
+		}
+		if products.Count() == 0 {
+			return health.Degraded("no products loaded")
+		}
+		return health.OK(fmt.Sprintf("%d product(s) loaded", products.Count()))
+	})
+
+	// ---- diagnostics: what happened last time this worker asked for work ----
+	//
+	// Not readiness, on purpose. A worker that cannot lease is still running
+	// the jobs it already holds, and the two commonest reasons it cannot - a
+	// Coordinator restarting, and a Coordinator refusing this worker's
+	// credentials - are neither of them fixed by taking this container out of
+	// anything. It is here so that "no work is moving" has an answer that
+	// names the cause.
+	hreg.AddDeep("leasing", func(context.Context) health.Result {
+		ok, at, detail := loop.LeaseHealth()
+		if ok {
+			return health.OK(detail + " (last succeeded " + time.Since(at).Round(time.Second).String() + " ago)")
+		}
+		if at.IsZero() {
+			return health.Degraded(detail)
+		}
+		return health.Degraded(fmt.Sprintf("last attempt %s ago: %s",
+			time.Since(at).Round(time.Second), detail))
 	})
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		if err := hreg.Live(); err != nil {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
+	// Both spellings of liveness, exactly as the Coordinator serves them, so
+	// one probe configuration works against either component.
+	mux.HandleFunc("/healthz", liveHandler(hreg))
+	mux.HandleFunc("/livez", liveHandler(hreg))
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		rep := hreg.Ready(r.Context())
-		if rep.Status != health.StatusHealthy {
-			http.Error(w, string(rep.Status), http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
+		writeReport(w, hreg.Ready(r.Context()))
+	})
+	// The deep report, at the path the Coordinator serves its own at. A worker
+	// is not an API server and this is the only route it shares, which is the
+	// point: `curl <host>/api/v1/system:healthCheck` answers for either.
+	mux.HandleFunc("/api/v1/system:healthCheck", func(w http.ResponseWriter, r *http.Request) {
+		// Always 200. This is a report, and its body carries the verdict; a
+		// 503 would leave a caller that checks status codes unable to see
+		// WHICH check is unhappy.
+		writeJSON(w, http.StatusOK, hreg.Deep(r.Context()))
 	})
 	mux.Handle("/metrics", promhttp.HandlerFor(
 		mreg.Prometheus(), promhttp.HandlerOpts{ErrorHandling: promhttp.ContinueOnError}))
@@ -335,4 +402,41 @@ func run() error {
 	}
 	logger.Info("stopped")
 	return nil
+}
+
+// liveHandler answers a liveness probe from the registry's process-local
+// checks. Shared by /healthz and /livez, which are the same question.
+func liveHandler(hreg *health.Registry) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if err := hreg.Live(); err != nil {
+			// A wedged lease loop is a restart, and this is what asks for one.
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"status": string(health.StatusDown),
+				"error":  err.Error(),
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": string(health.StatusHealthy)})
+	}
+}
+
+// writeReport answers a readiness probe with the whole report.
+//
+// The body NAMES THE FAILING CHECK, which the previous bare {"status":"ok"}
+// did not: a worker that would not go ready said only that it was not ready,
+// and the reason was in a log somebody had to go and find. Degraded is still
+// ready - the same rule the Coordinator applies - because a worker with one
+// unloadable product can still transfer the others.
+func writeReport(w http.ResponseWriter, rep health.Report) {
+	status := http.StatusOK
+	if rep.Status == health.StatusDown {
+		status = http.StatusServiceUnavailable
+	}
+	writeJSON(w, status, rep)
+}
+
+func writeJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
 }

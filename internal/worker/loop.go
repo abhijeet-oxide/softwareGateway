@@ -92,6 +92,11 @@ type Loop struct {
 	// rather than sixteen lease calls.
 	wake chan struct{}
 
+	// The loop's heartbeat, read by this process's own probes. See pulse.go:
+	// a worker serves nothing, so a probe server that answers proves only that
+	// the probe server is alive.
+	pulse pulse
+
 	// active tracks what this worker holds, for the heartbeat to renew.
 	mu     sync.Mutex
 	active map[int64]*watchdog
@@ -153,6 +158,10 @@ func (l *Loop) Run(ctx context.Context) error {
 	l.log.InfoContext(ctx, "worker started",
 		"worker", l.opts.WorkerID, "maxConcurrentJobs", l.opts.MaxConcurrentJobs)
 
+	// Armed before the first pass, so a loop that dies on its way into the
+	// first tick is still caught.
+	l.pulse.sleeping(0)
+
 	// A single timer rather than time.After per iteration: the loop now also
 	// wakes on completions, and time.After would leak a timer for every one of
 	// them until it fired.
@@ -205,6 +214,10 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		wait = l.tick(ctx)
+		// Declared BEFORE the wait, so the watchdog is measured against what
+		// this pass actually chose rather than against an interval this
+		// process does not control.
+		l.pulse.sleeping(wait)
 		timer.Reset(wait)
 	}
 }
@@ -225,6 +238,9 @@ func (l *Loop) tick(ctx context.Context) time.Duration {
 		ActiveJobs: l.activeCount(),
 		Version:    l.opts.Version,
 	})
+	// Recorded whichever way it went, so a diagnostic can say what the last
+	// attempt did rather than only that work is not moving.
+	l.pulse.leased(err)
 	if err != nil {
 		if ctx.Err() != nil {
 			return 0

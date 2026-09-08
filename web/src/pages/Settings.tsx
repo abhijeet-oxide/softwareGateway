@@ -3,6 +3,7 @@ import { Alert, Button, Card, Col, Descriptions, Row, Space, Table, Tag, Tooltip
 import { ThunderboltOutlined } from '../icons'
 import { useDeepHealth, useProducts, useVersion, useWorkers } from '../api/queries'
 import { useIdentity } from '../auth/permissions'
+import { isSignedIn, signOut } from '../auth/session'
 import { formatCount, formatRelative } from '../domain/format'
 import { Value } from '../components/value'
 import { ManagedInGit, TimeAgo } from '../components/chips'
@@ -70,7 +71,26 @@ export default function Settings() {
         </Col>
 
         <Col xs={24} xl={12}>
-          <Card title="Users and roles" extra={<ManagedInGit />} loading={loading}>
+          <Card
+            title="Users and roles"
+            /*
+              Ending the session belongs beside the identity it ends, and this
+              is the only place in the application that shows one. It is absent
+              when there is no session to end, which is every deployment
+              running without authentication.
+            */
+            extra={
+              <Space size={8}>
+                {isSignedIn() && (
+                  <Button size="small" onClick={() => void signOut()}>
+                    Sign out
+                  </Button>
+                )}
+                <ManagedInGit />
+              </Space>
+            }
+            loading={loading}
+          >
             {who && !who.authenticated ? (
               <Alert
                 type="info"

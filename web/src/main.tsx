@@ -6,6 +6,7 @@ import enGB from 'antd/locale/en_GB'
 import { ConfigProvider } from 'antd'
 import { App } from './App'
 import { IdentityProvider } from './auth/permissions'
+import { SessionGate } from './auth/SessionGate'
 import { BootGate } from './BootGate'
 import { AppErrorBoundary } from './routing'
 import { ThemeProvider } from './uikit'
@@ -51,14 +52,24 @@ createRoot(document.getElementById('root')!).render(
         */}
         <AppErrorBoundary>
           <QueryClientProvider client={queryClient}>
-            <IdentityProvider>
-              <BrowserRouter>
-                {/* Nothing renders until we know the Coordinator is there. */}
-                <BootGate>
-                  <App />
-                </BootGate>
-              </BrowserRouter>
-            </IdentityProvider>
+            {/*
+              Above IdentityProvider, and that order is load-bearing. Returning
+              from the identity provider lands on an address carrying a
+              single-use code; any read fired while it is being exchanged comes
+              back 401 and starts a SECOND sign-in, which navigates away before
+              the first one finished. Nothing may read until the session is
+              settled, and the first reader in this tree is /whoami.
+            */}
+            <SessionGate>
+              <IdentityProvider>
+                <BrowserRouter>
+                  {/* Nothing renders until we know the Coordinator is there. */}
+                  <BootGate>
+                    <App />
+                  </BootGate>
+                </BrowserRouter>
+              </IdentityProvider>
+            </SessionGate>
           </QueryClientProvider>
         </AppErrorBoundary>
       </ThemeProvider>

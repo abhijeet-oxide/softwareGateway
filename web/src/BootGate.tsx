@@ -1,10 +1,20 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { ReloadOutlined } from './icons'
 import { useQuery } from '@tanstack/react-query'
 import { api, ApiError } from './api/client'
 import type { VersionResponse } from './api/types'
+import { signInStatus, signOut, subscribeSignIn } from './auth/session'
 import brand from './brand'
-import { BootSplash, MaintenancePage, ServiceDownArt, StatusScreen } from './uikit'
+import {
+  AccessDeniedArt,
+  BootSplash,
+  ErrorArt,
+  MaintenancePage,
+  ServiceDownArt,
+  SessionExpiredArt,
+  SignedOutArt,
+  StatusScreen,
+} from './uikit'
 
 /**
  * BootGate answers the first question the application has to ask: is the
@@ -15,16 +25,26 @@ import { BootSplash, MaintenancePage, ServiceDownArt, StatusScreen } from './uik
  * exactly what this application used to do. So it boots behind one probe:
  *
  *   probing     -> a quiet branded screen (the mark, nothing that looks broken)
+ *   401         -> the sign-in, which the API client has already started
+ *   403         -> the no-access page: signed in, and not for this
  *   503         -> the maintenance page, retrying on its own
- *   no answer   -> the service-unavailable page below, retrying on its own
+ *   5xx / silence -> the service-unavailable page below, retrying on its own
+ *   anything else -> the unexpected-answer page, which names what arrived
  *   answered    -> the application, for the rest of the session
  *
- * The first two failures are the same wait and a different fact, and they are
- * worth separating: a Coordinator that answers 503 is a Coordinator that is
- * THERE and has been told to stand down, which nobody needs to escalate. One
- * that does not answer at all may be a service that fell over, or a network
- * that cannot reach it, and that is worth somebody looking at. A single screen
- * for both would make the planned case read like the unplanned one.
+ * EVERY ONE OF THOSE IS A DIFFERENT FACT, and the reason there are six screens
+ * rather than two is that they used to be two. A 401 from an unauthenticated
+ * browser - the normal first second of every visit to a Coordinator with
+ * authentication switched on - rendered "The Coordinator did not respond",
+ * which was false in every word: it responded, promptly, and said exactly what
+ * was wrong. Somebody reading that screen has no reason to suspect a sign-in
+ * is missing, and every reason to go and look at a service that is perfectly
+ * healthy. An outage screen is for an outage.
+ *
+ * A Coordinator that answers 503 is likewise THERE and has been told to stand
+ * down, which nobody needs to escalate; one that does not answer at all may be
+ * a service that fell over or a network that cannot reach it, and that is
+ * worth somebody looking at.
  *
  * Once the service has answered even once the gate steps aside for good: a
  * later blip is a temporary outage, and a page's own error state handles that
@@ -66,15 +86,142 @@ export function BootGate({ children }: { children: ReactNode }) {
   // yet", and swapping the failure screen back to a splash every fifteen
   // seconds reads as a page that cannot make up its mind.
   if (q.isError || q.failureCount > 0) {
+    const retry = { onRetry: () => void q.refetch(), retrying: q.isFetching }
     // Branch on the CODE, never on the status or the prose - see api/client.ts.
     // A 503 without a problem document maps to UNAVAILABLE there, which is what
     // a proxy in front of the Coordinator answers during a planned window.
-    if (q.error instanceof ApiError && q.error.code === 'UNAVAILABLE') {
-      return <UnderMaintenance onRetry={() => void q.refetch()} retrying={q.isFetching} />
+    if (q.error instanceof ApiError) {
+      const { code, status } = q.error
+      if (code === 'UNAVAILABLE') return <UnderMaintenance {...retry} />
+      // The API client has already started a sign-in by the time this renders.
+      // This screen says what is happening and what to do when it cannot.
+      if (code === 'UNAUTHENTICATED') return <SignInRequired />
+      if (code === 'PERMISSION_DENIED') return <NoAccess detail={q.error.message} />
+      // An answer that is neither a fault nor a refusal. Rare, and worth its
+      // own screen precisely because it is rare: a 404 here means the address
+      // this UI was served from is not in front of a Coordinator at all, which
+      // no amount of waiting for a service to come back will fix.
+      if (status > 0 && status < 500) {
+        return <UnexpectedAnswer status={status} detail={q.error.message} {...retry} />
+      }
+      return <ServiceUnavailable answered={status} {...retry} />
     }
-    return <ServiceUnavailable onRetry={() => void q.refetch()} retrying={q.isFetching} />
+    return <ServiceUnavailable {...retry} />
   }
   return showSplash ? <BootSplash brand={brand} /> : null
+}
+
+/**
+ * The Coordinator wants a token and this browser has none.
+ *
+ * By the time this renders, api/client.ts has already called requireSignIn and
+ * the browser is on its way to the identity provider - so the ordinary case is
+ * the splash, for the half second before the page is replaced. The other two
+ * states are the ones that need words, because in both of them redirecting
+ * again would achieve nothing.
+ */
+function SignInRequired() {
+  const status = useSyncExternalStore(subscribeSignIn, signInStatus)
+
+  if (status === 'unconfigured') {
+    return (
+      <StatusScreen
+        brand={brand}
+        art={<SignedOutArt size={140} />}
+        title="Sign-in is not configured"
+        actions={[{ label: 'Try again', primary: true, onClick: () => window.location.reload() }]}
+      >
+        The Coordinator requires an authenticated caller, and this deployment
+        published no identity provider to obtain a token from. An administrator
+        sets OIDC_ISSUER and OIDC_CLIENT_ID on the web service, or runs the
+        seeder that publishes them.
+      </StatusScreen>
+    )
+  }
+
+  if (status === 'rejected') {
+    return (
+      <StatusScreen
+        brand={brand}
+        art={<SessionExpiredArt size={140} />}
+        title="The sign-in was not accepted"
+        actions={[{ label: 'Sign out and try again', primary: true, onClick: () => void signOut() }]}
+      >
+        The identity provider issued a token and the Coordinator refused it.
+        The two are configured against different issuers, audiences or clocks;
+        signing in again produces the same token and the same refusal. An
+        administrator compares SWGW_AUTH_ISSUER on the Coordinator with the
+        issuer this page was pointed at.
+      </StatusScreen>
+    )
+  }
+
+  return <BootSplash brand={brand} label="Signing in" />
+}
+
+/**
+ * Signed in, and not for this. A different fact from a missing sign-in, and
+ * emphatically not an outage: the only way out is somebody granting a role,
+ * which is why this screen offers no retry.
+ */
+function NoAccess({ detail }: { detail: string }) {
+  return (
+    <StatusScreen
+      brand={brand}
+      art={<AccessDeniedArt size={140} />}
+      title="No access to this Coordinator"
+      actions={[{ label: 'Sign in as someone else', onClick: () => void signOut() }]}
+    >
+      {detail} An administrator grants a role on the tenant or on a product.
+    </StatusScreen>
+  )
+}
+
+/**
+ * The address answered, and not as a Coordinator.
+ *
+ * Almost always a proxy: this UI served from an origin whose /api/v1 goes
+ * somewhere else, or nowhere. Retrying is offered because a misrouted request
+ * during a deployment does resolve itself, and the status is named because it
+ * is the one fact that identifies the fault.
+ */
+function UnexpectedAnswer({
+  status,
+  detail,
+  onRetry,
+  retrying,
+}: {
+  status: number
+  detail: string
+  onRetry: () => void
+  retrying: boolean
+}) {
+  const left = useRetryCountdown(retrying)
+  return (
+    <StatusScreen
+      brand={brand}
+      art={<ErrorArt size={140} />}
+      title="Unexpected answer from the Coordinator"
+      actions={[
+        {
+          label: 'Try again now',
+          primary: true,
+          icon: <ReloadOutlined />,
+          loading: retrying,
+          onClick: onRetry,
+        },
+      ]}
+      note={
+        <span role="status" aria-live="polite">
+          {retrying ? 'Checking' : `Checking again in ${left}s`}
+        </span>
+      }
+    >
+      The version endpoint answered {status} rather than a version. This
+      address may not be in front of a Coordinator: check what /api/v1 is
+      proxied to. {detail}
+    </StatusScreen>
+  )
 }
 
 /**
@@ -136,10 +283,21 @@ function useRetryCountdown(retrying: boolean): number {
   return left
 }
 
+/**
+ * The unplanned case, and ONLY the unplanned case: nothing answered, or a 5xx
+ * came back. `answered` separates THREE facts, because the sentence a reader
+ * quotes into a ticket is what decides who picks it up. Silence is a network
+ * or a stopped container; a 502 or 504 is the web tier saying it could not
+ * reach the Coordinator, which is a Coordinator that is down rather than a
+ * Coordinator that failed; a 500 is the Coordinator itself failing a request
+ * it did receive, which is a bug and belongs to a different team.
+ */
 function ServiceUnavailable({
+  answered,
   onRetry,
   retrying,
 }: {
+  answered?: number
   onRetry: () => void
   retrying: boolean
 }) {
@@ -165,9 +323,13 @@ function ServiceUnavailable({
         </span>
       }
     >
-      The Coordinator did not respond. It may be starting up, restarting, or
-      unreachable from this host. Nothing is affected by this - no download was
-      cancelled and no configuration was changed.
+      {!answered
+        ? 'The Coordinator did not respond. It may be starting up, restarting, or unreachable from this host.'
+        : answered === 500
+          ? 'The Coordinator answered 500. It received the request and failed on it.'
+          : `The web tier answered ${answered}: it could not reach the Coordinator. The Coordinator may be starting up, restarting, or unreachable from the web tier.`}{' '}
+      Nothing is affected by this - no download was cancelled and no
+      configuration was changed.
     </StatusScreen>
   )
 }

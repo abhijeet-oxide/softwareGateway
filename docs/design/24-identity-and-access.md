@@ -337,7 +337,7 @@ cannot start against a ZITADEL that has no projects in it. `docker compose
 down` walks the same graph backwards, so nothing writes to a database that has
 already stopped.
 
-### 13.1 Four things that are easy to get wrong
+### 13.1 Six things that are easy to get wrong
 
 Each of these was found by running the stack, not by reading documentation.
 
@@ -359,6 +359,28 @@ Each of these was found by running the stack, not by reading documentation.
    distro CDN that fails in exactly the air-gapped estates this product targets
    ([19](19-user-interface.md) §1). Writing it in dependency-free Node removes
    the network call entirely.
+
+5. **Creating the SSO connector does not put it on the sign-in screen.** An
+   identity provider is offered because it is attached to the organization's
+   LOGIN POLICY, and an organization that has never been given one of its own
+   inherits the instance's, which cannot name an org-owned connector. Adding it
+   answers `404 Login Policy not found (Org-Ffgw2)`. So the connector exists,
+   the console reads as correctly configured, and the sign-in screen shows a
+   username box and nothing else. The seeder gives the tenant its own policy,
+   copied from what it was inheriting, and attaches the connector to it.
+6. **The redirect URI is registered under the wrong Entra platform.** ZITADEL's
+   callback is `${ZITADEL_PUBLIC_URL}/idps/callback` - not any URL a browser
+   shows during a failed sign-in - and in Microsoft Entra it must be registered
+   under the **Web** platform. Entra treats an SPA-registered redirect URI as a
+   public client whose token endpoint requires PKCE; ZITADEL redeems the code
+   from its own backend with the client secret, which is a confidential client.
+   Register it as an SPA and the flow fails AFTER the password has been typed,
+   with `AADSTS9002325: Proof Key for Code Exchange is required for
+   cross-origin authorization code redemption` - a message that names neither
+   the redirect URI nor the platform setting that caused it. Nothing on this
+   side can be configured around it. The seeder prints the exact URI on every
+   run, because a value this product cannot set for itself and cannot validate
+   is a value it should at least say out loud.
 
 Cerbos telemetry is disabled in `deploy/cerbos/config.yaml` for the same
 air-gap reason: by default it posts to `telemetry.cerbos.dev`, which is a

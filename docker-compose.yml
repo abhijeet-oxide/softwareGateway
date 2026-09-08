@@ -32,11 +32,22 @@
 #
 # STARTUP ORDER is declared, not raced. Each edge is a real condition:
 #
-#   postgres  --healthy-------> zitadel --healthy--> zitadel-init --completed-+
-#        \                                                                    |
-#         `--healthy--------------------------------> controller <--healthy---+
-#                                          cerbos ---'      |
-#                                                           `--healthy--> web
+#   the identity provider
+#     postgres --healthy--> zitadel --healthy--> zitadel-init --completed--+
+#                              |                                          |
+#                              |                     zitadel-login <------'
+#                              `--healthy--> zitadel-proxy <--started-----'
+#
+#   the product
+#     postgres     --healthy---------> controller --healthy--> web
+#     cerbos       --healthy---------'                            ^
+#     zitadel-init --completed-------'--------------completed-----'
+#     controller   --healthy--> worker
+#
+# ZITADEL is THREE containers, not one, and that is not this stack's choice:
+# since v3 the sign-in screens are a separate service from the APIs, and one
+# origin in front of both is what makes them a single identity provider. See
+# deploy/zitadel/nginx.conf.
 #
 # SHUTDOWN is the exact reverse: `docker compose down` stops web first and
 # postgres last, so nothing writes to a database that has already gone.
@@ -91,6 +102,21 @@ services:
       ZITADEL_EXTERNALDOMAIN: ${ZITADEL_EXTERNAL_DOMAIN:-localhost}
       ZITADEL_EXTERNALPORT: ${ZITADEL_PORT:-8090}
       ZITADEL_TLS_ENABLED: "false"
+      # Login V2. The sign-in screens are their own service since v3 (see the
+      # zitadel-login service below and deploy/zitadel/nginx.conf); these four
+      # tell the core where that service is reachable FROM A BROWSER, which is
+      # the front door's address and never the container's.
+      #
+      # v4 already redirects to /ui/v2/login by default, so an unset
+      # DEFAULTLOGINURLV2 would work today - through the same front door, with
+      # a relative Location. They are set anyway because "it happened to
+      # default that way" is not a thing to build a login flow on, and because
+      # a reader comparing this against ZITADEL's own compose file should find
+      # the same block.
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "true"
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_BASEURI: http://${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}/ui/v2/login/
+      ZITADEL_OIDC_DEFAULTLOGINURLV2: http://${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}/ui/v2/login/login?authRequest=
+      ZITADEL_OIDC_DEFAULTLOGOUTURLV2: http://${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}/ui/v2/login/logout?post_logout_redirect=
       # The org created at first boot IS the default tenant. No second step.
       ZITADEL_FIRSTINSTANCE_ORG_NAME: ${GATEWAY_TENANT:-default}
       ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: zitadel-admin
@@ -104,8 +130,12 @@ services:
     user: "0:0"          # the distroless image cannot write /pat as its default uid
     volumes:
       - patshare:/pat
-    ports:
-      - "${ZITADEL_PORT:-8090}:8080"
+    # NOT published. ZITADEL is reached through zitadel-proxy, which is what
+    # puts the core and the login UI on one origin. Publishing this as well
+    # would give the same instance a second address that serves 404 for every
+    # sign-in URL, which is the more confusing half of the bug this fixes.
+    expose:
+      - "8080"
     healthcheck:
       test: ["CMD", "/app/zitadel", "ready", "--config", "/dev/null"]
       interval: 5s
@@ -122,7 +152,7 @@ services:
     environment:
       ZITADEL_INTERNAL_URL: http://zitadel:8080
       ZITADEL_HOST_HEADER: ${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}
-      ZITADEL_PUBLIC_URL: http://localhost:${ZITADEL_PORT:-8090}
+      ZITADEL_PUBLIC_URL: http://${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}
       WEB_PUBLIC_URL: http://localhost:${WEB_PORT:-8000}
       GATEWAY_TENANT: ${GATEWAY_TENANT:-default}
       GATEWAY_PRODUCTS: ${GATEWAY_PRODUCTS:-software-01,software-02,software-03}
@@ -144,11 +174,96 @@ services:
       STACK_POSTGRES_PASSWORD_SET: ${POSTGRES_PASSWORD:+yes}
       STACK_MASTERKEY_SET: ${ZITADEL_MASTERKEY:+yes}
     volumes:
-      - patshare:/pat:ro
+      # Read-write, unlike every other consumer of this volume: the seeder
+      # ISSUES the login service's token as well as reading its own.
+      - patshare:/pat
+      - oidcshare:/oidc
       - ./deploy/zitadel/bootstrap.mjs:/bootstrap.mjs:ro
       - ./deploy/zitadel/users.json:/bootstrap-users.json:ro
     entrypoint: ["node", "/bootstrap.mjs"]
     restart: on-failure:3
+
+  # --- the sign-in screens ---------------------------------------------------
+  # ZITADEL's login UI is a SEPARATE SERVICE, and has been since v3: the core
+  # binary serves the APIs and the admin console, and this Next.js app serves
+  # every screen a person actually signs in on. Deploying the core alone gives
+  # you an identity provider that redirects to a login page that does not
+  # exist, which answers `{"code":5,"message":"Not Found"}` - the symptom
+  # docs/design/25 was written about.
+  zitadel-login:
+    image: ${ZITADEL_LOGIN_IMAGE:-ghcr.io/zitadel/zitadel-login:v4.17.3}
+    restart: unless-stopped
+    depends_on:
+      # For the token below, which the seeder issues. Not merely for ZITADEL:
+      # this service exits at once if the file is not there.
+      zitadel-init:
+        condition: service_completed_successfully
+    environment:
+      # Server to server, so the internal name - this is the one URL here that
+      # is NOT the browser-facing one.
+      ZITADEL_API_URL: http://zitadel:8080
+      NEXT_PUBLIC_BASE_PATH: /ui/v2/login
+      # The image ships HOSTNAME=:: and its Next.js server listens on exactly
+      # what that says, so on any host or engine without IPv6 this container
+      # restart-loops on `listen EAFNOSUPPORT ... :::3000` - a message that
+      # names neither ZITADEL nor IPv6 as the problem. Nothing in this stack
+      # talks IPv6 to it, so it binds v4 and the question does not arise.
+      HOSTNAME: 0.0.0.0
+      # A service user holding IAM_LOGIN_CLIENT and nothing else. Deliberately
+      # not the seeder's PAT: that one can write every object in the instance,
+      # and this container is the one thing here a signed-out browser talks to.
+      ZITADEL_SERVICE_USER_TOKEN_FILE: /pat/login-client.pat
+      # ZITADEL answers 404 to a Host it does not recognise as its own external
+      # name, and this service talks to it as `zitadel:8080`. Same fact as
+      # SWGW_AUTH_HOSTHEADER on the controller and ZHOST in the seeder. Parsed
+      # on the FIRST colon, so a host:port value is safe here.
+      CUSTOM_REQUEST_HEADERS: Host:${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090},X-Forwarded-Proto:http
+    # The PAT is written by ZITADEL running as uid 0 and is read-only to
+    # everyone else, so this image has to read it as root too.
+    user: "0"
+    volumes:
+      - patshare:/pat:ro
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "/bin/sh", "-c",
+             "node /app/healthcheck.mjs http://localhost:3000/ui/v2/login/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # --- ZITADEL's front door --------------------------------------------------
+  # One origin for the whole identity provider: the APIs, the admin console and
+  # the sign-in screens. See deploy/zitadel/nginx.conf for why that is a
+  # requirement and not a preference.
+  zitadel-proxy:
+    image: ${NGINX_IMAGE:-nginx:1.27.5-alpine}
+    restart: unless-stopped
+    depends_on:
+      zitadel:
+        condition: service_healthy
+      zitadel-login:
+        condition: service_started
+    volumes:
+      - ./deploy/zitadel/nginx.conf:/etc/nginx/templates/zitadel.conf:ro
+      - ./deploy/zitadel/docker-entrypoint.sh:/docker-entrypoint.sh:ro
+    # Invoked through sh so the script runs whatever mode it was checked out
+    # with. A bind-mounted file keeps the host's permission bits, and a clone
+    # that lost the executable bit would fail at container start.
+    entrypoint: ["/bin/sh", "/docker-entrypoint.sh"]
+    ports:
+      - "${ZITADEL_PORT:-8090}:80"
+    healthcheck:
+      # BOTH halves, because a front door that only proves one of them is a
+      # front door that goes green while nobody can sign in. The Host header is
+      # explicit: ZITADEL answers 404 to `127.0.0.1`.
+      test: ["CMD-SHELL",
+             "wget -q -O /dev/null --header=\"Host: ${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}\" http://127.0.0.1/.well-known/openid-configuration && wget -q -O /dev/null http://127.0.0.1/ui/v2/login/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   # --- authorization ---------------------------------------------------------
   cerbos:
@@ -301,16 +416,29 @@ services:
     depends_on:
       controller:
         condition: service_healthy
+      # For the OIDC client id, which only the seeder knows. Already implied
+      # through the controller, and stated because this service now reads a
+      # FILE that step writes rather than only depending on it being done.
+      zitadel-init:
+        condition: service_completed_successfully
     environment:
-      # Baked into the page at request time so the SPA knows where to send the
-      # browser for login. Public values only: a public OIDC client has no secret.
+      # Rendered into /runtime-config.json at container start so the SPA knows
+      # where to send the browser for login. Public values only: a public OIDC
+      # client has no secret. The client id is generated by ZITADEL and comes
+      # from the seeder through oidcshare; set OIDC_CLIENT_ID to override it.
       OIDC_ISSUER: http://${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}
+    volumes:
+      - oidcshare:/oidc:ro
     ports:
       - "${WEB_PORT:-8000}:80"
 
 volumes:
   pgdata:
   patshare:
+  # The SPA's OIDC client id, which ZITADEL generates and only the seeder ever
+  # sees. Public values only - a public client has no secret - and a separate
+  # volume from patshare so the web tier never mounts a credential.
+  oidcshare:
 
 secrets:
   # Points at an empty file by default, because compose refuses to start when

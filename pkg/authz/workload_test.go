@@ -222,14 +222,102 @@ func TestTokenSourceHealthIsUnaskedBeforeTheFirstToken(t *testing.T) {
 }
 
 // Derived rather than configured, so a credentials file needs one url.
-func TestTokenSourceDerivesTheTokenEndpointFromTheIssuer(t *testing.T) {
-	c := testCreds("")
-	ts, err := NewTokenSource(c, nil)
+func TestTokenEndpointIsDerivedFromTheIssuer(t *testing.T) {
+	if got, want := tokenURL(testCreds("")), "https://id.example/oauth/v2/token"; got != want {
+		t.Errorf("token url = %q, want %q", got, want)
+	}
+	if got := tokenURL(testCreds("http://internal:8080/oauth/v2/token")); got != "http://internal:8080/oauth/v2/token" {
+		t.Errorf("an explicit token url was overridden: %q", got)
+	}
+}
+
+// THE ORDERING PROPERTY. A worker that starts before the seeder has written
+// the file must recover on its own, because on podman nothing declares that
+// ordering and on any runtime a restart to fix it is a restart nobody knows to
+// perform.
+func TestFileTokenSourcePicksCredentialsUpWhenTheyAppear(t *testing.T) {
+	srv, _ := tokenServer(t, 3600)
+	path := filepath.Join(t.TempDir(), "worker.json")
+	ts := NewFileTokenSource(path, srv.Client())
+
+	// Nothing there yet: no token, and NOT an error. An error would stop the
+	// request being made at all, which is wrong against a Coordinator that has
+	// authentication switched off.
+	tok, err := ts.Token(context.Background())
+	if err != nil {
+		t.Fatalf("a missing credentials file was reported as a failure: %v", err)
+	}
+	if tok != "" {
+		t.Fatalf("a token appeared from nowhere: %q", tok)
+	}
+	if ok, detail := ts.Health(); ok || !strings.Contains(detail, "no credentials at") {
+		t.Errorf("health with no credentials = %v %q", ok, detail)
+	}
+
+	// The seeder runs.
+	raw, err := json.Marshal(testCreds(srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "https://id.example/oauth/v2/token"; ts.url != want {
-		t.Errorf("token url = %q, want %q", ts.url, want)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// No restart, no re-construction: the next attempt authenticates.
+	tok, err = ts.Token(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok == "" {
+		t.Fatal("credentials appeared and the source did not pick them up")
+	}
+	if ok, _ := ts.Health(); !ok {
+		t.Error("health is still unhappy after a good token")
+	}
+}
+
+// Rotation is a seeder run, not a fleet restart.
+func TestFileTokenSourceRereadsAfterRotation(t *testing.T) {
+	first, _ := tokenServer(t, 3600)
+	second, _ := tokenServer(t, 3600)
+
+	path := filepath.Join(t.TempDir(), "worker.json")
+	write := func(c WorkloadCredentials) {
+		raw, err := json.Marshal(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(testCreds(first.URL))
+
+	ts := NewFileTokenSource(path, first.Client())
+	if _, err := ts.Token(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// The seeder reissues, pointing at a different provider. Nothing cached is
+	// stale yet, so the source must be told - which is exactly what a refusal
+	// from the Coordinator does.
+	write(testCreds(second.URL))
+	ts.Invalidate()
+	if _, err := ts.Token(context.Background()); err != nil {
+		t.Fatalf("the rotated credentials were not read: %v", err)
+	}
+}
+
+// A file that is present and half filled in is a mistake somebody made, not a
+// deployment without authentication, and must not be quietly ignored.
+func TestFileTokenSourceReportsAnIncompleteFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker.json")
+	if err := os.WriteFile(path, []byte(`{"issuer":"https://id.example"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ts := NewFileTokenSource(path, nil)
+	if _, err := ts.Token(context.Background()); err == nil {
+		t.Fatal("an incomplete credentials file was treated as no credentials")
 	}
 }
 

@@ -205,6 +205,28 @@ are written to their own volume and mounted read-only into every worker.
 > change and is item 7 in §11; closing the half that arrived with this
 > credential is not a claim to have closed the other half.
 
+> **Decision - credentials are read when a token is needed, never once at startup.**
+>
+> Read at boot, a worker that came up before the seeder had written the file
+> could never authenticate again however long it ran, and picking up a rotated
+> secret meant restarting the fleet. Docker Compose declares that ordering as a
+> dependency; **podman-compose does not implement the key**, so on that runtime
+> it is not declared at all.
+>
+> Reading on demand makes the question moot on both. A worker with no
+> credentials sends no token, is refused by the Coordinator in its own words,
+> and retries on its ordinary five second cadence; the file appears and the next
+> attempt succeeds. *Verified:* credentials deleted and the worker restarted
+> against them, then written by the seeder - the fleet resumed leasing with no
+> restart and no intervention.
+>
+> A missing file is therefore **not an error**. That is what an installation
+> with authentication switched off looks like, and treating it as fatal would
+> make the data plane the one component that cannot run in a supported
+> deployment. A file that is present and half filled in IS an error, because
+> that is a mistake somebody made rather than a deployment without an identity
+> provider.
+
 > **Where this goes next.** In Kubernetes the same fence should be reached by a
 > projected ServiceAccount token and a TokenReview: no credential to provision
 > at all, rotation handled by the kubelet. The seam is `v1.TokenSource`, which

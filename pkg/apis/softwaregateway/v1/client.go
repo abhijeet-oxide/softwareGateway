@@ -62,6 +62,12 @@ type Client struct {
 // rest of that token's life retrying with a credential that was just refused.
 // Invalidate is how the source is told to go and get another.
 type TokenSource interface {
+	// Token returns the credential to present. An EMPTY token and a nil error
+	// means there is nothing to present: the request is made unauthenticated,
+	// which a Coordinator with authentication off serves and one with it on
+	// refuses in its own words. That is the honest answer for a data plane
+	// whose credentials have not been provisioned yet, and it is what lets the
+	// same worker image run in a deployment that has no identity provider.
 	Token(ctx context.Context) (string, error)
 	Invalidate()
 }
@@ -468,7 +474,9 @@ func (c *Client) authorize(req *http.Request) error {
 			// the identity provider, and this is the only place that knows it.
 			return fmt.Errorf("%w: %w", ErrNoCredentials, err)
 		}
-		req.Header.Set("Authorization", "Bearer "+tok)
+		if tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
 		return nil
 	}
 	if c.token != "" {
@@ -495,6 +503,11 @@ func (c *Client) send(req *http.Request, body []byte) (*http.Response, error) {
 	resp, err := c.http.Do(req)
 	if err != nil || c.tokens == nil || resp.StatusCode != http.StatusUnauthorized {
 		return resp, err
+	}
+	// Nothing was presented, so there is nothing to refresh and the refusal is
+	// already the accurate answer. Retrying would be the same request twice.
+	if req.Header.Get("Authorization") == "" {
+		return resp, nil
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 	_ = resp.Body.Close()

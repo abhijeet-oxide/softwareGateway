@@ -220,21 +220,28 @@ func run() error {
 	}
 	var tokens *authz.TokenSource
 	if path := cfg.Worker.CredentialsFile; path != "" {
-		creds, err := authz.LoadWorkloadCredentials(path)
-		switch {
-		case err != nil:
-			logger.Warn("no workload credentials: this worker will call the Coordinator "+
-				"with no token, which only works where authentication is off",
-				"error", err)
-		default:
-			ts, err := authz.NewTokenSource(creds, nil)
-			if err != nil {
-				return fmt.Errorf("workload credentials at %s: %w", path, err)
-			}
-			tokens = ts
-			clientOpts = append(clientOpts, v1.WithTokenSource(tokens))
+		// READ ON DEMAND, not here. Whether the file exists at this instant
+		// says nothing about whether it will exist in ten seconds: the seeder
+		// writes it, and a worker is perfectly capable of winning that race.
+		// Compose declares the ordering as a dependency and podman-compose does
+		// not implement the key, so on that runtime it is not declared at all -
+		// and a worker that read this once would then spend its whole life
+		// unauthenticated with the credentials sitting beside it. It is also
+		// what makes rotation a seeder run rather than a fleet restart.
+		tokens = authz.NewFileTokenSource(path, nil)
+		clientOpts = append(clientOpts, v1.WithTokenSource(tokens))
+
+		// Said once, at startup, in whichever of the two states this is. Not a
+		// failure either way: an installation with authentication off has no
+		// such file and never will.
+		if creds, err := authz.LoadWorkloadCredentials(path); err == nil {
 			logger.Info("authenticating to the Coordinator",
 				"issuer", creds.Issuer, "client_id", creds.ClientID)
+		} else {
+			logger.Warn("no workload credentials yet: calling the Coordinator with no "+
+				"token, which only works where authentication is off. They are picked "+
+				"up as soon as they appear, without a restart",
+				"path", path, "reason", err)
 		}
 	}
 

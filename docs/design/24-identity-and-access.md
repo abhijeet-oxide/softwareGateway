@@ -777,6 +777,39 @@ A FULL SCREEN, with no navigation, saying one thing.
 > mistypes. Unset, the sentence still completes and names no route: a refusal
 > that invents one sends people to a mailbox nobody reads.
 
+> **Decision - `/whoami` reports the VERBS a caller holds anywhere, and
+> `products` says where they apply.**
+>
+> The interface shows the screen above when `permissions` comes back empty.
+> `permissionsFor` used to answer the TENANT-WIDE question - may you read
+> across this tenant - which a product-scoped caller correctly cannot, so
+> somebody granted `product-owner` on one product got an empty list and was
+> shown a locked door with their own address on it. The only grant they need,
+> and the whole reason the product tier exists, read as no grant at all.
+>
+> That is the same mistake twice. The comment above `permissionsFor` already
+> recorded it for the EMPTY scope, where it disabled every control for an
+> org-admin; narrowing the question from "the estate" to "the tenant" fixed the
+> tier it was noticed on and left the tier below it broken. So the question is
+> now the one the answer is used for: `CanAny`, the same primitive a
+> self-filtering listing asks, paired with `products` for the narrowing. `*`
+> still means unrestricted and is still decided tenant-wide, because the client
+> short-circuits on it before it narrows - a product-owner holding all four
+> verbs on one product must not report the same thing as an org-admin.
+>
+> It stayed invisible because product grants never reached a token at all
+> (§8.1): with the token carrying nothing, this code path had never once been
+> given a caller who held only product roles.
+
+> **The same error, in `VisibleProducts`.** It asked `Can(read, Scope{})` -
+> estate-wide - to decide "is this caller unrestricted", and an `org-` role
+> produces a grant scoped to the TENANT, which deliberately cannot answer that.
+> A person holding org-reader *and* a role on one product therefore came back
+> narrowed to that one product, with the product tier cancelling the tier whose
+> entire purpose is to name no product. Every scoped store filter takes that
+> list. Also invisible until product grants started arriving, and guarded now
+> by `TestAnOrgRoleIsNotNarrowedByAProductRole`.
+
 ### 8.5 Taking access away, and how long that takes
 
 The Coordinator verifies a JWT **offline**, against the issuer's published keys.

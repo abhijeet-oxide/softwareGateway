@@ -193,3 +193,57 @@ func attempt(id Identity, method, path string) (bool, string) {
 	h.ServeHTTP(httptest.NewRecorder(), r)
 	return reached, denied
 }
+
+// TestAProductOnlyAccountHoldsSomething states the situation that produced a
+// locked door, so the next person reading these tests can see it.
+//
+// Somebody granted `product-owner` on one product and nothing else is
+// correctly provisioned: that is the only grant they need, and the two-tier
+// model exists so it can be the only one. They hold every action ON THAT
+// PRODUCT and none of them tenant-wide, and both halves matter - the first is
+// what the interface must enable, the second is what stops it enabling the
+// estate.
+func TestAProductOnlyAccountHoldsSomething(t *testing.T) {
+	only := identity("default", nil, map[string][]string{"software-01": {"product-owner"}})
+
+	for _, a := range []Action{ActionRead, ActionOperate, ActionApply, ActionAdmin} {
+		if !only.Can(a, Scope{Tenant: "default", Product: "software-01"}) {
+			t.Errorf("a product-owner may not %s their own product", a)
+		}
+		if !only.CanAny(a) {
+			t.Errorf("CanAny(%s) is false for a product-owner who may %s their product", a, a)
+		}
+		if only.Can(a, Scope{Tenant: "default"}) {
+			t.Errorf("a product-owner answers the tenant-wide question for %s", a)
+		}
+	}
+	if got := only.VisibleProducts(); len(got) != 1 || got[0] != "software-01" {
+		t.Errorf("VisibleProducts = %v, want [software-01]", got)
+	}
+}
+
+// TestAnOrgRoleIsNotNarrowedByAProductRole guards the tier boundary in the one
+// direction that fails quietly.
+//
+// An `org-` role names no product on purpose: it covers products that do not
+// exist yet. Holding one AND a product role must not shrink what the org role
+// covers - but VisibleProducts asked the estate-wide question, which a
+// tenant-scoped grant deliberately cannot answer, so it fell through to the
+// product list and returned that one product. Every scoped store filter takes
+// this list, so an org-reader who also owned one product would have been shown
+// only that product's data.
+//
+// It could not be seen until product roles reached a token at all, which is
+// why it is being written now rather than then.
+func TestAnOrgRoleIsNotNarrowedByAProductRole(t *testing.T) {
+	both := identity("default", []string{"org-reader"},
+		map[string][]string{"software-01": {"product-owner"}})
+	if got := both.VisibleProducts(); got != nil {
+		t.Errorf("VisibleProducts = %v for an org-reader, want nil meaning unrestricted", got)
+	}
+
+	orgOnly := identity("default", []string{"org-reader"}, nil)
+	if got := orgOnly.VisibleProducts(); got != nil {
+		t.Errorf("VisibleProducts = %v for a plain org-reader, want nil", got)
+	}
+}

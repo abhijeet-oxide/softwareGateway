@@ -49,19 +49,35 @@ func (s *Server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, r, http.StatusOK, out)
 }
 
-// permissionsFor lists the actions this identity may take across ITS OWN
-// TENANT.
+// permissionsFor lists the actions this identity may take ANYWHERE, leaving
+// the client to narrow them by product.
 //
-// The scope carries the caller's tenant rather than being empty. An empty
-// scope is the estate-wide question, which a tenant-scoped grant correctly
-// refuses to answer (scope.go: "a narrow grant cannot answer a question that
-// names nothing") - so asking it here reported NO permissions for a user who
-// holds org-admin over everything they can see, and the UI then disabled every
-// control for the most privileged person in the system.
+// This is a list of verbs, not of doors. `Products` beside it says where they
+// apply, and the client pairs the two exactly as the server does - an action
+// with no product named is the estate-wide question, which a caller holding
+// one product cannot answer (scope.go: "a narrow grant cannot answer a
+// question that names nothing").
 //
-// `*` rather than an enumeration when the caller may do everything, so a
-// client has one thing to test for the unrestricted case instead of having to
-// keep its list of actions in step with the server's.
+// Asking the narrow question HERE has now produced the same bug twice, in the
+// one place where the answer is not a refused request but a locked door:
+//
+//   - with an EMPTY scope it reported nothing for a user holding org-admin
+//     over everything they could see, and the UI disabled every control for the
+//     most privileged person in the system.
+//   - with the TENANT scope it reported nothing for a caller whose grants are
+//     all product-scoped. Empty permissions is precisely what the SPA reads as
+//     "this account is not enabled", so somebody granted product-owner on one
+//     product - correctly, deliberately, and the only grant they need - signed
+//     in and was shown a door with their own address on it. Adding any `org-`
+//     role appeared to fix it and fixed it by making them tenant-wide.
+//
+// So the question asked is the one the answer is used for: CanAny, the same
+// primitive a self-filtering listing uses.
+//
+// `*` still means UNRESTRICTED and is decided tenant-wide, because the client
+// short-circuits on it before narrowing by product. A product-owner holds all
+// four actions on their product and must not collapse to the same answer as an
+// org-admin.
 func permissionsFor(id middleware.Identity) []string {
 	all := []middleware.Action{
 		middleware.ActionRead,
@@ -70,15 +86,21 @@ func permissionsFor(id middleware.Identity) []string {
 		middleware.ActionAdmin,
 	}
 
-	scope := middleware.Scope{Tenant: id.Tenant}
-	out := make([]string, 0, len(all))
+	wide := 0
 	for _, a := range all {
-		if id.Can(a, scope) {
-			out = append(out, string(a))
+		if id.Can(a, middleware.Scope{Tenant: id.Tenant}) {
+			wide++
 		}
 	}
-	if len(out) == len(all) {
+	if wide == len(all) {
 		return []string{"*"}
+	}
+
+	out := make([]string, 0, len(all))
+	for _, a := range all {
+		if id.CanAny(a) {
+			out = append(out, string(a))
+		}
 	}
 	return out
 }

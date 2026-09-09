@@ -131,7 +131,8 @@ func LoadWorkloadCredentials(path string) (WorkloadCredentials, error) {
 //
 // Generous on purpose. A token that expires in flight costs a lease attempt
 // and a confusing 401 in a log; refetching one a minute early costs one HTTP
-// call every twelve hours.
+// call per token lifetime, which this deployment sets to minutes rather than
+// hours so that removing an account takes effect (docs/design/24 section 8.5).
 const tokenLeeway = 60 * time.Second
 
 // TokenSource hands out access tokens for a workload, fetching a new one only

@@ -206,10 +206,23 @@ export function RequirePermission({
   anyScope?: boolean
   children: ReactNode
 }) {
-  const { can, canAny, loading } = useIdentity()
-  // Nothing is refused before the answer arrives: a page that flashed a
-  // closed door and then opened would read as a system changing its mind.
-  if (loading) return <>{children}</>
+  const { who, can, canAny, loading } = useIdentity()
+  /*
+    NOT KNOWING IS NOT A REFUSAL, and the two must not look alike.
+
+    `loading` is the ordinary case - a page that flashed a closed door and then
+    opened would read as a system changing its mind. `!who` is the one that
+    matters: /whoami itself failed, so we did not ask and were not told no.
+    Refusing there would put "you do not have access to the audit trail" in
+    front of an administrator whose network blipped, and send them to ask for a
+    role they already hold.
+
+    Rendering the page instead is not a hole. The page's own reads answer to
+    the server, which authorizes every one of them, and their failures now
+    surface properly - which is a far better description of "the Coordinator is
+    not answering" than a permission screen is.
+  */
+  if (loading || !who) return <>{children}</>
   const allowed = anyScope ? canAny(permission) : can(permission)
   if (!allowed) return <AccessDenied permission={permission} what={what} />
   return <>{children}</>

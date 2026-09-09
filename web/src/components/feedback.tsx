@@ -51,6 +51,18 @@ import { c, mono } from '../uikit'
  */
 let notify: ((failure: Failure) => void) | undefined
 
+/**
+ * Failures that arrived before there was anywhere to put them.
+ *
+ * A read can fail in the first tick, before the bridge below has mounted its
+ * effect, and dropping those would reintroduce the exact silence this file
+ * exists to end - on the failures that happen earliest, which are the ones a
+ * reader is least equipped to interpret. Bounded, because a Coordinator that is
+ * simply not there produces one of these per read on the page.
+ */
+const pending: Failure[] = []
+const MAX_PENDING = 5
+
 /** Recent reports, so one broken thing is said once. */
 const recent = new Map<string, number>()
 const DEDUPE_MS = 4000
@@ -78,7 +90,12 @@ export function reportFailure(error: unknown, action?: string): void {
     if (now - at > DEDUPE_MS) recent.delete(k)
   }
 
-  notify?.(action ? { ...failure, title: `${action} failed` } : failure)
+  const reported = action ? { ...failure, title: `${action} failed` } : failure
+  if (!notify) {
+    if (pending.length < MAX_PENDING) pending.push(reported)
+    return
+  }
+  notify(reported)
 }
 
 /**
@@ -102,6 +119,8 @@ export function FeedbackBridge() {
         placement: 'bottomRight',
       })
     }
+    // Anything that failed before this mounted, said now rather than never.
+    while (pending.length > 0) notify(pending.shift()!)
     return () => {
       notify = undefined
     }

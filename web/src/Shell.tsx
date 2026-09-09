@@ -258,10 +258,16 @@ export function Shell({ children }: { children: ReactNode }) {
     place you may not go is not a place. The page behind each of these refuses
     itself as well - see `RequirePermission` - so this is the courtesy and that
     is the behaviour.
+
+    UNTIL THE ANSWER ARRIVES, everything. Filtering on an identity we have not
+    got yet empties the rail on every load and fills it a moment later, which
+    reads as an application that has just noticed who you are; and if /whoami
+    failed outright it would leave one entry on screen for somebody who holds
+    every permission in the system. Not knowing is not a refusal.
   */
-  const visible = NAV.filter(
-    (n) => !n.permission || (n.anyScope ? canAny(n.permission) : can(n.permission)),
-  )
+  const visible = who
+    ? NAV.filter((n) => !n.permission || (n.anyScope ? canAny(n.permission) : can(n.permission)))
+    : NAV
 
   const items: NavItem[] = visible.map((n) => ({
     key: n.key,

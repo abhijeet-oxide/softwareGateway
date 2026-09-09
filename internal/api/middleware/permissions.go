@@ -274,6 +274,15 @@ func ResolveAccess(ctx context.Context, engine authz.Engine, id Identity) Access
 
 // checkAll asks the engine about every permission in one exchange and returns
 // the ones it allowed, sorted so the answer is stable between calls.
+//
+// # One entry per RESOURCE, not one per permission
+//
+// Cerbos answers a list of resources, each with a list of actions, and the four
+// `product.*` permissions are four actions on ONE resource. Sending them as
+// four identical resource entries asks the same question four times, and asks a
+// PDP whose default request limit is fifty resources to hold a list that grows
+// with the catalogue rather than with the number of things in it. Grouped, the
+// whole catalogue is thirteen entries whatever it grows to.
 func checkAll(
 	ctx context.Context, engine authz.Engine, principal authz.Identity,
 	product string, defs []PermissionDef,
@@ -281,20 +290,39 @@ func checkAll(
 	if len(defs) == 0 {
 		return []string{}, nil
 	}
-	queries := make([]authz.Query, 0, len(defs))
+
+	// Grouped, in first-seen order so the request is deterministic and a
+	// captured exchange diffs cleanly between runs.
+	var kinds []string
+	actions := map[string][]string{}
 	for _, def := range defs {
+		if _, seen := actions[def.Kind]; !seen {
+			kinds = append(kinds, def.Kind)
+		}
+		actions[def.Kind] = append(actions[def.Kind], def.Action)
+	}
+
+	queries := make([]authz.Query, 0, len(kinds))
+	for _, kind := range kinds {
 		queries = append(queries, authz.Query{
-			Resource: authz.Resource{Kind: def.Kind, ID: "*", Product: product},
-			Actions:  []string{def.Action},
+			Resource: authz.Resource{Kind: kind, ID: "*", Product: product},
+			Actions:  actions[kind],
 		})
 	}
 	answers, err := authz.CheckMany(ctx, engine, principal, queries)
 	if err != nil {
 		return nil, err
 	}
+
+	allowed := map[string]map[string]bool{}
+	for i, kind := range kinds {
+		if i < len(answers) {
+			allowed[kind] = answers[i]
+		}
+	}
 	held := make([]string, 0, len(defs))
-	for i, def := range defs {
-		if i < len(answers) && answers[i][def.Action] {
+	for _, def := range defs {
+		if allowed[def.Kind][def.Action] {
 			held = append(held, string(def.Name))
 		}
 	}

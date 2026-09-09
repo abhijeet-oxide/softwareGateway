@@ -38,6 +38,8 @@ A cloud-native platform that continuously discovers software packages published 
 | 25 | [ZITADEL Login V2 and the SSO redirect](25-zitadel-login-v2-and-sso-redirect.md) | Where the sign-in screens actually live, the SPA's OIDC flow, and what a 401 means |
 | 26 | [SSO account linking](26-sso-account-linking.md) | Why a correctly provisioned administrator was refused, how the address a directory asserts is read back, and the mock that reproduces it |
 | 27 | [Configuration as data](27-configuration-as-data.md) | One directory an administrator manages, read the same way by docker compose and by Flux: products, people, roles, policies, secrets |
+| 28 | [Software flow](28-software-flow.md) | Automated ingestion, onboarding and promotion end to end, answering the brief in [software-flow-brief.md](../software-flow-brief.md) |
+| 29 | [JFrog Build Info](29-jfrog-build-info.md) | Publishing a Build Info document to Artifactory after a completed OCI transfer |
 
 ## Reading order
 

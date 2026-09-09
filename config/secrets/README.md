@@ -36,9 +36,9 @@ in by hand, bind-mounted by `docker-compose.yml` at the same path. A developer
 gets the same layout as production without a Vault:
 
 ```sh
-mkdir -p data/secrets/local/internal-registry
-printf '%s' 'svc-account'        > data/secrets/local/internal-registry/username
-printf '%s' 'the-password'       > data/secrets/local/internal-registry/password
+mkdir -p config/secrets/local/internal-registry
+printf '%s' 'svc-account'        > config/secrets/local/internal-registry/username
+printf '%s' 'the-password'       > config/secrets/local/internal-registry/password
 ```
 
 `printf` rather than `echo`, because `echo` appends a newline and a newline in a

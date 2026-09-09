@@ -1,14 +1,14 @@
 # 04 - Response to the compliance audit
 
-> **What changed, and why.** [compliance-report.md](compliance-report.md) is an
+> **What changed, and why.** [compliance-report-1.md](compliance-report-1.md) is an
 > audit of this tool against a real Helm chart. This document answers it clause
 > by clause: what was accepted, what was implemented differently, and what was
 > declined with a reason.
 >
 > A second validation followed, in
-> [complaince-report_2.md](complaince-report_2.md), against a larger release.
+> [compliance-report-2.md](compliance-report-2.md), against a larger release.
 > §9 answers that one the same way, and
-> [compliance_report_3.md](compliance_report_3.md) - a rescan verifying that
+> [compliance-report-3.md](compliance-report-3.md) - a rescan verifying that
 > round - is answered in §10.
 >
 > **Prerequisite:** [00 - The Compliance Model](00-compliance-model.md) · **See also:** [01 - Check Catalog](01-check-catalog.md), [02 - Authoring Checks](02-authoring-checks.md)
@@ -267,7 +267,7 @@ Stated rather than quietly dropped.
 
 ## 9. Response to the second validation
 
-[complaince-report_2.md](complaince-report_2.md) is an independent verification
+[compliance-report-2.md](compliance-report-2.md) is an independent verification
 of the work above, against a release of roughly 250 containers across a dozen
 charts. Its verdict was that the findings were largely correct and that the
 remaining problems were of a different kind from the first round: not rules that
@@ -332,7 +332,7 @@ author has to remember to keep true.
 
 ## 10. Response to the rescan
 
-[compliance_report_3.md](compliance_report_3.md) is a rescan of the same
+[compliance-report-3.md](compliance-report-3.md) is a rescan of the same
 release after §9's work. Nine of the eleven items were verified fixed, six
 check families were recomputed independently and matched exactly, and the
 rescan found two defects the fixes had introduced. Both are fixed here.

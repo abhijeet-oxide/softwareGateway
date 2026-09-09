@@ -1,4 +1,4 @@
-package promote_test
+package promoter_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/abhijeet-oxide/softwareGateway/internal/promote"
+	"github.com/abhijeet-oxide/softwareGateway/internal/promoter"
 )
 
 // The registry's job is to be BORING and DETERMINISTIC. A plugin registry
@@ -20,12 +20,12 @@ type fake struct {
 
 func (f fake) Name() string { return f.name }
 
-func (f fake) Claim(promote.Hop) promote.Verdict {
-	return promote.Verdict{Claimed: f.claims, Reason: f.name + " spoke"}
+func (f fake) Claim(promoter.Hop) promoter.Verdict {
+	return promoter.Verdict{Claimed: f.claims, Reason: f.name + " spoke"}
 }
 
-func (f fake) Promote(context.Context, promote.Hop) (promote.Outcome, error) {
-	return promote.Outcome{Promoter: f.name, Promoted: 1}, nil
+func (f fake) Promote(context.Context, promoter.Hop) (promoter.Outcome, error) {
+	return promoter.Outcome{Promoter: f.name, Promoted: 1}, nil
 }
 
 // registerOnce keeps the package-level registry usable from several tests
@@ -37,10 +37,10 @@ func register(t *testing.T) {
 	registered.Do(func() {
 		// Named so the sorted order is NOT the order they are registered in:
 		// if resolution followed registration, "zulu" would answer first.
-		promote.Register("zulu", func(promote.Config) (promote.Promoter, error) {
+		promoter.Register("zulu", func(promoter.Config) (promoter.Promoter, error) {
 			return fake{name: "zulu", claims: claimZulu.Load()}, nil
 		})
-		promote.Register("alpha", func(promote.Config) (promote.Promoter, error) {
+		promoter.Register("alpha", func(promoter.Config) (promoter.Promoter, error) {
 			return fake{name: "alpha", claims: claimAlpha.Load()}, nil
 		})
 	})
@@ -56,10 +56,10 @@ type atomicBool struct {
 func (a *atomicBool) Load() bool     { a.mu.Lock(); defer a.mu.Unlock(); return a.v }
 func (a *atomicBool) Store(val bool) { a.mu.Lock(); defer a.mu.Unlock(); a.v = val }
 
-func aHop() promote.Hop {
-	return promote.Hop{
+func aHop() promoter.Hop {
+	return promoter.Hop{
 		Product: "nokia", Package: "v1",
-		Names: []promote.Name{{Repository: "orbs/cfx", Tag: "v1", Digest: "sha256:aa"}},
+		Names: []promoter.Name{{Repository: "orbs/cfx", Tag: "v1", Digest: "sha256:aa"}},
 	}
 }
 
@@ -70,7 +70,7 @@ func TestNothingClaimingIsNotAnError(t *testing.T) {
 	claimAlpha.Store(false)
 	claimZulu.Store(false)
 
-	res, err := promote.Resolve(promote.Config{}, aHop())
+	res, err := promoter.Resolve(promoter.Config{}, aHop())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestNothingClaimingIsNotAnError(t *testing.T) {
 	if len(res.Declined) != 2 {
 		t.Fatalf("%d declines carried, want 2", len(res.Declined))
 	}
-	one := promote.Resolution{Declined: res.Declined[:1]}
+	one := promoter.Resolution{Declined: res.Declined[:1]}
 	if got := one.DeclinedReason(); got != res.Declined[0].Reason {
 		t.Errorf("a single decline must be its reason alone; got %q", got)
 	}
@@ -99,7 +99,7 @@ func TestTheClaimingPromoterIsReturned(t *testing.T) {
 	claimAlpha.Store(false)
 	claimZulu.Store(true)
 
-	res, err := promote.Resolve(promote.Config{}, aHop())
+	res, err := promoter.Resolve(promoter.Config{}, aHop())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestTwoClaimsAreRefusedAndNameBoth(t *testing.T) {
 	claimZulu.Store(true)
 	t.Cleanup(func() { claimAlpha.Store(false); claimZulu.Store(false) })
 
-	_, err := promote.Resolve(promote.Config{}, aHop())
+	_, err := promoter.Resolve(promoter.Config{}, aHop())
 	if err == nil {
 		t.Fatal("two promoters claiming one hop must be refused")
 	}
@@ -135,14 +135,14 @@ func TestTwoClaimsAreRefusedAndNameBoth(t *testing.T) {
 // report success having done nothing.
 func TestAHopWithNoNamesIsRefused(t *testing.T) {
 	register(t)
-	if _, err := promote.Resolve(promote.Config{}, promote.Hop{Package: "v1"}); err == nil {
+	if _, err := promoter.Resolve(promoter.Config{}, promoter.Hop{Package: "v1"}); err == nil {
 		t.Fatal("a hop with no names must be refused")
 	}
 }
 
 func TestPromotersAreListedInNameOrder(t *testing.T) {
 	register(t)
-	got := promote.Promoters()
+	got := promoter.Promoters()
 	if len(got) < 2 || got[0] != "alpha" {
 		t.Fatalf("Promoters() must be sorted by name, got %v", got)
 	}

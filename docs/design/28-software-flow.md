@@ -1,10 +1,10 @@
 # Configuration simplification, and flow as configuration
 
 **Status:** proposal, for review. Nothing here is implemented.
-**Answers:** `docs/software-flow.md`, plus the review that followed it.
+**Answers:** `docs/software-flow-brief.md`, plus the review that followed it.
 
 The goal of this round is **not** the flow. It is the configuration. The flow in
-`docs/software-flow.md` is one flow among many, and the test of this design is
+`docs/software-flow-brief.md` is one flow among many, and the test of this design is
 that the tool does not know it exists: `download`, `onboard` and `promote` are
 words a configuration file supplies, not behaviours compiled into the product.
 

@@ -1,4 +1,4 @@
-# 27. data/ - one directory, two deployment paths
+# 27. config/ - one directory, two deployment paths
 
 ## 1. What was wrong
 
@@ -32,14 +32,14 @@ format for the same decisions.
 
 ## 2. The split that replaced it
 
-**`data/` is content. `deploy/` is machinery.**
+**`config/` is content. `deploy/` is machinery.**
 
 Content changes without a release: which products exist, who may use them, what
 a role means, what a credential is. Machinery changes with the code:
 Dockerfiles, nginx configuration, the seeder, the database's init script.
 
 ```
-data/
+config/
   access/
     roles.yaml          the roles that exist: tenant-wide, and per product
     policies/           Cerbos policies - what each role may actually do
@@ -56,7 +56,7 @@ One directory, and the two deployment paths differ only in how it arrives:
 
 | | local | cluster |
 |---|---|---|
-| arrives by | `docker-compose.yml` bind-mounts `${DATA_DIR:-./data}` | Flux reconciles it |
+| arrives by | `docker-compose.yml` bind-mounts `${CONFIG_DIR:-./config}` | Flux reconciles it |
 | applied by | `docker compose run --rm zitadel-init` | the seeding Job, or a CI step |
 | read by | the same binaries, at the same paths | the same binaries, at the same paths |
 
@@ -64,9 +64,9 @@ No rendering step, no per-environment fork, no second format.
 
 ## 3. The rule that ties products to people
 
-**Every product in `data/products` must have an owner in `data/users/users.yaml`.**
+**Every product in `config/products` must have an owner in `config/users/users.yaml`.**
 
-The owner role is named once, in `data/access/roles.yaml` as
+The owner role is named once, in `config/access/roles.yaml` as
 `product.ownerRole`, so the rule is configuration rather than a constant in the
 seeder.
 
@@ -90,7 +90,7 @@ product ships into do not have.
 
 So it carries a **subset reader**: maps, lists, lists of maps, inline `[]` and
 `{}`, quoted and plain scalars, comments. Not anchors, not multi-line scalars,
-not multiple documents. `data/access/roles.yaml` and `data/users/users.yaml` are
+not multiple documents. `config/access/roles.yaml` and `config/users/users.yaml` are
 written inside that subset.
 
 Two things keep that honest. The Go test parses both files with the real
@@ -108,11 +108,11 @@ projected Kubernetes Secret volume, and it is deliberately not the Kubernetes
 API: no client-go, no cluster-wide Secret read permission, no API-server load,
 and the same code path works against a directory on a laptop.
 
-`data/secrets/manifests/` holds the documents that produce those Secrets in a
+`config/secrets/manifests/` holds the documents that produce those Secrets in a
 cluster - VaultStaticSecret, ExternalSecret, SealedSecret. They carry a
 reference to a value and never a value, which is what makes them reviewable.
 
-`data/secrets/local/` is the same layout filled in by hand, bind-mounted by
+`config/secrets/local/` is the same layout filled in by hand, bind-mounted by
 compose at the same path, and never committed. A developer gets production's
 layout without a Vault.
 
@@ -150,7 +150,7 @@ ever was.
 
 ## 8. Files
 
-- [`data/README.md`](../../data/README.md) - the directory, for the person who edits it
+- [`config/README.md`](../../config/README.md) - the directory, for the person who edits it
 - [`deploy/zitadel/bootstrap.mjs`](../../deploy/zitadel/bootstrap.mjs) - the reader, the checks, the seeding
 - [`deploy/deploy_test.go`](../../deploy/deploy_test.go) - `TestEveryProductHasAnOwner`
 - [`cmd/worker/main.go`](../../cmd/worker/main.go) - `workerName`, `CanLease`, the readiness check

@@ -3,8 +3,8 @@
 What this integration does, what it needs from an Anchore deployment, and what
 each failure it can report actually means.
 
-The methodology it implements is [Anchore.md](Anchore.md); the endpoints and
-schemas are [anchore_5.22_openapi.yaml](anchore_5.22_openapi.yaml), which is the
+The methodology it implements is [anchore-orb-analysis.md](anchore-orb-analysis.md); the endpoints and
+schemas are [anchore-5.22-openapi.yaml](anchore-5.22-openapi.yaml), which is the
 final authority. The design argument is
 [21 - Security Posture](../design/21-security-posture.md) §12-14.
 

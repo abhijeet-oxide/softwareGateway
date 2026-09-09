@@ -11,7 +11,7 @@
 # Three processes: the fake vendor registries, the Coordinator and one Worker.
 # No Docker, no Postgres, no cluster; the only thing written is dev/swgw.db.
 #
-# It reads data/config.yaml, the same file compose and Flux read, and overrides
+# It reads config/config.yaml, the same file compose and Flux read, and overrides
 # exactly two paths: the products and the secrets come from test/, so a seeded
 # demo estate never writes into the directory a deployment is described by.
 set -euo pipefail
@@ -59,9 +59,9 @@ run fakeregistry "$BIN/fakeregistry"
 sleep 2
 
 echo "==> starting coordinator and worker"
-run coordinator "$BIN/coordinator" --config ./data/config.yaml
+run coordinator "$BIN/coordinator" --config ./config/config.yaml
 sleep 6
-run worker "$BIN/worker" --config ./data/config.yaml
+run worker "$BIN/worker" --config ./config/config.yaml
 
 echo "==> waiting for discovery"
 for _ in $(seq 1 40); do

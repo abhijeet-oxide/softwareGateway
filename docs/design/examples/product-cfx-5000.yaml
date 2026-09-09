@@ -9,7 +9,7 @@
 #  Quays — as one action. There is no separate mirror concept: a Quay mirror is
 #  an ordinary target with `type: quay` and a `replication:` block.
 #
-#  Proposed v1alpha2 shape. See docs/design/24-software-flow.md.
+#  Proposed v1alpha2 shape. See docs/design/28-software-flow.md.
 # ═══════════════════════════════════════════════════════════════════════════════
 apiVersion: softwaregateway.io/v1alpha2
 kind: Product

@@ -4,7 +4,7 @@ One document per secret, referencing a value rather than carrying one.
 
 Nothing here is applied by `docker compose`: locally the values are files in
 `../local/`, which is the same layout without an operator to produce it. These
-are for the cluster, applied by Flux alongside everything else in `data/`.
+are for the cluster, applied by Flux alongside everything else in `config/`.
 
 A VaultStaticSecret, for the Vault Secrets Operator:
 

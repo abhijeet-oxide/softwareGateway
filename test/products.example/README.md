@@ -2,11 +2,11 @@
 
 Three vendor products pointed at `test/cmd/fakeregistry`, which serves their
 release trees locally over TLS. `test/seed/up.sh` reads them IN PLACE, through
-`SWGW_PRODUCTSDIR`, so a seeded demo estate never writes into `data/products` -
+`SWGW_PRODUCTSDIR`, so a seeded demo estate never writes into `config/products` -
 the directory that describes what a real deployment replicates.
 
 They are also the richer half of `task validate`: credentials, promotion
-targets and compliance packs that the shipped `data/products` samples
+targets and compliance packs that the shipped `config/products` samples
 deliberately leave out, because a validator only ever exercised against the
 simple case is a validator nobody has tested.
 

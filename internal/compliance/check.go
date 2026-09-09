@@ -510,7 +510,7 @@ type Assert struct {
 	// make such a check say anything is to make it FAIL on every subject - and
 	// that is how a pack ends up with three checks producing a third of the
 	// report's rows and close to none of its defects, which is the shape the
-	// audit in docs/compliance/compliance-report.md found.
+	// audit in docs/compliance/compliance-report-1.md found.
 	//
 	// With it, the check passes on everything correct and still carries what it
 	// saw, so the inventory lives in the full record and the action report stays

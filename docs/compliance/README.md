@@ -19,7 +19,7 @@ report, milestones. This directory is the ground truth it rests on.
 | 01 | [Check Catalog](01-check-catalog.md) | Every one of the 118 assertions triaged - automatable now, needs a values file, or needs a human reading a document - plus 8 proposed additions and the six checks that are easy to get wrong |
 | 02 | [Authoring Checks](02-authoring-checks.md) | The extension contract: the pack manifest, the YAML and CEL forms a check is written in, ID rules, and what a new check must prove before it can fail anybody's release |
 | 03 | [Review of the Existing Policies](03-sample-policy-review.md) | An honest read of the sixteen `.rego` files in [sample-policies/](sample-policies/): what is sound, what is broken, what each becomes |
-| — | [compliance-report.md](compliance-report.md) | **The audit.** This tool run against a real Helm chart, by somebody reading its output rather than its code: the false positives, the severities that were wrong, and the language nobody outside the team could read |
+| — | [compliance-report-1.md](compliance-report-1.md) | **The audit.** This tool run against a real Helm chart, by somebody reading its output rather than its code: the false positives, the severities that were wrong, and the language nobody outside the team could read |
 | 04 | [Response to the Audit](04-audit-response.md) | What changed because of it, clause by clause - including the two proposals implemented differently, and what is still open |
 | — | [sample-policies/](sample-policies/) | The policies as they were handed over. Kept as-is; see 03 before adopting any of them |
 

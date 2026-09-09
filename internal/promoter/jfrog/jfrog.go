@@ -53,7 +53,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/abhijeet-oxide/softwareGateway/internal/promote"
+	"github.com/abhijeet-oxide/softwareGateway/internal/promoter"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/transport"
 )
@@ -64,7 +64,7 @@ const Name = "jfrog"
 
 // Option keys read from an endpoint's Options map.
 //
-// Strings rather than fields on promote.Endpoint, because a plugin's own
+// Strings rather than fields on promoter.Endpoint, because a plugin's own
 // configuration must not require editing a shared struct - see the Options
 // comment there.
 const (
@@ -107,11 +107,11 @@ const (
 // merely reporting it.
 var errAmbiguousBadRequest = errors.New("no further diagnosis from Artifactory")
 
-func init() { promote.Register(Name, New) }
+func init() { promoter.Register(Name, New) }
 
 // Promoter promotes between two repository keys of one JFrog platform.
 type Promoter struct {
-	cfg promote.Config
+	cfg promoter.Config
 	log *slog.Logger
 
 	// endpoint, srcKey and dstKey are derived at construction so Claim can
@@ -129,8 +129,8 @@ type Promoter struct {
 //
 // It never fails: everything it could complain about is a reason for Claim to
 // decline rather than an error, because the chain constructs every registered
-// plugin in order to ask. See promote.Constructor.
-func New(cfg promote.Config) (promote.Promoter, error) {
+// plugin in order to ask. See promoter.Constructor.
+func New(cfg promoter.Config) (promoter.Promoter, error) {
 	log := cfg.Logger
 	if log == nil {
 		log = slog.Default()
@@ -153,7 +153,7 @@ func New(cfg promote.Config) (promote.Promoter, error) {
 	return p, nil
 }
 
-// Name implements promote.Promoter.
+// Name implements promoter.Promoter.
 func (p *Promoter) Name() string { return Name }
 
 // Claim decides whether this hop is JFrog's to carry.
@@ -162,9 +162,9 @@ func (p *Promoter) Name() string { return Name }
 // fast path is unavailable should learn WHICH of these was not true, because
 // three of the four are configuration mistakes worth fixing and the fourth is
 // a fact about the estate.
-func (p *Promoter) Claim(h promote.Hop) promote.Verdict {
-	no := func(format string, args ...any) promote.Verdict {
-		return promote.Verdict{Promoter: Name, Reason: fmt.Sprintf(format, args...)}
+func (p *Promoter) Claim(h promoter.Hop) promoter.Verdict {
+	no := func(format string, args ...any) promoter.Verdict {
+		return promoter.Verdict{Promoter: Name, Reason: fmt.Sprintf(format, args...)}
 	}
 
 	// 1. Both ends must be JFrog. A target configured `generic` against an
@@ -202,7 +202,7 @@ func (p *Promoter) Claim(h promote.Hop) promote.Verdict {
 			h.Origin.Name, h.Destination.Name, p.srcKey)
 	}
 
-	return promote.Verdict{
+	return promoter.Verdict{
 		Promoter: Name,
 		Claimed:  true,
 		Reason: fmt.Sprintf("Same Artifactory as %s. JFrog relocates %s server-side.",
@@ -217,8 +217,8 @@ func (p *Promoter) Claim(h promote.Hop) promote.Verdict {
 // and firing two hundred of them at once at one instance is how a promotion
 // turns into a 429 storm and finishes slower than the serial version. The
 // whole operation is already seconds in the case that matters.
-func (p *Promoter) Promote(ctx context.Context, h promote.Hop) (promote.Outcome, error) {
-	out := promote.Outcome{
+func (p *Promoter) Promote(ctx context.Context, h promoter.Hop) (promoter.Outcome, error) {
+	out := promoter.Outcome{
 		Promoter: Name,
 		Detail:   fmt.Sprintf("%s -> %s on %s", p.srcKey, p.dstKey, hostOf(p.endpoint)),
 	}
@@ -429,7 +429,7 @@ func (p *Promoter) tagsOutsideHop(
 	return extra, nil
 }
 
-// promoteRequest is the body of POST /api/docker/{repo}/v2/promote.
+// promoteRequest is the body of POST /api/docker/{repo}/v2/promoter.
 type promoteRequest struct {
 	TargetRepo string `json:"targetRepo"`
 
@@ -598,7 +598,7 @@ func (p *Promoter) httpClient() (*http.Client, error) {
 // exactly the arrangement xray.go's endpoint resolution uses, and for the same
 // reason. Getting it wrong is cheap to diagnose because the failure names the
 // repository key it tried.
-func repositoryKey(e promote.Endpoint) (string, error) {
+func repositoryKey(e promoter.Endpoint) (string, error) {
 	if key := strings.Trim(e.Options[OptionRepositoryKey], "/ "); key != "" {
 		return key, nil
 	}
@@ -618,7 +618,7 @@ func repositoryKey(e promote.Endpoint) (string, error) {
 // Same problem and same answer as xray.go: on a repository-path deployment the
 // platform base URL is the docker host, and on a subdomain deployment it is
 // not. `jfrogEndpoint` settles it where the derivation cannot.
-func platformEndpoint(e promote.Endpoint, c registry.ClientConfig) (string, error) {
+func platformEndpoint(e promoter.Endpoint, c registry.ClientConfig) (string, error) {
 	raw := strings.TrimSpace(e.Options[OptionEndpoint])
 	if raw == "" {
 		if e.Registry == "" {
@@ -680,7 +680,7 @@ func joinPath(base, rest string) string {
 // isJFrog recognises the two spellings configuration accepts.
 //
 // Compared here rather than through product.RegistryType.IsJFrog, so this
-// plugin stays free of configuration types - see the promote.Endpoint comment
+// plugin stays free of configuration types - see the promoter.Endpoint comment
 // on why a promoter must not import internal/product. The two spellings are
 // fixed by that package's validation, so there is nothing here to drift.
 func isJFrog(t string) bool {
@@ -701,14 +701,14 @@ func orGeneric(t string) string {
 
 // notJFrog names the END that is not declared JFrog, so the refusal points at
 // the one target somebody has to edit rather than restating both.
-func notJFrog(h promote.Hop) string {
+func notJFrog(h promoter.Hop) string {
 	if !isJFrog(h.Origin.RegistryType) {
 		return h.Origin.Name
 	}
 	return h.Destination.Name
 }
 
-func typeOfNotJFrog(h promote.Hop) string {
+func typeOfNotJFrog(h promoter.Hop) string {
 	if !isJFrog(h.Origin.RegistryType) {
 		return h.Origin.RegistryType
 	}

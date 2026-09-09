@@ -96,7 +96,7 @@ Organization  = TENANT      (default)
 │
 ├── Project "software-01"   = one PRODUCT
 ├── Project "software-02"     product-owner, product-operator, product-reader
-└── ...                       (one project per document in data/products)
+└── ...                       (one project per document in config/products)
 ```
 
 A **role assignment** binds (user × project × roles) inside an org. That is
@@ -283,7 +283,7 @@ their address.
 > and it is the only one that produces no token at all.
 >
 > Who may use this gateway is decided by an administrator in
-> `data/users/users.yaml`, reviewable in a pull request. It is not decided
+> `config/users/users.yaml`, reviewable in a pull request. It is not decided
 > by who happens to hold an account in the corporate directory, which is
 > everybody.
 
@@ -417,10 +417,10 @@ SSO_CLIENT_ID=<from Entra app registration>
 SSO_CLIENT_SECRET=<from Entra app registration>
 SSO_AUTO_REDIRECT=true          # single IdP: skip ZITADEL's own login form
 
-# --- what exists: NOT here. See data/README.md ------------------------------
-#   data/products/*.yaml      one project per product, with its roles
-#   data/access/roles.yaml    the roles themselves, both tiers
-#   data/users/users.yaml     the people, and their role on each product
+# --- what exists: NOT here. See config/README.md ------------------------------
+#   config/products/*.yaml      one project per product, with its roles
+#   config/access/roles.yaml    the roles themselves, both tiers
+#   config/users/users.yaml     the people, and their role on each product
 
 # --- break glass: set EXACTLY ONE (see §7) ----------------------------------
 BOOTSTRAP_ADMIN_EMAIL=platform-admin@example.com    # production
@@ -436,9 +436,9 @@ replicated with no project to grant access to, or a project could outlive the
 product it was made for, and the only symptom either way was somebody unable to
 open something.
 
-One list now, in `data/products`, with the access rule enforced where the two
+One list now, in `config/products`, with the access rule enforced where the two
 files first meet: a product nobody holds `product.ownerRole` on in
-`data/users/users.yaml` refuses to seed. `go test ./deploy/...` makes the same
+`config/users/users.yaml` refuses to seed. `go test ./deploy/...` makes the same
 check on the pull request.
 
 ## 7. The bootstrap admin exists to appoint a real one
@@ -564,7 +564,7 @@ consulted. **A permission model no handler asks is documentation.**
 > closed, which is why a product-scoped caller cannot list every transfer.
 
 > **Corrected while doing this:** the role ladder gave `operator` `ActionApply`.
-> `data/access/policies/download.yaml` grants `apply` to `org_wide_admin` and
+> `config/access/policies/download.yaml` grants `apply` to `org_wide_admin` and
 > `product_owner` only, and §5.2 describes org-operator in the same terms. The
 > disagreement cost nothing while nothing consulted the ladder, and would have
 > handed every operator the one action that writes into somebody else's
@@ -574,7 +574,7 @@ consulted. **A permission model no handler asks is documentation.**
 
 The policy engine was constructed at startup and never consulted; the decision
 came from a role ladder compiled into the binary. That is the opposite of why a
-PDP is in this stack. `data/access/policies` is now the only answer whenever
+PDP is in this stack. `config/access/policies` is now the only answer whenever
 an engine is configured - not a second opinion layered over the ladder, which
 would be two answers that can disagree and a shipped behaviour decided by
 whichever was checked last.
@@ -736,7 +736,7 @@ the key and fall back to a default, so an existing deployment silently starts
 talking to `http://localhost:8080` instead of its real controller. That is a
 deprecation cycle with dual-key support, not a rename. The rest is 486 mentions
 across 129 Go files, 291 across 31 documents, `cmd/coordinator`,
-`build/Dockerfile.coordinator` and the worker's wire config.
+`deploy/build/Dockerfile.coordinator` and the worker's wire config.
 
 > **Decision - rename at the deployment layer now, in the code never (or behind a deprecation).**
 >
@@ -749,7 +749,7 @@ docker compose up -d          # start, in dependency order
 docker compose down           # stop, reverse order, data kept
 docker compose down -v        # stop and discard the databases
 
-# after adding a document to data/products and an owner to data/users/users.yaml:
+# after adding a document to config/products and an owner to config/users/users.yaml:
 docker compose run --rm zitadel-init
 ```
 

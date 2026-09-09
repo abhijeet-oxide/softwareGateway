@@ -186,8 +186,8 @@ services:
       # WHAT THIS DEPLOYMENT IS, in one directory. The products, the people,
       # the roles and the policies were four formats in four places applied by
       # four mechanisms; they are one subject, so they are one mount. The same
-      # directory Flux reconciles in a cluster - see data/README.md.
-      GATEWAY_DATA_DIR: /data
+      # directory Flux reconciles in a cluster - see config/README.md.
+      GATEWAY_CONFIG_DIR: /config
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
       # Defaulted so a zero-config run has an admin who can actually sign in.
       # Setting SSO_ISSUER makes the seeder REFUSE this, so the convenience
@@ -240,7 +240,7 @@ services:
       # Read-only and whole: the seeder reads products, users, roles and the
       # relationships between them, and refuses to write anything if they
       # disagree - a product with no owner, a document with no name.
-      - ${DATA_DIR:-./data}:/data:ro
+      - ${CONFIG_DIR:-./config}:/config:ro
       # The sign-in screen's logo. Mount another directory here to brand it
       # without touching the repository - see deploy/zitadel/branding/README.md.
       - ${BRANDING_DIR:-./deploy/zitadel/branding}:/branding:ro
@@ -362,7 +362,7 @@ services:
       # connection in one that has.
       CERBOS_NO_TELEMETRY: "1"
     volumes:
-      - ${DATA_DIR:-./data}/access/policies:/policies:ro
+      - ${CONFIG_DIR:-./config}/access/policies:/policies:ro
       - ./deploy/cerbos/config.yaml:/config/config.yaml:ro
     healthcheck:
       # Defaults to the gRPC health protocol on :3593, which the REST API sits on.
@@ -382,7 +382,7 @@ services:
     image: ${CONTROLLER_IMAGE:-software-gateway-controller:local}
     build:
       context: .
-      dockerfile: build/Dockerfile.coordinator
+      dockerfile: deploy/build/Dockerfile.coordinator
       args:
         GO_IMAGE: ${GO_IMAGE:-golang:1.25.14}
         RUNTIME_IMAGE: ${RUNTIME_IMAGE:-gcr.io/distroless/static-debian12:nonroot}
@@ -413,7 +413,7 @@ services:
       # A mismatch is refused at startup now rather than defaulted around.
       # THE SAME CONFIGURATION FILE `task run` uses, mounted below, with only
       # what genuinely differs in a container stated here. configDir points at
-      # ./data on a laptop and at the mount root in an image; the credentials
+      # ./config on a laptop and at the mount root in an image; the credentials
       # are mounted straight at their in-container path, so secretsDir is the
       # derived one again.
       SWGW_CONFIGDIR: /etc/softwaregateway
@@ -437,13 +437,13 @@ services:
     # controller ships no CORS middleware) AND lets this service scale: a fixed
     # host port would collide the moment CONTROLLER_REPLICAS > 1.
     volumes:
-      - ${DATA_DIR:-./data}/config.yaml:/etc/softwaregateway/config.yaml:ro
-      - ${DATA_DIR:-./data}/products:/etc/softwaregateway/products:ro
+      - ${CONFIG_DIR:-./config}/config.yaml:/etc/softwaregateway/config.yaml:ro
+      - ${CONFIG_DIR:-./config}/products:/etc/softwaregateway/products:ro
       # REGISTRY CREDENTIALS, in the layout a projected Kubernetes Secret
       # produces: <secretName>/<key>, one file per key. The same path, the same
       # shape and the same code in both deployments; locally the files are
-      # written by hand and are not committed. See data/secrets/README.md.
-      - ${DATA_DIR:-./data}/secrets/local:/etc/softwaregateway/secrets:ro
+      # written by hand and are not committed. See config/secrets/README.md.
+      - ${CONFIG_DIR:-./config}/secrets/local:/etc/softwaregateway/secrets:ro
     expose:
       - "8080"
     deploy:
@@ -479,7 +479,7 @@ services:
     image: ${WORKER_IMAGE:-software-gateway-worker:local}
     build:
       context: .
-      dockerfile: build/Dockerfile.worker
+      dockerfile: deploy/build/Dockerfile.worker
       args:
         GO_IMAGE: ${GO_IMAGE:-golang:1.25.14}
         RUNTIME_IMAGE: ${RUNTIME_IMAGE:-gcr.io/distroless/static-debian12:nonroot}
@@ -523,13 +523,13 @@ services:
     # A worker must see the SAME product configuration as the controller, or it
     # leases jobs it cannot execute and says so rather than failing quietly.
     volumes:
-      - ${DATA_DIR:-./data}/config.yaml:/etc/softwaregateway/config.yaml:ro
-      - ${DATA_DIR:-./data}/products:/etc/softwaregateway/products:ro
+      - ${CONFIG_DIR:-./config}/config.yaml:/etc/softwaregateway/config.yaml:ro
+      - ${CONFIG_DIR:-./config}/products:/etc/softwaregateway/products:ro
       # REGISTRY CREDENTIALS, in the layout a projected Kubernetes Secret
       # produces: <secretName>/<key>, one file per key. The same path, the same
       # shape and the same code in both deployments; locally the files are
-      # written by hand and are not committed. See data/secrets/README.md.
-      - ${DATA_DIR:-./data}/secrets/local:/etc/softwaregateway/secrets:ro
+      # written by hand and are not committed. See config/secrets/README.md.
+      - ${CONFIG_DIR:-./config}/secrets/local:/etc/softwaregateway/secrets:ro
       # WHO THIS WORKER IS. A machine account in the identity provider, written
       # by the seeder, mounted read-only, identical for every replica. Nothing
       # to configure and nothing to rotate by hand: scaling the fleet is a
@@ -581,7 +581,7 @@ services:
     image: ${WEB_IMAGE:-software-gateway-web:local}
     build:
       context: .
-      dockerfile: build/Dockerfile.web
+      dockerfile: deploy/build/Dockerfile.web
       args:
         NODE_IMAGE: ${NODE_IMAGE:-node:22.23.2-alpine}
         NGINX_IMAGE: ${NGINX_IMAGE:-nginx:1.27.5-alpine}
@@ -624,7 +624,7 @@ services:
     ports:
       - "${WEB_PORT:-8000}:80"
     # No healthcheck here: this image declares its own, and it is a better one
-    # than a line in this file could be. See build/Dockerfile.web - it proves
+    # than a line in this file could be. See deploy/build/Dockerfile.web - it proves
     # nginx is serving, that the entrypoint published the SPA's runtime
     # configuration, and that the Coordinator answers through this tier's own
     # proxy. Overriding it here would replace three facts with one.

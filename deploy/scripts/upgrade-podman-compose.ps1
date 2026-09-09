@@ -6,7 +6,7 @@
 # Upstream main fixes this; the fix is not in any release yet, so this script
 # installs from git. Remove it once a release > 1.6.0 ships the fix.
 #
-#   pwsh ./scripts/upgrade-podman-compose.ps1
+#   pwsh ./deploy/deploy/scripts/upgrade-podman-compose.ps1
 
 [CmdletBinding()]
 param(

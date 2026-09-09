@@ -699,4 +699,4 @@ For the Software Gateway ORB workflow:
 ## References
 
 - [Anchore Enterprise 5.22 API Reference](https://docs.anchore.com/5.22/docs/api/reference)
-- Local API contract: `anchore_5.22_openapi.json`
+- Local API contract: `anchore-5.22-openapi.yaml`

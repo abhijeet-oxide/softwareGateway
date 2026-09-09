@@ -8,7 +8,7 @@
 #
 # So this is the settings, and the environment is the DIFFERENCES:
 #
-#   task run          --config ./data/config.yaml, as it stands
+#   task run          --config ./config/config.yaml, as it stands
 #   docker compose    mounted at /etc/softwaregateway/config.yaml, with
 #                     SWGW_CONFIGDIR, SWGW_SECRETSDIR and the database
 #                     overridden for a container
@@ -20,8 +20,8 @@
 # ignored, so an override that binds to nothing is a startup failure and not a
 # setting that silently did not apply.
 #
-#   go run ./cmd/coordinator --config ./data/config.yaml
-#   go run ./cmd/worker      --config ./data/config.yaml
+#   go run ./cmd/coordinator --config ./config/config.yaml
+#   go run ./cmd/worker      --config ./config/config.yaml
 #   go run ./cmd/transferctl health
 #
 apiVersion: softwaregateway.io/v1alpha1
@@ -29,15 +29,15 @@ kind: SystemConfig
 
 # Root for products/ and secrets/. In a container this is /etc/softwaregateway,
 # set through SWGW_CONFIGDIR, and the two directories are mounted under it.
-configDir: ./data
+configDir: ./config
 
 # The credentials are NOT under configDir here, and that is the one place the
-# local layout and the cluster's differ. `data/secrets/` holds two things: the
+# local layout and the cluster's differ. `config/secrets/` holds two things: the
 # manifests that produce a Secret in a cluster, which are committed and carry
 # references rather than values, and `local/`, which is the projected shape
 # filled in by hand and is never committed. A container mounts the second of
 # those AT /etc/softwaregateway/secrets, so it needs no override there.
-secretsDir: ./data/secrets/local
+secretsDir: ./config/secrets/local
 
 server:
   address: :8080
@@ -49,7 +49,7 @@ database:
   #   task dev:postgres
   #   SWGW_DATABASE_DRIVER=postgres \
   #   SWGW_DATABASE_DSN='postgres://swgw:swgw@localhost:5432/swgw?sslmode=disable' \
-  #     go run ./cmd/coordinator --config ./data/config.yaml
+  #     go run ./cmd/coordinator --config ./config/config.yaml
   driver: sqlite
   dsn: ./dev/swgw.db
 

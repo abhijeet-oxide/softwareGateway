@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
-	"github.com/abhijeet-oxide/softwareGateway/internal/promote"
+	"github.com/abhijeet-oxide/softwareGateway/internal/promoter"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store/storetest"
@@ -140,21 +140,21 @@ type recordingPromoter struct {
 
 func (p *recordingPromoter) Name() string { return "fake" }
 
-func (p *recordingPromoter) Claim(promote.Hop) promote.Verdict {
-	return promote.Verdict{Promoter: "fake", Claimed: p.claims, Reason: "mine"}
+func (p *recordingPromoter) Claim(promoter.Hop) promoter.Verdict {
+	return promoter.Verdict{Promoter: "fake", Claimed: p.claims, Reason: "mine"}
 }
 
-func (p *recordingPromoter) Promote(_ context.Context, h promote.Hop) (promote.Outcome, error) {
+func (p *recordingPromoter) Promote(_ context.Context, h promoter.Hop) (promoter.Outcome, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, n := range h.Names {
 		key := n.Repository + ":" + n.Tag
 		if key == p.failOn {
-			return promote.Outcome{}, errors.New("Artifactory said no")
+			return promoter.Outcome{}, errors.New("Artifactory said no")
 		}
 		p.names = append(p.names, key)
 	}
-	return promote.Outcome{Promoter: "fake", Promoted: len(h.Names)}, nil
+	return promoter.Outcome{Promoter: "fake", Promoted: len(h.Names)}, nil
 }
 
 func (p *recordingPromoter) promoted() []string {
@@ -191,7 +191,7 @@ func (r *fakeReader) ResolveAt(
 var current *recordingPromoter
 
 func init() {
-	promote.Register("fake", func(promote.Config) (promote.Promoter, error) {
+	promoter.Register("fake", func(promoter.Config) (promoter.Promoter, error) {
 		if current == nil {
 			// Claiming nothing is the honest answer outside a test that set
 			// one up, and it keeps this registration from deciding what any

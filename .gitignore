@@ -26,7 +26,7 @@ node_modules/
 *.swp
 .DS_Store
 # dev/ holds LOCAL RUNTIME STATE and nothing else: the SQLite database, its
-# journals, a stray log. Everything that was configuration moved to data/ and
+# journals, a stray log. Everything that was configuration moved to config/ and
 # everything that was tooling moved to test/, so the whole directory is
 # disposable and none of it is committed. Deleting it is a reset.
 dev/*
@@ -52,7 +52,7 @@ podman-build-secret*
 test/mockEntra/certs/
 
 # Registry credentials for local development. The same layout a projected
-# Kubernetes Secret produces, filled in by hand. data/secrets/manifests/ is
+# Kubernetes Secret produces, filled in by hand. config/secrets/manifests/ is
 # committed and holds references; this holds values and never is.
-data/secrets/local/*
-!data/secrets/local/.gitkeep
+config/secrets/local/*
+!config/secrets/local/.gitkeep

@@ -30,7 +30,7 @@ ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} NO_PROXY=${NO_PROXY} \
     http_proxy=${HTTP_PROXY} https_proxy=${HTTPS_PROXY} no_proxy=${NO_PROXY} \
     GOPROXY=${GOPROXY} GOSUMDB=${GOSUMDB}
 
-# See build/Dockerfile.web for why this exists: a TLS-intercepting corporate
+# See deploy/build/Dockerfile.web for why this exists: a TLS-intercepting corporate
 # proxy makes `go mod download` fail with x509: certificate signed by unknown
 # authority, and the only correct fix is to trust the proxy's CA.
 COPY deploy/certs/ /usr/local/share/ca-certificates/extra/

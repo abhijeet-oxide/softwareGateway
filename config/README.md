@@ -1,4 +1,4 @@
-# data/ - what an administrator manages
+# config/ - what an administrator manages
 
 Everything in here is CONTENT: the products this gateway replicates, the people
 who may use it, the roles they hold, the policies that decide what a role may
@@ -12,7 +12,7 @@ serve both deployment paths:
 
 | | local | cluster |
 |---|---|---|
-| how it arrives | `docker-compose.yml` bind-mounts `${DATA_DIR:-./data}` | Flux reconciles this directory |
+| how it arrives | `docker-compose.yml` bind-mounts `${CONFIG_DIR:-./config}` | Flux reconciles this directory |
 | how it is applied | `docker compose run --rm zitadel-init` | the seeding Job, or a CI step |
 | what reads it | the same binaries, at the same paths | the same binaries, at the same paths |
 
@@ -20,7 +20,7 @@ There is no second format, no rendering step and no per-environment fork. A
 change here is reviewed once and applied the same way in both.
 
 ```
-data/
+config/
   access/
     roles.yaml          the roles that exist: tenant-wide, and per product
     policies/           Cerbos policies - what each role may actually do

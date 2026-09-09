@@ -135,14 +135,14 @@ linters:
 
         # The engine must never know which registry vendor it is promoting on.
         #
-        # internal/promote holds the Promoter INTERFACE and the plugin
-        # registry; internal/promote/<name> holds one vendor's implementation.
+        # internal/promoter holds the Promoter INTERFACE and the plugin
+        # registry; internal/promoter/<name> holds one vendor's implementation.
         # Everything downstream depends on the seam in
         # internal/transfer/promotion.go, and only the composition root names a
         # promoter.
         #
         # The test this encodes is the same mechanical one the vendor rule
-        # encodes: delete internal/promote/jfrog and the rest must still build
+        # encodes: delete internal/promoter/jfrog and the rest must still build
         # and pass, with every promotion falling back to a copy. A JFrog
         # assumption reaching the expander or the queue is exactly the leak
         # that would make that false, and it is the kind that arrives one
@@ -159,8 +159,8 @@ linters:
             - "**/internal/registry/**"
             - "**/internal/product/**"
           deny:
-            - pkg: github.com/abhijeet-oxide/softwareGateway/internal/promote/jfrog
-              desc: "a promoter implementation must stay behind promote.Promoter - only the composition root may name one"
+            - pkg: github.com/abhijeet-oxide/softwareGateway/internal/promoter/jfrog
+              desc: "a promoter implementation must stay behind promoter.Promoter - only the composition root may name one"
 
         # Compliance follows the same rule as every other domain package.
         compliance-imports-no-api:

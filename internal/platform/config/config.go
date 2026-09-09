@@ -34,7 +34,7 @@ type SystemConfig struct {
 	//
 	// In a cluster the two are one root because a ConfigMap volume and a Secret
 	// volume are mounted side by side and it is tidy for them to be. Outside
-	// one that is a coincidence rather than a rule: `data/` is a directory
+	// one that is a coincidence rather than a rule: `config/` is a directory
 	// somebody edits and commits, and the credentials in it are the one part
 	// that is deliberately NOT committed - so they live in their own subtree
 	// with the manifests that produce them in the cluster beside it, and this

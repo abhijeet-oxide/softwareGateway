@@ -258,7 +258,7 @@ task dev:worker                       # second terminal
 go run ./cmd/transferctl health --endpoint http://localhost:8080
 ```
 
-The identical configuration loader reads `./data/products/` and `./data/secrets/local/` as plain directories ([02](02-configuration.md) §9) - no cluster, no ConfigMaps, no mocking of client-go. That is the payoff for choosing volume mounts over the Kubernetes API ([02](02-configuration.md) §3), and it is a large one for developer experience.
+The identical configuration loader reads `./config/products/` and `./config/secrets/local/` as plain directories ([02](02-configuration.md) §9) - no cluster, no ConfigMaps, no mocking of client-go. That is the payoff for choosing volume mounts over the Kubernetes API ([02](02-configuration.md) §3), and it is a large one for developer experience.
 
 ### 5.2 With PostgreSQL
 
@@ -308,7 +308,7 @@ The task runner is [Task](https://taskfile.dev) (`Taskfile.yml`), not make. `tas
 | `task ci` | Exactly what the pipeline runs |
 | `task dev:coordinator` / `dev:worker` | Run against SQLite |
 | `task dev:registry` | Local registry seeded with a multi-arch test package |
-| `task validate` | Validate `./data/products` |
+| `task validate` | Validate `./config/products` |
 
 > **Decision - Task over make.**
 >
@@ -418,7 +418,7 @@ tarred.
 
 | Task | Command |
 |---|---|
-| Add a product | Add YAML to `data/products/`, add to the projected volume, merge. Flux applies; reload within ~60 s |
+| Add a product | Add YAML to `config/products/`, add to the projected volume, merge. Flux applies; reload within ~60 s |
 | Rotate a credential | Rotate in Vault. VSO updates the Secret; the mount refreshes; no restart |
 | Change rate limits | Edit the product YAML, merge. Applies to new transfers; in-flight keep planned settings ([02](02-configuration.md) §6) |
 | Scale workers manually | `kubectl scale deploy/worker --replicas=20` (HPA will reassert) |

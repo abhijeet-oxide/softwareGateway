@@ -87,7 +87,7 @@ func actionsFor(role string) []Action {
 	switch suffix(role) {
 	case "admin", "owner":
 		return []Action{ActionRead, ActionOperate, ActionApply, ActionAdmin, ActionWork}
-	// NOT ActionApply. data/access/policies/download.yaml puts `apply`
+	// NOT ActionApply. config/access/policies/download.yaml puts `apply`
 	// alongside `promote` and grants both to org_wide_admin and product_owner
 	// only, and docs/design/24 section 5.2 describes org-operator in the same
 	// terms. This ladder disagreed with both, which cost nothing while nothing

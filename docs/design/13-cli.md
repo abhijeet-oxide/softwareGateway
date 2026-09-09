@@ -793,7 +793,7 @@ Served from `worker_logs` via the Coordinator ([03](03-persistence.md) §7). **T
 ## 9. Config validation in CI
 
 ```
-$ transferctl config validate ./data/products/
+$ transferctl config validate ./config/products/
 
   vendor-a-platform.yaml     OK   2 sources, 2 targets, 2 rules
   vendor-b-database.yaml     OK   1 source, 1 target, 1 rule

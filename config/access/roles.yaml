@@ -32,8 +32,8 @@ product:
 
   # THE ROLE EVERY PRODUCT MUST HAVE SOMEBODY HOLDING.
   #
-  # Seeding fails when a product in data/products has nobody in
-  # data/users/users.yaml holding this role on it. A product nobody owns is a
+  # Seeding fails when a product in config/products has nobody in
+  # config/users/users.yaml holding this role on it. A product nobody owns is a
   # product whose downloads nobody can approve and whose configuration nobody
   # is accountable for; it is worth refusing to deploy rather than discovering
   # months later.

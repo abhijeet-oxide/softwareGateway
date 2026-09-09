@@ -22,11 +22,11 @@
 #   firstName   optional. Derived from the address when it spells a name, and
 #   lastName    replaced by the directory's own at the second sign-in.
 #   password    LOCAL AND TEST ONLY. Ignored once SSO_ISSUER is set.
-#   orgRoles    tenant-wide roles, from data/access/roles.yaml
+#   orgRoles    tenant-wide roles, from config/access/roles.yaml
 #   products    per-product roles, from the same file
 #
-# EVERY PRODUCT IN data/products NEEDS AN OWNER HERE. Seeding fails otherwise,
-# naming the product and the role - see `ownerRole` in data/access/roles.yaml.
+# EVERY PRODUCT IN config/products NEEDS AN OWNER HERE. Seeding fails otherwise,
+# naming the product and the role - see `ownerRole` in config/access/roles.yaml.
 
 users:
   - username: test-owner

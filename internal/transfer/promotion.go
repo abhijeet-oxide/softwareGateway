@@ -30,7 +30,7 @@ import (
 // no JFrog pair still is.
 
 // PromotionName is one name the destination must answer to when the hop is
-// done. It mirrors promote.Name, restated here so this package does not import
+// done. It mirrors promoter.Name, restated here so this package does not import
 // the plugin registry - the seam is what keeps a vendor's name out of the
 // engine, and an import would put it back.
 type PromotionName struct {

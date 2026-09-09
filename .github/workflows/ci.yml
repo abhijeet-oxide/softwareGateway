@@ -350,10 +350,10 @@ jobs:
           # measuring startup, which is what it is meant to measure.
           go build -o /tmp/coordinator-ci ./cmd/coordinator
 
-          # data/products is committed and is what every runtime reads, so
+          # config/products is committed and is what every runtime reads, so
           # there is nothing to seed: this boots the Coordinator against the
           # same directory a developer, a compose stack and a cluster all use.
-          /tmp/coordinator-ci --config ./data/config.yaml &
+          /tmp/coordinator-ci --config ./config/config.yaml &
           COORD=$!
           trap 'kill $COORD 2>/dev/null || true' EXIT
 

@@ -1,4 +1,4 @@
-// Package promote is the plugin registry for NATIVE promotion.
+// Package promoter is the plugin registry for NATIVE promotion.
 //
 // See docs/design/22-promotion.md.
 //
@@ -52,7 +52,7 @@
 // relocate between them - the bytes will be copied instead" is the whole
 // diagnosis. An operator who configured two hosts by mistake finds out from
 // the promotion dialog rather than from a 45 GB transfer.
-package promote
+package promoter
 
 import (
 	"context"

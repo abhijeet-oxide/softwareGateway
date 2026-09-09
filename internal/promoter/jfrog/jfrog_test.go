@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/abhijeet-oxide/softwareGateway/internal/promote"
+	"github.com/abhijeet-oxide/softwareGateway/internal/promoter"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 )
 
@@ -19,18 +19,18 @@ import (
 // repository key wrong 404s in a way that reads like a missing image. Both are
 // pinned here.
 
-func hop(origin, destination promote.Endpoint, names ...promote.Name) promote.Hop {
+func hop(origin, destination promoter.Endpoint, names ...promoter.Name) promoter.Hop {
 	if len(names) == 0 {
-		names = []promote.Name{{Repository: "orbs/cfx", Tag: "v1", Digest: "sha256:aa"}}
+		names = []promoter.Name{{Repository: "orbs/cfx", Tag: "v1", Digest: "sha256:aa"}}
 	}
-	return promote.Hop{
+	return promoter.Hop{
 		Product: "nokia", Package: "v1", ManifestDigest: "sha256:aa",
 		Origin: origin, Destination: destination, Names: names,
 	}
 }
 
-func jfrogEnd(name, host, repo string, opts ...map[string]string) promote.Endpoint {
-	e := promote.Endpoint{
+func jfrogEnd(name, host, repo string, opts ...map[string]string) promoter.Endpoint {
+	e := promoter.Endpoint{
 		Name: name, Registry: host, Repository: repo, RegistryType: "jfrog",
 	}
 	if len(opts) > 0 {
@@ -39,9 +39,9 @@ func jfrogEnd(name, host, repo string, opts ...map[string]string) promote.Endpoi
 	return e
 }
 
-func promoterFor(t *testing.T, h promote.Hop) *Promoter {
+func promoterFor(t *testing.T, h promoter.Hop) *Promoter {
 	t.Helper()
-	p, err := New(promote.Config{
+	p, err := New(promoter.Config{
 		Origin:      h.Origin,
 		Destination: h.Destination,
 		OriginClient: registry.ClientConfig{
@@ -176,7 +176,7 @@ func TestPromoteAlwaysCopiesAndNeverMoves(t *testing.T) {
 	h := hop(
 		jfrogEnd("lab", host, "docker-lab/nokia"),
 		jfrogEnd("production", host, "docker-prod/nokia"),
-		promote.Name{Repository: "orbs/cfx", Tag: "v1", Digest: "sha256:aa"},
+		promoter.Name{Repository: "orbs/cfx", Tag: "v1", Digest: "sha256:aa"},
 	)
 
 	out, err := promoterFor(t, h).Promote(t.Context(), h)
@@ -227,7 +227,7 @@ func TestTheDestinationPathIsRebasedNotCopied(t *testing.T) {
 	h := hop(
 		jfrogEnd("lab", host, "docker-lab/nokia-lab"),
 		jfrogEnd("production", host, "docker-prod/nokia-prod"),
-		promote.Name{Repository: "orbs/cfx", Tag: "v1", Digest: "sha256:aa"},
+		promoter.Name{Repository: "orbs/cfx", Tag: "v1", Digest: "sha256:aa"},
 	)
 	if _, err := promoterFor(t, h).Promote(t.Context(), h); err != nil {
 		t.Fatalf("Promote: %v", err)
@@ -437,14 +437,14 @@ func TestUndiagnosedBadRequestUsesAllNamesNotTheNarrowedCall(t *testing.T) {
 	// This call is asked to publish only the orb tag - as the runner narrows
 	// it to - but the release also owns the signature tag in the same
 	// repository, carried on AllNames.
-	all := []promote.Name{
+	all := []promoter.Name{
 		{Repository: "orbs/cfx", Tag: "orb_25.7", Digest: "sha256:aa"},
 		{Repository: "orbs/cfx", Tag: "signature_orb_25.7", Digest: "sha256:bb"},
 	}
-	h := promote.Hop{
+	h := promoter.Hop{
 		Product: "cfx", Package: "orb_25.7", ManifestDigest: "sha256:aa",
 		Origin: origin, Destination: destination,
-		Names:    []promote.Name{all[0]},
+		Names:    []promoter.Name{all[0]},
 		AllNames: all,
 	}
 
@@ -464,7 +464,7 @@ func TestAnAnonymousTargetIsRefusedBeforeAnyRequest(t *testing.T) {
 		jfrogEnd("lab", "acme.jfrog.io", "docker-lab/nokia"),
 		jfrogEnd("production", "acme.jfrog.io", "docker-prod/nokia"),
 	)
-	p, err := New(promote.Config{
+	p, err := New(promoter.Config{
 		Origin: h.Origin, Destination: h.Destination,
 		OriginClient: registry.ClientConfig{PlainHTTP: true},
 	})

@@ -60,7 +60,7 @@ promote.Register("jfrog", jfrog.New)   // one line, in the composition root
 
 `grep -rn "promote/jfrog"` finding only `cmd/coordinator/main.go` is the
 mechanical form of "the engine does not know what Artifactory is", and depguard
-enforces it. **Deleting `internal/promote/jfrog` must leave everything building
+enforces it. **Deleting `internal/promoter/jfrog` must leave everything building
 and passing, with every promotion falling back to a copy.**
 
 ### 3.1 Claim and Promote are separate calls
@@ -178,7 +178,7 @@ registry, and the dialog says which button makes the fast path available.
 
 ## 5. The JFrog promoter
 
-`internal/promote/jfrog`. It claims when, and only when:
+`internal/promoter/jfrog`. It claims when, and only when:
 
 1. **Both ends are declared `type: jfrog` (or `artifactory`).** A target
    configured `generic` against an Artifactory host is deliberately not

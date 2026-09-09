@@ -405,7 +405,7 @@ type Target struct {
 	// that had to be filled in would be a second field to forget. Leaving both
 	// empty derives the host from `registry`, which is right for a
 	// repository-path deployment and wrong for a subdomain one - see
-	// internal/promote/jfrog for why that cannot be told apart automatically.
+	// internal/promoter/jfrog for why that cannot be told apart automatically.
 	JFrogEndpoint string `json:"jfrogEndpoint,omitempty"`
 
 	// JFrogRepositoryKey names the Artifactory repository this target lives

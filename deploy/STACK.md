@@ -19,21 +19,21 @@ docker compose up -d
 ## What gets created for you
 
 The `zitadel-init` container runs once and exits. Everything it creates it
-reads out of `data/`, which is the one directory an administrator manages and
+reads out of `config/`, which is the one directory an administrator manages and
 the same one Flux reconciles in a cluster:
 
 | from | it creates |
 |---|---|
-| `data/products/*.yaml` | one ZITADEL project per product, with its roles |
-| `data/access/roles.yaml` | the roles themselves, both tiers |
-| `data/users/users.yaml` | the people and machine accounts, and their grants |
+| `config/products/*.yaml` | one ZITADEL project per product, with its roles |
+| `config/access/roles.yaml` | the roles themselves, both tiers |
+| `config/users/users.yaml` | the people and machine accounts, and their grants |
 | `.env` | the tenant, the SSO connector, the first administrator |
 
 It is **idempotent**. Add a product and re-run it; only the new one is created.
 
 ```bash
-# add data/products/software-04.yaml, give it an owner in
-# data/users/users.yaml, then:
+# add config/products/software-04.yaml, give it an owner in
+# config/users/users.yaml, then:
 docker compose run --rm zitadel-init
 ```
 
@@ -129,7 +129,7 @@ The rest of the app registration:
 The seeder configures the screen as well as the connector:
 
 - **Self-registration is off, always.** Everyone who may use this gateway is
-  provisioned - by the seeder, or by `data/users/users.yaml`.
+  provisioned - by the seeder, or by `config/users/users.yaml`.
 - **Password sign-in is off once SSO is configured.** `SSO_ALLOW_PASSWORD_LOGIN=true`
   keeps it. Note that switching it off locks out `zitadel-admin` as well: it is
   in the same organization and has no Microsoft account. That is recoverable at
@@ -152,7 +152,7 @@ The seeder configures the screen as well as the connector:
 
 ### Adding a person from the ZITADEL console
 
-`data/users/users.yaml` is the reviewable way, and the console is the quick
+`config/users/users.yaml` is the reviewable way, and the console is the quick
 one. Both work; the console has one trap.
 
 1. Users, New. Fill in the address, the username and the name.

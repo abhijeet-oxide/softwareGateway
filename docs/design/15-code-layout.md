@@ -8,53 +8,101 @@ Organized around **business domains, not technical layers**. There is no `models
 
 ## 1. Tree
 
+Ten directories at the root, and each answers a question none of the others
+answers. That is the whole rule: a newcomer should be able to pick the right
+one from its name without opening it.
+
 ```
 softwareGateway/
-├── cmd/
-│   ├── coordinator/main.go          Control plane
-│   ├── worker/main.go               Data plane
-│   └── transferctl/main.go          CLI
+├── cmd/                             The three binaries, and nothing else
+│   ├── coordinator/                 Control plane
+│   ├── worker/                      Data plane
+│   └── transferctl/                 CLI
 │
 ├── internal/                        Not importable outside this module - deliberate
 │   ├── product/                     Config model, loader, validation, watch
 │   ├── discovery/                   Scanner, dedupe, auto-download rules
 │   ├── expand/                      Walk a package's tree once, for whoever asks first
 │   ├── transfer/                    Planner, engine, dry run, progress
+│   ├── replication/                 Delegated replication and its runner
+│   ├── promoter/                    The Promoter INTERFACE and its plugin registry
+│   │   └── jfrog/                   One vendor's implementation, deletable
+│   ├── promotion/                   Binds those plugins to product configuration
+│   ├── download/                    Request-side entry point for downloads
 │   ├── maintenance/                 Leader-gated housekeeping loops
 │   ├── registry/                    Repository interface + implementations
-│   │   ├── registry.go              THE interface (06 section 2)
 │   │   ├── transport/               Auth, token cache, rate limit, retry, CA, proxy
-│   │   ├── generic/                 OCI Distribution v2 -- the default
-│   │   ├── acr/  artifactory/  quay/    Deltas only (06 section 6)
-│   │   └── factory.go               Type -> constructor registration
+│   │   └── generic/  acr/  artifactory/  quay/
+│   ├── regclient/  oci/             Registry client plumbing and OCI primitives
 │   ├── queue/                       Jobs, leases, waves, priorities, retry
-│   ├── scheduler/                   Due-time expansion, leader loops
-│   ├── verification/                Verifier interface + cosign
-│   ├── notification/                Outbox, email, teams, templates
-│   ├── audit/                       Event recording and query
+│   ├── pipeline/                    Stage sequencing over the queue
+│   ├── security/                    Scanner integration, findings, posture
+│   ├── compliance/                  Check catalog, policy evaluation, reports
+│   ├── catalog/  compare/  export/  calibrate/  preflight/  vendors/
 │   ├── worker/                      Worker loop, lease client, concurrency
 │   ├── api/                         HTTP: router, handlers, DTOs, middleware
-│   │   ├── router.go  middleware/  v1/{handlers,dto}/
-│   ├── store/                       Persistence
-│   │   ├── store.go                 Store interfaces
-│   │   ├── postgres/  sqlite/       sqlc-generated + hand-written
-│   │   └── migrate/                 goose runner
+│   ├── store/                       Persistence: interfaces + postgres/ + sqlite/
 │   └── platform/                    Cross-cutting infrastructure
-│       ├── config/  log/  metrics/  tracing/  health/
-│       ├── backoff/  statemachine/  leader/  version/
+│       ├── config/  log/  metrics/  tracing/  health/  tlscompat/
+│       └── backoff/  statemachine/  leader/  version/
 │
-├── pkg/                             PUBLIC -- API types shared with consumers
-│   └── apis/softwaregateway/v1/     Request/response types, enums, client
+├── pkg/                             PUBLIC - importable by consumers
+│   ├── apis/softwaregateway/v1/     Request/response types, enums, client
+│   └── authz/                       Identity, the Cerbos engine, middleware
 │
-├── db/
-│   ├── migrations/{postgres,sqlite}/
-│   └── queries/{postgres,sqlite}/   sqlc input
+├── web/                             The SPA (React + TypeScript + Vite)
+│   └── src/{pages,components,api,auth,domain,uikit,tablekit}/
 │
-├── deploy/                          14
-├── docs/design/                     This document set
-└── test/
-    ├── integration/  chaos/  fixtures/
+├── db/                              Schema, and only schema
+│   └── migrations/{postgres,sqlite}/
+│
+├── config/                          What an ADMINISTRATOR manages - see 27
+│   ├── config.yaml                  One file, read by task run, compose and Flux
+│   ├── products/  users/  access/   Products, people, roles and policies
+│   └── secrets/                     Manifests for a cluster; local/ is gitignored
+│
+├── deploy/                          How it is BUILT and SHIPPED
+│   ├── build/                       The four Dockerfiles
+│   ├── zitadel/  web/  cerbos/  postgres/    Entrypoints, configs, the seeder
+│   ├── certs/  go/  npm/            Trust and registry material for the build
+│   ├── dev/                         Compose for Postgres and local registries
+│   └── scripts/                     Operator helpers
+│
+├── docs/                            Why it is the way it is
+│   ├── design/                      This document set, 00 to 29
+│   ├── compliance/  security/  ui/
+│   └── DEVELOPER-GUIDE.md  FUNCTIONAL-OVERVIEW.md
+│
+├── test/                            What PROVES it works
+│   ├── cmd/fakeregistry/            A standalone vendor registry, as a command
+│   ├── fakeregistry/                The same double, as a package tests import
+│   ├── mockEntra/                   A Microsoft directory whose answers can be read
+│   ├── seed/                        Brings a full local estate up with data in it
+│   └── products.example/  secrets/  Fixtures
+│
+└── dev/                             One laptop's runtime state. Disposable, ignored
 ```
+
+Four boundaries carry the weight, and they are the ones people get wrong:
+
+- **`config/` is content, `deploy/` is machinery.** Editing a product is a
+  configuration change an administrator makes and CI applies; editing an nginx
+  config is an engineering change that ships in an image. They travel
+  differently, so they do not share a directory.
+- **`db/` is schema, `config/` is configuration.** Adjacent names, opposite
+  things. `db/` holds migrations and nothing else.
+- **`test/` is tooling and fixtures, not unit tests.** Go tests live beside the
+  code they test, as Go intends. What lives here is what a test needs and a
+  package cannot hold: doubles, a seeded estate, example inputs.
+- **`dev/` is the only disposable directory,** and the only one that is
+  ignored. Deleting it is a reset.
+
+There is no `src/`. `cmd/` and `internal/` at the root are Go's own
+conventions, `internal/` in particular being a rule the toolchain enforces
+rather than a name somebody chose, and burying either under a directory that
+means "the code" would cost every import path a segment that carries no
+information.
+
 
 ## 2. Package responsibilities
 
@@ -124,7 +172,7 @@ The real test of a layout. Each row should touch one directory, plus its tests.
 | Change | Where |
 |---|---|
 | Add Harbor support | `internal/registry/harbor/` + `factory.go` ([06](06-registry-abstraction.md) §6.5) |
-| Teach a registry to promote for itself | `internal/promote/<name>/` + one line in `cmd/coordinator` ([22](22-promotion.md) §3). Nothing in `internal/transfer` moves, and depguard enforces it |
+| Teach a registry to promote for itself | `internal/promoter/<name>/` + one line in `cmd/coordinator` ([22](22-promotion.md) §3). Nothing in `internal/transfer` moves, and depguard enforces it |
 | Add a notification channel | `internal/notification/` |
 | Add a config field | `internal/product/` (+ [02](02-configuration.md)) |
 | Change retry policy | `internal/queue/retry.go` |

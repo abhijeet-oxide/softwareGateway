@@ -59,9 +59,9 @@ import (
 	// internal/transfer and is forbidden by depguard from importing an
 	// implementation, so `grep -rn "promote/jfrog"` finding only this file is
 	// the mechanical form of "the engine does not know what Artifactory is".
-	// Deleting internal/promote/jfrog must leave the rest building and
+	// Deleting internal/promoter/jfrog must leave the rest building and
 	// passing, with every promotion falling back to a copy.
-	_ "github.com/abhijeet-oxide/softwareGateway/internal/promote/jfrog"
+	_ "github.com/abhijeet-oxide/softwareGateway/internal/promoter/jfrog"
 )
 
 const component = "coordinator"

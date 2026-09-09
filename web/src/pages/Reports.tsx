@@ -73,7 +73,7 @@ export default function Reports() {
       {!reports.isLoading && settled === 0 && (totals?.downloadsRunning ?? 0) === 0 ? (
         <EmptyStateCard
           title="Nothing has been downloaded in this period"
-          explanation="These figures are computed from downloads that completed within the period shown. Widen the period, or start a download to produce something to measure."
+          explanation="Stats are computed from downloads that completed within the period shown. Widen the period, or start a download to measure."
           action={<Typography.Text type="secondary">Period: {reports.data?.period.label ?? period}</Typography.Text>}
         />
       ) : (

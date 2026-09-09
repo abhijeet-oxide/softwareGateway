@@ -203,7 +203,7 @@ export default function Products() {
         <InlineNotice tone="danger" className="ui-fade-in">
           {notLoaded.length === 1
             ? `${label(notLoaded[0])} is configured but not running: its document was rejected. It is listed below with the reason.`
-            : `${notLoaded.length} products are configured but not running: their documents were rejected. They are listed below with their reasons.`}
+            : `${notLoaded.length} products are configured but not running: their configurations were rejected. Errors are listed below against the respective products.`}
         </InlineNotice>
       )}
       {stale.length > 0 && (

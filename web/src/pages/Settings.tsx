@@ -100,8 +100,7 @@ export default function Settings() {
               />
             ) : (
               <Typography.Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
-                Dependencies have not been probed. A health check makes real outbound calls, so it
-                runs when asked for rather than on a timer.
+                Run Health Check to view more details.
               </Typography.Text>
             )}
           </Card>

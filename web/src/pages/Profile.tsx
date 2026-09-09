@@ -161,9 +161,7 @@ export default function Profile() {
                   </Field>
                   {provider ? (
                     <Note>
-                      Read from {provider} at each sign-in. A field {provider} does not hold is
-                      not held here. The first sign-in links the account only; details recorded
-                      at provisioning are replaced from the second.
+                      Details fetched from {provider}
                     </Note>
                   ) : (
                     <Note>
@@ -208,8 +206,7 @@ export default function Profile() {
                 {who?.products?.length ? who.products.join(', ') : 'All products'}
               </Field>
               <Note>
-                Roles are granted in the identity provider and arrive in the sign-in token.
-                Changing one takes effect at the next sign-in.
+                Recent changes in roles takes effect at the next sign-in.
               </Note>
               </Section>
 

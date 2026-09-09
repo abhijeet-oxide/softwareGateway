@@ -121,10 +121,8 @@ export function SpeedTest({ product: fixedProduct }: {
     >
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Typography.Text type="secondary">
-          Sweeps how many streams at once each registry will actually carry, and reports the
-          point past which more streams stop helping. It moves real data in both directions -
-          nothing is committed anywhere - and it takes minutes, so it runs when asked and never
-          on its own.
+          Select and run a speed test for the chosen path. This checks how many streams at once each registry can actually carry, and reports the
+          max thoughput. this moves real data in both directions however nothing is committed anywhere. This test may take few minutes.
         </Typography.Text>
 
         {calibrate.isPending && (

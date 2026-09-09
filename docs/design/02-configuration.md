@@ -722,7 +722,7 @@ The identical loader reads a plain directory, so local development needs no clus
   secrets/vendor-registry/{username,password}     # plain files
 ```
 
-`dev/products/reference.yaml` is deliberately the ONLY product in the tree. It
+`config/products/reference.yaml` is deliberately the ONLY product in the tree. It
 exercises every field the schema has - which is what makes it worth copying, and
 what makes `task validate` a real check: a field that stops being accepted
 breaks CI there first.

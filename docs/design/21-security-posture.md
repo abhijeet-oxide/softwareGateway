@@ -915,8 +915,8 @@ That difference is three whole phases the Xray path does not have:
 | **Wait** | Analysis is asynchronous and minutes long. A sync that read the vulnerability endpoint immediately after submitting would report every release as unscanned on its first sync. |
 | **Group** | A release is one thing to a person and 157 images to a registry, and Anchore's Application/Version model is exactly that shape. |
 
-The methodology is `docs/security/Anchore.md`; the endpoints and schemas are
-`docs/security/anchore_5.22_openapi.yaml`, which is the final authority.
+The methodology is `docs/security/anchore-orb-analysis.md`; the endpoints and schemas are
+`docs/security/anchore-5.22-openapi.yaml`, which is the final authority.
 
 ### 12.2 Configuration: still one field on a product
 

@@ -67,7 +67,7 @@ func newConfigValidateCommand() *cobra.Command {
 		"also verify that referenced secrets exist under this directory")
 	takes(cmd, "validate", argSpec{
 		Name: "directory",
-		Help: "a directory of product documents, e.g. ./dev/products",
+		Help: "a directory of product documents, e.g. ./config/products",
 	})
 	return cmd
 }

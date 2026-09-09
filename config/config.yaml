@@ -1,0 +1,139 @@
+# The system configuration, for every runtime.
+#
+# ONE FILE. It used to be dev/config.yaml, read only by `task run`, while the
+# containers ran on their compiled-in defaults plus a dozen SWGW_ environment
+# variables and a cluster would have had a third description again. Three
+# statements of the same settings, and the only way to know they agreed was to
+# read all three.
+#
+# So this is the settings, and the environment is the DIFFERENCES:
+#
+#   task run          --config ./config/config.yaml, as it stands
+#   docker compose    mounted at /etc/softwaregateway/config.yaml, with
+#                     SWGW_CONFIGDIR, SWGW_SECRETSDIR and the database
+#                     overridden for a container
+#   Flux              the same file as a ConfigMap, same two overrides
+#
+# The loader layers defaults, then this file, then SWGW_* - so an environment
+# states only what genuinely differs there, and everything else is here where
+# it can be reviewed once. An unknown SWGW_ variable is refused rather than
+# ignored, so an override that binds to nothing is a startup failure and not a
+# setting that silently did not apply.
+#
+#   go run ./cmd/coordinator --config ./config/config.yaml
+#   go run ./cmd/worker      --config ./config/config.yaml
+#   go run ./cmd/transferctl health
+#
+apiVersion: softwaregateway.io/v1alpha1
+kind: SystemConfig
+
+# Root for products/ and secrets/. In a container this is /etc/softwaregateway,
+# set through SWGW_CONFIGDIR, and the two directories are mounted under it.
+configDir: ./config
+
+# The credentials are NOT under configDir here, and that is the one place the
+# local layout and the cluster's differ. `config/secrets/` holds two things: the
+# manifests that produce a Secret in a cluster, which are committed and carry
+# references rather than values, and `local/`, which is the projected shape
+# filled in by hand and is never committed. A container mounts the second of
+# those AT /etc/softwaregateway/secrets, so it needs no override there.
+secretsDir: ./config/secrets/local
+
+server:
+  address: :8080
+  shutdownGracePeriod: 15s
+
+database:
+  # SQLite is the DEVELOPMENT default and is not supported in production; the
+  # Coordinator warns about it at startup. For Postgres:
+  #   task dev:postgres
+  #   SWGW_DATABASE_DRIVER=postgres \
+  #   SWGW_DATABASE_DSN='postgres://swgw:swgw@localhost:5432/swgw?sslmode=disable' \
+  #     go run ./cmd/coordinator --config ./config/config.yaml
+  driver: sqlite
+  dsn: ./dev/swgw.db
+
+coordinator:
+  leaderElection:
+    enabled: true
+    lockID: 1
+    retryInterval: 10s
+  scheduler:
+    tickInterval: 10s
+  reaper:
+    tickInterval: 30s
+    leaseDuration: 2m
+  queue:
+    maxLeaseBatchSize: 32
+  gc:
+    tickInterval: 1h
+    batchSize: 5000
+  # The cached manifest bodies, and the only thing this system stores that
+  # would otherwise grow without limit. A package's CONTENTS - its artifacts,
+  # their sizes, the blobs they reference - are kept forever and cost a few
+  # kilobytes. The manifest BODIES are a cache in front of the source registry:
+  # large, read only when a manifest is pushed, and exactly recoverable,
+  # because a manifest is addressed by the hash of its own bytes.
+  #
+  # Set either bound to 0 to disable it; both 0 keeps everything. Lowering them
+  # is safe - the cost of a miss is re-fetching a few kilobytes at transfer
+  # time, and nothing else.
+  manifestCache:
+    budgetBytes: 536870912   # 512 MiB
+    ttl: 168h                # a week
+    sweepInterval: 15m
+  # Whether a reader can save a file's raw bytes, separate from looking at it.
+  # Turn off to disable saving without losing the ability to view text files.
+  files:
+    downloadEnabled: false
+
+
+worker:
+  coordinatorEndpoint: http://localhost:8080
+  address: :8081
+  maxConcurrentJobs: 16
+  copyBufferSize: 1048576
+  heartbeatInterval: 20s
+
+# PROCESS-WIDE X.509 relaxations.
+#
+# Here and not under a product's `network:` because these are implemented with
+# Go's GODEBUG mechanism, which is per process and cannot be scoped to one
+# connection. Putting them beside `network.tls.insecureSkipVerify` would
+# misrepresent the blast radius: they apply to every registry, every Sigstore
+# call and every other outbound connection this process makes.
+#
+# Set it on the COORDINATOR and the WORKER. The Coordinator discovers, the
+# Worker moves the bytes; setting only one gives you clean discovery and a
+# failure at the handshake on every transfer.
+tls:
+  # Accepts certificates whose serial number is negative, which crypto/x509 has
+  # rejected since Go 1.23. This is the ONLY fix for:
+  #
+  #   tls: failed to parse certificate from server: x509: negative serial number
+  #
+  # network.tls.insecureSkipVerify does NOT help - that failure happens while
+  # PARSING the certificate, before any verification runs. Measured, not
+  # assumed: internal/platform/tlscompat carries the test.
+  #
+  # OFF, because this file is now read by production as well as by a laptop and
+  # a relaxation that only one of them needs must not arrive as a default in
+  # both. Turn it on where a registry actually needs it - the whole process is
+  # affected, so it is a deployment's decision:
+  #
+  #   SWGW_TLS_ALLOWNEGATIVESERIALNUMBERS=true
+  allowNegativeSerialNumbers: false
+
+observability:
+  log:
+    level: info
+    # JSON, because this file is shared and an aggregator is the reader that
+    # cannot cope with the other one. `task run` and `task dev:*` override it
+    # to `text` for a terminal.
+    format: json
+  metrics:
+    enabled: true
+    path: /metrics
+  tracing:
+    enabled: false
+    sampleRatio: 0.05

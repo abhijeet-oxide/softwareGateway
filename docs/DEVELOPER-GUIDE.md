@@ -133,7 +133,7 @@ Precedence, lowest to highest: **defaults → file → `SWGW_` environment varia
 A missing file is not an error - defaults plus environment must be enough to start. That is what makes `go run ./cmd/coordinator` work with zero setup.
 
 ```yaml
-# dev/config.yaml
+# config/config.yaml
 apiVersion: softwaregateway.io/v1alpha1
 kind: SystemConfig
 
@@ -275,7 +275,7 @@ spec:
 Validate before committing:
 
 ```bash
-./bin/transferctl config validate ./dev/products
+./bin/transferctl config validate ./config/products
 ```
 
 #### Repositories: name one, name several, or name none
@@ -581,7 +581,7 @@ The reason is where the failure happens. Go's `crypto/x509` has rejected negativ
 The fix is in system config, not product config:
 
 ```yaml
-# dev/config.yaml - or SWGW_TLS_ALLOWNEGATIVESERIALNUMBERS=true
+# config/config.yaml - or SWGW_TLS_ALLOWNEGATIVESERIALNUMBERS=true
 tls:
   allowNegativeSerialNumbers: true
 ```
@@ -634,7 +634,7 @@ Two properties worth knowing:
 - It is **appended to the system roots, never replacing them.** A product that adds a private CA still needs to reach public registries and Sigstore.
 - **There is deliberately no `insecureSkipVerify`.** Disabling verification is never the right fix, and an option to do it gets set in production "temporarily" exactly once. Supply the CA instead.
 
-A complete example is in [`dev/products/vendor-c-multirepo.yaml`](../dev/products/vendor-c-multirepo.yaml).
+A complete example is in [`test/products.example/nokia-cmm.yaml`](../test/products.example/nokia-cmm.yaml).
 
 #### Why `metadata.name` must be lowercase
 
@@ -663,14 +663,14 @@ Secrets are read from **projected volume mounts**, never the Kubernetes API. No 
 ```
 
 ```bash
-mkdir -p dev/secrets/vendor-a-registry
-printf 'svc-account' > dev/secrets/vendor-a-registry/username
-printf 'the-token'   > dev/secrets/vendor-a-registry/password
+mkdir -p config/secrets/local/vendor-a-registry
+printf 'svc-account' > config/secrets/local/vendor-a-registry/username
+printf 'the-token'   > config/secrets/local/vendor-a-registry/password
 ```
 
 In Kubernetes, **Vault Secrets Operator writes these**; the tool only reads what VSO projects.
 
-A full annotated example with verification, notifications, promotion targets and rate limits is in [`dev/products/vendor-a-platform.yaml`](../dev/products/vendor-a-platform.yaml). The schema reference is [doc 02](design/02-configuration.md).
+A full annotated example with verification, notifications, promotion targets and rate limits is in [`test/products.example/near-cfx.yaml`](../test/products.example/near-cfx.yaml). The schema reference is [doc 02](design/02-configuration.md).
 
 ---
 
@@ -682,7 +682,7 @@ SQLite, no containers, no cluster:
 
 ```bash
 task dev:coordinator
-# or: go run ./cmd/coordinator --config ./dev/config.yaml
+# or: go run ./cmd/coordinator --config ./config/config.yaml
 ```
 
 The database is created and migrated on first start. In another terminal:
@@ -704,7 +704,7 @@ docker compose up -d postgres
 
 SWGW_DATABASE_DRIVER=postgres \
 SWGW_DATABASE_DSN='postgres://swgw:swgw@localhost:5432/swgw?sslmode=disable' \
-  go run ./cmd/coordinator --config ./dev/config.yaml
+  go run ./cmd/coordinator --config ./config/config.yaml
 ```
 
 SQLite is a development convenience and is **not supported in production** - the Coordinator warns loudly at startup. Use Postgres for anything you care about; leader election and the M3 queue both depend on Postgres semantics that SQLite does not have.
@@ -925,8 +925,8 @@ task build
 **2 - Point a product at a registry you control.** For a real trial, `docker run -d -p 5000:5000 registry:2` and push an image; if Docker is unavailable, use any registry you can reach.
 
 ```bash
-mkdir -p dev/products dev/secrets
-cat > dev/products/demo.yaml <<'YAML'
+mkdir -p config/products config/secrets/local
+cat > config/products/demo.yaml <<'YAML'
 apiVersion: softwaregateway.io/v1alpha1
 kind: Product
 metadata:
@@ -960,13 +960,13 @@ YAML
 **3 - Validate before running.**
 
 ```bash
-./bin/transferctl config validate ./dev/products
+./bin/transferctl config validate ./config/products
 ```
 
 **4 - Start the Coordinator.**
 
 ```bash
-go run ./cmd/coordinator --config ./dev/config.yaml
+go run ./cmd/coordinator --config ./config/config.yaml
 ```
 
 Look for these lines - they are the checkpoints:
@@ -989,7 +989,7 @@ export SWGW_ENDPOINT=http://localhost:8080
 
 **6 - Watch supersession.** Re-push the *same tag* with different content, then re-scan. A new package row appears and the old one becomes `superseded` with `superseded_by` set. Different tags never do this to each other - `v1.0.0` and `v1.1.0` coexist indefinitely.
 
-**7 - Watch hot reload.** Edit `dev/products/demo.yaml` - change the interval, add a tag filter - and save. Discovery stops and restarts with the new configuration. No restart, no signal.
+**7 - Watch hot reload.** Edit `config/products/demo.yaml` - change the interval, add a tag filter - and save. Discovery stops and restarts with the new configuration. No restart, no signal.
 
 ---
 

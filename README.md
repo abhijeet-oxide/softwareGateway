@@ -54,7 +54,7 @@ How to build (including Windows), configure the two separate kinds of configurat
 
 What the tool does, the logical components and where they run, the file-level code layout, the CLI grouped by task, and ten day-in-the-life scenarios showing what operating it actually looks like.
 
-**Running two scanners? [Read the Anchore integration guide →](docs/security/ANCHORE-INTEGRATION.md)**
+**Running two scanners? [Read the Anchore integration guide →](docs/security/anchore-integration.md)**
 
 What Anchore has to be able to reach, the two lines of configuration, what a
 sync does in five phases, what each failure means, and what running a second

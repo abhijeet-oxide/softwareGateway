@@ -4,7 +4,7 @@
 #  High-level functionality, rules and defaults. Nothing here names a registry,
 #  a repository or a credential: those belong to the product that uses them.
 #
-#  Proposed v1alpha2 shape. See docs/design/24-software-flow.md.
+#  Proposed v1alpha2 shape. See docs/design/28-software-flow.md.
 # ═══════════════════════════════════════════════════════════════════════════════
 apiVersion: softwaregateway.io/v1alpha2
 kind: SystemConfig

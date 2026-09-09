@@ -106,12 +106,12 @@ address an administrator typed into `users.json`.
 
 ## 5. Reproducing it without a tenant
 
-`test/mockEntra/docker-compose.mock-entra.yml` and `deploy/mock-entra/` stand a mock directory
+`test/mockEntra/docker-compose.mock-entra.yml` and `test/mockEntra/` stand a mock directory
 behind `login.microsoftonline.com` and `graph.microsoft.com` - those two names
 are compiled into ZITADEL's Microsoft connector, so a network alias, a
 certificate for both names and `SSL_CERT_FILE` are what it takes to be them. The
 connector itself is not reconfigured, so the code path under test is the real
-one. See [`deploy/mock-entra/README.md`](../../deploy/mock-entra/README.md).
+one. See [`test/mockEntra/README.md`](../../test/mockEntra/README.md).
 
 Verified through a real browser against a stack brought up from empty volumes:
 
@@ -278,7 +278,7 @@ The console steps that produce a linkable account are in
 
 - [`deploy/zitadel/bootstrap.mjs`](../../deploy/zitadel/bootstrap.mjs) - `createHuman`, `replaceIfUninitialised`, the attempt report
 - [`deploy/deploy_test.go`](../../deploy/deploy_test.go) - `TestSeederDoesNotImportHumans`
-- [`deploy/mock-entra/`](../../deploy/mock-entra/README.md) - the mock directory
+- [`test/mockEntra/`](../../test/mockEntra/README.md) - the mock directory
 - [`test/mockEntra/docker-compose.mock-entra.yml`](../../test/mockEntra/docker-compose.mock-entra.yml) - the overlay
 - [`deploy/zitadel/docker-entrypoint.sh`](../../deploy/zitadel/docker-entrypoint.sh) - the contact on the refusal page
 - [`web/src/pages/Profile.tsx`](../../web/src/pages/Profile.tsx), [`web/src/auth/session.ts`](../../web/src/auth/session.ts) - the Directory section and the claims behind it

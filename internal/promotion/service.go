@@ -25,7 +25,7 @@ import (
 	"log/slog"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
-	"github.com/abhijeet-oxide/softwareGateway/internal/promote"
+	"github.com/abhijeet-oxide/softwareGateway/internal/promoter"
 	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
@@ -83,9 +83,9 @@ func (s *Service) Claim(ctx context.Context, hop transfer.PromotionHop) (transfe
 // the resolved endpoints and credentials of that pair - so handing the runner
 // a promoter without the hop it belongs to would invite the two to be mixed.
 type Bound struct {
-	Promoter promote.Promoter
-	Hop      promote.Hop
-	Verdict  promote.Verdict
+	Promoter promoter.Promoter
+	Hop      promoter.Hop
+	Verdict  promoter.Verdict
 }
 
 // PromoterFor returns the plugin that carries a hop, and the hop it carries.
@@ -102,40 +102,40 @@ func (s *Service) PromoterFor(hop transfer.PromotionHop) (Bound, error) {
 		return Bound{}, err
 	}
 	if res.Promoter == nil {
-		return Bound{Verdict: promote.Verdict{Reason: reasonFor(res)}}, nil
+		return Bound{Verdict: promoter.Verdict{Reason: reasonFor(res)}}, nil
 	}
 	return Bound{Promoter: res.Promoter, Hop: pluginHop, Verdict: res.Verdict}, nil
 }
 
-func (s *Service) resolve(hop transfer.PromotionHop) (promote.Resolution, error) {
+func (s *Service) resolve(hop transfer.PromotionHop) (promoter.Resolution, error) {
 	res, _, err := s.resolveHop(hop)
 	return res, err
 }
 
 func (s *Service) resolveHop(
 	hop transfer.PromotionHop,
-) (promote.Resolution, promote.Hop, error) {
+) (promoter.Resolution, promoter.Hop, error) {
 	p, ok := s.products.Get(hop.ProductName)
 	if !ok {
-		return promote.Resolution{}, promote.Hop{},
+		return promoter.Resolution{}, promoter.Hop{},
 			fmt.Errorf("product %q is not loaded", hop.ProductName)
 	}
 
 	origin, err := s.endpoint(p, hop.Origin)
 	if err != nil {
-		return promote.Resolution{}, promote.Hop{}, err
+		return promoter.Resolution{}, promoter.Hop{}, err
 	}
 	destination, err := s.endpoint(p, hop.Destination)
 	if err != nil {
-		return promote.Resolution{}, promote.Hop{}, err
+		return promoter.Resolution{}, promoter.Hop{}, err
 	}
 
-	names := make([]promote.Name, 0, len(hop.Names))
+	names := make([]promoter.Name, 0, len(hop.Names))
 	for _, n := range hop.Names {
-		names = append(names, promote.Name{Repository: n.Repository, Tag: n.Tag, Digest: n.Digest})
+		names = append(names, promoter.Name{Repository: n.Repository, Tag: n.Tag, Digest: n.Digest})
 	}
 
-	pluginHop := promote.Hop{
+	pluginHop := promoter.Hop{
 		Product:        hop.ProductName,
 		Package:        hop.Package,
 		ManifestDigest: hop.ManifestDigest,
@@ -149,7 +149,7 @@ func (s *Service) resolveHop(
 		AllNames: names,
 	}
 
-	res, err := promote.Resolve(promote.Config{
+	res, err := promoter.Resolve(promoter.Config{
 		Origin:            origin.endpoint,
 		Destination:       destination.endpoint,
 		OriginClient:      origin.client,
@@ -161,7 +161,7 @@ func (s *Service) resolveHop(
 
 // resolvedEnd is one target, in both vocabularies.
 type resolvedEnd struct {
-	endpoint promote.Endpoint
+	endpoint promoter.Endpoint
 	client   registry.ClientConfig
 }
 
@@ -192,7 +192,7 @@ func (s *Service) endpoint(p *product.Product, targetName string) (resolvedEnd, 
 	}
 
 	return resolvedEnd{
-		endpoint: promote.Endpoint{
+		endpoint: promoter.Endpoint{
 			Name:         t.Name,
 			Registry:     t.Registry,
 			Repository:   t.Repository,
@@ -205,7 +205,7 @@ func (s *Service) endpoint(p *product.Product, targetName string) (resolvedEnd, 
 
 // options carries a target's promoter-specific settings.
 //
-// A map rather than fields on promote.Endpoint, so adding the second plugin
+// A map rather than fields on promoter.Endpoint, so adding the second plugin
 // does not mean editing the first plugin's types - see the Options comment
 // there. The keys are the plugin's own, which is why they are spelled as the
 // configuration spells them.
@@ -227,7 +227,7 @@ func options(t product.Target) map[string]string {
 }
 
 // reasonFor renders why nothing claimed, in words an operator can act on.
-func reasonFor(res promote.Resolution) string {
+func reasonFor(res promoter.Resolution) string {
 	if reason := res.DeclinedReason(); reason != "" {
 		return reason
 	}

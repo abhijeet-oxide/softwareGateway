@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/abhijeet-oxide/softwareGateway/internal/promote"
+	"github.com/abhijeet-oxide/softwareGateway/internal/promoter"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
@@ -168,7 +168,7 @@ func (r *Runner) run(ctx context.Context, pm store.Promotion) error {
 		// the repository keys are whatever the claim resolved; only the name
 		// narrows, which is what makes each call independently recordable.
 		one := bound.Hop
-		one.Names = []promote.Name{
+		one.Names = []promoter.Name{
 			{Repository: n.Repository, Tag: n.Tag, Digest: n.Digest},
 		}
 

@@ -29,6 +29,18 @@ const EnvPrefix = "SWGW_"
 // SystemConfig is the deployment-scoped configuration document.
 type SystemConfig struct {
 	ConfigDir string `koanf:"configDir"`
+	// ProductsDirOverride and SecretsDirOverride place either directory
+	// somewhere other than under ConfigDir. Empty keeps the derived path.
+	//
+	// In a cluster the two are one root because a ConfigMap volume and a Secret
+	// volume are mounted side by side and it is tidy for them to be. Outside
+	// one that is a coincidence rather than a rule: `config/` is a directory
+	// somebody edits and commits, and the credentials in it are the one part
+	// that is deliberately NOT committed - so they live in their own subtree
+	// with the manifests that produce them in the cluster beside it, and this
+	// is what lets one configuration file describe both.
+	ProductsDirOverride string `koanf:"productsDir"`
+	SecretsDirOverride  string `koanf:"secretsDir"`
 
 	// Stage is the task vocabulary: what a release can be moved through, and
 	// what each move checks. See stage.go - this is the block that makes
@@ -994,6 +1006,17 @@ func Defaults() SystemConfig {
 //
 // A missing file is not an error - the defaults plus environment must be
 // enough to start, which is what makes the zero-setup development path work.
+// DefaultPath is where a deployment puts the configuration file, and what
+// --config falls back to.
+//
+// A DEFAULT rather than a flag every deployment has to remember, because the
+// alternative is the same path written into a compose file, a Deployment's
+// args, a Helm template and a developer's shell - four copies of one constant,
+// and a component that silently runs on compiled-in defaults wherever one of
+// them is missed. A file that is not there is not an error (see Load), so this
+// costs a developer running the binary from a checkout nothing at all.
+const DefaultPath = "/etc/softwaregateway/config.yaml"
+
 func Load(path string) (SystemConfig, error) {
 	k := koanf.New(".")
 
@@ -1140,10 +1163,20 @@ func (c SystemConfig) Validate() error {
 }
 
 // ProductsDir is where per-product ConfigMaps are projected.
-func (c SystemConfig) ProductsDir() string { return c.ConfigDir + "/products" }
+func (c SystemConfig) ProductsDir() string {
+	if c.ProductsDirOverride != "" {
+		return c.ProductsDirOverride
+	}
+	return c.ConfigDir + "/products"
+}
 
 // SecretsDir is where VSO-managed Secrets are projected.
-func (c SystemConfig) SecretsDir() string { return c.ConfigDir + "/secrets" }
+func (c SystemConfig) SecretsDir() string {
+	if c.SecretsDirOverride != "" {
+		return c.SecretsDirOverride
+	}
+	return c.ConfigDir + "/secrets"
+}
 
 // IsProduction reports whether the store is production-grade. Used to warn at
 // startup that SQLite is a development convenience only.

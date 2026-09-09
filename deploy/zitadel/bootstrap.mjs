@@ -243,7 +243,7 @@ function request(method, path, body, contentType) {
  * (COMMAND-1m88i)" - and every one of them means the seeder asked for exactly
  * what is already true. That is the normal outcome of an idempotent re-run, so
  * it is not reported as a fault; anything else is. */
-/* --- reading data/ -------------------------------------------------------
+/* --- reading config/ -------------------------------------------------------
  *
  * A DELIBERATELY SMALL YAML READER, and the reason it is here rather than a
  * dependency: this container is `node:alpine` and nothing else. Adding js-yaml
@@ -254,7 +254,7 @@ function request(method, path, body, contentType) {
  * So it reads a SUBSET, and says so. Maps, lists, lists of maps, inline `[]`
  * and `{}`, quoted and plain scalars, comments, blank lines. Not anchors, not
  * multi-line scalars, not flow maps with nested structure, not multiple
- * documents. data/access/roles.yaml and data/users/users.yaml are written
+ * documents. config/access/roles.yaml and config/users/users.yaml are written
  * inside that subset and `go test ./deploy/...` parses both with a real YAML
  * library on every build, so a document this cannot read fails in CI rather
  * than at three in the morning.
@@ -275,7 +275,7 @@ function parseYaml(text) {
 }
 
 /* A `#` inside quotes is content, not a comment. Anywhere else it ends the
- * line - which is what lets every file in data/ carry its reasoning with it. */
+ * line - which is what lets every file in config/ carry its reasoning with it. */
 function stripComment(line) {
   let quote = '';
   for (let i = 0; i < line.length; i++) {
@@ -433,7 +433,7 @@ head('ZITADEL');
 item('reachable', `after ${Math.round((Date.now() - startedAt) / 1000)}s`);
 item('credential', PAT_FILE);
 
-/* --- 1b. what this deployment is, read from data/ --------------------------
+/* --- 1b. what this deployment is, read from config/ --------------------------
  *
  * ONE DIRECTORY, read before anything is written.
  *
@@ -447,10 +447,10 @@ item('credential', PAT_FILE);
  * happen HERE, before the first write. A run that would produce a deployment
  * nobody can administer refuses to start rather than half-applying itself.
  */
-const DATA_DIR = process.env.GATEWAY_DATA_DIR || '/data';
-const ROLES_FILE = `${DATA_DIR}/access/roles.yaml`;
-const USERS_FILE = `${DATA_DIR}/users/users.yaml`;
-const PRODUCTS_DIR = `${DATA_DIR}/products`;
+const CONFIG_DIR = process.env.GATEWAY_CONFIG_DIR || '/config';
+const ROLES_FILE = `${CONFIG_DIR}/access/roles.yaml`;
+const USERS_FILE = `${CONFIG_DIR}/users/users.yaml`;
+const PRODUCTS_DIR = `${CONFIG_DIR}/products`;
 
 const dataError = (...lines) => {
   console.error('');
@@ -494,7 +494,7 @@ if (found.unnamed?.length) {
   dataError(`FATAL: ${found.unnamed.length} document(s) in ${PRODUCTS_DIR} declare no metadata.name:`,
     ...found.unnamed.map(f => `    ${f}`),
     '  A product with no name cannot be granted access to. Every document',
-    '  here needs `metadata.name` at the top level - see data/products/README.md.');
+    '  here needs `metadata.name` at the top level - see config/products/README.md.');
 }
 const products = found.names.map(p => p.name);
 
@@ -528,12 +528,12 @@ if (ownerRole) {
       `      products:`,
       `        ${orphans[0]}: [${ownerRole}]`,
       '',
-      `  The role that must be held is data/access/roles.yaml's product.ownerRole.`);
+      `  The role that must be held is config/access/roles.yaml's product.ownerRole.`);
   }
 }
 
 head('Configuration');
-item('source', DATA_DIR);
+item('source', CONFIG_DIR);
 item('tenant roles', orgRoles.join(', '));
 item('product roles', productRoles.join(', '));
 item('owner role', ownerRole || 'not required');
@@ -1032,7 +1032,7 @@ for (const p of products) {
     /* NOBODY IS CREATED BY SIGNING IN.
      *
      * This is a closed system: who may use this gateway is decided by an
-     * administrator, in data/users/users.yaml, reviewable in a pull
+     * administrator, in config/users/users.yaml, reviewable in a pull
      * request. It is not decided by who happens to hold an account at the
      * identity provider - which, federating a corporate directory, is
      * everybody who works here.
@@ -1260,7 +1260,7 @@ for (const p of products) {
       '',
       'Anybody at that identity provider can sign in, be given a new account',
       'with no roles, and be issued a valid token with it. Who may use this',
-      'stack is decided in data/users/users.yaml, not by the directory.',
+      'stack is decided in config/users/users.yaml, not by the directory.',
       '',
       'Remedy: re-run this container with SSO_DISPLAY_NAME set to the name',
       'above, which reconciles that connector; or delete it in the console',
@@ -1426,14 +1426,14 @@ for (const p of products) {
     note('  at the identity provider holds that one, so no sign-in reaches this');
     note('  account.');
     note('  Remedy: set BOOTSTRAP_ADMIN_EMAIL to the address that signs in, or');
-    note('  add that person to data/users/users.yaml, then re-run this');
+    note('  add that person to config/users/users.yaml, then re-run this');
     note('  container.');
   }
 }
 
 /* --- 13. additional users, from a file that IS the deployment mechanism ----
  *
- * Add a person to data/users/users.yaml, commit it, re-run this container.
+ * Add a person to config/users/users.yaml, commit it, re-run this container.
  * That is the whole user-provisioning story, and it is reviewable in a pull
  * request rather than being clicks in a console that nobody can audit later.
  */
@@ -1725,7 +1725,7 @@ for (const a of (doc?.apiUsers || [])) {
     lines.push('Usually the account was created by the identity provider at a first');
     lines.push('sign-in, and this file has never been told about it.');
     lines.push('');
-    lines.push('Remedy: add each of them to data/users/users.yaml under the');
+    lines.push('Remedy: add each of them to config/users/users.yaml under the');
     lines.push('address that signs in - that address is what matches them to the');
     lines.push('account that already exists - then re-run this container. For the');
     lines.push('administrator, BOOTSTRAP_ADMIN_EMAIL is the same thing.');
@@ -1799,7 +1799,7 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
     console.error('');
     console.error('  Remedy, then re-run this container:');
     console.error('    BOOTSTRAP_ADMIN_EMAIL=<the address that signs in>');
-    console.error('  or add that person to data/users/users.yaml with their address.');
+    console.error('  or add that person to config/users/users.yaml with their address.');
     console.error('  To keep the password box instead: SSO_ALLOW_PASSWORD_LOGIN=true');
     console.error('');
     process.exit(1);
@@ -1923,7 +1923,7 @@ if (process.env.SSO_ISSUER) {
     note('verified address.');
     note();
     note('Remedy for an unmatched address: correct it in .env or in');
-    note('data/users/users.yaml, then re-run this container.');
+    note('config/users/users.yaml, then re-run this container.');
   }
 }
 }

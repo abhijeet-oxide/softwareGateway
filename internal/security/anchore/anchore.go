@@ -1,7 +1,7 @@
 // Package anchore reaches Anchore Enterprise and answers in the platform's own
 // security vocabulary.
 //
-// See docs/security/Anchore.md for the integration methodology this implements
+// See docs/security/anchore-orb-analysis.md for the integration methodology this implements
 // and docs/design/21-security-posture.md §12 for the boundary it sits behind.
 //
 // # Why this is a package of its own and Xray is not

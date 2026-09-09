@@ -214,19 +214,19 @@ func TestEveryProductHasAnOwner(t *testing.T) {
 			OwnerRole string   `json:"ownerRole"`
 		} `json:"product"`
 	}
-	readYAML(t, "../data/access/roles.yaml", &roles)
+	readYAML(t, "../config/access/roles.yaml", &roles)
 	if len(roles.Tenant.Roles) == 0 || len(roles.Product.Roles) == 0 {
-		t.Fatal("data/access/roles.yaml declares no roles; both tiers are required")
+		t.Fatal("config/access/roles.yaml declares no roles; both tiers are required")
 	}
 	if roles.Product.OwnerRole == "" {
-		t.Skip("data/access/roles.yaml sets no product.ownerRole, so no product needs one")
+		t.Skip("config/access/roles.yaml sets no product.ownerRole, so no product needs one")
 	}
 
 	var users struct {
 		Users    []userEntry `json:"users"`
 		APIUsers []userEntry `json:"apiUsers"`
 	}
-	readYAML(t, "../data/users/users.yaml", &users)
+	readYAML(t, "../config/users/users.yaml", &users)
 
 	owned := map[string]bool{}
 	for _, u := range append(append([]userEntry{}, users.Users...), users.APIUsers...) {
@@ -239,7 +239,7 @@ func TestEveryProductHasAnOwner(t *testing.T) {
 		}
 	}
 
-	files, err := filepath.Glob("../data/products/*.yaml")
+	files, err := filepath.Glob("../config/products/*.yaml")
 	if err != nil {
 		t.Fatalf("glob products: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestEveryProductHasAnOwner(t *testing.T) {
 		}
 		if !owned[doc.Metadata.Name] {
 			t.Errorf("product %q (%s) has no owner. Add it to somebody's `products:` mapping in "+
-				"data/users/users.yaml with the %q role, or nobody can approve a download for it:"+
+				"config/users/users.yaml with the %q role, or nobody can approve a download for it:"+
 				"\n      products:\n        %s: [%s]",
 				doc.Metadata.Name, file, roles.Product.OwnerRole,
 				doc.Metadata.Name, roles.Product.OwnerRole)

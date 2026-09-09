@@ -80,7 +80,7 @@ func main() {
 
 func run() error {
 	var (
-		configPath  = flag.String("config", "", "path to the system configuration file")
+		configPath  = flag.String("config", config.DefaultPath, "path to the system configuration file")
 		showVersion = flag.Bool("version", false, "print version and exit")
 		healthCheck = flag.Bool("health-check", false,
 			"probe this process's own readiness endpoint and exit 0 or 1")

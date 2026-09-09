@@ -48,7 +48,7 @@ func (c *instantCoordinator) LeaseJobs(
 ) (*v1.LeaseResponse, error) {
 	c.leases.Add(1)
 
-	// The server's own batch ceiling, from dev/config.yaml.
+	// The server's own batch ceiling, from config/config.yaml.
 	const maxBatch = 32
 	want := min(req.Capacity, maxBatch)
 

@@ -1,0 +1,71 @@
+# syntax=docker/dockerfile:1
+#
+# Worker image. See docs/design/14-deployment-and-development.md section 3.2.
+#
+# The worker holds NO database credentials and writes NOTHING to disk. The
+# deployment runs it with readOnlyRootFilesystem and no writable volume, which
+# makes invariant I5 ("bytes never touch worker disk") enforced by the platform
+# rather than by code review - a worker cannot buffer a blob because there is
+# nowhere to put it.
+
+# Pinned, and overridable so an internal registry or pull-through proxy can be
+# used: docker compose build --build-arg GO_IMAGE=registry.corp/golang:1.25.14
+# Base images: declared here, above every FROM, because an ARG used in a
+# FROM must be in the global scope - one declared inside a stage is
+# invisible to the next FROM and fails with "base name should not be blank".
+# All are overridable for an internal registry or pull-through proxy.
+ARG GO_IMAGE=golang:1.25.14
+ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
+
+FROM ${GO_IMAGE} AS build
+WORKDIR /src
+
+# Network configuration for a build behind a corporate proxy. A container
+# inherits none of the host's proxy settings, so without these `go mod
+# download` fails with a TLS handshake timeout against storage.googleapis.com.
+# GOPROXY additionally lets an internal module mirror serve the whole graph.
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=
+ARG GOPROXY=https://proxy.golang.org,direct
+ARG GOSUMDB=sum.golang.org
+ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} NO_PROXY=${NO_PROXY} \
+    http_proxy=${HTTP_PROXY} https_proxy=${HTTPS_PROXY} no_proxy=${NO_PROXY} \
+    GOPROXY=${GOPROXY} GOSUMDB=${GOSUMDB}
+
+# See deploy/build/Dockerfile.web for why this exists: a TLS-intercepting corporate
+# proxy makes `go mod download` fail with x509: certificate signed by unknown
+# authority, and the only correct fix is to trust the proxy's CA.
+COPY deploy/certs/ /usr/local/share/ca-certificates/extra/
+RUN if ls /usr/local/share/ca-certificates/extra/*.crt >/dev/null 2>&1; then \
+      update-ca-certificates && echo "trusting operator-supplied CA certificates"; \
+    fi
+
+COPY go.mod go.sum ./
+# Credentials for a private module proxy arrive as a mounted secret, never as
+# a build argument: an ARG is readable forever in `docker history`. /root/.netrc
+# is where the Go toolchain looks, and the mount exists only for this RUN.
+RUN --mount=type=secret,id=netrc,target=/root/.netrc \
+    go mod download
+
+COPY . .
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+RUN CGO_ENABLED=0 go build -trimpath \
+      -ldflags="-s -w \
+        -X github.com/abhijeet-oxide/softwareGateway/internal/platform/version.Version=${VERSION} \
+        -X github.com/abhijeet-oxide/softwareGateway/internal/platform/version.Commit=${COMMIT} \
+        -X github.com/abhijeet-oxide/softwareGateway/internal/platform/version.Date=${BUILD_DATE}" \
+      -o /out/worker ./cmd/worker
+
+# Overridable for an internal registry or pull-through proxy. Pinned by digest
+# would be stronger still; :nonroot is what upstream documents and what the
+# published deployment manifests use.
+FROM ${RUNTIME_IMAGE}
+COPY --from=build /out/worker /worker
+USER nonroot:nonroot
+EXPOSE 8081
+ENTRYPOINT ["/worker"]

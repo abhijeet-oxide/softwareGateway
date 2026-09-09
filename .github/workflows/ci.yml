@@ -350,14 +350,10 @@ jobs:
           # measuring startup, which is what it is meant to measure.
           go build -o /tmp/coordinator-ci ./cmd/coordinator
 
-          # dev/products/ is gitignored - it is a developer's working copy -
-          # so on a fresh checkout the Coordinator loads nothing and the
-          # products assertion below finds an empty list. Seed it from the
-          # committed reference, which is what a developer does by hand.
-          mkdir -p dev/products
-          cp dev/products.example/*.yaml dev/products/
-
-          /tmp/coordinator-ci --config ./dev/config.yaml &
+          # config/products is committed and is what every runtime reads, so
+          # there is nothing to seed: this boots the Coordinator against the
+          # same directory a developer, a compose stack and a cluster all use.
+          /tmp/coordinator-ci --config ./config/config.yaml &
           COORD=$!
           trap 'kill $COORD 2>/dev/null || true' EXIT
 

@@ -21,7 +21,13 @@ version: '3'
 vars:
   MODULE: github.com/abhijeet-oxide/softwareGateway
   BINARIES: coordinator worker transferctl
-  DEV_CONFIG: ./dev/config.yaml
+  # ONE configuration file for every runtime - see config/config.yaml. What a
+  # laptop wants and a cluster wants differ in exactly two settings, so those
+  # are overrides here rather than a second file to keep in step.
+  DEV_CONFIG: ./config/config.yaml
+  DEV_ENV: >-
+    SWGW_OBSERVABILITY_LOG_FORMAT=text
+    SWGW_TLS_ALLOWNEGATIVESERIALNUMBERS=true
 
   # The executable suffix, resolved against the TARGET platform.
   #
@@ -146,7 +152,7 @@ tasks:
     cmds:
       - cmd: rm -rf bin dist coverage.out dev/swgw.db dev/swgw.db-shm dev/swgw.db-wal
         platforms: [linux, darwin]
-      - cmd: powershell -NoProfile -File ./scripts/clean-dev.ps1
+      - cmd: powershell -NoProfile -File ./deploy/scripts/clean-dev.ps1
         platforms: [windows]
 
   # ------------------------------------------------------------------- test --
@@ -286,12 +292,12 @@ tasks:
   dev:coordinator:
     desc: Run the Coordinator against SQLite (zero setup)
     cmds:
-      - go run ./cmd/coordinator --config {{.DEV_CONFIG}}
+      - '{{.DEV_ENV}} go run ./cmd/coordinator --config {{.DEV_CONFIG}}'
 
   dev:worker:
     desc: Run a Worker
     cmds:
-      - go run ./cmd/worker --config {{.DEV_CONFIG}}
+      - '{{.DEV_ENV}} go run ./cmd/worker --config {{.DEV_CONFIG}}'
 
   dev:web:
     desc: Run the web development server
@@ -302,12 +308,12 @@ tasks:
   run:coordinator:
     internal: true
     cmds:
-      - ./bin/coordinator{{.EXE}} --config {{.DEV_CONFIG}}
+      - '{{.DEV_ENV}} ./bin/coordinator{{.EXE}} --config {{.DEV_CONFIG}}'
 
   run:worker:
     internal: true
     cmds:
-      - ./bin/worker{{.EXE}} --config {{.DEV_CONFIG}}
+      - '{{.DEV_ENV}} ./bin/worker{{.EXE}} --config {{.DEV_CONFIG}}'
 
   run:all:
     internal: true
@@ -322,7 +328,7 @@ tasks:
   dev:postgres:
     desc: Start PostgreSQL for development
     cmds:
-      - docker compose -f dev/docker-compose.dev.yaml up -d postgres
+      - docker compose -f deploy/dev/docker-compose.yml up -d postgres
       - cmd: |
           echo "Then run the Coordinator against it:"
           echo "  SWGW_DATABASE_DRIVER=postgres \\"
@@ -333,7 +339,7 @@ tasks:
   dev:registry:
     desc: Start two local OCI registries (source and destination)
     cmds:
-      - docker compose -f dev/docker-compose.dev.yaml up -d registry registry-dest
+      - docker compose -f deploy/dev/docker-compose.yml up -d registry registry-dest
       - cmd: |
           echo "source      localhost:5000"
           echo "destination localhost:5001"
@@ -342,17 +348,21 @@ tasks:
   dev:down:
     desc: Stop all development containers
     cmds:
-      - docker compose -f dev/docker-compose.dev.yaml down -v
+      - docker compose -f deploy/dev/docker-compose.yml down -v
 
   # ----------------------------------------------------------------- config --
 
   validate:
     desc: Validate the sample product configuration
-    # dev/products.example/ is the COMMITTED reference. dev/products/ is a
-    # developer's own working copy and is gitignored, so validating that path
-    # fails on any fresh checkout - CI included, which is how this was found.
+    # BOTH directories, because they answer different questions. config/products
+    # is what this deployment actually replicates and is what every runtime
+    # reads; test/products.example is the richer reference an operator copies
+    # from, with credentials, promotion targets and compliance packs the
+    # shipped samples deliberately leave out. A validator that only ever sees
+    # the simple case is a validator nobody has tested.
     cmds:
-      - go run ./cmd/transferctl config validate ./dev/products.example
+      - go run ./cmd/transferctl config validate ./config/products
+      - go run ./cmd/transferctl config validate ./test/products.example
 
   validate:rejects-broken:
     desc: Confirm the validator actually rejects bad configuration
@@ -366,7 +376,7 @@ tasks:
     # trusted. This asserts the negative case.
     #
     # The broken document is written to a temp directory rather than kept in
-    # the tree: dev/products/ is a reference an operator copies from, and a
+    # the tree: config/products/ is what a deployment reads, and a
     # deliberately invalid file sitting next to it is a trap. The three error
     # classes below are the ones from docs/design/13-cli.md section 9, and each
     # also has a unit test in internal/product/validate_test.go asserting its
@@ -471,5 +481,5 @@ tasks:
           docker build
           --build-arg VERSION={{.VERSION}}
           --build-arg COMMIT={{.COMMIT}}
-          -f build/Dockerfile.{{.ITEM}}
+          -f deploy/build/Dockerfile.{{.ITEM}}
           -t softwaregateway-{{.ITEM}}:{{.VERSION}} .

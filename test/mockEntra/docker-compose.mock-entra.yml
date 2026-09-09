@@ -1,11 +1,11 @@
 # The Microsoft directory, replaced by one whose answers can be read.
 #
-#   ./deploy/mock-entra/mkcerts.sh
+#   ./test/mockEntra/mkcerts.sh
 #   docker compose -f docker-compose.yml -f test/mockEntra/docker-compose.mock-entra.yml up -d --force-recreate
 #
 # Paths below are relative to the PROJECT directory, which compose takes from
 # the FIRST -f file - the repository root - and not from this file's own
-# directory. The mock itself lives in deploy/mock-entra.
+# directory. The mock itself lives in test/mockEntra.
 #
 # NEVER part of a deployment. It is a second file, named explicitly on the
 # command line, and it exists so that a sign-in failure can be reproduced on a
@@ -34,14 +34,14 @@
 #                       shape of this that wastes an afternoon.
 #   8443 published      the browser is redirected to login.microsoftonline.com
 #                       as well, so a test driving a real browser needs a route
-#                       to the mock from the host. See deploy/mock-entra/README.md
+#                       to the mock from the host. See test/mockEntra/README.md
 #                       for the resolver rule that does it.
 services:
   mock-entra:
     image: ${SEEDER_IMAGE:-node:22.23.2-alpine}
     restart: unless-stopped
     volumes:
-      - ./deploy/mock-entra:/mock:ro
+      - ./test/mockEntra:/mock:ro
     environment:
       MOCK_DIRECTORY: /mock/directory.json
       MOCK_TLS_KEY: /mock/certs/mock.key
@@ -69,7 +69,7 @@ services:
       SSL_CERT_FILE: /mock/certs/ca.crt
       ZITADEL_HTTPCLIENT_DENYLIST: '255.255.255.255/32'
     volumes:
-      - ./deploy/mock-entra/certs:/mock/certs:ro
+      - ./test/mockEntra/certs:/mock/certs:ro
 
   # The mock configures SSO through this file rather than through .env, so the
   # web tier's own gate on SSO_ISSUER cannot see it. Named here instead, so the
@@ -91,4 +91,4 @@ services:
       SSO_CLIENT_ID: ${MOCK_ENTRA_CLIENT_ID:-mock-entra-app}
       SSO_CLIENT_SECRET: ${MOCK_ENTRA_CLIENT_SECRET:-aBc8Q~mock.secret_value-0123456789}
     volumes:
-      - ./deploy/mock-entra/certs:/mock/certs:ro
+      - ./test/mockEntra/certs:/mock/certs:ro

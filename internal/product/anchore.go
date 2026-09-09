@@ -4,7 +4,7 @@ import "strings"
 
 // Anchore, in one field.
 //
-// See docs/design/21-security-posture.md and docs/security/Anchore.md.
+// See docs/design/21-security-posture.md and docs/security/anchore-orb-analysis.md.
 //
 // # Why it is one field, like xrayEnabled and unlike everything else
 //

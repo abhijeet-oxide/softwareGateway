@@ -45,7 +45,7 @@ by the report's search, and about fifty terms are asserted to find the checks
 they belong to - see [02](02-authoring-checks.md) §2.2.1.
 
 **Rows marked `v2`** changed after the audit in
-[compliance-report.md](compliance-report.md): a severity recalibrated, a
+[compliance-report-1.md](compliance-report-1.md): a severity recalibrated, a
 condition narrowed to remove a false positive, or a check split in two because
 it was describing two different defects in one sentence. What changed and why is
 in [04 - Response to the Audit](04-audit-response.md).

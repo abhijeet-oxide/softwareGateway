@@ -59,9 +59,9 @@ import (
 	// internal/transfer and is forbidden by depguard from importing an
 	// implementation, so `grep -rn "promote/jfrog"` finding only this file is
 	// the mechanical form of "the engine does not know what Artifactory is".
-	// Deleting internal/promote/jfrog must leave the rest building and
+	// Deleting internal/promoter/jfrog must leave the rest building and
 	// passing, with every promotion falling back to a copy.
-	_ "github.com/abhijeet-oxide/softwareGateway/internal/promote/jfrog"
+	_ "github.com/abhijeet-oxide/softwareGateway/internal/promoter/jfrog"
 )
 
 const component = "coordinator"
@@ -104,7 +104,7 @@ func main() {
 
 func run() error {
 	var (
-		configPath  = flag.String("config", "", "path to the system configuration file")
+		configPath  = flag.String("config", config.DefaultPath, "path to the system configuration file")
 		showVersion = flag.Bool("version", false, "print version and exit")
 		healthCheck = flag.Bool("health-check", false,
 			"probe this process's own readiness endpoint and exit 0 or 1")

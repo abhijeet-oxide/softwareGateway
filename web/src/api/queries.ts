@@ -115,6 +115,9 @@ export function useConnectivity(enabled: boolean) {
     queryKey: ['connectivity'],
     queryFn: () => api.post<CheckConnectivityResponse>('/products:checkConnectivity'),
     enabled,
+    // Somebody pressed a button for this, so its failure is reported rather
+    // than stored. See components/feedback.
+    meta: { action: 'Check connectivity' },
     // A registry probe makes real outbound calls, so it runs when asked for
     // and is not refreshed behind the user's back.
     staleTime: Infinity,
@@ -500,7 +503,7 @@ export function useTransfers(
  * tight poll on the page they are on.
  */
 export function useTransferActivity() {
-  const { can } = useIdentity()
+  const { canAny } = useIdentity()
   return useQuery({
     queryKey: ['transfer-activity'],
     queryFn: () => api.get<TransferActivity>('/transfers:activity'),
@@ -511,7 +514,7 @@ export function useTransferActivity() {
     // every ten seconds for the whole session, and - worse - the status pill
     // fell back to its default and told that person "Downloads completed",
     // which is a confident statement about an estate they cannot see.
-    enabled: can('read'),
+    enabled: canAny('software_download.view'),
     refetchInterval: 10_000,
     // A status line that briefly disagrees with a page is better than one that
     // vanishes: the previous numbers stay on screen while the next arrive.
@@ -873,10 +876,21 @@ export function useAuditEvents(filters: AuditFilters = {}) {
   })
 }
 
+/**
+ * The estate's rollups.
+ *
+ * Gated on `report.view` for the same reason useWorkers is gated on
+ * `worker.view`: reports are an ESTATE resource with no product tier (see
+ * config/access/policies/report.yaml), so a product-scoped caller is refused
+ * every time. Asking anyway put a refusal in the log once a minute and painted
+ * a card of dashes that reads as "nothing was downloaded".
+ */
 export function useReports(params: { period?: string; product?: string } = {}) {
+  const { can } = useIdentity()
   return useQuery({
     queryKey: ['reports', params],
     queryFn: () => api.get<ReportSummary>(`/reports/summary${query({ ...params })}`),
+    enabled: can('report.view'),
     staleTime: MINUTE,
   })
 }
@@ -886,7 +900,11 @@ export function useWorkers() {
   return useQuery({
     queryKey: ['workers'],
     queryFn: () => api.get<ListWorkersResponse>('/workers'),
-    enabled: can('read'),
+    // The fleet is an ESTATE resource with no product tier, so this is the
+    // tenant-wide question and a product-scoped caller correctly answers no.
+    // Asking `canAny` here would poll a refusal every fifteen seconds for the
+    // whole of their session.
+    enabled: can('worker.view'),
     refetchInterval: 15_000,
   })
 }
@@ -928,6 +946,15 @@ export function useVersion() {
   })
 }
 
+/**
+ * Every dependency the Coordinator holds, tested now.
+ *
+ * `meta.action` is what makes a failure here reach the reader. This read only
+ * ever happens because somebody pressed a button, and TanStack cannot tell that
+ * from a background refresh - so the query says which it is, and the query
+ * cache reports its failures as "Run health check failed" rather than storing
+ * them where nothing looks. See components/feedback.
+ */
 export function useDeepHealth(enabled: boolean) {
   return useQuery({
     queryKey: ['health'],
@@ -935,6 +962,7 @@ export function useDeepHealth(enabled: boolean) {
     enabled,
     staleTime: 30_000,
     retry: false,
+    meta: { action: 'Run health check' },
   })
 }
 

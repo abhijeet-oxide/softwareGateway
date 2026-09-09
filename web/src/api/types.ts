@@ -1434,8 +1434,45 @@ export interface WhoAmIResponse {
   productPermissions?: Record<string, string[]>
   /** Empty means every product. */
   products?: string[]
+  /**
+   * The EFFECTIVE PERMISSION SET, in the vocabulary the policies are written
+   * in: `product.discover`, `audit_event.view`.
+   *
+   * This is what the interface renders itself from. `permissions` above is
+   * four coarse verbs and cannot express the difference between running
+   * discovery on one product and reading the audit trail across the estate -
+   * so an interface driven by it offers controls the API refuses and hides
+   * ones it would allow.
+   *
+   * The server answers this from the same authority that enforces every
+   * request, so a control offered here is a request the API accepts. Read it
+   * through `auth/access`, never directly.
+   */
+  access: AccessSet
   /** Deployment-wide switches, off a config file rather than a role. */
   features: Features
+}
+
+/**
+ * What a caller may do, split by the scope it is held over.
+ *
+ * TWO LISTS, NOT ONE, and the split is the same one the server applies: a
+ * tenant-wide permission covers every product including ones created tomorrow,
+ * a product permission covers the product it names. Flattened into one list
+ * they read as every verb on every product, which is how an interface comes to
+ * offer a promotion on a product somebody may only read.
+ */
+export interface AccessSet {
+  /** Held tenant-wide: every product, and the estate resources that have none. */
+  global: string[]
+  /** Held on ONE product. Global permissions are not repeated in here. */
+  byProduct?: Record<string, string[]>
+  /**
+   * The policy engine could not be reached, so both lists are empty because
+   * nothing could be RESOLVED - not because nothing is held. The interface
+   * says so rather than telling somebody their account has no access.
+   */
+  unavailable?: boolean
 }
 
 export interface Features {

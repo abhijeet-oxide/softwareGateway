@@ -10,6 +10,7 @@ import {
   usePackages, usePackagesByProducts, useProducts, useRunDownload, useSyncPackageSecurity, useTransfers,
 } from '../api/queries'
 import { useCan } from '../auth/permissions'
+import { ActionButton } from '../components/access'
 import {
   deriveLocations, deriveStatus, downloadSeconds, failureReason, isLive, isPromotion, matches,
   hasSecurityData, packageReference, promotableTargets, publishedAt, releaseHref, transferIndex,
@@ -114,7 +115,11 @@ function RowActions({ product, pkg, config, autoProductFilter }: {
   const { message } = App.useApp()
   const navigate = useNavigate()
   const sync = useSyncPackageSecurity()
-  const mayOperate = useCan('operate', { product })
+  // Syncing reaches a third-party scanner and writes what it says, which the
+  // policies judge an INSPECTION rather than a read - the same call
+  // `:inspect` makes. It is not `software_download.request`: a reader who may
+  // not start a download may still be entitled to ask a scanner a question.
+  const mayInspect = useCan('package.inspect', { product })
 
   // "Compare with another release" now PRE-SELECTS this one and stays here.
   //
@@ -152,7 +157,6 @@ function RowActions({ product, pkg, config, autoProductFilter }: {
         // watch is a background job they start twice.
         navigate(securityHref)
       },
-      onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be started.'),
     },
   )
 
@@ -162,7 +166,7 @@ function RowActions({ product, pkg, config, autoProductFilter }: {
       ? [{
           key: 'sync',
           label: security.state === '' ? 'Sync vulnerabilities' : 'Sync vulnerabilities again',
-          disabled: !mayOperate,
+          disabled: !mayInspect,
           onClick: startSync,
         }]
       : [{
@@ -230,7 +234,6 @@ function RowActions({ product, pkg, config, autoProductFilter }: {
         product={product}
         pkg={pkg}
         history={history}
-        mayOperate={mayOperate}
         promotable={promotableTargets(pkg, config).length > 0}
       />
       <Dropdown menu={{ items }} trigger={['click']} placement="bottomRight">
@@ -295,12 +298,11 @@ function releaseHistory(pkg: Package): ReleaseHistory {
  * and the row shows the step it is actually on.
  */
 function NextStep({
-  product, pkg, history, mayOperate, promotable,
+  product, pkg, history, promotable,
 }: {
   product: string
   pkg: Package
   history: ReleaseHistory
-  mayOperate: boolean
   /** There is somewhere left to promote it to. */
   promotable: boolean
 }) {
@@ -324,8 +326,6 @@ function NextStep({
         reference={packageReference(pkg)}
         repository={pkg.sourceRepository}
         packageLabel={`${pkg.displayRepository || pkg.sourceRepository || pkg.tag}:${version(pkg)}`}
-        disabled={!mayOperate}
-        disabledReason="You do not have permission to promote a release."
       />
     )
   }
@@ -369,52 +369,50 @@ function DownloadAction({ product, pkg }: { product: string; pkg: Package }) {
   const { message } = App.useApp()
   const navigate = useNavigate()
   const run = useRunDownload(product)
-  const mayOperate = useCan('operate', { product })
 
+  // No catch: the failure reaches the reader through the query client, with the
+  // Coordinator's own sentence, its code and its request id. See
+  // components/feedback.
   const start = async () => {
-    try {
-      // The REPOSITORY travels with the version. Nine packages of this product
-      // carry this version; the row that was clicked is the only one that says
-      // which, and sending the version alone threw that away.
-      const result = await run.mutateAsync({ tags: [packageReference(pkg)] })
-      message.success(
-        result.created?.length
-          ? `Download of ${version(pkg)} started.`
-          : 'This release was already requested; the existing download continues.',
-      )
-      // The request fans out to one transfer per destination, so there is no
-      // single download to land on. The listing is the honest destination and
-      // the new rows are at the top of it.
-      navigate('/downloads')
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'The download could not be started.')
-    }
+    // The REPOSITORY travels with the version. Nine packages of this product
+    // carry this version; the row that was clicked is the only one that says
+    // which, and sending the version alone threw that away.
+    const result = await run.mutateAsync({ tags: [packageReference(pkg)] })
+    message.success(
+      result.created?.length
+        ? `Download of ${version(pkg)} started.`
+        : 'This release was already requested; the existing download continues.',
+    )
+    // The request fans out to one transfer per destination, so there is no
+    // single download to land on. The listing is the honest destination and
+    // the new rows are at the top of it.
+    navigate('/downloads')
   }
 
+  /*
+    The row's primary, and the only filled button in it. Green was a second
+    accent that existed nowhere else in the product and that no palette could
+    reach; what makes this button the loud one is that it is the step the row is
+    actually on, which the brand colour is for.
+
+    DISABLED rather than hidden, unusually: this is one cell of a table column,
+    and a column whose cells appear on some rows and not others reads as a
+    rendering fault rather than as a permission. The reason is on the hover.
+  */
   return (
-    <Tooltip
-      title={
-        mayOperate
-          ? `Download ${version(pkg)} whole into the internal repositories. Artifacts already present are skipped.`
-          : 'You do not have permission to start a download.'
-      }
+    <ActionButton
+      permission="software_download.request"
+      scope={{ product }}
+      whenDenied="disable"
+      action="Download"
+      size="small"
+      type="primary"
+      busy={run.isPending}
+      title={`Download ${version(pkg)} whole into the internal repositories. Artifacts already present are skipped.`}
+      onClick={start}
     >
-      {/*
-        The row's primary, and the only filled button in it. Green was a second
-        accent that existed nowhere else in the product and that no palette
-        could reach; what makes this button the loud one is that it is the step
-        the row is actually on, which the brand colour is for.
-      */}
-      <Button
-        size="small"
-        type="primary"
-        disabled={!mayOperate}
-        loading={run.isPending}
-        onClick={() => void start()}
-      >
-        Download
-      </Button>
-    </Tooltip>
+      Download
+    </ActionButton>
   )
 }
 
@@ -427,7 +425,9 @@ function RowVulnerability({
   pkg: Package
   onSync: () => void
 }) {
-  const mayOperate = useCan('operate', { product })
+  // Syncing a release's security state reaches a scanner and writes what it
+  // says, which is an inspection rather than a read.
+  const mayOperate = useCan('package.inspect', { product })
   const security = pkg.security
   const maySync = Boolean(security?.state === '' && security?.canSync && mayOperate)
 
@@ -607,7 +607,6 @@ export default function Packages() {
             ? `Syncing ${res.artifacts} artifacts of ${version(pkg)}.`
             : 'A sync is already running for this release.')
         },
-        onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be started.'),
       },
     )
   }

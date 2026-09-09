@@ -10,6 +10,8 @@ import {
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
 import { CopyOutlined, DownloadOutlined, ExportOutlined, LoadingOutlined } from '../icons'
+import { reportFailure } from './feedback'
+import { ActionButton, Guard } from './access'
 import {
   packageSecurityExportUrl, useCancelPackageReplication, useCancelPackageSecuritySync,
   usePackageSecurity, useReplicatePackageSecurity, useSecurityDocument, useSyncPackageSecurity,
@@ -166,7 +168,10 @@ export function SecurityTab({ product, reference, repository }: {
           : 'A sync is already running for this release.')
         void security.refetch()
       },
-      onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be started.'),
+      // No onError. Every mutation failure is reported by the query client with
+      // the code, the detail and the request id the Coordinator sent, which a
+      // hand-written `message.error(e.message)` here threw away - and adding one
+      // now would say the same thing twice, worse. See components/feedback.
     })
   }
 
@@ -178,7 +183,6 @@ export function SecurityTab({ product, reference, repository }: {
           : 'That sync had already finished.')
         void security.refetch()
       },
-      onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be stopped.'),
     })
   }
 
@@ -205,9 +209,6 @@ export function SecurityTab({ product, reference, repository }: {
         }
         void security.refetch()
       },
-      onError: (e) => message.error(e instanceof Error
-        ? e.message
-        : 'This release could not be replicated.'),
       onSettled: () => setReplicating(undefined),
     })
   }
@@ -227,9 +228,6 @@ export function SecurityTab({ product, reference, repository }: {
           : 'That replication had already finished.')
         void security.refetch()
       },
-      onError: (e) => message.error(e instanceof Error
-        ? e.message
-        : 'The replication could not be stopped.'),
     })
   }
 
@@ -330,23 +328,32 @@ export function SecurityTab({ product, reference, repository }: {
             control on the tab was below the fold and the one thing offered up
             here was a sync that could only ever come back empty.
           */}
-          <ReplicateButton
-            registrations={data.registrations}
-            onReplicate={startReplicate}
-            pending={replicating}
-          />
-          {!syncing && (
-            <>
-              <StopSyncButton sync={data.sync} onStop={stopSync} pending={cancel.isPending} />
-              <SyncButton
-                sync={data.sync}
-                onSync={startSync}
-                pending={sync.isPending}
-                freshness={data.freshness}
-                providers={data.providers}
-              />
-            </>
-          )}
+          {/*
+            EVERY CONTROL HERE ASKS A SCANNER SOMETHING and writes what it says,
+            which the policies judge an inspection rather than a read
+            (config/access/policies/package.yaml). A product reader may look at
+            this tab and may not drive it, and until this guard existed they
+            were offered all four buttons and found out by pressing one.
+          */}
+          <Guard permission="package.inspect" scope={{ product }}>
+            <ReplicateButton
+              registrations={data.registrations}
+              onReplicate={startReplicate}
+              pending={replicating}
+            />
+            {!syncing && (
+              <>
+                <StopSyncButton sync={data.sync} onStop={stopSync} pending={cancel.isPending} />
+                <SyncButton
+                  sync={data.sync}
+                  onSync={startSync}
+                  pending={sync.isPending}
+                  freshness={data.freshness}
+                  providers={data.providers}
+                />
+              </>
+            )}
+          </Guard>
         </Space>
       </div>
 
@@ -441,7 +448,7 @@ export function SecurityTab({ product, reference, repository }: {
       )}
 
       {!syncing && data.sync.state === '' && data.sync.canSync && (
-        <NeverSynced onSync={startSync} pending={sync.isPending} />
+        <NeverSynced product={product} onSync={startSync} pending={sync.isPending} />
       )}
 
       {!syncing && (data.sync.state === 'synced' || data.sync.syncedAt) && (
@@ -494,7 +501,12 @@ export function SecurityTab({ product, reference, repository }: {
  * A release nobody has scanned is the normal state of a fresh estate, and the
  * only useful thing to put on this screen is the button that changes it.
  */
-function NeverSynced({ onSync, pending }: { onSync: () => void; pending?: boolean }) {
+function NeverSynced({ product, onSync, pending }: {
+  /** Whose release it is, for the permission the sync needs. */
+  product: string
+  onSync: () => void
+  pending?: boolean
+}) {
   return (
     <Card>
       <Space direction="vertical" size={10} align="center" style={{ width: '100%', padding: '28px 0' }}>
@@ -506,7 +518,22 @@ function NeverSynced({ onSync, pending }: { onSync: () => void; pending?: boolea
           the release comparison and the vulnerability search are served without contacting the
           scanner again.
         </Typography.Text>
-        <Button type="primary" loading={pending} onClick={onSync}>Sync vulnerabilities</Button>
+        {/*
+          The empty state's whole point is the button, so for a reader who may
+          not press it the state has to say something else - otherwise it
+          describes a fix and withholds it. The sentence above still explains
+          what a sync is; this simply stops offering one.
+        */}
+        <ActionButton
+          permission="package.inspect"
+          scope={{ product }}
+          action="Sync vulnerabilities"
+          type="primary"
+          busy={pending}
+          onClick={onSync}
+        >
+          Sync vulnerabilities
+        </ActionButton>
       </Space>
     </Card>
   )
@@ -3502,7 +3529,6 @@ const ArtifactTable = memo(function ArtifactTable({ reports, whole, freshness }:
  */
 function SbomButton({ doc }: { doc?: SecurityDocumentRef }) {
   const [running, setRunning] = useState(false)
-  const { message } = App.useApp()
 
   if (!doc?.url) return null
 
@@ -3511,9 +3537,7 @@ function SbomButton({ doc }: { doc?: SecurityDocumentRef }) {
     try {
       await download(doc.url!)
     } catch (err) {
-      message.error(err instanceof Error
-        ? `The SBOM could not be produced: ${err.message}`
-        : 'The SBOM could not be produced.')
+      reportFailure(err, 'Download SBOM')
     } finally {
       setRunning(false)
     }
@@ -3526,14 +3550,9 @@ function SbomButton({ doc }: { doc?: SecurityDocumentRef }) {
         : doc.message
           || 'Generated on demand. The first download asks Xray to produce it, which takes a moment.'}
     >
-      <Button
-        size="small"
-        icon={running ? <LoadingOutlined /> : <DownloadOutlined />}
-        onClick={() => void run()}
-        disabled={running}
-      >
+      <ActionButton size="small" icon={<DownloadOutlined />} busy={running} onClick={run}>
         {running ? 'Preparing…' : 'Download SBOM'}
-      </Button>
+      </ActionButton>
     </Tooltip>
   )
 }

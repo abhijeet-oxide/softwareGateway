@@ -190,3 +190,84 @@ func TestWhoAmIReportsUnrestrictedForAnOrgAdmin(t *testing.T) {
 		t.Errorf("products = %v, want empty meaning unrestricted", out.Products)
 	}
 }
+
+// THE INTERFACE'S OWN ANSWER, and the defect it was reported for.
+//
+// A product owner was shown a disabled Discover button on their own product.
+// The interface was reading `permissions`, which is the tenant-wide question
+// and correctly answers nothing for them, and there was no other answer to
+// read: four coarse verbs cannot say "may run discovery on software-01".
+//
+// `access` is that answer, in the vocabulary of config/access/policies, so the
+// browser can gate one control on one permission over one product.
+func TestWhoAmIReportsWhatEachProductActuallyAllows(t *testing.T) {
+	h := newAPIHarnessWith(t, func(d *Deps) {
+		d.Authenticator = fixedAuthenticator{id: productOwnerOfOne()}
+	})
+
+	out := getJSON[v1.WhoAmIResponse](t, h.server.URL+"/api/v1/whoami")
+
+	// Nothing tenant-wide. They hold one product, and the estate is not theirs.
+	if len(out.Access.Global) != 0 {
+		t.Errorf("access.global = %v, want none for a product-scoped caller", out.Access.Global)
+	}
+	held := out.Access.ByProduct["software-01"]
+	for _, want := range []string{
+		"product.discover", "product.view", "package.view",
+		"software_download.request", "audit_event.view",
+	} {
+		if !slices.Contains(held, want) {
+			t.Errorf("access.byProduct[software-01] = %v, missing %q which a product-owner "+
+				"holds - the control it gates is hidden from somebody entitled to it", held, want)
+		}
+	}
+	// The ESTATE permissions have no product tier, so they must not turn up
+	// under one. An interface reading them there would offer this person the
+	// fleet, the rollups and the deployment's own settings.
+	for _, never := range []string{"report.view", "worker.view", "policy_catalogue.view", "system.view"} {
+		if slices.Contains(held, never) {
+			t.Errorf("access.byProduct[software-01] carries the estate permission %q", never)
+		}
+	}
+	if _, wrong := out.Access.ByProduct["software-02"]; wrong {
+		t.Error("permissions are reported on a product this caller holds nothing on")
+	}
+	if out.Access.Unavailable {
+		t.Error("access reports itself unresolvable on a deployment with no policy engine")
+	}
+}
+
+// An org-tier caller holds their permissions TENANT-WIDE, which covers products
+// that do not exist yet - so nothing is copied under today's product names.
+//
+// Copying them in is the mistake this shape exists to prevent: it turns "covers
+// everything" into "covers these", and the day a product is added the interface
+// silently stops offering it.
+func TestWhoAmIDoesNotNarrowATenantWideCallerToTodaysProducts(t *testing.T) {
+	admin := middleware.Identity{
+		Subject: "u9", Tenant: "default", Method: "oidc",
+		Roles: []middleware.Role{"org-admin"},
+	}
+	for _, a := range []middleware.Action{
+		middleware.ActionRead, middleware.ActionOperate,
+		middleware.ActionApply, middleware.ActionAdmin,
+	} {
+		admin.Grants = append(admin.Grants, middleware.Grant{
+			Action: a, Scope: middleware.Scope{Tenant: "default"},
+		})
+	}
+	h := newAPIHarnessWith(t, func(d *Deps) {
+		d.Authenticator = fixedAuthenticator{id: admin}
+	})
+
+	out := getJSON[v1.WhoAmIResponse](t, h.server.URL+"/api/v1/whoami")
+
+	for _, want := range []string{"system.view", "report.view", "product.discover"} {
+		if !slices.Contains(out.Access.Global, want) {
+			t.Errorf("access.global = %v, missing %q", out.Access.Global, want)
+		}
+	}
+	if len(out.Access.ByProduct) != 0 {
+		t.Errorf("a tenant-wide grant was copied into %v", out.Access.ByProduct)
+	}
+}

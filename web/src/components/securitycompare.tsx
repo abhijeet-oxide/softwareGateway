@@ -16,6 +16,7 @@ import {
 } from './security'
 import { c, FieldLabel, mono, verdict as verdictColour } from '../uikit'
 import { formatRelative } from '../domain/format'
+import { ActionButton } from './access'
 
 /**
  * "How did the security posture change from release A to release B?"
@@ -298,7 +299,14 @@ function ReleaseEnd({ title, end, name, onSync, align }: {
               : end.sync.reason}
           </Typography.Text>
           {end.sync.canSync && onSync && (
-            <Button size="small" type="primary" onClick={onSync}>Sync vulnerabilities</Button>
+            <ActionButton
+              size="small"
+              type="primary"
+              action="Sync vulnerabilities"
+              onClick={onSync}
+            >
+              Sync vulnerabilities
+            </ActionButton>
           )}
         </Space>
       )}

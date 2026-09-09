@@ -429,3 +429,31 @@ func toAPIConcurrency(c product.Concurrency) v1.Concurrency {
 		RequestsPerSecond: c.RequestsPerSecond,
 	}
 }
+
+// permitted narrows a fleet-wide list to what this request was authorized for.
+//
+// The authorization decision already established which products this caller may
+// act on - see middleware.PermittedProducts - and empty means unrestricted, so
+// an org-tier caller and an unauthenticated deployment both get the whole list
+// back untouched.
+//
+// It exists as one function rather than three copies because the failure mode
+// of a copy is silent: a fleet-wide route that forgets to narrow does not
+// error, it acts on somebody else's products.
+func permitted(r *http.Request, all []string) []string {
+	allowed := middleware.PermittedProducts(r.Context())
+	if len(allowed) == 0 {
+		return all
+	}
+	keep := make(map[string]bool, len(allowed))
+	for _, name := range allowed {
+		keep[name] = true
+	}
+	out := make([]string, 0, len(all))
+	for _, name := range all {
+		if keep[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}

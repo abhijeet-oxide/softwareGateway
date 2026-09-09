@@ -23,6 +23,7 @@ import type { Product } from '../api/types'
 import { TargetTag } from '../components/chips'
 import { ConfigErrorDetail, ConfigErrorPill, isNotLoaded } from '../components/configerror'
 import { useIdentity } from '../auth/permissions'
+import { Guard } from '../components/access'
 import { AccessRoute, useSupportContact } from '../auth/contact'
 
 /**
@@ -133,12 +134,9 @@ export default function Products() {
   // Whether an empty listing is about this ACCOUNT rather than about the
   // deployment. Held here rather than derived in the render so the two empty
   // states below read as the two different facts they are.
-  const { who, can } = useIdentity()
+  const { who, canAny } = useIdentity()
   const contact = useSupportContact()
-  const noProductAccess = Boolean(
-    who?.authenticated && !can('read') &&
-    Object.keys(who.productPermissions ?? {}).length === 0,
-  )
+  const noProductAccess = Boolean(who?.authenticated && !canAny('product.view'))
 
   const [expanded, setExpanded] = useState<string[]>(routeProduct ? [routeProduct] : [])
   // A rejected product OPENS ITSELF, once, the first time it is seen.
@@ -274,7 +272,15 @@ export default function Products() {
           action={
             search.trim()
               ? <Button onClick={() => setSearch('')}>Clear search</Button>
-              : <Button href="/settings">Open Settings</Button>
+              : (
+                // Offered only to somebody who can open it. A "go and look at
+                // Settings" that lands on a refusal is worse than no offer -
+                // it turns "nothing is configured" into "and you cannot even
+                // check".
+                <Guard permission="system.view">
+                  <Button href="/settings">Open Settings</Button>
+                </Guard>
+              )
           }
         />
       ) : (

@@ -5,7 +5,7 @@ import { Button, Card, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import { Table as DataTable } from '../tablekit'
 import { ApiOutlined, CheckCircleFilled, CloseCircleFilled, SafetyOutlined } from '../icons'
 import { useConnectivity, useProducts } from '../api/queries'
-import { useCan } from '../auth/permissions'
+import { ActionButton } from '../components/access'
 import { RepoLink } from '../components/chips'
 import { Value } from '../components/value'
 import { formatCount } from '../domain/format'
@@ -24,7 +24,6 @@ export default function Repositories() {
   const products = useProducts()
   const [checking, setChecking] = useState(false)
   const connectivity = useConnectivity(checking)
-  const mayOperate = useCan('operate')
 
   const rows: Row[] = []
   for (const p of products.data?.products ?? []) {
@@ -49,23 +48,21 @@ export default function Repositories() {
     <>
       <PageHeader
         extra={
-          <Tooltip
-            title={
-              mayOperate
-                ? 'Makes a real connection to every configured registry and reports what happened at each step.'
-                : 'You do not have permission to run a connectivity check.'
-            }
+          <ActionButton
+            permission="product.check_connectivity"
+            anyScope
+            action="Check connectivity"
+            type="primary"
+            icon={<ApiOutlined />}
+            busy={connectivity.isFetching}
+            title="Makes a real connection to every registry this account may probe and reports what happened at each step."
+            onClick={async () => {
+              setChecking(true)
+              await connectivity.refetch()
+            }}
           >
-            <Button
-              type="primary"
-              icon={<ApiOutlined />}
-              disabled={!mayOperate}
-              loading={connectivity.isFetching}
-              onClick={() => { setChecking(true); void connectivity.refetch() }}
-            >
-              Check connectivity
-            </Button>
-          </Tooltip>
+            Check connectivity
+          </ActionButton>
         }
       />
 

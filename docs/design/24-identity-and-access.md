@@ -881,6 +881,106 @@ A FULL SCREEN, with no navigation, saying one thing.
 > member with no products sees what a deployment with no products configured
 > would show, and only the interface can tell those apart.
 
+### 8.4a The interface renders from the permissions the server enforces
+
+The screens do not decide what a caller may do. They ask, and the answer comes
+from the same authority that decides every request.
+
+> **Decision - there is a PERMISSION CATALOGUE, and it is the enforcement
+> points themselves.**
+>
+> `internal/api/middleware/permissions.go` names every distinct thing a caller
+> may be permitted, as `<resource>.<action>` - `product.discover`,
+> `audit_event.view`, `software_download.promote`. Each entry is a
+> `(kind, action)` pair `PolicyFor` already produces for some route and a rule
+> that already exists in `config/access/policies`. Both directions are tested:
+> a route whose question no permission names fails the build, and a permission
+> no route asks for fails it too.
+>
+> The alternatives were both tried and both drifted. The interface deciding
+> from ROLES is this model reimplemented in TypeScript, in a file nobody
+> reviews against the policies. The interface deciding from the four coarse
+> verbs - read, operate, apply, admin - cannot express the estate boundary at
+> all: "run a scan on my product" and "run a scan across the fleet" are the
+> same word to it.
+
+> **Decision - `/whoami` reports the RESOLVED set, and the policy engine
+> resolves it.**
+>
+> `access.global` is what the caller holds tenant-wide; `access.byProduct` is
+> what they hold on each product, with the tenant-wide answers subtracted. The
+> split is `Scope.covers`, for the reason §8.4 gives: flattened, they read as
+> every verb on every product.
+>
+> Cerbos answers it in ONE batched `CheckResources` call per scope rather than
+> one per permission (`authz.CheckMany`), so describing a caller's whole
+> permission set costs two round trips rather than forty.
+>
+> `access.unavailable` is its own field because an unreachable PDP resolves to
+> nothing and REFUSES everything, and an interface that could not tell that
+> from "you hold nothing" showed an administrator a screen saying their account
+> had no access. The application shows a screen about the policy engine
+> instead.
+
+> **It is not a security control, and nothing about it is withheld.** It
+> describes the caller's own permissions to the caller, and every request is
+> authorized again on arrival by the same catalogue. A person who edits it in
+> their browser gets a screen full of controls that all answer 403.
+
+> **Decision - hidden, disabled, or refused, decided once.**
+>
+> A control the caller cannot use is HIDDEN: a Run Discovery button somebody
+> can never press is furniture that reads as the page refusing them
+> personally. A control in a row or a table cell is DISABLED instead, because a
+> cell that appears on some rows and not others reads as a rendering fault; the
+> reason is on the hover and it names the permission. A whole page is REFUSED
+> with a screen that says so - an empty table is a confident statement that
+> nothing has happened in a system the reader simply cannot see.
+>
+> The navigation drops what an account cannot open AND every page refuses
+> itself at the door, so a bookmark or a link in a ticket meets the same answer
+> as the rail.
+
+> **Decision - a fleet-wide verb is NARROWED, not refused.**
+>
+> `products:discover` and `products:checkConnectivity` name no product, so the
+> tenant-wide question refuses every product owner - and refusing them the one
+> control this product exists to offer is the wrong answer, not a safe one.
+> They are `AnyScope` routes: the authorization decision already asks the
+> engine product by product, so it passes THAT LIST to the handler
+> (`middleware.PermittedProducts`) and the handler acts on exactly those. A
+> product owner asking for a fleet-wide scan scans their fleet.
+>
+> The narrowing comes from the middleware rather than being derived in each
+> handler on purpose. A handler deriving it from the identity is a SECOND
+> authorization decision, written where nobody reviews it against the policies,
+> and the two can disagree - which is how the fleet-wide scan came to be
+> refused to the owners of every product in the fleet.
+
+> **Decision - a refusal names the permission.**
+>
+> `Access denied: this account does not have the product.calibrate permission
+> on product "software-02".` A subject, a permission, a resource - the form an
+> operator already knows from every other system they administer, and the
+> permission named is the string they grep `config/access/policies` for. It
+> replaced "This account may not operate this", which named neither what was
+> needed nor how to get it.
+
+> **Decision - failures are reported in ONE place.**
+>
+> Pressing Run health check without `system.view` did nothing at all: no
+> spinner, no error, no message. The request went, the Coordinator answered 403
+> with a sentence naming exactly what was missing, and no code anywhere read
+> it. That was not a missing `catch` - it was the absence of a place to put
+> one, so every page had to remember to render every failure it could produce
+> and the ones nobody remembered were silent.
+>
+> The query client's caches now report every mutation, every read somebody
+> pressed a button for, and every background refresh of data already on screen,
+> with the Coordinator's own sentence, the RFC 9457 code and the request id.
+> `ActionButton` owns its pending state from the promise its handler returns,
+> so a control cannot be written without one.
+
 ### 8.5 Taking access away, and how long that takes
 
 The Coordinator verifies a JWT **offline**, against the issuer's published keys.
@@ -936,6 +1036,53 @@ credentials grant, so the same lifetime bounds them. `TokenSource` holds one
 until a minute before expiry and clamps that to half the lifetime, so a short
 token shortens the hold rather than breaking the data plane
 (`pkg/authz/workload.go`).
+
+### 8.5a Granting access, and how long THAT takes
+
+The mirror of §8.5, and the question every administrator asks second.
+
+**Nothing restarts.** Not the Coordinator, not ZITADEL, not the browser.
+
+| What changed | Where it lives | What has to happen | How long |
+|---|---|---|---|
+| A **role granted to a person** (`config/users/users.yaml`, or the ZITADEL console) | The access token's claims | The token is re-minted | Within the access token's lifetime - 15 minutes by default (`ACCESS_TOKEN_LIFETIME`). Sign out and in for immediately. |
+| A **permission added to a role** (`config/access/policies/*.yaml`) | Cerbos | Cerbos reloads the file | Seconds. `watchForChanges: true` in `deploy/cerbos/config.yaml`; no restart, and the same token keeps working. |
+| A **new product** | Git, reconciled into the registry | Nothing, for an org-tier role | Immediately. That is what §5.1 buys: an org role names no product, so it covers one created after the token was issued. A PRODUCT-tier grant on it is a new role, so it takes the first row. |
+| A **new route or permission** | This repository | A deploy | A release. |
+
+> **Decision - the interface re-reads its permissions on a token renewal.**
+>
+> The browser renews in the background (`auth/session`), so a grant reaches the
+> API within the token's lifetime with nobody doing anything. The screen has to
+> notice that or it renders the permissions the session STARTED with for as
+> long as the tab is open - the administrator grants discovery, the API begins
+> accepting it a quarter of an hour later, and the button stays hidden until
+> somebody thinks to reload. "Sign out and in again" was the workaround for
+> that, and it was written into three screens.
+>
+> `store()` in `auth/session` announces every new token; `IdentityProvider`
+> invalidates `/whoami` on it, and also re-asks on window focus with a
+> five-minute floor - which is when somebody who has just been granted
+> something comes back to look for it. One small request against an
+> always-allowed route.
+>
+> **Cerbos is not cached anywhere.** The Coordinator asks it per request and
+> per `/whoami`, so a policy edit needs no invalidation at all: the next
+> request decides against the new rule.
+
+> **Why a role change cannot be faster than the token, and why that is the
+> right trade.** §8.5 is the whole answer: the Coordinator verifies JWTs
+> offline, with no credential for the identity provider and no call to it in
+> the request path. The price of that is that a token says what it said when it
+> was minted, in both directions - a withdrawn role keeps working until expiry,
+> and a granted one does not work until renewal. Shortening the lifetime
+> shortens both. Removing the delay entirely means opaque tokens and
+> introspection on every request, which is the trade §8.5 declines and for the
+> same reasons.
+
+**So the operator's answer is: grant it, and wait a quarter of an hour, or tell
+them to sign out and in.** Nothing is restarted, and a permission added to a
+role is live in seconds without even that.
 
 ### 8.6 One tenant, and the boundary around it
 

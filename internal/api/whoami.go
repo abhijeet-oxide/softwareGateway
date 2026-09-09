@@ -41,6 +41,7 @@ func (s *Server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 		Member:             id.IsMember(),
 		Permissions:        permissionsFor(id),
 		ProductPermissions: productPermissionsFor(id),
+		Access:             s.accessFor(r, id),
 		Features: v1.Features{
 			FileDownloads: s.deps.FileDownloadsEnabled,
 		},
@@ -105,6 +106,45 @@ func productPermissionsFor(id middleware.Identity) map[string][]string {
 			out = map[string][]string{}
 		}
 		out[product] = verbs
+	}
+	return out
+}
+
+// accessFor resolves the caller's whole permission set, in the vocabulary the
+// policies are written in.
+//
+// # Why the interface is told this and not left to work it out
+//
+// Because the alternative is the role model reimplemented in the browser, and
+// it drifts the first time a policy changes - as a control offered and then
+// refused, or hidden from somebody entitled to it. Publishing the answer from
+// the same authority that enforces it is what makes the two agree by
+// construction. See middleware.ResolveAccess.
+//
+// # Why it is on /whoami and not an endpoint of its own
+//
+// Because it is answered for the caller about the caller, it is read exactly
+// once per session at the same moment as the rest of the identity, and a
+// second always-allowed endpoint would be a second round trip before anything
+// can be drawn. It is the same document: who you are, and what that gets you.
+func (s *Server) accessFor(r *http.Request, id middleware.Identity) v1.AccessSet {
+	// ANONYMOUS TAKES THE LADDER, not the engine, and this mirrors Authorize
+	// exactly. A deployment with authentication off holds admin and has no
+	// roles a policy could match, so asking the engine would report an empty
+	// permission set for a caller the API lets do everything - an interface
+	// with every control hidden in front of an API that refuses nothing.
+	engine := s.deps.Engine
+	if id.Method == "" || id.Method == "none" {
+		engine = nil
+	}
+	set := middleware.ResolveAccess(r.Context(), engine, id)
+	out := v1.AccessSet{
+		Global:      set.Global,
+		ByProduct:   set.ByProduct,
+		Unavailable: set.Unavailable,
+	}
+	if out.Global == nil {
+		out.Global = []string{}
 	}
 	return out
 }

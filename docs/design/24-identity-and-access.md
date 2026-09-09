@@ -387,6 +387,79 @@ different address, so one human ends up with two accounts.
 > the reports above matter more than they would in a stack that started empty
 > each time.
 
+### 5.1d One person's name, two domains
+
+Two people can hold the same local part in different domains -
+`test@domain1.com` and `test@domain2.com` - and be two different people. A
+ZITADEL **username is unique across the whole instance**, so only one of them
+can be `test`. The obvious workaround is to invent `test2` for the second, and
+it produces a login name that person has never been told and would never guess.
+
+The addresses, meanwhile, were unique from the start.
+
+> **Decision - `username` is optional in `config/users/users.yaml`, and defaults
+> to the address.**
+>
+> An address is unique, it is the one identifier the person definitely knows,
+> and it is already the identity everywhere else in this design: it is what the
+> directory asserts, what auto-linking keys on, and what a re-run matches an
+> existing account by (5.1b). Two people in two domains then hold two distinct
+> usernames without anybody inventing anything, and the name on the account, the
+> name in the seeder's output and the name the person types are one string
+> instead of three.
+
+**Typing the address already worked, and that is worth being precise about,**
+because it is the reason this is a tidying rather than a fix. ZITADEL's Login V2
+resolves what somebody types in two steps: as a **login name** first, and - when
+that matches nobody - as an **e-mail address** (`searchUsers`,
+`apps/login/src/lib/zitadel.ts`, which then refuses anything matching more than
+one account). So `test2` could always sign in by typing `test@domain2.com`. What
+the default removes is the second string, and the need for anyone to know that
+the fallback exists.
+
+> **Decision - the e-mail fallback is asserted on every run, not inherited.**
+>
+> `disableLoginWithEmail` is one field on the organization's login policy, and
+> turning it off does not read as a decision about sign-in - it reads as
+> tightening something. Every account this system provisions before the default
+> existed, and every account the identity provider named itself, gets in by the
+> address rather than by its login name. The seeder now writes `false` rather
+> than preserving what it finds, and prints it beside the password-sign-in line.
+
+> **Decision - two entries may not share an address, and no two accounts may
+> share a login name. Both refuse the run.**
+>
+> An address identifies an account, so two entries carrying one address are one
+> account: the second is not created, it is matched to the first, and its roles
+> are granted to that person. Two entries carrying one login name are the
+> opposite failure - people and machine accounts share one namespace, so the
+> second is refused at creation and never provisioned. Both are invisible while
+> reading the file and both surface at apply time as somebody missing or
+> somebody holding a grant nobody gave them. They are refused where they are a
+> typo in a pull request; `go test ./deploy/...` makes the same two checks on
+> the change itself.
+
+> **Decision - an existing account is renamed to what the file says, and the
+> cost is printed.**
+>
+> The deployment this came from already carries `test` and `test2`. Without
+> reconciliation those accounts keep the invented names forever: the file is
+> corrected, the seeder prints one name, the console shows another, and the fix
+> never reaches the stack. The rename happens only on a difference, so an
+> unchanged file renames nothing, and ZITADEL invalidates that person's tokens
+> and sessions when it happens - which is why it is driven by an edit somebody
+> made rather than by a heuristic, and why the seeder says so on the line where
+> it does it. A refusal (usually: the name is taken) is reported against that
+> account and does not abandon the run.
+
+> **`userLoginMustBeDomain` is reported, not changed.** With it on, every login
+> name carries the organization's domain, and a username that is an address
+> reads as `alex@corp.com@default.localhost`. The address still gets that person
+> in through the fallback above. It is an organization-wide setting that
+> rewrites the login name of every account that already exists, which is not a
+> thing to do as a side effect of adding somebody to a file, so the seeder warns
+> and names the console setting instead.
+
 ### 5.2 The four personas
 
 | Persona | How it is expressed | Scope |

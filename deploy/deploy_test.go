@@ -265,10 +265,87 @@ func TestEveryProductHasAnOwner(t *testing.T) {
 	}
 }
 
-// A person or a machine account, as far as this check is concerned.
+// TestEveryAccountHasOneLoginName enforces, on the pull request, what the
+// seeder refuses to run on.
+//
+// Two people who share a local part in different domains - test@domain1.com and
+// test@domain2.com - cannot both be the username `test`, because a ZITADEL
+// username is unique across the whole instance. Leaving `username` out gives
+// each of them their address, which is unique already. Two mistakes are still
+// possible in that file and neither is visible while reading it:
+//
+//   - two entries carrying ONE ADDRESS are one account. The address is how a
+//     re-run finds an existing user, so the second entry is not created; it is
+//     matched to the first, and its roles are granted to that person.
+//   - two entries carrying ONE LOGIN NAME. People and machine accounts share
+//     the namespace, so the second is refused at creation and never provisioned.
+//
+// Both surface at apply time as somebody missing or somebody holding a grant
+// nobody gave them. Here they are a failing test on the change that caused it.
+func TestEveryAccountHasOneLoginName(t *testing.T) {
+	var users struct {
+		Users    []userEntry `json:"users"`
+		APIUsers []userEntry `json:"apiUsers"`
+	}
+	readYAML(t, "../config/users/users.yaml", &users)
+	if len(users.Users) == 0 {
+		t.Fatal("config/users/users.yaml provisions nobody, which means this test is not testing anything")
+	}
+
+	byAddress := map[string]string{}
+	for _, u := range users.Users {
+		if u.Username == "" && u.Email == "" {
+			t.Error("an entry in config/users/users.yaml has neither a username nor an address, " +
+				"so there is nobody to provision. Give it `email`: a sign-in matches on the " +
+				"address, and `username` defaults to it")
+			continue
+		}
+		if u.Email == "" {
+			continue
+		}
+		key := strings.ToLower(u.Email)
+		if first, seen := byAddress[key]; seen {
+			t.Errorf("config/users/users.yaml gives %q to two people (%s and %s). The address "+
+				"identifies the account, so these are one account and the second one's roles "+
+				"land on the first person",
+				u.Email, first, u.loginName())
+		}
+		byAddress[key] = u.loginName()
+	}
+
+	byLoginName := map[string]bool{}
+	for _, u := range append(append([]userEntry{}, users.Users...), users.APIUsers...) {
+		name := u.loginName()
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if byLoginName[key] {
+			t.Errorf("config/users/users.yaml gives the login name %q to two accounts. A username "+
+				"is unique across the whole instance - people and machine accounts share one "+
+				"namespace - so the second is refused at creation and that account is never "+
+				"provisioned. Omit `username` for people and each gets their own address",
+				name)
+		}
+		byLoginName[key] = true
+	}
+}
+
+// A person or a machine account, as far as these checks are concerned.
 type userEntry struct {
 	Username string              `json:"username"`
+	Email    string              `json:"email"`
 	Products map[string][]string `json:"products"`
+}
+
+// What this account signs in as. `username` is optional for a person and
+// defaults to their address, which is the same rule the seeder applies in
+// deploy/zitadel/bootstrap.mjs.
+func (u userEntry) loginName() string {
+	if u.Username != "" {
+		return u.Username
+	}
+	return u.Email
 }
 
 func readYAML(t *testing.T, path string, into any) {

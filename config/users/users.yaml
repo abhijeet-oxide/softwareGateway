@@ -17,13 +17,37 @@
 # refused with `Errors.User.NotFound` however correct everything else looks. The
 # seeder prints what the directory actually asserted on every run.
 #
-#   username    the login name in the identity provider. Local to this system.
+#   username    OPTIONAL. The login name in the identity provider, local to
+#               this system. Left out, it IS the address - which is what you
+#               want in almost every case, because a username has to be unique
+#               across the whole instance and an address already is.
 #   email       what the directory asserts. This is what a sign-in matches on.
 #   firstName   optional. Derived from the address when it spells a name, and
 #   lastName    replaced by the directory's own at the second sign-in.
 #   password    LOCAL AND TEST ONLY. Ignored once SSO_ISSUER is set.
 #   orgRoles    tenant-wide roles, from config/access/roles.yaml
 #   products    per-product roles, from the same file
+#
+# TWO PEOPLE, TWO DOMAINS, ONE NAME. test@domain1.com and test@domain2.com are
+# two different people, and only one of them can be `test`. Do not invent
+# `test2` for the second: it is a login name they have never been told. Leave
+# `username` out of both and each signs in as their own address:
+#
+#     users:
+#       - email: test@domain1.com     # signs in as test@domain1.com
+#         products: {...}
+#       - email: test@domain2.com     # signs in as test@domain2.com
+#         products: {...}
+#
+# Either spelling gets them in - the sign-in screen looks a typed value up as a
+# login name first and as an address second - but with the default there is one
+# string to know instead of two. Dropping `username` from a stack that already
+# carries `test` and `test2` renames those two accounts on the next seeding
+# run, which is printed as it happens and ends any session they are holding.
+#
+# TWO ENTRIES MAY NOT SHARE AN ADDRESS. The address is how a re-run finds an
+# existing account, so two entries carrying one address are one account, and
+# the second one's roles land on the first person. Seeding refuses.
 #
 # EVERY PRODUCT IN config/products NEEDS AN OWNER HERE. Seeding fails otherwise,
 # naming the product and the role - see `ownerRole` in config/access/roles.yaml.

@@ -532,6 +532,90 @@ if (ownerRole) {
   }
 }
 
+/* WHAT EACH PERSON TYPES AT THE SIGN-IN SCREEN, decided here rather than by
+ * whoever edited the file last.
+ *
+ * ONE PERSON'S NAME, TWO DOMAINS. `test@domain1.com` and `test@domain2.com`
+ * are two different people who happen to share a local part, and a ZITADEL
+ * username is unique across the whole instance - so the second of them cannot
+ * also be `test`. The obvious workaround is to invent `test2`, and it produces
+ * a login name that person has never been told and would never guess.
+ *
+ * So USERNAME IS OPTIONAL AND DEFAULTS TO THE ADDRESS. An address is already
+ * unique, it is the one identifier the person definitely knows, and it is what
+ * this system treats as the identity everywhere else - it is what the identity
+ * provider asserts, what auto-linking keys on, and what `findUserId` matches a
+ * re-run against. Two people in two domains then hold two distinct usernames
+ * without anybody inventing anything.
+ *
+ * Typing the address works EITHER WAY, and that is worth knowing before
+ * changing anything here: Login V2 looks the typed value up as a login name,
+ * and when that finds nobody it looks it up again as an e-mail address
+ * (`searchUsers`, apps/login/src/lib/zitadel.ts). The address is a way in for
+ * `test2` as much as for `test@domain2.com`. What the default buys is that the
+ * name on the account, the name in the seeder's output and the name the person
+ * types are one string instead of three - and that nothing depends on the
+ * fallback still being enabled, which is a login policy setting somebody can
+ * turn off (see `disableLoginWithEmail` in section 9).
+ *
+ * TWO ENTRIES MAY NOT SHARE AN ADDRESS. The address is how a re-run finds an
+ * account, so two entries carrying one address are one account: the second is
+ * not created, it is matched, and it silently adds its roles to the first
+ * person. Refused here, where it is a typo in a pull request, rather than
+ * discovered later as somebody holding a grant nobody gave them. */
+{
+  const seenEmail = new Map(), seenName = new Map(), anonymous = [];
+  for (const u of (doc.users || [])) {
+    u.email = String(u.email ?? '').trim();
+    u.username = String(u.username ?? '').trim() || u.email;
+    if (!u.username) { anonymous.push(u); continue; }
+
+    const key = u.email.toLowerCase();
+    if (key) {
+      if (seenEmail.has(key)) {
+        const first = seenEmail.get(key);
+        dataError(`FATAL: ${USERS_FILE} gives two people the same address.`,
+          '',
+          `    ${String(first.username).padEnd(30)}${first.email}`.trimEnd(),
+          `    ${String(u.username).padEnd(30)}${u.email}`.trimEnd(),
+          '',
+          '  An address identifies an account, so these two entries are one',
+          '  account. The second would not be created; it would be matched to',
+          '  the first, and its roles granted to that person.',
+          '',
+          '  Give each person their own address. Two people who share a local',
+          '  part in different domains already have one.');
+      }
+      seenEmail.set(key, u);
+    }
+  }
+  for (const u of [...(doc.users || []), ...(doc.apiUsers || [])]) {
+    const name = String(u.username ?? '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seenName.has(key)) {
+      dataError(`FATAL: ${USERS_FILE} gives two accounts the login name '${name}'.`,
+        '',
+        `    ${String(seenName.get(key).username).padEnd(30)}${seenName.get(key).email || ''}`.trimEnd(),
+        `    ${String(name).padEnd(30)}${u.email || ''}`.trimEnd(),
+        '',
+        '  A username is unique across the whole ZITADEL instance - people and',
+        '  machine accounts share one namespace - so the second of these is',
+        '  refused at creation and that person is never provisioned.',
+        '',
+        '  Omit `username` for people: it then defaults to their address, which',
+        '  is unique even when two people share a local part in two domains.');
+    }
+    seenName.set(key, u);
+  }
+  if (anonymous.length) {
+    dataError(`FATAL: ${anonymous.length} ${anonymous.length === 1 ? 'entry' : 'entries'} in ${USERS_FILE} ${anonymous.length === 1 ? 'has' : 'have'} neither a username nor an address.`,
+      '',
+      '  A person is provisioned under one or the other. `email` is the one to',
+      '  give: it is what a sign-in matches on, and `username` defaults to it.');
+  }
+}
+
 head('Configuration');
 item('source', CONFIG_DIR);
 item('tenant roles', orgRoles.join(', '));
@@ -966,7 +1050,20 @@ for (const p of products) {
     hidePasswordReset: ssoOn ? true : (p.hidePasswordReset ?? false),
     ignoreUnknownUsernames: p.ignoreUnknownUsernames ?? false,
     allowDomainDiscovery: p.allowDomainDiscovery ?? true,
-    disableLoginWithEmail: p.disableLoginWithEmail ?? false,
+    /* THE ADDRESS IS A WAY IN. Asserted every run, not inherited.
+     *
+     * Login V2 resolves what somebody types as a LOGIN NAME first, and only
+     * when that matches nobody does it look the same string up as an E-MAIL
+     * ADDRESS (`searchUsers`, apps/login/src/lib/zitadel.ts). That fallback is
+     * what lets a person whose username is not their address - anyone
+     * provisioned before `username` defaulted to it, and every account the
+     * identity provider named itself - sign in with the address they know.
+     *
+     * This one setting turns it off, and turning it off is not visibly a
+     * decision about sign-in: it reads as tightening something. Everything
+     * this deployment does with identity is keyed on the address, so the
+     * fallback is part of the contract rather than a default to inherit. */
+    disableLoginWithEmail: false,
     disableLoginWithPhone: p.disableLoginWithPhone ?? false,
   };
   const wrote = current.isDefault
@@ -979,6 +1076,31 @@ for (const p of products) {
   head('Sign-in policy');
   item('self-registration', 'off');
   item('password sign-in', allowPassword ? 'on' : 'off');
+  item('sign-in with an address', 'on; an address works wherever a username does');
+
+  /* WHAT A LOGIN NAME LOOKS LIKE, which is not this policy's decision.
+   *
+   * With `userLoginMustBeDomain` on, every login name carries the
+   * organization's domain - `alex@default.localhost` - and an account whose
+   * username is an address ends up as `alex@corp.com@default.localhost`. The
+   * address still gets that person in, through the fallback above, but the
+   * name this seeder prints is not the name the console shows and nobody can
+   * tell which one to type.
+   *
+   * Reported rather than changed. It is an organization-wide setting that
+   * rewrites the login name of every account that already exists, which is not
+   * a thing to do as a side effect of adding somebody to a file. */
+  {
+    const dp = await api('GET', '/management/v1/policies/domain');
+    if (dp.policy?.userLoginMustBeDomain) {
+      warn('login names carry the org domain as a suffix, so a username that is');
+      warn('an address reads as alex@corp.com@<org domain>. People sign in with');
+      warn('their address either way. Settings, Domain, "must be domain" turns');
+      warn('the suffix off - it renames every existing login name.');
+    } else if (!dp.__status) {
+      item('login name', 'the username as written, with no org-domain suffix');
+    }
+  }
   if (ssoOn && !allowPassword) {
     note("'zitadel-admin' cannot sign in with a password either. Restore the");
     note('password box with SSO_ALLOW_PASSWORD_LOGIN=true and re-run this');
@@ -1483,8 +1605,46 @@ async function findUserId(username, email) {
     duplicates.push({ username, email, keep: byEmail.id, leftover: byName.id });
   }
   const hit = byEmail || byName;
-  if (!hit) return { id: '', by: '', state: '' };
-  return { id: hit.id, by: byEmail ? 'email' : 'username', state: hit.state || '' };
+  if (!hit) return { id: '', by: '', state: '', userName: '' };
+  // The name the account CARRIES, which is not necessarily the name that was
+  // searched for: an account matched on its address may have been created by
+  // the identity provider, or by an earlier version of the file it is being
+  // reconciled against. `reconcileUsername` is what closes that gap.
+  return { id: hit.id, by: byEmail ? 'email' : 'username', state: hit.state || '', userName: hit.userName || '' };
+}
+
+/* THE LOGIN NAME AN EXISTING ACCOUNT CARRIES, brought back to what the file
+ * says it should be.
+ *
+ * The case this exists for: a deployment provisioned when two people sharing a
+ * local part needed hand-invented usernames - `test` and `test2` for
+ * test@domain1.com and test@domain2.com - where the file has since been
+ * changed to let both default to their address. Without this the accounts keep
+ * the invented names forever, the seeder prints one name and the console shows
+ * another, and the fix that was applied to the file never reaches the stack.
+ *
+ * Only ever on a difference, so an unchanged file renames nothing. ZITADEL
+ * invalidates that person's active tokens and sessions on a rename, which is
+ * why this is driven by an edit somebody made rather than by a heuristic, and
+ * why it is printed on the line where it happens.
+ *
+ * Not fatal when refused. The usual refusal is that the name is already taken
+ * by another account, and that is a thing to report next to the account it
+ * concerns rather than a reason to abandon a run that has already granted
+ * roles to everybody above.
+ */
+async function reconcileUsername(id, from, to) {
+  if (!id || !from || !to || from.toLowerCase() === to.toLowerCase()) return { changed: false, error: '' };
+  // v2 UpdateUser. Older cores answer 404 for it and carry the v1 endpoint,
+  // which does the same thing under a different name for the same field.
+  const r = await api('PATCH', `/v2/users/${id}`, { username: to });
+  if (r.__status >= 400 && !unchanged(r)) {
+    const v1 = await api('PUT', `/management/v1/users/${id}/username`, { userName: to });
+    if (v1.__status >= 400 && !unchanged(v1)) {
+      return { changed: false, error: (v1.message || JSON.stringify(v1)).slice(0, 160) };
+    }
+  }
+  return { changed: true, error: '' };
 }
 
 /* An account that was never initialised is not an account.
@@ -1621,6 +1781,14 @@ async function grantRoles(userId, projectId, roleKeys) {
       // Which identifier matched, because it is the difference between "the
       // account this file made" and "the account Microsoft made for them".
       item(u.username, `exists, matched on ${found.by}`);
+      const renamed = await reconcileUsername(uid, found.userName, u.username);
+      if (renamed.error) {
+        warn(`${found.userName} could not be renamed to ${u.username}: ${renamed.error}`);
+        warn(`${u.email || 'their address'} still signs them in either way.`);
+      } else if (renamed.changed) {
+        sub('login name', `${found.userName} -> ${u.username}`);
+        sub('sessions', 'ended by the rename; they sign in again under the new name');
+      }
     }
 
     if (u.orgRoles?.length) {

@@ -143,28 +143,33 @@ with **no re-login and no new grant**. That is the whole reason the tier exists.
 re-run the init container. Who has access is then reviewable in a pull request
 rather than being clicks in a console nobody can audit later.
 
-```jsonc
-{
-  "users": [
-    {
-      "username": "dana",
-      "email": "dana@example.com",
-      "firstName": "Dana", "lastName": "Okafor",
-      "password": "OnlyForLocalUse!23",       // ignored when SSO is configured
-      "orgRoles": ["org-security"],            // tenant-wide
-      "products": { "software-01": ["product-owner"] }
-    }
-  ],
-  "apiUsers": [
-    {
-      "username": "ci-deployer",
-      "description": "pipeline that requests downloads",
-      "orgRoles": [],
-      "products": { "software-01": ["product-operator"] }
-    }
-  ]
-}
+```yaml
+users:
+  - email: dana@example.com          # username is optional; it defaults to this
+    firstName: Dana
+    lastName: Okafor
+    password: OnlyForLocalUse!23     # ignored when SSO is configured
+    orgRoles: [org-security]         # tenant-wide
+    products:
+      software-01: [product-owner]
+
+apiUsers:
+  - username: ci-deployer
+    description: pipeline that requests downloads
+    orgRoles: []
+    products:
+      software-01: [product-operator]
 ```
+
+**One person's name in two domains.** `test@domain1.com` and `test@domain2.com`
+are two different people, and a username is unique across the whole instance -
+so they cannot both be `test`. Leave `username` out of both rather than
+inventing `test2` for the second: each then signs in as their own address,
+which was unique to begin with. (Typing the address works either way - the
+sign-in screen looks a typed value up as a login name first and as an address
+second - but the default leaves one string to know instead of two.) Two entries
+sharing one address are refused: the address is how a re-run finds an existing
+account, so they would be one account with both sets of roles on it.
 
 Apply it:
 
@@ -462,6 +467,7 @@ disable certificate verification.
 | `controller` unhealthy at boot | It fails fast on broken auth config rather than starting and refusing everyone. Read its logs. |
 | Worker up but doing nothing, logging `not leasing` | No valid product YAML in `config/products/`. A worker will not lease work it cannot execute, because attempts are counted when a job is handed out. It starts anyway, says so once, and begins working the moment a product is loaded - no restart. |
 | Sign-in ends on "Account Not Found", or "This account is not recognised" | The address the identity provider asserted matches no account here. The seeder prints every account that can sign in, username and address together - compare that list against what the directory actually sends. If the address is right and it still fails, the directory is asserting something else (commonly a user principal name where there is no mail attribute): set `SSO_LINK_ON=username` and re-run the seeder. |
+| Two people share a local part in different domains, and only one of them can be `test` | Do not invent `test2`. Leave `username` out of both entries in `config/users/users.yaml` and each signs in as their own address. On a stack that already carries the invented names, removing the `username` lines renames those accounts on the next seeding run - the seeder prints the rename, and it ends any session those people are holding. |
 | Sign-in ends on "This account is not recognised" | Correct, and the point: accounts are provisioned here, never created by signing in. Add that person's address to `config/users/users.yaml` (or `BOOTSTRAP_ADMIN_EMAIL` for the administrator) and re-run the seeder. The seeder lists which addresses can sign in at the end of every run, and refuses to seed a stack where that list would be empty. |
 | Signed in and every page says "This account has no access yet" | Correct, and the point: routes are refused to an account holding no roles. Grant one - the row below - and sign in again. |
 | Signed in, but the profile says "Tenant roles: none" | The roles are on a different account. A sign-in through the identity provider creates its own account when nothing already holds that address, so the seeded one keeps the roles and the one you actually sign in as holds none. Set `BOOTSTRAP_ADMIN_EMAIL` to the address you sign in with, or add yourself to `config/users/users.yaml` with that address, and re-run the seeder - it matches on the address, so the roles land on the account you use. Roles arrive in the token, so sign out and back in. |

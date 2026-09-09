@@ -8,6 +8,8 @@ import type { ReactNode } from 'react'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
+import { ActionButton } from './access'
+import { useCan } from '../auth/permissions'
 import {
   BookOutlined, ReportOutlined, FileTextOutlined, HelmOutlined, LoadingOutlined, SearchOutlined,
   SyncOutlined,
@@ -243,6 +245,7 @@ export function ComplianceTab({ product, reference, repository }: {
   })
   const run = useRunCompliance()
   const cancel = useCancelCompliance()
+  const mayRun = useCan('compliance_report.cancel', { product })
   // Analysing, offered from HERE. See the empty state below for why this tab
   // needs it at all, and why sending the reader to another tab to press it was
   // the wrong way to ask.
@@ -387,9 +390,19 @@ export function ComplianceTab({ product, reference, repository }: {
           }
           action={
             <Space direction="vertical" size={10}>
-              <Button type="primary" loading={run.isPending} onClick={start}>
+              {/* `compliance_report.run` - an operator's, because a run renders
+                  every chart and reaches a registry. A reader still sees the
+                  link below, which is the part of this that is a read. */}
+              <ActionButton
+                permission="compliance_report.run"
+                scope={{ product }}
+                action="Check this release"
+                type="primary"
+                busy={run.isPending}
+                onClick={start}
+              >
                 {run.isPending ? 'Starting the check' : 'Check this release'}
-              </Button>
+              </ActionButton>
               <Link to="/policies" style={{ fontSize: 12, color: c.brand }}>
                 See what would be checked
               </Link>
@@ -434,7 +447,13 @@ export function ComplianceTab({ product, reference, repository }: {
         <ComplianceRunPanel
           progress={data.progress}
           cancelling={cancel.isPending}
-          onCancel={() => cancel.mutate({ product, ref: reference, repository })}
+          // Stopping a run is `compliance_report.cancel`, an operator's - a
+          // reader watching one may not end it. The panel drops the control
+          // when there is no handler, which is the right shape here: a Stop
+          // that is present and refused reads as a run nobody can end.
+          onCancel={
+            mayRun ? () => cancel.mutate({ product, ref: reference, repository }) : undefined
+          }
         />
       </Space>
     )
@@ -494,14 +513,17 @@ export function ComplianceTab({ product, reference, repository }: {
               + 'before under identical inputs are reused.'
             }
           >
-            <Button
+            <ActionButton
+              permission="compliance_report.run"
+              scope={{ product }}
+              action="Re-check"
               icon={<SyncOutlined spin={run.isPending} />}
-              loading={run.isPending}
+              busy={run.isPending}
               disabled={running}
               onClick={start}
             >
               Re-check
-            </Button>
+            </ActionButton>
           </Tooltip>
         </Space>
       </div>

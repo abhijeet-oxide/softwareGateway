@@ -861,13 +861,14 @@ function buildTree(
  * That is what makes an entitlement refusal debuggable weeks after the transfer
  * that hit it, and paraphrasing it here would throw the only useful part away.
  */
-function DownloadsTab({ transfers, onDownload, downloadHref, mayOperate }: {
+function DownloadsTab({ transfers, onDownload, downloadHref, product }: {
   transfers: PackageTransfer[]
   /** Starts one, when there is none and the reader may. */
   onDownload?: () => void
   /** Where the existing download is, when there is one. */
   downloadHref?: string
-  mayOperate?: boolean
+  /** Which product this release belongs to, for the permission on the button. */
+  product?: string
 }) {
   if (transfers.length === 0) {
     return (
@@ -890,20 +891,17 @@ function DownloadsTab({ transfers, onDownload, downloadHref, mayOperate }: {
               </Link>
             )
             : (
-              <Tooltip
-                title={mayOperate
-                  ? 'Downloads the whole release into the internal repositories and configures the mirror OpenShift pulls from.'
-                  : 'You do not have permission to start a download.'}
+              <ActionButton
+                permission="software_download.request"
+                scope={{ product }}
+                type="primary"
+                icon={<Icon as={DownloadIcon} title="Download" />}
+                disabled={!onDownload}
+                title="Downloads the whole release into the internal repositories and configures the mirror OpenShift pulls from."
+                onClick={onDownload}
               >
-                <Button
-                  type="primary"
-                  icon={<Icon as={DownloadIcon} title="Download" />}
-                  disabled={!mayOperate || !onDownload}
-                  onClick={onDownload}
-                >
-                  Download this release
-                </Button>
-              </Tooltip>
+                Download this release
+              </ActionButton>
             )
         }
       />
@@ -1700,7 +1698,7 @@ export default function PackageDetail() {
                     // describing one. See DownloadsTab.
                     onDownload={existingDownload ? undefined : () => setConfirming(true)}
                     downloadHref={existingDownload ? `/downloads/${existingDownload.id}` : undefined}
-                    mayOperate={mayOperate && Boolean(p)}
+                    product={productName}
                   />
                 ),
               },

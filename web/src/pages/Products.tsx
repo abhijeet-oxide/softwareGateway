@@ -23,6 +23,7 @@ import type { Product } from '../api/types'
 import { TargetTag } from '../components/chips'
 import { ConfigErrorDetail, ConfigErrorPill, isNotLoaded } from '../components/configerror'
 import { useIdentity } from '../auth/permissions'
+import { Guard } from '../components/access'
 import { AccessRoute, useSupportContact } from '../auth/contact'
 
 /**
@@ -271,7 +272,15 @@ export default function Products() {
           action={
             search.trim()
               ? <Button onClick={() => setSearch('')}>Clear search</Button>
-              : <Button href="/settings">Open Settings</Button>
+              : (
+                // Offered only to somebody who can open it. A "go and look at
+                // Settings" that lands on a refusal is worse than no offer -
+                // it turns "nothing is configured" into "and you cannot even
+                // check".
+                <Guard permission="system.view">
+                  <Button href="/settings">Open Settings</Button>
+                </Guard>
+              )
           }
         />
       ) : (

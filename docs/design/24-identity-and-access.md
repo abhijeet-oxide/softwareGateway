@@ -881,6 +881,106 @@ A FULL SCREEN, with no navigation, saying one thing.
 > member with no products sees what a deployment with no products configured
 > would show, and only the interface can tell those apart.
 
+### 8.4a The interface renders from the permissions the server enforces
+
+The screens do not decide what a caller may do. They ask, and the answer comes
+from the same authority that decides every request.
+
+> **Decision - there is a PERMISSION CATALOGUE, and it is the enforcement
+> points themselves.**
+>
+> `internal/api/middleware/permissions.go` names every distinct thing a caller
+> may be permitted, as `<resource>.<action>` - `product.discover`,
+> `audit_event.view`, `software_download.promote`. Each entry is a
+> `(kind, action)` pair `PolicyFor` already produces for some route and a rule
+> that already exists in `config/access/policies`. Both directions are tested:
+> a route whose question no permission names fails the build, and a permission
+> no route asks for fails it too.
+>
+> The alternatives were both tried and both drifted. The interface deciding
+> from ROLES is this model reimplemented in TypeScript, in a file nobody
+> reviews against the policies. The interface deciding from the four coarse
+> verbs - read, operate, apply, admin - cannot express the estate boundary at
+> all: "run a scan on my product" and "run a scan across the fleet" are the
+> same word to it.
+
+> **Decision - `/whoami` reports the RESOLVED set, and the policy engine
+> resolves it.**
+>
+> `access.global` is what the caller holds tenant-wide; `access.byProduct` is
+> what they hold on each product, with the tenant-wide answers subtracted. The
+> split is `Scope.covers`, for the reason §8.4 gives: flattened, they read as
+> every verb on every product.
+>
+> Cerbos answers it in ONE batched `CheckResources` call per scope rather than
+> one per permission (`authz.CheckMany`), so describing a caller's whole
+> permission set costs two round trips rather than forty.
+>
+> `access.unavailable` is its own field because an unreachable PDP resolves to
+> nothing and REFUSES everything, and an interface that could not tell that
+> from "you hold nothing" showed an administrator a screen saying their account
+> had no access. The application shows a screen about the policy engine
+> instead.
+
+> **It is not a security control, and nothing about it is withheld.** It
+> describes the caller's own permissions to the caller, and every request is
+> authorized again on arrival by the same catalogue. A person who edits it in
+> their browser gets a screen full of controls that all answer 403.
+
+> **Decision - hidden, disabled, or refused, decided once.**
+>
+> A control the caller cannot use is HIDDEN: a Run Discovery button somebody
+> can never press is furniture that reads as the page refusing them
+> personally. A control in a row or a table cell is DISABLED instead, because a
+> cell that appears on some rows and not others reads as a rendering fault; the
+> reason is on the hover and it names the permission. A whole page is REFUSED
+> with a screen that says so - an empty table is a confident statement that
+> nothing has happened in a system the reader simply cannot see.
+>
+> The navigation drops what an account cannot open AND every page refuses
+> itself at the door, so a bookmark or a link in a ticket meets the same answer
+> as the rail.
+
+> **Decision - a fleet-wide verb is NARROWED, not refused.**
+>
+> `products:discover` and `products:checkConnectivity` name no product, so the
+> tenant-wide question refuses every product owner - and refusing them the one
+> control this product exists to offer is the wrong answer, not a safe one.
+> They are `AnyScope` routes: the authorization decision already asks the
+> engine product by product, so it passes THAT LIST to the handler
+> (`middleware.PermittedProducts`) and the handler acts on exactly those. A
+> product owner asking for a fleet-wide scan scans their fleet.
+>
+> The narrowing comes from the middleware rather than being derived in each
+> handler on purpose. A handler deriving it from the identity is a SECOND
+> authorization decision, written where nobody reviews it against the policies,
+> and the two can disagree - which is how the fleet-wide scan came to be
+> refused to the owners of every product in the fleet.
+
+> **Decision - a refusal names the permission.**
+>
+> `Access denied: this account does not have the product.calibrate permission
+> on product "software-02".` A subject, a permission, a resource - the form an
+> operator already knows from every other system they administer, and the
+> permission named is the string they grep `config/access/policies` for. It
+> replaced "This account may not operate this", which named neither what was
+> needed nor how to get it.
+
+> **Decision - failures are reported in ONE place.**
+>
+> Pressing Run health check without `system.view` did nothing at all: no
+> spinner, no error, no message. The request went, the Coordinator answered 403
+> with a sentence naming exactly what was missing, and no code anywhere read
+> it. That was not a missing `catch` - it was the absence of a place to put
+> one, so every page had to remember to render every failure it could produce
+> and the ones nobody remembered were silent.
+>
+> The query client's caches now report every mutation, every read somebody
+> pressed a button for, and every background refresh of data already on screen,
+> with the Coordinator's own sentence, the RFC 9457 code and the request id.
+> `ActionButton` owns its pending state from the promise its handler returns,
+> so a control cannot be written without one.
+
 ### 8.5 Taking access away, and how long that takes
 
 The Coordinator verifies a JWT **offline**, against the issuer's published keys.

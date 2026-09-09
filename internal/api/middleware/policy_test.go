@@ -63,7 +63,17 @@ var routePolicies = []struct {
 	{"GET", "/api/v1/products/software-01/packages/v1/files/download", "package", "view"},
 	{"GET", "/api/v1/products/software-01/packages/v1/promotionOptions", "package", "view"},
 	{"POST", "/api/v1/products/software-01/packages/v1:inspect", "package", "inspect"},
+	{"POST", "/api/v1/products/software-01/packages/v1:cancelAnalysis", "package", "inspect"},
 	{"POST", "/api/v1/products/software-01/packages/v1:compare", "package", "inspect"},
+	{"POST", "/api/v1/products/software-01/packages/v1:compareSecurity", "package", "inspect"},
+	// Asking a scanner about a release, and stopping the asking. They reach a
+	// third-party scanner and write what it says, so they are inspections
+	// rather than reads - the same judgement package.yaml makes about walking a
+	// manifest tree.
+	{"POST", "/api/v1/products/software-01/packages/v1:syncSecurity", "package", "inspect"},
+	{"POST", "/api/v1/products/software-01/packages/v1:cancelSecuritySync", "package", "inspect"},
+	{"POST", "/api/v1/products/software-01/packages/v1:replicateSecurity", "package", "inspect"},
+	{"POST", "/api/v1/products/software-01/packages/v1:cancelSecurityReplicate", "package", "inspect"},
 	{"GET", "/api/v1/comparisons/tok", "package", "view"},
 
 	// Security.

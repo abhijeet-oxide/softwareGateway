@@ -115,7 +115,11 @@ function RowActions({ product, pkg, config, autoProductFilter }: {
   const { message } = App.useApp()
   const navigate = useNavigate()
   const sync = useSyncPackageSecurity()
-  const mayOperate = useCan('software_download.request', { product })
+  // Syncing reaches a third-party scanner and writes what it says, which the
+  // policies judge an INSPECTION rather than a read - the same call
+  // `:inspect` makes. It is not `software_download.request`: a reader who may
+  // not start a download may still be entitled to ask a scanner a question.
+  const mayInspect = useCan('package.inspect', { product })
 
   // "Compare with another release" now PRE-SELECTS this one and stays here.
   //
@@ -162,7 +166,7 @@ function RowActions({ product, pkg, config, autoProductFilter }: {
       ? [{
           key: 'sync',
           label: security.state === '' ? 'Sync vulnerabilities' : 'Sync vulnerabilities again',
-          disabled: !mayOperate,
+          disabled: !mayInspect,
           onClick: startSync,
         }]
       : [{
@@ -230,7 +234,6 @@ function RowActions({ product, pkg, config, autoProductFilter }: {
         product={product}
         pkg={pkg}
         history={history}
-        mayOperate={mayOperate}
         promotable={promotableTargets(pkg, config).length > 0}
       />
       <Dropdown menu={{ items }} trigger={['click']} placement="bottomRight">
@@ -295,12 +298,11 @@ function releaseHistory(pkg: Package): ReleaseHistory {
  * and the row shows the step it is actually on.
  */
 function NextStep({
-  product, pkg, history, mayOperate, promotable,
+  product, pkg, history, promotable,
 }: {
   product: string
   pkg: Package
   history: ReleaseHistory
-  mayOperate: boolean
   /** There is somewhere left to promote it to. */
   promotable: boolean
 }) {
@@ -324,8 +326,6 @@ function NextStep({
         reference={packageReference(pkg)}
         repository={pkg.sourceRepository}
         packageLabel={`${pkg.displayRepository || pkg.sourceRepository || pkg.tag}:${version(pkg)}`}
-        disabled={!mayOperate}
-        disabledReason="You do not have permission to promote a release."
       />
     )
   }

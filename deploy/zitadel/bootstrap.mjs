@@ -55,6 +55,21 @@ const item = (label, value = '') => console.log(`    ${String(label).padEnd(COL)
 const sub  = (label, value = '') => console.log(`      ${String(label).padEnd(COL - 2)}${value}`.trimEnd());
 const note = (text = '') => console.log(text ? `    ${text}` : '');
 const warn = (text) => console.log(`    ! ${text}`);
+/* A fixed-width table sized to its own contents.
+ *
+ * padEnd against a guessed width is fine until one value is longer than the
+ * guess, and then the row runs into the next column and the table stops being
+ * a table - `zitadel-admin@default.localhost` is 31 characters and plenty of
+ * real login names are longer than the one in front of you. Sized from the
+ * data, two spaces of gutter, and the last column never padded. */
+const table = (header, rows) => {
+  const widths = header.map((h, i) =>
+    Math.max(h.length, ...rows.map(row => String(row[i] ?? '').length)) + 2);
+  const line = cells => cells.map((v, i) =>
+    i === cells.length - 1 ? String(v ?? '') : String(v ?? '').padEnd(widths[i])).join('');
+  return [line(header), ...rows.map(line)];
+};
+
 const panel = (title, lines) => {
   console.log('');
   console.log('  ' + '-'.repeat(72));
@@ -1539,18 +1554,57 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
   item('matched on', linkOn === 'username' ? 'the ZITADEL username' : 'a verified e-mail address');
   item('count', String(signInAddresses.length));
   note();
-  note(`${'USERNAME'.padEnd(30)}ADDRESS`);
   /* Username AND address, because the failure this is meant to catch is that
    * the provider asserts one and this directory holds the other. Printing
    * only the matched field hides exactly the mismatch worth seeing. */
-  for (const u of matchable.slice(0, 20)) {
-    note(`${String(u.userName).padEnd(30)}${u.human?.email?.email || ''}`);
-  }
+  for (const row of table(['USERNAME', 'ADDRESS'],
+    matchable.slice(0, 20).map(u => [u.userName, u.human?.email?.email || '']))) note(row);
   if (matchable.length > 20) note(`... and ${matchable.length - 20} more`);
   note();
   note('A sign-in is refused unless the provider asserts one of these exactly.');
   note('The section below reports what it did assert.');
   if (passwordLoginOn) item('password sign-in', 'also on');
+
+  /* AND WHO CANNOT, with the reason.
+   *
+   * The list above is the answer to "can this person get in". Its complement
+   * is the answer to "why can they not", and until this existed there was
+   * nowhere to read it: an account that cannot be matched is simply absent
+   * from the list, which looks the same as an account nobody has added.
+   *
+   * The reason that matters is the one nothing announces. Creating a person in
+   * ZITADEL's console leaves their address UNVERIFIED unless the "Email
+   * Verified" box is ticked, and that box is off by default. The account looks
+   * finished - active, addressed, listed among the users - and auto-linking
+   * matches a verified address only, so every sign-in comes back
+   * Errors.User.NotFound. There is no message anywhere that connects those two
+   * facts. This is that message. */
+  const humans = (all.result || []).filter(u => u.human);
+  const blocked = [];
+  for (const u of humans) {
+    if (matchable.includes(u)) continue;
+    const address = u.human?.email?.email || '';
+    const why = !address ? 'no address on the account'
+      : placeholder.test(address) ? 'the address is a placeholder that no directory asserts'
+      : !u.human.email.isEmailVerified ? 'the address is not verified'
+      : u.state !== 'USER_STATE_ACTIVE' ? `the account is ${String(u.state).replace('USER_STATE_', '').toLowerCase()}`
+      : 'unknown';
+    blocked.push({ user: u.userName || '', address: address || '(none)', why });
+  }
+  if (blocked.length) {
+    head(`Accounts that cannot sign in through ${process.env.SSO_DISPLAY_NAME || 'Microsoft'}`);
+    item('count', String(blocked.length));
+    note();
+    for (const row of table(['USERNAME', 'ADDRESS', 'REASON'],
+      blocked.slice(0, 12).map(b => [b.user, b.address, b.why]))) note(row);
+    if (blocked.length > 12) note(`... and ${blocked.length - 12} more`);
+    note();
+    note('A sign-in is matched to a VERIFIED address on an ACTIVE account. In');
+    note("ZITADEL's console that is the \"Email Verified\" box on the create-user");
+    note('form, which is off by default; on an account that already exists it is');
+    note('under Contact Information. An account listed here can still be signed');
+    note('in to with a password where password sign-in is on.');
+  }
 
 /* --- 17. what the directory actually asserted -----------------------------
  *
@@ -1598,12 +1652,11 @@ if (process.env.SSO_ISSUER) {
     head(`Sign-in attempts through ${process.env.SSO_DISPLAY_NAME || 'Microsoft'}`);
     item('recorded', String(seen.size));
     note();
-    note(`${'WHEN'.padEnd(21)}${'ASSERTED ADDRESS'.padEnd(36)}MATCHED ACCOUNT`);
-    for (const a of [...seen.values()].slice(0, 10)) {
+    const rows = [...seen.values()].slice(0, 10).map(a => {
       const addr = asserted(a.raw) || a.name;
-      const who = held.get(addr.toLowerCase());
-      note(`${a.when.padEnd(21)}${addr.padEnd(36)}${who || 'none'}`);
-    }
+      return [a.when, addr, held.get(addr.toLowerCase()) || 'none'];
+    });
+    for (const row of table(['WHEN', 'ASSERTED ADDRESS', 'MATCHED ACCOUNT'], rows)) note(row);
     note();
     note("The asserted address is the directory's own value for that person: the");
     note('Graph mail attribute, or the user principal name when the account has');

@@ -227,7 +227,54 @@ the provider. It is one string across three surfaces - the sign-in button, the
 refusal page and this - which is what stops them disagreeing about what the
 organization's identity provider is called.
 
-## 8. Files
+## 8. A user made in ZITADEL's console
+
+Reported as: "I go to users, I create users, but I am not able to make them use
+Microsoft to log in. It says no external IDP found."
+
+There is nothing to assign there, and the message is not a fault. A user's
+**Identity Providers** tab lists the external identities ALREADY LINKED to that
+account. It is a report, not a control. Verified against the mock: an account
+that has signed in once shows
+
+| IDP CONFIG ID | IDP NAME | EXTERNAL USER ID | EXTERNAL NAME |
+|---|---|---|---|
+| 389979434733535237 | Microsoft | 00000000-...-0000000000a4 | ds3456@contoso.com |
+
+and an account that never has shows "No external IdP found". An administrator
+holds none of those values before the fact - the directory object id is minted
+by the sign-in - which is why there is nothing to pick from.
+
+**The address is the assignment**, and the console has one trap in it: the
+create-user form's **Email Verified** box is off by default. Measured:
+
+| created in the console | state | address | signs in through Microsoft |
+|---|---|---|---|
+| Email Verified ticked | ACTIVE | verified | yes, and links itself |
+| Email Verified unticked | ACTIVE | unverified | no: `Errors.User.NotFound` |
+
+Both accounts look finished in the console. Only one can ever be matched, and
+nothing anywhere connects the tick to the refusal - which is the same shape as
+§2, in a different place.
+
+So the seeder now reports the complement of "who can sign in". The list of who
+can was the answer to "can this person get in"; an account that cannot be
+matched was simply absent from it, which looks exactly like an account nobody
+has added:
+
+```
+Accounts that cannot sign in through Microsoft
+    count                         2
+
+    USERNAME     ADDRESS                  REASON
+    nobodyhere   nobody.here@contoso.com  the address is not verified
+    test-reader  test-reader@example.com  the address is a placeholder that no directory asserts
+```
+
+The console steps that produce a linkable account are in
+[`deploy/STACK.md`](../../deploy/STACK.md).
+
+## 9. Files
 
 - [`deploy/zitadel/bootstrap.mjs`](../../deploy/zitadel/bootstrap.mjs) - `createHuman`, `replaceIfUninitialised`, the attempt report
 - [`deploy/deploy_test.go`](../../deploy/deploy_test.go) - `TestSeederDoesNotImportHumans`

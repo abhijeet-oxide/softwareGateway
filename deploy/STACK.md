@@ -137,6 +137,42 @@ The seeder configures the screen as well as the connector:
   setting that removes it - but with a single allowed language it has nothing
   to offer.
 
+### Adding a person from the ZITADEL console
+
+`deploy/zitadel/users.json` is the reviewable way, and the console is the quick
+one. Both work; the console has one trap.
+
+1. Users, New. Fill in the address, the username and the name.
+2. **Tick "Email Verified".** It is off by default, and it is the whole thing.
+3. Choose "Setup authentication later for this User". They have no password
+   here and do not need one.
+4. Create, then grant them a role: their project grant under Role Assignments,
+   or add them to `users.json` and re-run the seeder, which is the same grant
+   in a file somebody can review.
+
+**There is nothing to assign under a user's "Identity Providers" tab, and the
+"No external IdP found" it shows is not a fault.** That table lists external
+identities ALREADY LINKED to the account. It is a report, not a control: the
+link is made by the person signing in, matched on their verified address, and
+appears there by itself afterwards - the connector's id, `Microsoft`, their
+directory object id and the name it asserted. An administrator has none of
+those values before the fact, which is why there is nothing to pick from.
+
+So the address is the assignment. An unverified one is matched by nothing, the
+sign-in comes back `Errors.User.NotFound`, and the account looks completely
+finished in the console while it happens. The seeder names every account in
+that state on every run:
+
+```
+Accounts that cannot sign in through Microsoft
+    count                         1
+
+    USERNAME    ADDRESS                  REASON
+    nobodyhere  nobody.here@contoso.com  the address is not verified
+```
+
+On an account that already exists, the box is under Contact Information.
+
 **Re-running the seeder against a stack that is already up needs a restart:**
 
 ```bash

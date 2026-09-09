@@ -176,8 +176,9 @@ export function AccessDenied({ permission, what }: { permission: Permission; wha
         <span>
           This page needs the{' '}
           <code style={{ fontSize: '0.95em' }}>{permission}</code> permission, which this
-          account has not been granted. Access is granted by an administrator and takes
-          effect at your next sign-in.
+          account has not been granted. Access is granted by an administrator and reaches
+          this screen within about fifteen minutes, when this session's token is next
+          renewed - signing out and in again applies it immediately.
           {account && (
             <span style={{ display: 'block', marginTop: 8, color: c.text3, fontSize: 12.5 }}>
               Signed in as {account}

@@ -392,15 +392,18 @@ func Refusal(id Identity, req Requirement) string {
 	if !id.IsMember() {
 		return "Access denied: this account is not provisioned in this tenant and holds no " +
 			"roles, so it may not read or change anything here. Roles are granted in the " +
-			"identity provider; ask an administrator to grant one, then sign out and in again."
+			"identity provider; ask an administrator to grant one. A grant takes effect when " +
+			"this session's access token is next renewed, within its lifetime; signing out " +
+			"and in again applies it immediately."
 	}
 	// Provisioned, and holding nothing that reaches anything: the baseline
 	// role and no other. Saying "you lack a permission" to them describes the
 	// request rather than their situation, and their situation is the answer.
 	if len(id.Grants) == 0 {
 		return "Access denied: this account is provisioned but has not been granted access to " +
-			"any product. Ask an administrator for access to the products you need, then " +
-			"sign out and in again."
+			"any product. Ask an administrator for access to the products you need. A grant " +
+			"takes effect when this session's access token is next renewed, within its " +
+			"lifetime; signing out and in again applies it immediately."
 	}
 	return "Access denied: this account does not have the " + requiredPermission(req) +
 		" permission" + onWhat(req) + "."

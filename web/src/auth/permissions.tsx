@@ -1,6 +1,7 @@
-import { createContext, useContext, useMemo, type ReactNode } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
+import { subscribeTokenRenewal } from './session'
 import type { AccessSet, WhoAmIResponse } from '../api/types'
 
 /**
@@ -135,16 +136,49 @@ const IdentityContext = createContext<Identity>({
 })
 
 export function IdentityProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient()
+
   const { data, isLoading } = useQuery({
     queryKey: ['whoami'],
     queryFn: () => api.get<WhoAmIResponse>('/whoami'),
-    // Identity does not change while a page is open, and re-asking on every
-    // window focus would be a request per tab switch for an answer that is
-    // constant. A role granted mid-session takes effect at the next sign-in,
-    // which is what the profile page says.
-    staleTime: Infinity,
+    /*
+      A GRANT REACHES THE SCREEN WITHOUT A SIGN-OUT.
+
+      This used to be `staleTime: Infinity` on the reasoning that identity does
+      not change while a page is open. It does. Roles travel in the access
+      token, that token lives fifteen minutes, and the browser renews it in the
+      background (auth/session) - so a product granted at 09:05 is accepted by
+      the API from about 09:20, on a screen that goes on hiding the controls it
+      unlocked for as long as the tab stays open. "Sign out and in again" was
+      the workaround for that, and it was in three places in this interface.
+
+      Three things re-ask now, and each is a moment when the answer can
+      genuinely have changed:
+
+        - a TOKEN RENEWAL, below. This is the real one: it is the only instant
+          in a session when what the caller may do can change at all.
+        - RETURNING TO THE TAB, which is when somebody who has just been
+          granted something comes back to look for it.
+        - a five-minute floor between those, so a tab switched between twenty
+          times is one request rather than twenty.
+
+      It is one small request against a route that is always allowed, so the
+      cost of asking is a round trip and the cost of not asking is a person
+      being told to sign in again.
+    */
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: true,
     retry: false,
   })
+
+  // The renewal itself. Invalidated rather than refetched, so a tab in the
+  // background pays nothing until something is actually looking at it.
+  useEffect(
+    () => subscribeTokenRenewal(() => {
+      void queryClient.invalidateQueries({ queryKey: ['whoami'] })
+    }),
+    [queryClient],
+  )
 
   const value = useMemo<Identity>(() => {
     const access = data?.access ?? EMPTY_ACCESS

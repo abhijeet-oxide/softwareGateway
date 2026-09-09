@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
-import { Alert, Button, Popover, Space, Tag, Tooltip, Typography } from 'antd'
+import { Alert, Popover, Space, Tag, Tooltip, Typography } from 'antd'
 import { initialsOf, useIdentity } from '../auth/permissions'
 import { accountLabel, productAccess, roleLabel, roleMeaning } from '../auth/roles'
 import { identityClaims, identityProviderName, isSignedIn, signOut } from '../auth/session'
 import { formatAbsolute } from '../domain/format'
+import { ActionButton } from '../components/access'
 import { AppearanceSettings, c, mono, SectionCard } from '../uikit'
 
 /**
@@ -108,9 +109,9 @@ export default function Profile() {
         {isSignedIn() && (
           // The one control here that ENDS something, so it is the one thing
           // said in the danger colour and the only button on the surface.
-          <Button danger onClick={() => void signOut()}>
+          <ActionButton danger action="Sign out" onClick={signOut}>
             Sign out
-          </Button>
+          </ActionButton>
         )}
       </div>
 
@@ -400,8 +401,8 @@ function ProductAccessList({ products, compact }: { products: ProductAccess; com
   if (products.length === 0) {
     return (
       <Muted>
-        No product access. Ask an administrator for the products you need; it takes effect at
-        your next sign-in.
+        No product access. Ask an administrator for the products you need; a grant reaches this
+        screen within about fifteen minutes, when this session&rsquo;s token is next renewed.
       </Muted>
     )
   }

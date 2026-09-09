@@ -3550,14 +3550,9 @@ function SbomButton({ doc }: { doc?: SecurityDocumentRef }) {
         : doc.message
           || 'Generated on demand. The first download asks Xray to produce it, which takes a moment.'}
     >
-      <Button
-        size="small"
-        icon={running ? <LoadingOutlined /> : <DownloadOutlined />}
-        onClick={() => void run()}
-        disabled={running}
-      >
+      <ActionButton size="small" icon={<DownloadOutlined />} busy={running} onClick={run}>
         {running ? 'Preparing…' : 'Download SBOM'}
-      </Button>
+      </ActionButton>
     </Tooltip>
   )
 }

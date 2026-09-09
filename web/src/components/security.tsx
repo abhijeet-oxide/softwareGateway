@@ -18,6 +18,7 @@ import { RunPanel, runEventsFromLog } from './runpanel'
 import { ScannerMark } from './icons'
 import { kevColour, KevTag } from './securitykev'
 import type { RunTile } from './runtiles'
+import { ActionButton } from './access'
 import { SEVERITIES } from '../api/types'
 import type {
   PackageSecuritySummary, ScanStatus, SecurityCounts, SecurityCoverage,
@@ -603,7 +604,11 @@ export function SecurityStateNotice({ state, message, onRefresh, onShowProblems,
           )}
         </Space>
       }
-      action={onRefresh && <Button size="small" onClick={onRefresh}>Sync again</Button>}
+      action={onRefresh && (
+        <ActionButton size="small" action="Sync vulnerabilities" onClick={onRefresh}>
+          Sync again
+        </ActionButton>
+      )}
     />
   )
 }

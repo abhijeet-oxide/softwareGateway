@@ -1037,6 +1037,53 @@ until a minute before expiry and clamps that to half the lifetime, so a short
 token shortens the hold rather than breaking the data plane
 (`pkg/authz/workload.go`).
 
+### 8.5a Granting access, and how long THAT takes
+
+The mirror of §8.5, and the question every administrator asks second.
+
+**Nothing restarts.** Not the Coordinator, not ZITADEL, not the browser.
+
+| What changed | Where it lives | What has to happen | How long |
+|---|---|---|---|
+| A **role granted to a person** (`config/users/users.yaml`, or the ZITADEL console) | The access token's claims | The token is re-minted | Within the access token's lifetime - 15 minutes by default (`ACCESS_TOKEN_LIFETIME`). Sign out and in for immediately. |
+| A **permission added to a role** (`config/access/policies/*.yaml`) | Cerbos | Cerbos reloads the file | Seconds. `watchForChanges: true` in `deploy/cerbos/config.yaml`; no restart, and the same token keeps working. |
+| A **new product** | Git, reconciled into the registry | Nothing, for an org-tier role | Immediately. That is what §5.1 buys: an org role names no product, so it covers one created after the token was issued. A PRODUCT-tier grant on it is a new role, so it takes the first row. |
+| A **new route or permission** | This repository | A deploy | A release. |
+
+> **Decision - the interface re-reads its permissions on a token renewal.**
+>
+> The browser renews in the background (`auth/session`), so a grant reaches the
+> API within the token's lifetime with nobody doing anything. The screen has to
+> notice that or it renders the permissions the session STARTED with for as
+> long as the tab is open - the administrator grants discovery, the API begins
+> accepting it a quarter of an hour later, and the button stays hidden until
+> somebody thinks to reload. "Sign out and in again" was the workaround for
+> that, and it was written into three screens.
+>
+> `store()` in `auth/session` announces every new token; `IdentityProvider`
+> invalidates `/whoami` on it, and also re-asks on window focus with a
+> five-minute floor - which is when somebody who has just been granted
+> something comes back to look for it. One small request against an
+> always-allowed route.
+>
+> **Cerbos is not cached anywhere.** The Coordinator asks it per request and
+> per `/whoami`, so a policy edit needs no invalidation at all: the next
+> request decides against the new rule.
+
+> **Why a role change cannot be faster than the token, and why that is the
+> right trade.** §8.5 is the whole answer: the Coordinator verifies JWTs
+> offline, with no credential for the identity provider and no call to it in
+> the request path. The price of that is that a token says what it said when it
+> was minted, in both directions - a withdrawn role keeps working until expiry,
+> and a granted one does not work until renewal. Shortening the lifetime
+> shortens both. Removing the delay entirely means opaque tokens and
+> introspection on every request, which is the trade §8.5 declines and for the
+> same reasons.
+
+**So the operator's answer is: grant it, and wait a quarter of an hour, or tell
+them to sign out and in.** Nothing is restarted, and a permission added to a
+role is live in seconds without even that.
+
 ### 8.6 One tenant, and the boundary around it
 
 An identity provider hosting more than one organization signs **all** of their

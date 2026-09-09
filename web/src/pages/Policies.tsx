@@ -4,10 +4,11 @@ import { Alert, Button, Card, Input, Select, Space, Tabs, Tooltip, Typography } 
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
 import {
-  ApiOutlined, BarChartOutlined, ClusterOutlined, CompareOutlined,
+  BarChartOutlined, ClusterOutlined, CompareOutlined,
   CopyOutlined, HddOutlined, PackageOutlined, SearchOutlined,
   ScaleOutlined, SafetyOutlined, SettingOutlined,
   BookOutlined,
+  NetworkOutlined,
 } from '../icons'
 import { usePolicies } from '../api/queries'
 import { ErrorState, PageHeader } from '../components/layout'
@@ -19,7 +20,7 @@ const categoryInfo: Record<string, { meaning: string; Icon: typeof ScaleOutlined
   'Configuration & Secrets': { meaning: 'Configuration and secret handling', Icon: SettingOutlined },
   'Identity & Access': { meaning: 'Identity and access control', Icon: SafetyOutlined },
   'Metadata': { meaning: 'Labels and annotations', Icon: PackageOutlined },
-  'Networking': { meaning: 'Network reachability and exposure', Icon: ApiOutlined },
+  'Networking': { meaning: 'Network reachability and exposure', Icon: NetworkOutlined },
   'Observability': { meaning: 'Monitoring and failure visibility', Icon: BarChartOutlined },
   'Probes': { meaning: 'Health checks and lifecycle', Icon: SafetyOutlined },
   'RBAC': { meaning: 'Role-based access control', Icon: SafetyOutlined },

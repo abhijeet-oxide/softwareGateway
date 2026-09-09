@@ -98,6 +98,11 @@ const uninitialised = [];
  * found threw a ReferenceError instead of reporting itself - a crash in the
  * one code path written to explain a confusing situation. */
 const duplicates = [];
+
+/* Grants found on a product's own project and rewritten onto `platform`,
+ * collected as they are repaired and reported together at the end. Declared up
+ * here for the same hoisting reason as the two above. */
+const superseded = [];
 const list = (v, d) => (v ?? d).split(',').map(s => s.trim()).filter(Boolean);
 
 /* A credential, shown well enough to recognise and not well enough to use. */
@@ -723,6 +728,53 @@ for (const p of products) {
   item(p, created.has(p) ? 'created' : 'exists');
   sub('roles', productRoles.join(', '));
   if (added.length && !created.has(p)) sub('roles added this run', added.join(', '));
+}
+
+/* --- 5a. and the SAME KEYS on `platform`, which is where they are GRANTED --
+ *
+ * THE ONE THING THAT DECIDES WHETHER A PRODUCT ROLE REACHES A TOKEN.
+ *
+ * A token does not carry everything a person is granted. ZITADEL asserts roles
+ * only for the projects in that token's ROLE AUDIENCE, and the audience of a
+ * token issued to the web application is that application's OWN project -
+ * `platform` - unless the sign-in additionally asks for
+ * `urn:zitadel:iam:org:project:id:<id>:aud` naming another one. The filtering
+ * is not subtle and it is not a claim-shaping step at the end: the grants are
+ * never loaded. `internal/query/userinfo_by_id.sql` reads
+ *
+ *     and project_id = any($3)
+ *
+ * with `$3` built by `prepareRoles` in `internal/api/oidc/userinfo.go`.
+ *
+ * So a grant written on a PRODUCT's own project is invisible to the token that
+ * asks about it. This seeder used to write them exactly there, and the effect
+ * was that somebody granted `product-owner` on one product - and nothing else -
+ * signed in perfectly and arrived holding NO ROLES AT ALL: every screen
+ * refused, /whoami reporting an account with nothing on it, indistinguishable
+ * from never having been provisioned. Adding any `org-` role appeared to fix
+ * it, because those were always granted here, on `platform`, where the token
+ * could see them - and it fixed it by making that person able to read every
+ * product.
+ *
+ * The keys are namespaced `<product>:<role>` already, and section 5 above says
+ * why: a claim is keyed by an opaque PROJECT ID, so the role key has to carry
+ * the product for a token to be self-describing. That namespacing is also what
+ * makes this safe - a hundred and twenty product role keys on one project
+ * cannot collide - and `splitProductRole` in pkg/authz/identity.go is the
+ * reader that has always expected them to arrive together.
+ *
+ * The alternative is to name every product project in the sign-in scope. It is
+ * rejected in docs/design/24 section 8.1 and the reasons hold: the scope string
+ * grows with the estate, and a product added on Tuesday is invisible to
+ * everybody until the client configuration is changed and every session has
+ * signed in again.
+ */
+{
+  const keys = products.flatMap(p => productRoles.map(r => `${p}:${r}`));
+  const added = await ensureRoles(PLATFORM, keys);
+  item('platform', `also holds ${keys.length} product role keys`);
+  sub('why', 'a token carries roles for its own project only; grants live here');
+  if (added.length) sub('added this run', String(added.length));
 }
 
 /* --- 6. the web application (OIDC client) ---------------------------------
@@ -1743,6 +1795,37 @@ function nameFor({ username, email, firstName, lastName }) {
   return { givenName: username, familyName: username, displayName: username };
 }
 
+/* A grant on a product's OWN project, moved to where a token can see it.
+ *
+ * Only ever called AFTER the same roles have been written on `platform`, so
+ * nobody loses access for a moment even if this fails. What it removes cannot
+ * be load bearing: no token can carry it (section 5a), and nothing in this
+ * stack reads a grant any other way - pkg/authz reads claims and nothing in
+ * the Go services holds a ZITADEL credential at all.
+ *
+ * It is REMOVED rather than left, and that is the opposite of what this file
+ * does with duplicate accounts, deliberately. A leftover account cannot sign
+ * in, so it is confusing; a leftover grant reads in the console as the access
+ * somebody has - `product-owner on software-01`, sitting there, doing nothing.
+ * The whole cost of this bug was a screen that said the grant existed while
+ * the token it produced was empty, and leaving these behind reproduces exactly
+ * that on the next person who goes looking.
+ */
+async function supersedeProductGrant(userId, projectId, label) {
+  const existing = await api('POST', '/management/v1/users/grants/_search',
+    { queries: [{ userIdQuery: { userId } }] });
+  const dead = (existing.result || []).find(g => g.projectId === projectId);
+  if (!dead) return;
+  const r = await api('DELETE', `/management/v1/users/${userId}/grants/${dead.id}`);
+  if (r.__status >= 400 && !unchanged(r)) {
+    warn(`${label}: the superseded grant on the product's own project could not be `
+      + `removed: ${(r.message || JSON.stringify(r)).slice(0, 120)}`);
+    warn('It grants nothing - no token can carry it - but the console shows it as access.');
+    return;
+  }
+  superseded.push(label);
+}
+
 async function grantRoles(userId, projectId, roleKeys) {
   if (!roleKeys.length) return;
   const existing = await api('POST', '/management/v1/users/grants/_search',
@@ -1798,7 +1881,11 @@ async function grantRoles(userId, projectId, roleKeys) {
     for (const [product, roles] of Object.entries(u.products || {})) {
       const pid = projectOf.get(product);
       if (!pid) { warn(`${u.username}: no product named '${product}' in ${PRODUCTS_DIR}`); continue; }
-      await grantRoles(uid, pid, roles.map(r => `${product}:${r}`));
+      // On `platform`, not on `pid`. Section 5a: a token carries roles for its
+      // own project's audience only, so a grant on the product's own project
+      // is filtered out of the token and the person arrives holding nothing.
+      await grantRoles(uid, PLATFORM, roles.map(r => `${product}:${r}`));
+      await supersedeProductGrant(uid, pid, `${u.username} on ${product}`);
       sub(product, roles.join(', '));
     }
   }
@@ -1842,7 +1929,12 @@ for (const a of (doc?.apiUsers || [])) {
   if (a.orgRoles?.length) await grantRoles(uid, PLATFORM, a.orgRoles);
   for (const [product, roles] of Object.entries(a.products || {})) {
     const pid = projectOf.get(product);
-    if (pid) await grantRoles(uid, pid, roles.map(r => `${product}:${r}`));
+    if (!pid) continue;
+    // `platform`, for the reason in section 5a. A machine account asks for its
+    // token with the client credentials grant and the same audience rule
+    // applies to it: scopeFor in pkg/authz/workload.go names one project.
+    await grantRoles(uid, PLATFORM, roles.map(r => `${product}:${r}`));
+    await supersedeProductGrant(uid, pid, `${a.username} on ${product}`);
   }
 }
 
@@ -1867,8 +1959,15 @@ for (const a of (doc?.apiUsers || [])) {
   const all = await api('POST', '/management/v1/users/_search', { query: { limit: 500 } });
   const humans = (all.result || []).filter(u => u.human);
   const granted = new Set();
+  // Grants ON `platform` are the only ones a token carries (section 5a), so
+  // they are counted apart: holding a grant and holding a usable one are two
+  // different facts, and the difference between them is this whole check.
+  const onPlatform = new Set();
   const gr = await api('POST', '/management/v1/users/grants/_search', { query: { limit: 1000 } });
-  for (const g of (gr.result || [])) granted.add(g.userId);
+  for (const g of (gr.result || [])) {
+    granted.add(g.userId);
+    if (g.projectId === PLATFORM) onPlatform.add(g.userId);
+  }
 
   /* Somebody who administers the DIRECTORY is not a person who can sign in
    * and do nothing - they can do rather a lot. ZITADEL's own break-glass
@@ -1876,9 +1975,39 @@ for (const a of (doc?.apiUsers || [])) {
    * without this the banner opens by reporting the one account that is
    * supposed to look like that, every single run. A warning that is wrong on
    * its first line is a warning people learn to skip. */
+  const members = new Set();
   for (const path of ['/management/v1/orgs/me/members/_search', '/admin/v1/members/_search']) {
     const m = await api('POST', path, { query: { limit: 500 } });
-    for (const x of (m.result || [])) granted.add(x.userId);
+    for (const x of (m.result || [])) { granted.add(x.userId); members.add(x.userId); }
+  }
+
+  /* A GRANT THAT CANNOT REACH A TOKEN, which reads in every console as access.
+   *
+   * The check that names the fault section 5a describes, rather than leaving
+   * it to be inferred from a person who is provisioned, visibly granted, and
+   * refused by everything. Anybody here holds roles only on a product's own
+   * project: this file no longer writes those and moves the ones it finds, so
+   * what is left was made by hand in the console, on the project whose name
+   * matches the product - which is the obvious place and the wrong one. */
+  const dead = humans.filter(u =>
+    granted.has(u.id) && !onPlatform.has(u.id) && !members.has(u.id));
+  if (dead.length) {
+    const lines = [];
+    for (const u of dead.slice(0, 20)) {
+      lines.push(`  ${String(u.userName).padEnd(30)}${u.human?.email?.email || '(no address)'}`.trimEnd());
+    }
+    if (dead.length > 20) lines.push(`  ... and ${dead.length - 20} more`);
+    lines.push('');
+    lines.push('Their roles sit on a product\'s own project. A token carries roles for');
+    lines.push('the project the application belongs to - `platform` - and ZITADEL never');
+    lines.push('even loads the others, so these people sign in holding nothing and every');
+    lines.push('screen refuses them.');
+    lines.push('');
+    lines.push('Remedy: add them to config/users/users.yaml under `products:` and re-run');
+    lines.push('this container, which writes the grant on `platform` and removes the one');
+    lines.push('that does nothing. By hand in the console: grant the role on the');
+    lines.push('`platform` project, whose keys are named <product>:<role>.');
+    panel('GRANTS THAT NO TOKEN CAN CARRY', lines);
   }
 
   const ungranted = humans.filter(u => !granted.has(u.id));
@@ -2165,4 +2294,15 @@ item('application', process.env.WEB_PUBLIC_URL || 'http://localhost:8000');
 if (uninitialised.length) {
   item('accounts replaced', String(uninitialised.length));
   for (const label of uninitialised) sub(label, 'was never initialised and could not sign in');
+}
+/* Reported because it changes what somebody sees in the console tomorrow, and
+ * because it is the repair for a stack where product roles granted nothing. */
+if (superseded.length) {
+  item('product grants moved', String(superseded.length));
+  for (const label of superseded.slice(0, 20)) sub(label, 'rewritten onto platform, where a token carries it');
+  if (superseded.length > 20) sub(`... and ${superseded.length - 20} more`);
+  note();
+  note('These were granted on the product\'s own project, which no token this');
+  note('stack issues carries roles for - so they granted nothing. Anybody who');
+  note('holds one is signed in again to pick them up.');
 }

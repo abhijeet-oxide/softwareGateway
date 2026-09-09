@@ -153,6 +153,48 @@ func TestSeederDoesNotImportHumans(t *testing.T) {
 	}
 }
 
+// TestSeederGrantsProductRolesOnPlatform guards the difference between holding
+// a grant and holding one that reaches a token.
+//
+// ZITADEL asserts roles only for the projects in a token's role audience, and
+// the audience of the token the web application gets is that application's own
+// project - `platform`. The grants are not shaped at the end and trimmed; they
+// are never loaded (`project_id = any($3)` in internal/query/userinfo_by_id.sql,
+// with the audience built by prepareRoles in internal/api/oidc/userinfo.go).
+//
+// So a grant written on the product's own project is invisible to the token
+// that asks about it. That is what shipped: somebody granted product-owner on
+// one product and nothing else signed in perfectly and arrived with NO roles,
+// every screen refusing them, indistinguishable from never having been
+// provisioned - while the console showed the grant. Adding any org- role
+// appeared to fix it, because those were always granted on `platform`, and it
+// "fixed" it by making that person able to read every product.
+//
+// The regression is one identifier long and reads as a tidy-up, so it is
+// guarded here rather than left to whoever notices the symptom next.
+func TestSeederGrantsProductRolesOnPlatform(t *testing.T) {
+	body, err := os.ReadFile("zitadel/bootstrap.mjs")
+	if err != nil {
+		t.Fatalf("bootstrap.mjs: %v", err)
+	}
+	if bytes.Contains(body, []byte("grantRoles(uid, pid")) {
+		t.Error("deploy/zitadel/bootstrap.mjs grants product roles on the product's own " +
+			"project. No token this stack issues carries roles for those projects, so the " +
+			"grant is invisible and the person arrives holding nothing. Grant on PLATFORM: " +
+			"the role keys are namespaced <product>:<role> so they cannot collide there.")
+	}
+	if !bytes.Contains(body, []byte("grantRoles(uid, PLATFORM, roles.map(")) {
+		t.Error("deploy/zitadel/bootstrap.mjs no longer grants product roles on the " +
+			"platform project, which is the only project whose roles reach the token the " +
+			"web application holds.")
+	}
+	if !bytes.Contains(body, []byte("supersedeProductGrant(uid, pid,")) {
+		t.Error("deploy/zitadel/bootstrap.mjs no longer retires the grants an earlier " +
+			"version wrote on each product's own project. Left behind, they read in the " +
+			"console as access that the token does not carry, which is the fault itself.")
+	}
+}
+
 // TestSeederInventsNoPersonName guards a small thing that lands on the one
 // screen where it is least welcome.
 //

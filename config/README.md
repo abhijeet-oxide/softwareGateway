@@ -38,7 +38,10 @@ config/
 **Every product in `products/` must have an owner in `users/users.yaml`.**
 
 Seeding creates a project per product with the roles from `access/roles.yaml`,
-and refuses to finish if a product has nobody holding `ownerRole`. A product
+and refuses to finish if a product has nobody holding `ownerRole`. The grants
+themselves are written on the `platform` project, where the role keys are
+namespaced `<product>:<role>` - that is the only project whose roles reach a
+token, so a grant anywhere else grants nothing. A product
 nobody owns is a product whose downloads nobody can approve, and the right time
 to find that out is the pull request rather than the incident.
 

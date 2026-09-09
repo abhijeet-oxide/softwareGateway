@@ -559,18 +559,64 @@ is what [09](09-api.md) §10.1 was holding the seam open for.
 
 ### 8.1 Where product grants come from
 
-The token carries identity, tenant and **global** roles only. Per-product grants
-are read from ZITADEL's API and cached for 60 seconds.
+**The token carries all of them, and this section used to say otherwise.** It
+described per-product grants as read from ZITADEL's API and cached for sixty
+seconds, with a measured cost for the lookup. No such lookup was ever built: no
+Go service in this repository holds a ZITADEL credential or makes a single call
+to it. `pkg/authz` reads role claims and nothing else, which is a good design -
+and it was documented as something else, which is how the gap below survived a
+review.
 
-> **Decision - product grants are resolved and cached, not carried in the token.**
+Roles arrive in claims named `urn:zitadel:iam:org:project:<projectID>:roles`,
+one per project, plus a flattened `urn:zitadel:iam:org:project:roles` for the
+requesting one. `readRoles` decodes every claim of that shape and dedupes;
+`splitProductRole` reads the product off the key.
+
+> **Decision - every grant is written on the `platform` project.**
 >
-> *Alternative considered:* request every product's audience at login so the token carries all grants.
+> ZITADEL asserts roles only for the projects in a token's **role audience**,
+> and the audience of a token issued to the web application is that
+> application's own project - `platform` - unless the sign-in also asks for
+> `urn:zitadel:iam:org:project:id:<id>:aud` naming another. This is not
+> claim-shaping at the end: the grants are never loaded.
+> `internal/query/userinfo_by_id.sql` reads `and project_id = any($3)`, with
+> `$3` built by `prepareRoles` in `internal/api/oidc/userinfo.go`.
 >
-> *Rejected because* it requires the login scope string to enumerate every product ID - 2,160 characters at forty products. A product created on Tuesday is invisible to everyone until the OIDC client configuration is changed and redeployed, and the symptom is a permissions bug rather than a missing config. The cached lookup has no such coupling: a grant made at 10:00 works at 10:01.
+> Product roles were granted on each product's own project, so **the token
+> could not carry them**. Somebody granted `product-owner` on one product and
+> nothing else signed in perfectly and arrived holding no roles at all: every
+> screen refused, `/whoami` describing an account with nothing on it,
+> indistinguishable from never having been provisioned - while the ZITADEL
+> console showed the grant sitting there. Adding any `org-` role appeared to
+> fix it, because those were always granted on `platform` where the token could
+> see them, and it "fixed" it by making that person able to read every product.
 >
-> *Cost, measured:* the ZITADEL read is an index scan on a precomputed projection - `Execution Time: 0.063 ms`, two shared-buffer hits, no disk. ZITADEL is event-sourced, so this read never touches the event store. At 1,000 active users and a 60-second cache that is 63 ms of database time per minute.
+> The role keys are namespaced `<product>:<role>` already (§5, and
+> `splitProductRole`), which is what makes one project able to hold them all:
+> forty products at three roles is a hundred and twenty keys that cannot
+> collide.
+
+> **Alternative considered - name every product project in the sign-in scope.**
 >
-> *Failure behaviour:* on a ZITADEL error, serve the stale cache entry. Refuse only when there is no cached entry at all. **Never fail open.**
+> `urn:zitadel:iam:org:project:id:<id>:aud` per product, plus
+> `urn:zitadel:iam:org:projects:roles`, which is what a worker's client
+> credentials request already does for the one project it needs
+> (`scopeFor`, pkg/authz/workload.go).
+>
+> *Rejected because* the scope string then grows with the estate - 2,160
+> characters at forty products - and a product created on Tuesday is invisible
+> to everybody until the client configuration is regenerated AND every session
+> has signed in again, with a permissions bug as the symptom. One grant on one
+> project has no such coupling: a grant made at 10:00 is in the next token.
+
+> **The seeder repairs what it wrote.** A grant found on a product's own
+> project is rewritten onto `platform` and then removed - after the replacement
+> is written, so nobody is briefly refused - and each move is named in the
+> summary. What is removed cannot be load bearing: no token carries it and
+> nothing else reads it. Left in place it reads in the console as access, which
+> is precisely the appearance that made this take as long as it did. A grant
+> made by hand on a product project, which this file did not write and does not
+> touch, is reported instead: **GRANTS THAT NO TOKEN CAN CARRY**.
 
 ### 8.2 Authorization is enforced, and where
 

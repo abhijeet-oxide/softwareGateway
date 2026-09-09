@@ -122,18 +122,37 @@ Verified through a real browser against a stack brought up from empty volumes:
 - an account deliberately re-created through the old `_import` path is detected
   as uninitialised, replaced, and signs in on the next attempt.
 
-## 6. Who to ask, on the screen that refuses
+## 6. What the refusal says
 
 A person refused this way never reaches the application: they are stopped inside
-ZITADEL, on its own Account Not Found page. `SUPPORT_CONTACT` - defaulting to the
-bootstrap administrator, who is by definition the person who provisions accounts
-here - is substituted into that page's sentence by `zitadel-proxy`, which is
-already the only thing between it and a browser.
+ZITADEL, on its own Account Not Found page. What that page says by default is
+written for whoever built the integration:
 
-It is done in CSS rather than by rewriting the HTML. The direct version was
-written and watched: the server sends the new sentence, React hydrates over it,
-and the original is back before anybody reads it. A stylesheet is not hydrated.
-The cost is that the address is text rather than a link.
+> We couldn't find an account associated with your identity provider
+> credentials.
+>
+> No existing account was found. Please sign in with an existing account or
+> contact your administrator for assistance.
+
+Two sentences, one of them about identity providers and credentials, and neither
+naming anybody to ask. The reader is a colleague who has been told no. It now
+says one thing:
+
+> **Account Not Found**
+>
+> This account is not registered. Kindly reach out to platform-team@example.com
+> for access.
+
+The address is `SUPPORT_CONTACT`, defaulting to the bootstrap administrator - the
+person who provisions accounts here. With neither set the sentence still
+completes and names a role instead, because an invented address sends people to a
+mailbox nobody reads.
+
+`zitadel-proxy` does the substitution, being already the only thing between that
+page and a browser, and it does it in CSS rather than by rewriting the HTML. The
+direct version was written and watched: the server sends the new sentence, React
+hydrates over it, and the original is back before anybody reads it. A stylesheet
+is not hydrated. The cost is that the address is text rather than a link.
 
 The **asserted** address cannot be shown there. It is not in the page, not in
 the URL, and not in any redirect the browser sees - §4 is where it lives.

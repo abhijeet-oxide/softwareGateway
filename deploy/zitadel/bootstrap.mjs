@@ -33,7 +33,45 @@ if (process.env.SSO_ISSUER && process.env.BOOTSTRAP_ADMIN_PASSWORD) {
 const fs   = await import('node:fs/promises');
 const http = await import('node:http');
 const { createHash } = await import('node:crypto');
-const say = (...a) => console.log('  ' + a.join(' '));
+/* WHAT THIS CONTAINER PRINTS IS A REPORT, not a commentary on itself.
+ *
+ * It is read once, under time pressure, by somebody deciding whether a
+ * deployment is usable - and pasted into a ticket when it is not. So every
+ * line is a fact in a fixed place: a section, a label in one column, a value
+ * in the next. Nothing addresses the reader, nothing narrates progress in the
+ * first person, and nothing hedges.
+ *
+ *   head()   a section, one per thing this file provisions
+ *   item()   a fact: label in a fixed column, value after it
+ *   sub()    a fact about the fact above it
+ *   note()   a sentence qualifying the section, indented under it
+ *   warn()   something that did not work and did not stop the run
+ *   panel()  a condition that needs a paragraph, boxed and kept for the end
+ */
+const COL  = 30;
+const out  = (s = '') => console.log(s);
+const head = (title) => { console.log(''); console.log(title); };
+const item = (label, value = '') => console.log(`    ${String(label).padEnd(COL)}${value}`.trimEnd());
+const sub  = (label, value = '') => console.log(`      ${String(label).padEnd(COL - 2)}${value}`.trimEnd());
+const note = (text = '') => console.log(text ? `    ${text}` : '');
+const warn = (text) => console.log(`    ! ${text}`);
+const panel = (title, lines) => {
+  console.log('');
+  console.log('  ' + '-'.repeat(72));
+  console.log('  ' + title);
+  console.log('  ' + '-'.repeat(72));
+  for (const l of lines) console.log(l ? `  ${l}` : '');
+  console.log('  ' + '-'.repeat(72));
+};
+
+/* Accounts replaced because they were never initialised, named at the end.
+ *
+ * Declared HERE for the same reason as `duplicates` below: the function that
+ * pushes to it is hoisted and runs long before the line that would declare it
+ * further down, and a `const` does not hoist - it throws
+ * `Cannot access '...' before initialization` on the first repair, which is
+ * the run somebody is doing because nothing else worked. */
+const uninitialised = [];
 
 /* Two accounts found for one person, collected while looking them up and
  * reported together at the end.
@@ -183,11 +221,15 @@ function request(method, path, body, contentType) {
   });
 }
 
-/* ZITADEL answers a write that changes nothing with an ERROR - "has not been
- * changed" - so on a seeder that is run repeatedly by design, the second run
- * of a correct configuration reports failures. Treated as success, because it
- * is: the desired state is the state. */
-const unchanged = r => r.__status >= 400 && /not\s*been\s*changed|NotChanged/i.test(r.message || '');
+/* ZITADEL AGREEING, dressed as a refusal.
+ *
+ * Writing a value that is already the stored value answers 400 with one of
+ * several spellings - "has not been changed", "NotChanged", "No changes
+ * (COMMAND-1m88i)" - and every one of them means the seeder asked for exactly
+ * what is already true. That is the normal outcome of an idempotent re-run, so
+ * it is not reported as a fault; anything else is. */
+const unchanged = r => r.__status >= 400 &&
+  /not\s*been\s*changed|NotChanged|no\s*changes/i.test(r.message || '');
 
 async function api(method, path, body) {
   const r = await request(method, path, body);
@@ -197,18 +239,21 @@ async function api(method, path, body) {
 }
 
 /* --- 1. wait for ZITADEL and the PAT the first-instance step writes -------- */
-process.stdout.write('waiting for zitadel');
+out('Software Gateway - identity bootstrap');
+out(`  ${new Date().toISOString().replace('T', ' ').slice(0, 19)}   ${process.env.ZITADEL_PUBLIC_URL || 'http://localhost:8090'}`);
+const startedAt = Date.now();
 for (let i = 0; i < 180; i++) {
   try {
     const r = await request('GET', '/.well-known/openid-configuration');
     const pat = await fs.readFile(PAT_FILE, 'utf8').catch(() => '');
     if (r.status === 200 && pat.trim()) { PAT = pat.trim(); break; }
   } catch { /* not up yet */ }
-  process.stdout.write('.');
   await new Promise(r => setTimeout(r, 2000));
 }
-if (!PAT) { console.error('\nFATAL: no PAT at ' + PAT_FILE + ' after 360s'); process.exit(1); }
-console.log(' ok');
+if (!PAT) { console.error('\nFATAL: ZITADEL did not publish a credential at ' + PAT_FILE + ' within 360s'); process.exit(1); }
+head('ZITADEL');
+item('reachable', `after ${Math.round((Date.now() - startedAt) / 1000)}s`);
+item('credential', PAT_FILE);
 
 /* --- 2. the organization is the tenant ------------------------------------ */
 const TENANT = process.env.GATEWAY_TENANT || 'default';
@@ -217,20 +262,23 @@ const TENANT = process.env.GATEWAY_TENANT || 'default';
   ORG_ID = (found.result || []).find(o => o.name === TENANT)?.id || '';
   if (!ORG_ID) {
     ORG_ID = (await api('POST', '/management/v1/orgs', { name: TENANT })).id;
-    say(`tenant '${TENANT}' created (${ORG_ID})`);
+    head('Tenant');
+    item(TENANT, `created (${ORG_ID})`);
   } else {
-    say(`tenant '${TENANT}' exists (${ORG_ID})`);
+    head('Tenant');
+    item(TENANT, `exists (${ORG_ID})`);
   }
 }
 
 /* --- 3. idempotent project + roles ---------------------------------------- */
+const created = new Set();
 async function ensureProject(name) {
   const found = await api('POST', '/management/v1/projects/_search', { query: { limit: 500 } });
   let id = (found.result || []).find(p => p.name === name)?.id;
   if (!id) {
     id = (await api('POST', '/management/v1/projects',
       { name, projectRoleAssertion: true })).id;
-    say(`project ${name} created`);
+    created.add(name);
   }
   // Assertion must be on or roles never reach a token, and creating with the
   // flag does not always persist it. Set it explicitly every run.
@@ -239,21 +287,28 @@ async function ensureProject(name) {
 }
 
 async function ensureRoles(projectId, roles) {
+  const added = [];
   const have = new Set(((await api('POST', `/management/v1/projects/${projectId}/roles/_search`,
     { query: { limit: 500 } })).result || []).map(r => r.key));
   for (const key of roles) {
     if (have.has(key)) continue;
     await api('POST', `/management/v1/projects/${projectId}/roles`,
       { roleKey: key, displayName: key, group: 'gateway' });
-    say(`  + role ${key}`);
+    added.push(key);
   }
+  return added;
 }
 
 /* --- 4. org-wide roles live on `platform` and name no product ------------- */
-say('platform project (org-wide roles)');
+head('Projects and roles');
 const PLATFORM = await ensureProject('platform');
-await ensureRoles(PLATFORM,
-  list(process.env.GATEWAY_ORG_ROLES, 'org-admin,org-operator,org-security,org-reader'));
+{
+  const orgRoles = list(process.env.GATEWAY_ORG_ROLES, 'org-admin,org-operator,org-security,org-reader');
+  const added = await ensureRoles(PLATFORM, orgRoles);
+  item('platform', created.has('platform') ? 'created' : 'exists');
+  sub('tenant-wide roles', orgRoles.join(', '));
+  if (added.length && !created.has('platform')) sub('roles added this run', added.join(', '));
+}
 
 /* --- 5. one project per product -------------------------------------------
  *
@@ -269,10 +324,12 @@ const productRoles = list(process.env.GATEWAY_PRODUCT_ROLES,
   'product-owner,product-operator,product-reader');
 const projectOf = new Map();          // product name -> project id
 for (const p of products) {
-  say(`product ${p}`);
   const pid = await ensureProject(p);
   projectOf.set(p, pid);
-  await ensureRoles(pid, productRoles.map(r => `${p}:${r}`));
+  const added = await ensureRoles(pid, productRoles.map(r => `${p}:${r}`));
+  item(p, created.has(p) ? 'created' : 'exists');
+  sub('roles', productRoles.join(', '));
+  if (added.length && !created.has(p)) sub('roles added this run', added.join(', '));
 }
 
 /* --- 6. the web application (OIDC client) ---------------------------------
@@ -319,10 +376,12 @@ for (const p of products) {
     const r = await api('POST', `/management/v1/projects/${PLATFORM}/apps/oidc`,
       { name: 'software-gateway-web', ...oidc });
     clientId = r.clientId || '';
-    say(`web client created, client_id: ${clientId || '(see console)'}`);
+    head('Applications');
+    item('software-gateway-web', 'created');
   } else {
     clientId = existing.oidcConfig?.clientId || '';
-    say('web client exists');
+    head('Applications');
+    item('software-gateway-web', 'exists');
     /* The redirect URI is where ZITADEL is willing to send a browser back to,
      * and it is derived from WEB_PORT. Change that port on a stack that has
      * already been seeded and every login ends on ZITADEL's own error page
@@ -337,9 +396,9 @@ for (const p of products) {
     const r = await api('PUT',
       `/management/v1/projects/${PLATFORM}/apps/${existing.id}/oidc_config`, oidc);
     if (r.__status >= 400 && !unchanged(r)) {
-      say(`  ! could not update the web client: ${JSON.stringify(r).slice(0, 120)}`);
+      warn(`software-gateway-web was not updated: ${JSON.stringify(r).slice(0, 120)}`);
     } else if (!(existing.oidcConfig?.redirectUris || []).includes(redirectUri)) {
-      say(`  redirect URI updated to ${redirectUri}`);
+      sub('redirect uri', `${redirectUri} (updated)`);
     }
   }
 
@@ -347,13 +406,16 @@ for (const p of products) {
   if (clientId) {
     await writeShared('/oidc/web.json',
       JSON.stringify({ issuer, clientId, redirectUri }, null, 2) + '\n');
-    say(`  published ${issuer} + client id for the web tier`);
+    sub('client id', clientId);
+    sub('redirect uri', redirectUri);
+    sub('issuer', issuer);
+    sub('published to', '/oidc/web.json');
   } else {
-    say('  ! no client id to publish - the SPA will not be able to sign anyone in');
+    warn('no client id was issued; the web tier cannot start a sign-in');
   }
 }
 
-/* --- 6b. the login service's own account ----------------------------------
+/* --- 7. the login service's own account -----------------------------------
  *
  * ZITADEL's sign-in screens are a separate service (see the zitadel-login
  * service in docker-compose.yml) and it drives the login flow through the
@@ -371,7 +433,7 @@ for (const p of products) {
   const path = '/pat/login-client.pat';
   const have = await fs.readFile(path, 'utf8').catch(() => '');
   if (have.trim()) {
-    say('login service account exists');
+    item('login-client', 'exists');
   } else {
     const found = await api('POST', '/management/v1/users/_search',
       { queries: [{ userNameQuery: { userName: 'login-client' } }] });
@@ -384,7 +446,7 @@ for (const p of products) {
       });
       uid = r.userId;
       if (!uid) { console.error('FATAL: could not create login-client:', JSON.stringify(r)); process.exit(1); }
-      say('login service account created');
+      item('login-client', 'created');
     }
     /* An INSTANCE-level membership, not a project role: the login screens
      * serve every organization in the instance, not just this tenant. It is
@@ -395,11 +457,11 @@ for (const p of products) {
       { expirationDate: '2100-01-01T00:00:00Z' });
     if (!pat.token) { console.error('FATAL: could not issue the login client PAT:', JSON.stringify(pat)); process.exit(1); }
     await writeShared(path, pat.token, 0o600);
-    say('  token issued for the sign-in service');
+    sub('token', 'issued for the sign-in screens');
   }
 }
 
-/* --- 6c. the data plane's own account -------------------------------------
+/* --- 8. the data plane's own account --------------------------------------
  *
  * WHY WORKERS NEED ONE AT ALL, and why it is not a token somebody types in.
  *
@@ -467,9 +529,9 @@ for (const p of products) {
       process.exit(1);
     }
     created = true;
-    say('worker service account created');
+    item('swgw-worker', 'created');
   } else {
-    say('worker service account exists');
+    item('swgw-worker', 'exists');
   }
 
   /* The ONE role it holds. org-worker maps to leasing work and reporting on
@@ -490,7 +552,7 @@ for (const p of products) {
    */
   const have = await fs.readFile(path, 'utf8').then(t => JSON.parse(t)).catch(() => null);
   if (have?.clientSecret && !created && !process.env.WORKER_ROTATE_SECRET) {
-    say('  credentials already published for the data plane');
+    sub('credentials', 'already published to /workercreds/worker.json');
   } else {
     const sec = await api('PUT', `/management/v1/users/${uid}/secret`, {});
     if (!sec.clientId || !sec.clientSecret) {
@@ -519,18 +581,19 @@ for (const p of products) {
     try {
       await fs.chown(path, owner, owner);
     } catch (e) {
-      say(`  ! could not give ${path} to uid ${owner}: ${e.message}`);
-      say('    the worker runs as a non-root user and will not be able to read it');
+      warn(`${path} could not be given to uid ${owner}: ${e.message}`);
+      note('  The worker runs as a non-root user and cannot read it as written.');
     }
-    say(`  credentials published for the data plane (client_id ${sec.clientId})`);
+    sub('client id', sec.clientId);
+    sub('published to', '/workercreds/worker.json');
     // No restart. A worker reads this file when it needs a token rather than
     // once at boot, so the fleet moves over on its own within one lease
     // interval - and a worker that started before this ran recovers by itself.
-    if (!created) say('  running workers take the new secret within a few seconds');
+    if (!created) sub('rotation', 'running workers take the new secret within seconds');
   }
 }
 
-/* --- 7. Sign-in: the connector, and what the login screen offers ----------
+/* --- 9. sign-in: the connector, and what the login screen offers ----------
  *
  * THREE things, and only the first is obvious.
  *
@@ -589,16 +652,18 @@ for (const p of products) {
     console.error('FATAL: could not set the sign-in policy:', JSON.stringify(wrote));
     process.exit(1);
   }
-  say('sign-in policy set');
-  say(`  self-registration: off      password sign-in: ${allowPassword ? 'on' : 'off'}`);
+  head('Sign-in policy');
+  item('self-registration', 'off');
+  item('password sign-in', allowPassword ? 'on' : 'off');
   if (ssoOn && !allowPassword) {
-    say(`    'zitadel-admin' can no longer sign in with a password either. To put`);
-    say('    it back: SSO_ALLOW_PASSWORD_LOGIN=true and re-run this container,');
-    say('    which authenticates with a machine token rather than that screen.');
+    note("'zitadel-admin' cannot sign in with a password either. Restore the");
+    note('password box with SSO_ALLOW_PASSWORD_LOGIN=true and re-run this');
+    note('container, which authenticates with a machine token rather than');
+    note('through the sign-in screen.');
   }
 
   if (!ssoOn) {
-    say('SSO not configured - username/password sign-in is active');
+    item('identity provider', 'none configured; sign-in is username and password');
   } else {
     const secret = process.env.SSO_CLIENT_SECRET || '';
     const issuer = process.env.SSO_ISSUER;
@@ -716,6 +781,7 @@ for (const p of products) {
      * that matters: attached is what "offered on the sign-in screen" means. */
     const attached = await api('POST', '/management/v1/policies/login/idps/_search', {});
     const legacy = await api('POST', '/management/v1/idps/_search', {});
+    let replaced = false;
     let idpId = (attached.result || []).find(i => i.idpName === ssoName)?.idpId
       || (legacy.result || []).find(i => i.name === ssoName)?.id;
 
@@ -731,7 +797,7 @@ for (const p of products) {
       if (before.type && before.type !== wantType && azure) {
         await api('DELETE', `/management/v1/idps/${idpId}`);
         await api('DELETE', `/v2/idps/${idpId}`);
-        say(`SSO connector '${ssoName}' replaced with ZITADEL's Microsoft connector`);
+        replaced = true;
         idpId = '';
       }
     }
@@ -740,7 +806,8 @@ for (const p of products) {
       const r = await api('POST', `/management/v1/idps/${kind}`, body);
       idpId = r.id || r.idpId;
       if (!idpId) { console.error('FATAL: could not create the SSO connector:', JSON.stringify(r)); process.exit(1); }
-      say(`SSO connector '${ssoName}' created`);
+      head('Identity provider');
+      item(ssoName, replaced ? `created (${kind}, replacing a connector of another type)` : `created (${kind})`);
     } else {
       /* RECONCILED, not merely found. The connector used to be created once
        * and never touched again, so a corrected secret in .env reached
@@ -757,10 +824,11 @@ for (const p of products) {
         console.error(`FATAL: could not update the '${ssoName}' connector:`, JSON.stringify(r));
         process.exit(1);
       }
-      say(`SSO connector '${ssoName}' reconciled from .env`);
+      head('Identity provider');
+      item(ssoName, `reconciled from .env (${kind})`);
       const storedId = before.config?.azureAd?.clientId || before.config?.oidc?.clientId;
       if (storedId && storedId !== body.clientId) {
-        say(`  client id CHANGED: ${storedId} -> ${body.clientId}`);
+        sub('client id changed', `${storedId} -> ${body.clientId}`);
       }
     }
 
@@ -769,9 +837,11 @@ for (const p of products) {
       const r = await api('POST', '/management/v1/policies/login/idps',
         { idpId, ownerType: 'IDP_OWNER_TYPE_ORG' });
       if (r.__status >= 400) { console.error(`FATAL: could not offer '${ssoName}' on the sign-in screen:`, JSON.stringify(r)); process.exit(1); }
-      say(`  '${ssoName}' offered on the sign-in screen`);
-    } else say(`  '${ssoName}' already offered on the sign-in screen`);
-    say('  people are matched to their existing account by e-mail address');
+      sub('sign-in screen', 'now offers it');
+    } else sub('sign-in screen', 'already offers it');
+    sub('matched on', options.autoLinking === 'AUTO_LINKING_OPTION_USERNAME'
+      ? 'the ZITADEL username' : 'the e-mail address');
+    sub('may create accounts', 'no');
 
     /* Whether the SECRET moved, which is the one thing here that cannot be
      * answered by reading it back: ZITADEL returns a connector's client id and
@@ -789,9 +859,8 @@ for (const p of products) {
     const previous = await fs.readFile(fingerprintFile, 'utf8')
       .then(t => { try { return JSON.parse(t); } catch { return {}; } })
       .catch(() => ({}));
-    if (!previous.secret) say(`  client secret RECORDED (${secret.length} characters)`);
-    else if (previous.secret !== fingerprint) say(`  client secret CHANGED (${secret.length} characters)`);
-    else say(`  client secret unchanged (${secret.length} characters)`);
+    const secretState = !previous.secret ? 'recorded'
+      : previous.secret !== fingerprint ? 'changed' : 'unchanged';
     await writeShared(fingerprintFile,
       JSON.stringify({ secret: fingerprint, clientId: body.clientId, issuer }, null, 2) + '\n', 0o600);
 
@@ -801,8 +870,8 @@ for (const p of products) {
      * the portal says something is wrong and nothing about what, and the
      * obvious next question - "is that even my secret?" - had no answer. So
      * the ends are shown and the middle is not. */
-    say(`  client id     : ${body.clientId}`);
-    say(`  client secret : ${mask(secret)}`);
+    sub('client id', body.clientId);
+    sub('client secret', `${mask(secret)}, ${secretState}`);
 
     const check = await verifyIdpCredentials(issuer, body.clientId, secret);
     if (check.rejected) {
@@ -816,25 +885,25 @@ for (const p of products) {
       process.exit(1);
     }
     if (check.unreachable) {
-      say(`  ! could not verify the credentials: ${check.unreachable}`);
-      say('    ZITADEL needs this same network path to sign anybody in, so this is');
-      say('    worth fixing even though the seeding itself succeeded.');
+      warn(`the credentials could not be verified: ${check.unreachable}`);
+      note('  ZITADEL needs this same network path to sign anybody in, so this');
+      note('  remains a fault even though the seeding itself succeeded.');
     } else {
-      say(`  credentials verified: ${check.detail}`);
+      sub('credentials', `verified: ${check.detail}`);
     }
 
     const zitadelURL = process.env.ZITADEL_PUBLIC_URL || 'http://localhost:8090';
-    say(`  register this redirect URI at '${ssoName}': ${zitadelURL}/idps/callback`);
-    say('    Microsoft Entra: register it under the WEB platform, not');
-    say('    Single-page application. ZITADEL redeems the code server side with');
-    say('    a client secret, and Entra requires PKCE for anything registered as');
-    say('    an SPA - which is the AADSTS9002325 sign-in failure.');
+    sub('redirect uri to register', `${zitadelURL}/idps/callback`);
+    note('  In Microsoft Entra this belongs under the Web platform, not');
+    note('  Single-page application: ZITADEL redeems the code server side with a');
+    note('  client secret, and Entra requires PKCE for anything registered as an');
+    note('  SPA, which fails as AADSTS9002325.');
   }
 }
 
-/* --- 7a. no connector, anywhere, may create users -------------------------
+/* --- 10. no connector, anywhere, may create users -------------------------
  *
- * Section 7 configures the connector this file MANAGES, which is the one whose
+ * Section 9 configures the connector this file MANAGES, which is the one whose
  * display name matches SSO_DISPLAY_NAME. Any other connector attached to the
  * sign-in policy is left exactly as it was found - including, on a stack
  * seeded before this rule existed, with creation switched on.
@@ -862,24 +931,23 @@ for (const p of products) {
     }
   }
   if (offenders.length) {
-    console.log('\n  ' + '-'.repeat(66));
-    console.log('  A SIGN-IN CONNECTOR CAN STILL CREATE ACCOUNTS:');
-    for (const o of offenders) console.log(`    ${o.name}  (${o.id})`);
-    console.log('');
-    console.log('  Anybody at that identity provider can sign in and be given a brand new');
-    console.log('  account with no roles - and a valid token with it. This stack decides who');
-    console.log('  may use it in deploy/zitadel/users.json, not the directory.');
-    console.log('');
-    console.log('  Fix: re-run this container with SSO_DISPLAY_NAME set to the name above,');
-    console.log('  which reconciles that connector, or delete it in the console under');
-    console.log('  Settings, Identity Providers.');
-    console.log('  ' + '-'.repeat(66));
+    panel('A SIGN-IN CONNECTOR CAN STILL CREATE ACCOUNTS', [
+      ...offenders.map(o => `  ${o.name}  (${o.id})`),
+      '',
+      'Anybody at that identity provider can sign in, be given a new account',
+      'with no roles, and be issued a valid token with it. Who may use this',
+      'stack is decided in deploy/zitadel/users.json, not by the directory.',
+      '',
+      'Remedy: re-run this container with SSO_DISPLAY_NAME set to the name',
+      'above, which reconciles that connector; or delete it in the console',
+      'under Settings, Identity Providers.',
+    ]);
   } else {
-    say('no connector can create accounts: people are provisioned first, then sign in');
+    sub('account creation', 'refused by every attached connector');
   }
 }
 
-/* --- 7b. what the sign-in screen looks like -------------------------------
+/* --- 11. what the sign-in screen looks like -------------------------------
  *
  * The screen a person meets before they are anybody is the product's, not
  * ZITADEL's. Without this it carries ZITADEL's mark and ZITADEL's palette, and
@@ -908,7 +976,7 @@ for (const p of products) {
     ? await api('POST', '/management/v1/policies/label', brand)
     : await api('PUT', '/management/v1/policies/label', brand);
   if (r.__status >= 400 && !unchanged(r)) {
-    say(`  ! could not set the sign-in branding: ${JSON.stringify(r).slice(0, 140)}`);
+    warn(`the sign-in branding was not applied: ${JSON.stringify(r).slice(0, 140)}`);
   } else {
     for (const [file, path] of [
       [process.env.BRANDING_LOGO_FILE || '/branding/logo.svg', '/assets/v1/org/policy/label/logo'],
@@ -917,13 +985,14 @@ for (const p of products) {
     ]) {
       const up = await uploadAsset(path, file);
       if (up === 'missing') continue;
-      if (up >= 400) say(`  ! could not upload ${file}: ${up}`);
+      if (up >= 400) warn(`${file} was not uploaded: HTTP ${up}`);
     }
     /* Nothing is visible until the draft is activated, which is the step that
      * is easy to leave out: every write above succeeds, the console shows the
      * new colours, and the sign-in screen keeps the old ones. */
     await api('POST', '/management/v1/policies/label/_activate', {});
-    say('sign-in screen branded');
+    head('Sign-in screen');
+    item('branding', 'applied');
   }
 
   /* One language, so the picker on the sign-in screen cannot change anything.
@@ -931,8 +1000,8 @@ for (const p of products) {
    * it - but with a single allowed language it has nothing to offer. */
   const langs = list(process.env.BRANDING_LANGUAGES, 'en');
   const lr = await api('PUT', '/admin/v1/restrictions', { allowedLanguages: { list: langs } });
-  if (lr.__status >= 400 && !unchanged(lr)) say(`  ! could not restrict languages: ${JSON.stringify(lr).slice(0, 120)}`);
-  else say(`  languages: ${langs.join(', ')}`);
+  if (lr.__status >= 400 && !unchanged(lr)) warn(`languages were not restricted: ${JSON.stringify(lr).slice(0, 120)}`);
+  else item('languages', langs.join(', '));
 
   /* The sign-in service CACHES all of this.
    *
@@ -943,34 +1012,33 @@ for (const p of products) {
    * every write above succeeds, the console shows the new values, and the
    * sign-in screen keeps the old ones, which reads as the change not having
    * worked. */
-  say('  changes to the sign-in screen need: docker compose restart zitadel-login');
+  item('takes effect after', 'docker compose restart zitadel-login');
 }
 
-/* --- 8. the first administrator ------------------------------------------- */
+/* --- 12. the first administrator ------------------------------------------ */
 {
   const user  = process.env.BOOTSTRAP_ADMIN_USERNAME || 'admin';
   const pw    = process.env.BOOTSTRAP_ADMIN_PASSWORD || '';
   const email = process.env.BOOTSTRAP_ADMIN_EMAIL || 'admin@example.com';
-  const found = await findUserId(user, email);
+  const found = await replaceIfUninitialised(await findUserId(user, email), `administrator '${user}'`);
   let id = found.id;
 
   if (!id) {
-    const body = {
-      userName: user,
-      profile: { firstName: 'Platform', lastName: 'Administrator' },
-      email: { email, isEmailVerified: true },
-    };
-    if (pw) body.password = pw;
-    const r = await api('POST', '/management/v1/users/human/_import', body);
-    id = r.userId;
-    if (!id) { console.error('FATAL: could not create admin:', JSON.stringify(r)); process.exit(1); }
-    say(`administrator '${user}' created - ${pw ? 'password login' : 'passwordless (no password ever set)'}`);
+    const r = await createHuman({
+      username: user, firstName: 'Platform', lastName: 'Administrator', email, password: pw,
+    });
+    id = r.id;
+    if (!id) { console.error('FATAL: could not create admin:', r.error); process.exit(1); }
+    head('People');
+    item(user, `created, administrator, ${pw ? 'password sign-in' : 'no password set'}`);
     await api('POST', `/management/v1/users/${id}/grants`,
       { projectId: PLATFORM, roleKeys: ['org-admin'] });
     await api('POST', '/management/v1/orgs/me/members', { userId: id, roles: ['ORG_OWNER'] });
-    say('  granted org-admin + ORG_OWNER');
+    sub('granted', 'org-admin, ORG_OWNER');
+    sub('address', email);
   } else {
-    say(`administrator '${user}' exists (matched on ${found.by})`);
+    head('People');
+    item(user, `exists, administrator, matched on ${found.by}`);
 
     /* THE ADDRESS IS RECONCILED, like everything else this file derives from
      * configuration.
@@ -986,13 +1054,18 @@ for (const p of products) {
      * Verified rather than merely set: an unverified address does not match. */
     const current = await api('GET', `/management/v1/users/${id}`);
     const held = current.user?.human?.email?.email || '';
-    if (held.toLowerCase() !== email.toLowerCase()) {
-      const r = await api('PUT', `/management/v1/users/${id}/email`,
-        { email, isEmailVerified: true });
+    const verified = Boolean(current.user?.human?.email?.isEmailVerified);
+    if (held.toLowerCase() !== email.toLowerCase() || !verified) {
+      /* v2, not `PUT /management/v1/users/{id}/email`. The v1 endpoint takes
+       * `isEmailVerified` and does not always act on it; v2 states the flag as
+       * `isVerified` and is the one that leaves the address matchable. */
+      const r = await api('POST', `/v2/users/${id}/email`, { email, isVerified: true });
       if (r.__status >= 400 && !unchanged(r)) {
-        say(`  ! could not set the address to ${email}: ${JSON.stringify(r).slice(0, 120)}`);
+        warn(`the address was not set to ${email}: ${JSON.stringify(r).slice(0, 120)}`);
+      } else if (held.toLowerCase() !== email.toLowerCase()) {
+        sub('address', `${held || '(none)'} -> ${email}`);
       } else {
-        say(`  address ${held || '(none)'} -> ${email}`);
+        sub('address', `${email}, verified`);
       }
     }
     /* GRANTED EVERY RUN, not only at creation.
@@ -1007,13 +1080,13 @@ for (const p of products) {
      * search on a run that changes nothing. */
     await grantRoles(id, PLATFORM, ['org-admin']);
     await api('POST', '/management/v1/orgs/me/members', { userId: id, roles: ['ORG_OWNER'] });
-    if (pw) say('  WARNING: BOOTSTRAP_ADMIN_PASSWORD still set. Unset it once a real admin exists.');
+    if (pw) warn('BOOTSTRAP_ADMIN_PASSWORD is still set. Unset it once a real administrator exists.');
   }
 
   /* Auto-linking is by EMAIL ADDRESS, so an address that cannot match is a
    * guaranteed second account.
    *
-   * The connector is configured with AUTO_LINKING_OPTION_EMAIL (§7): somebody
+   * The connector is configured with AUTO_LINKING_OPTION_EMAIL (§9): somebody
    * arriving through Microsoft is joined to the account already holding their
    * address. Leave the administrator on the example address and there is
    * nothing to join them to, so ZITADEL does the other thing it is configured
@@ -1022,19 +1095,17 @@ for (const p of products) {
    * signed in to, and a profile page reporting no permissions. It is worth
    * one loud paragraph here rather than an afternoon there. */
   if (process.env.SSO_ISSUER && email === 'admin@example.com') {
-    say('');
-    say('  ! BOOTSTRAP_ADMIN_EMAIL is still admin@example.com while SSO is on.');
-    say('    Sign-ins are matched to existing accounts by email address, and');
-    say('    nobody at the identity provider has that one - so the first person');
-    say('    to sign in gets a brand new account holding no roles, beside this');
-    say('    one holding all of them.');
-    say('    Fix: set BOOTSTRAP_ADMIN_EMAIL to the address that signs in, or add');
-    say('    that person to deploy/zitadel/users.json, then re-run this container.');
-    say('');
+    warn('BOOTSTRAP_ADMIN_EMAIL is still admin@example.com while SSO is configured.');
+    note('  A sign-in is matched to an existing account by address, and nobody');
+    note('  at the identity provider holds that one, so no sign-in reaches this');
+    note('  account.');
+    note('  Remedy: set BOOTSTRAP_ADMIN_EMAIL to the address that signs in, or');
+    note('  add that person to deploy/zitadel/users.json, then re-run this');
+    note('  container.');
   }
 }
 
-/* --- 9. additional users, from a file that IS the deployment mechanism -----
+/* --- 13. additional users, from a file that IS the deployment mechanism ----
  *
  * Add a person to deploy/zitadel/users.json, commit it, re-run this container.
  * That is the whole user-provisioning story, and it is reviewable in a pull
@@ -1066,28 +1137,84 @@ for (const p of products) {
  * match on, which is every machine account.
  */
 async function findUserId(username, email) {
-  let byEmail = '';
+  let byEmail = null;
   if (email) {
     const r = await api('POST', '/management/v1/users/_search',
       { queries: [{ emailQuery: { emailAddress: email, method: 'TEXT_QUERY_METHOD_EQUALS_IGNORE_CASE' } }] });
-    byEmail = (r.result || [])[0]?.id || '';
+    byEmail = (r.result || [])[0] || null;
   }
-  let byName = '';
+  let byName = null;
   if (username) {
     const r = await api('POST', '/management/v1/users/_search',
       { queries: [{ userNameQuery: { userName: username } }] });
-    byName = (r.result || [])[0]?.id || '';
+    byName = (r.result || [])[0] || null;
   }
 
   /* BOTH matched, and they are different people as far as ZITADEL is
    * concerned. Recorded rather than resolved: deleting somebody's account is
    * not a thing a seeder should decide to do on a re-run. */
-  if (byEmail && byName && byEmail !== byName) {
-    duplicates.push({ username, email, keep: byEmail, leftover: byName });
+  if (byEmail && byName && byEmail.id !== byName.id) {
+    duplicates.push({ username, email, keep: byEmail.id, leftover: byName.id });
   }
-  if (byEmail) return { id: byEmail, by: 'email' };
-  if (byName) return { id: byName, by: 'username' };
-  return { id: '', by: '' };
+  const hit = byEmail || byName;
+  if (!hit) return { id: '', by: '', state: '' };
+  return { id: hit.id, by: byEmail ? 'email' : 'username', state: hit.state || '' };
+}
+
+/* An account that was never initialised is not an account.
+ *
+ * ZITADEL puts a human in USER_STATE_INITIAL when it is created with neither a
+ * password nor a verified address, and that state is a DEAD END reachable only
+ * by the initialisation mail: the address cannot be corrected, cannot be
+ * verified, and a password cannot be set on it. Every one of those answers
+ * `User is not yet initialized`.
+ *
+ * It also cannot be signed in to. Auto-linking joins an arriving external
+ * identity to an existing user by VERIFIED address, so an uninitialised
+ * account matches nothing, the sign-in comes back Errors.User.NotFound, and
+ * the person is told they are not recognised while a console plainly shows
+ * them sitting there with the right address on them.
+ *
+ * Nothing is lost by replacing one. Nobody has ever signed in to it - they
+ * could not - and its grants are written again by the run that replaces it.
+ * The alternative is a stack that reports success forever and lets no one in.
+ */
+async function replaceIfUninitialised(found, label) {
+  if (!found.id || found.state !== 'USER_STATE_INITIAL') return found;
+  const r = await api('DELETE', `/v2/users/${found.id}`);
+  if (r.__status >= 400) {
+    warn(`${label} was never initialised, cannot sign in, and could not be replaced: ${JSON.stringify(r).slice(0, 120)}`);
+    return found;
+  }
+  uninitialised.push(label);
+  return { id: '', by: '', state: '' };
+}
+
+/* Creating a person, through the API that leaves them able to sign in.
+ *
+ * NOT /management/v1/users/human/_import, which is what this used to call.
+ * That endpoint accepts `isEmailVerified: true`, answers 200, and - when no
+ * password is supplied - stores the address UNVERIFIED and leaves the account
+ * in USER_STATE_INITIAL. No error, no warning, and the search result reads
+ * correctly enough that the seeder went on to report the person as able to
+ * sign in.
+ *
+ * With SSO configured this seeder deliberately sets no password, because the
+ * person signs in through the identity provider. So every human it made was
+ * uninitialised, every address was unverified, auto-linking matched none of
+ * them, and every SSO sign-in on a correctly configured stack came back
+ * Errors.User.NotFound. /v2/users/human honours the flag: ACTIVE, verified,
+ * with or without a password.
+ */
+async function createHuman({ username, firstName, lastName, email, password }) {
+  const body = {
+    username,
+    profile: { givenName: firstName, familyName: lastName },
+    email: { email, isVerified: true },
+  };
+  if (password) body.password = { password, changeRequired: false };
+  const r = await api('POST', '/v2/users/human', body);
+  return { id: r.userId || '', error: r.userId ? '' : JSON.stringify(r).slice(0, 200) };
 }
 
 async function grantRoles(userId, projectId, roleKeys) {
@@ -1108,46 +1235,47 @@ let doc = null;
 {
   const path = process.env.BOOTSTRAP_USERS_FILE || '/bootstrap-users.json';
   try { doc = JSON.parse(await fs.readFile(path, 'utf8')); }
-  catch { say('no users file - skipping additional users'); }
+  catch { item('users file', 'absent; no additional people'); }
 
   for (const u of (doc?.users || [])) {
     if (!u.username) continue;
-    const found = await findUserId(u.username, u.email);
+    const found = await replaceIfUninitialised(
+      await findUserId(u.username, u.email), `user ${u.username}`);
     let uid = found.id;
 
     if (!uid) {
-      const body = {
-        userName: u.username,
-        profile: { firstName: u.firstName || u.username, lastName: u.lastName || 'User' },
-        email: { email: u.email || `${u.username}@example.invalid`, isEmailVerified: true },
-      };
-      // A password here is for local and test use. With SSO configured the
-      // person signs in through Microsoft and never needs one.
-      if (u.password && !process.env.SSO_ISSUER) body.password = u.password;
-      const r = await api('POST', '/management/v1/users/human/_import', body);
-      uid = r.userId;
-      if (!uid) { say(`  ! could not create ${u.username}: ${JSON.stringify(r).slice(0, 160)}`); continue; }
-      say(`user ${u.username} created`);
+      const r = await createHuman({
+        username: u.username,
+        firstName: u.firstName || u.username,
+        lastName: u.lastName || 'User',
+        email: u.email || `${u.username}@example.invalid`,
+        // A password here is for local and test use. With SSO configured the
+        // person signs in through Microsoft and never needs one.
+        password: (u.password && !process.env.SSO_ISSUER) ? u.password : '',
+      });
+      uid = r.id;
+      if (!uid) { warn(`${u.username} was not created: ${r.error}`); continue; }
+      item(u.username, `created${u.email ? ', ' + u.email : ''}`);
     } else {
       // Which identifier matched, because it is the difference between "the
       // account this file made" and "the account Microsoft made for them".
-      say(`user ${u.username} exists (matched on ${found.by})`);
+      item(u.username, `exists, matched on ${found.by}`);
     }
 
     if (u.orgRoles?.length) {
       await grantRoles(uid, PLATFORM, u.orgRoles);
-      say(`  org roles: ${u.orgRoles.join(', ')}`);
+      sub('tenant-wide', u.orgRoles.join(', '));
     }
     for (const [product, roles] of Object.entries(u.products || {})) {
       const pid = projectOf.get(product);
-      if (!pid) { say(`  ! ${u.username}: product '${product}' is not in GATEWAY_PRODUCTS`); continue; }
+      if (!pid) { warn(`${u.username}: product '${product}' is not in GATEWAY_PRODUCTS`); continue; }
       await grantRoles(uid, pid, roles.map(r => `${product}:${r}`));
-      say(`  ${product}: ${roles.join(', ')}`);
+      sub(product, roles.join(', '));
     }
   }
 }
 
-/* --- 10. API users -------------------------------------------------------
+/* --- 14. API users --------------------------------------------------------
  *
  * Machine accounts for CI and scripts. They authenticate with
  * client_credentials - no browser, no password - and carry exactly the same
@@ -1169,16 +1297,18 @@ for (const a of (doc?.apiUsers || [])) {
       accessTokenType: 'ACCESS_TOKEN_TYPE_JWT',
     });
     uid = r.userId;
-    if (!uid) { say(`  ! could not create API user ${a.username}`); continue; }
+    if (!uid) { warn(`API user ${a.username} was not created`); continue; }
     created = true;
   }
   if (created || a.rotateSecret) {
     const sec = await api('PUT', `/management/v1/users/${uid}/secret`, {});
-    say(`API user ${a.username}`);
-    say(`  client_id     : ${sec.clientId}`);
-    say(`  client_secret : ${sec.clientSecret}   <-- shown once`);
+    item(a.username, 'API user, secret issued');
+    sub('client id', sec.clientId);
+    sub('client secret', sec.clientSecret);
+    note('  ZITADEL does not store this retrievably. It appears here once.');
   } else {
-    say(`API user ${a.username} exists (set "rotateSecret": true to reissue)`);
+    item(a.username, 'API user, exists');
+    sub('secret', 'unchanged; set "rotateSecret": true in users.json to reissue');
   }
   if (a.orgRoles?.length) await grantRoles(uid, PLATFORM, a.orgRoles);
   for (const [product, roles] of Object.entries(a.products || {})) {
@@ -1187,19 +1317,7 @@ for (const a of (doc?.apiUsers || [])) {
   }
 }
 
-console.log('\nbootstrap complete.');
-console.log(`  tenant   : ${TENANT} (${ORG_ID})`);
-console.log(`  products : ${products.join(', ') || 'none'}`);
-console.log(`  console  : ${process.env.ZITADEL_PUBLIC_URL || 'http://localhost:8090'}`);
-
-/* --- 11. say plainly what is not production-ready -------------------------
- *
- * The stack runs with no .env so a first run always works. The price is that
- * defaults are insecure, and an insecure default nobody mentions is how a
- * demo ends up on a network. This names each one, once, where it cannot be
- * missed.
- */
-/* --- 10a. people who can sign in and do nothing ---------------------------
+/* --- 15. people who can sign in and do nothing ----------------------------
  *
  * THE SYMPTOM THIS FILE EXISTS TO PREVENT, checked directly rather than
  * inferred. A human account with no project grant can sign in perfectly well
@@ -1236,26 +1354,25 @@ console.log(`  console  : ${process.env.ZITADEL_PUBLIC_URL || 'http://localhost:
 
   const ungranted = humans.filter(u => !granted.has(u.id));
   if (ungranted.length) {
-    console.log('\n  ' + '-'.repeat(66));
-    console.log('  THESE PEOPLE CAN SIGN IN AND HOLD NO ROLES:');
+    const lines = [];
     for (const u of ungranted.slice(0, 20)) {
-      console.log(`    ${u.userName}   ${u.human?.email?.email || '(no address)'}`);
+      lines.push(`  ${String(u.userName).padEnd(30)}${u.human?.email?.email || '(no address)'}`);
     }
-    if (ungranted.length > 20) console.log(`    ... and ${ungranted.length - 20} more`);
-    console.log('');
-    console.log('  Their screens will load and every permission will be denied. Usually');
-    console.log('  this is an account the identity provider created at somebody\'s first');
-    console.log('  sign-in, which this file has never been told about.');
-    console.log('');
-    console.log('  Fix: add each of them to deploy/zitadel/users.json WITH THE ADDRESS');
-    console.log('  THEY SIGN IN WITH - that address is what matches them to the account');
-    console.log('  that already exists - then re-run this container. For the');
-    console.log('  administrator, BOOTSTRAP_ADMIN_EMAIL is the same thing.');
-    console.log('  ' + '-'.repeat(66));
+    if (ungranted.length > 20) lines.push(`  ... and ${ungranted.length - 20} more`);
+    lines.push('');
+    lines.push('Every screen loads for these accounts and every permission is denied.');
+    lines.push('Usually the account was created by the identity provider at a first');
+    lines.push('sign-in, and this file has never been told about it.');
+    lines.push('');
+    lines.push('Remedy: add each of them to deploy/zitadel/users.json under the');
+    lines.push('address that signs in - that address is what matches them to the');
+    lines.push('account that already exists - then re-run this container. For the');
+    lines.push('administrator, BOOTSTRAP_ADMIN_EMAIL is the same thing.');
+    panel('ACCOUNTS THAT CAN SIGN IN AND HOLD NO ROLES', lines);
   }
 }
 
-/* --- 10a2. can ANYBODY actually sign in? ----------------------------------
+/* --- 16. can ANYBODY actually sign in? ------------------------------------
  *
  * THE CHECK THAT STOPS THIS FILE PRODUCING AN UNUSABLE STACK.
  *
@@ -1285,25 +1402,42 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
    * These are the placeholder domains this file and its examples emit; a real
    * one that happens to be unroutable is beyond what can be checked here. */
   const placeholder = /@(example\.(com|org|net|invalid)|localhost|.*\.localhost)$/i;
-  const matchable = (all.result || [])
-    .filter(u => u.human?.email?.email && !placeholder.test(u.human.email.email));
+  /* THREE conditions, and holding an address is only the first of them.
+   *
+   * Auto-linking matches an arriving external identity against an address that
+   * is VERIFIED, on an account that is ACTIVE. An account in
+   * USER_STATE_INITIAL, or one carrying an address ZITADEL has not marked
+   * verified, is matched by nothing - so listing it here as a way in is a
+   * promise the sign-in screen then breaks. That is precisely what this
+   * listing used to do, and it is why "the seeder says this address can sign
+   * in" and "the sign-in says the account is not recognised" were both true at
+   * once. */
+  const matchable = (all.result || []).filter(u =>
+    u.human?.email?.email &&
+    !placeholder.test(u.human.email.email) &&
+    u.human.email.isEmailVerified &&
+    u.state === 'USER_STATE_ACTIVE');
   const signInAddresses = matchable.map(u => u.human.email.email);
 
   if (signInAddresses.length === 0 && !passwordLoginOn) {
     console.error('');
     console.error('FATAL: this would seed a stack that nobody can sign in to.');
     console.error('');
-    console.error(`  SSO is configured (${process.env.SSO_ISSUER}) and password sign-in is off,`);
-    console.error('  so the only way in is an account whose e-mail address the identity');
-    console.error('  provider will assert. No user here has one - every address is a');
-    console.error('  placeholder, which nobody can sign in with.');
+    console.error(`  identity provider   ${process.env.SSO_ISSUER}`);
+    console.error('  password sign-in    off');
+    console.error('  accounts that can be matched to a sign-in    0');
+    console.error('');
+    console.error('  The only way in is an account holding a verified address that the');
+    console.error('  identity provider asserts. No account here holds one: every address');
+    console.error('  is a placeholder, or is unverified, or sits on an account that was');
+    console.error('  never initialised.');
     console.error('');
     console.error('  A sign-in would reach the provider, authenticate correctly, and come');
     console.error('  back Errors.User.NotFound, because accounts are provisioned here and');
     console.error('  are deliberately never created by signing in.');
     console.error('');
-    console.error('  Fix, then re-run this container:');
-    console.error('    BOOTSTRAP_ADMIN_EMAIL=<the address you sign in with>');
+    console.error('  Remedy, then re-run this container:');
+    console.error('    BOOTSTRAP_ADMIN_EMAIL=<the address that signs in>');
     console.error('  or add that person to deploy/zitadel/users.json with their address.');
     console.error('  To keep the password box instead: SSO_ALLOW_PASSWORD_LOGIN=true');
     console.error('');
@@ -1314,24 +1448,88 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
    * closed to, and this is the answer to "why can this person not sign in"
    * without anybody having to open a console. */
   const linkOn = (process.env.SSO_LINK_ON || 'email').toLowerCase() === 'username' ? 'username' : 'address';
-  say('');
-  say(`${signInAddresses.length} account(s) can sign in through ${process.env.SSO_DISPLAY_NAME || 'Microsoft'}, matched on ${linkOn}:`);
+  head(`Accounts that can sign in through ${process.env.SSO_DISPLAY_NAME || 'Microsoft'}`);
+  item('matched on', linkOn === 'username' ? 'the ZITADEL username' : 'a verified e-mail address');
+  item('count', String(signInAddresses.length));
+  note();
+  note(`${'USERNAME'.padEnd(30)}ADDRESS`);
   /* Username AND address, because the failure this is meant to catch is that
    * the provider asserts one and this directory holds the other. Printing
    * only the matched field hides exactly the mismatch worth seeing. */
   for (const u of matchable.slice(0, 20)) {
-    say(`    ${String(u.userName).padEnd(28)} ${u.human?.email?.email || ''}`);
+    note(`${String(u.userName).padEnd(30)}${u.human?.email?.email || ''}`);
   }
-  if (matchable.length > 20) say(`    ... and ${matchable.length - 20} more`);
-  say('');
-  say('  A sign-in is refused unless the provider asserts one of these exactly.');
-  say('  If it does and the sign-in still fails, the provider is asserting a');
-  say('  different value: try SSO_LINK_ON=username, or correct the address here.');
-  if (passwordLoginOn) say('  (password sign-in is also on)');
-  say('');
+  if (matchable.length > 20) note(`... and ${matchable.length - 20} more`);
+  note();
+  note('A sign-in is refused unless the provider asserts one of these exactly.');
+  note('The section below reports what it did assert.');
+  if (passwordLoginOn) item('password sign-in', 'also on');
+
+/* --- 17. what the directory actually asserted -----------------------------
+ *
+ * The one fact nobody could get at, and the reason a sign-in failure here used
+ * to be diagnosed by redeploying.
+ *
+ * A refused sign-in says `Errors.User.NotFound`, which is also what a genuinely
+ * unknown person gets, and the screen names no address. So an administrator
+ * looking at a correctly provisioned account and a person who cannot get in has
+ * nothing to compare: the directory asserted SOMETHING, it matched nothing, and
+ * neither string is visible anywhere.
+ *
+ * ZITADEL records it. Every attempt writes an `idpintent.succeeded` event -
+ * succeeded meaning the provider authenticated the person, not that the sign-in
+ * worked - carrying the provider's own document about them. That is the string
+ * auto-linking was given, so printing it beside the addresses this stack holds
+ * turns "not recognised" into a diff.
+ *
+ * Read-only, and the last few. This is a report, not a log: what is wanted is
+ * the most recent handful of distinct people, not an audit trail.
+ */
+if (process.env.SSO_ISSUER) {
+  const ev = await api('POST', '/admin/v1/events/_search',
+    { limit: 50, asc: false, eventTypes: ['idpintent.succeeded'] });
+
+  /* Newest per person. Somebody who tries four times is one line. */
+  const seen = new Map();
+  for (const e of (ev.events || [])) {
+    const key = e.payload?.idpUserId || e.payload?.idpUserName;
+    if (!key || seen.has(key)) continue;
+    let raw = {};
+    try { raw = JSON.parse(Buffer.from(e.payload.idpUser || '', 'base64').toString('utf8')); } catch { /* not fatal */ }
+    seen.set(key, { when: (e.creationDate || '').replace('T', ' ').slice(0, 19), raw,
+      name: e.payload.idpUserName || '' });
+  }
+
+  if (seen.size) {
+    /* WHICH FIELD becomes the address is the connector's rule, not ours.
+     * ZITADEL's Microsoft connector reads Graph: the `mail` attribute, and the
+     * user principal name when the directory holds no mail on that account. A
+     * generic OIDC connector reads the `email` claim and has no fallback. */
+    const asserted = (r) => r.mail || r.email || r.userPrincipalName || r.preferred_username || '';
+    const held = new Map(matchable.map(u => [String(u.human.email.email).toLowerCase(), u.userName]));
+
+    head(`Sign-in attempts through ${process.env.SSO_DISPLAY_NAME || 'Microsoft'}`);
+    item('recorded', String(seen.size));
+    note();
+    note(`${'WHEN'.padEnd(21)}${'ASSERTED ADDRESS'.padEnd(36)}MATCHED ACCOUNT`);
+    for (const a of [...seen.values()].slice(0, 10)) {
+      const addr = asserted(a.raw) || a.name;
+      const who = held.get(addr.toLowerCase());
+      note(`${a.when.padEnd(21)}${addr.padEnd(36)}${who || 'none'}`);
+    }
+    note();
+    note("The asserted address is the directory's own value for that person: the");
+    note('Graph mail attribute, or the user principal name when the account has');
+    note('no mail. A sign-in is refused when no active account holds it as a');
+    note('verified address.');
+    note();
+    note('Remedy for an unmatched address: correct it in .env or in');
+    note('deploy/zitadel/users.json, then re-run this container.');
+  }
+}
 }
 
-/* --- 10b. two accounts for one person -------------------------------------
+/* --- 18. two accounts for one person --------------------------------------
  *
  * Said here, at the end, in full, because it explains a symptom that otherwise
  * reads as the product being broken: signing in and finding no roles at all,
@@ -1343,27 +1541,33 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
  * somebody removes it.
  */
 if (duplicates.length) {
-  console.log('\n  ' + '-'.repeat(66));
-  console.log('  TWO ACCOUNTS FOR THE SAME PERSON:');
+  const lines = [];
   for (const d of duplicates) {
-    console.log(`    ${d.email}`);
-    console.log(`      roles granted to the account holding that address  (${d.keep})`);
-    console.log(`      a second account named '${d.username}' also exists (${d.leftover})`);
+    lines.push(`  ${d.email}`);
+    lines.push(`    roles granted to the account holding that address  (${d.keep})`);
+    lines.push(`    a second account named '${d.username}' also exists (${d.leftover})`);
   }
-  console.log('');
-  console.log('  This is what a sign-in through the identity provider leaves behind when');
-  console.log('  the account seeded for that person carried a different address: ZITADEL');
-  console.log('  matches on the address, finds nothing, and creates one. The roles are on');
-  console.log('  the account that signs in, so nobody is locked out.');
-  console.log('');
-  console.log('  The leftover cannot sign in - it has no identity at the provider, and');
-  console.log('  password sign-in is off - so it is safe to delete, and this file will not');
-  console.log('  do it for you. In the console: Users, open it, Delete. Or re-create the');
-  console.log('  stack from empty with `docker compose down -v`, which discards the');
-  console.log('  database and every account in it.');
-  console.log('  ' + '-'.repeat(66));
+  lines.push('');
+  lines.push('This is what a sign-in through the identity provider leaves behind when');
+  lines.push('the account seeded for that person carried a different address: ZITADEL');
+  lines.push('matches on the address, finds nothing, and creates one. The roles are');
+  lines.push('on the account that signs in, so nobody is locked out.');
+  lines.push('');
+  lines.push('The leftover cannot sign in: it has no identity at the provider, and');
+  lines.push('password sign-in is off. It is safe to delete, and this file does not');
+  lines.push('delete accounts it did not create. In the console: Users, open it,');
+  lines.push('Delete. Or re-create the stack from empty with `docker compose down -v`,');
+  lines.push('which discards the database and every account in it.');
+  panel('TWO ACCOUNTS FOR THE SAME PERSON', lines);
 }
 
+/* --- 19. state plainly what is not production-ready -----------------------
+ *
+ * The stack runs with no .env so a first run always works. The price is that
+ * defaults are insecure, and an insecure default nobody mentions is how a
+ * demo ends up on a network. This names each one, once, where it cannot be
+ * missed.
+ */
 {
   const todo = [];
   if (process.env.STACK_POSTGRES_PASSWORD_SET !== 'yes')
@@ -1376,11 +1580,22 @@ if (duplicates.length) {
     todo.push(`the '${process.env.BOOTSTRAP_ADMIN_USERNAME || 'admin'}' account has a password from .env; disable it once a real admin exists`);
 
   if (todo.length) {
-    console.log('\n  ' + '-'.repeat(66));
-    console.log('  NOT READY FOR ANYTHING OTHER PEOPLE CAN REACH:');
-    for (const t of todo) console.log(`    - ${t}`);
-    console.log('  Fix: cp .env.example .env, fill it in, then');
-    console.log('       docker compose up -d && docker compose run --rm zitadel-init');
-    console.log('  ' + '-'.repeat(66));
+    panel('NOT READY FOR ANYTHING OTHER PEOPLE CAN REACH', [
+      ...todo.map(t => `  - ${t}`),
+      '',
+      'Remedy: cp .env.example .env, fill it in, then',
+      '        docker compose up -d && docker compose run --rm zitadel-init',
+    ]);
   }
+}
+
+head('Summary');
+item('result', 'bootstrap complete');
+item('tenant', `${TENANT} (${ORG_ID})`);
+item('products', products.join(', ') || 'none');
+item('admin console', process.env.ZITADEL_PUBLIC_URL || 'http://localhost:8090');
+item('application', process.env.WEB_PUBLIC_URL || 'http://localhost:8000');
+if (uninitialised.length) {
+  item('accounts replaced', String(uninitialised.length));
+  for (const label of uninitialised) sub(label, 'was never initialised and could not sign in');
 }

@@ -35,6 +35,8 @@ A cloud-native platform that continuously discovers software packages published 
 | 22 | [Promotion](22-promotion.md) | Lab to production: the promoter plugins, native JFrog relocation, and why it is a plugin rather than a branch |
 | 23 | [Custom Standards Compliance](23-compliance.md) | Does this release follow our own Kubernetes and CNF standards: policy packs, chart rendering, determinacy, per-resource findings, the vendor report |
 | 24 | [Identity and Access](24-identity-and-access.md) | Who is this and may they do it: ZITADEL for SSO and tokens, Cerbos for permissions, one compose file that seeds it all on day 0 |
+| 25 | [ZITADEL Login V2 and the SSO redirect](25-zitadel-login-v2-and-sso-redirect.md) | Where the sign-in screens actually live, the SPA's OIDC flow, and what a 401 means |
+| 26 | [SSO account linking](26-sso-account-linking.md) | Why a correctly provisioned administrator was refused, how the address a directory asserts is read back, and the mock that reproduces it |
 
 ## Reading order
 

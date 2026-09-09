@@ -1,0 +1,55 @@
+{
+  "tenantId": "11111111-2222-3333-4444-555555555555",
+  "clientId": "mock-entra-app",
+  "clientSecret": "aBc8Q~mock.secret_value-0123456789",
+  "people": [
+    {
+      "id": "mailbox",
+      "label": "Has a mailbox. Graph returns mail.",
+      "graph": {
+        "id": "00000000-0000-0000-0000-0000000000a1",
+        "displayName": "Alex Hart",
+        "givenName": "Alex",
+        "surname": "Hart",
+        "mail": "alex.hart@contoso.com",
+        "userPrincipalName": "ah1234@contoso.com"
+      }
+    },
+    {
+      "id": "no-mailbox",
+      "label": "No mailbox. Graph returns mail: null.",
+      "graph": {
+        "id": "00000000-0000-0000-0000-0000000000a2",
+        "displayName": "Blair Nunn",
+        "givenName": "Blair",
+        "surname": "Nunn",
+        "mail": null,
+        "userPrincipalName": "bn5678@contoso.com"
+      }
+    },
+    {
+      "id": "upn-elsewhere",
+      "label": "Mailbox domain differs from the UPN domain.",
+      "graph": {
+        "id": "00000000-0000-0000-0000-0000000000a3",
+        "displayName": "Casey Doyle",
+        "givenName": "Casey",
+        "surname": "Doyle",
+        "mail": "casey.doyle@contoso.com",
+        "userPrincipalName": "cd9012@intl.contoso.com"
+      }
+    },
+    {
+      "id": "stranger",
+      "label": "Not provisioned in this gateway at all.",
+      "graph": {
+        "id": "00000000-0000-0000-0000-0000000000a4",
+        "displayName": "Dee Stranger",
+        "givenName": "Dee",
+        "surname": "Stranger",
+        "mail": "dee.stranger@contoso.com",
+        "userPrincipalName": "ds3456@contoso.com"
+      }
+    }
+  ]
+}

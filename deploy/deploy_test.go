@@ -109,3 +109,44 @@ func TestScriptsAreLFAndExecutable(t *testing.T) {
 		}
 	}
 }
+
+// TestSeederDoesNotImportHumans guards the fault that made every SSO sign-in on
+// a correctly configured stack come back "this account is not recognised".
+//
+// `POST /management/v1/users/human/_import` accepts `isEmailVerified: true`,
+// answers 200, and - when the request carries no password - stores the address
+// UNVERIFIED and leaves the account in USER_STATE_INITIAL. Nothing says so. The
+// seeder deliberately sets no password when SSO is configured, because the
+// person signs in through the identity provider, so every human it created was
+// uninitialised with an unverified address.
+//
+// ZITADEL auto-links an arriving external identity to an existing user by
+// VERIFIED address on an ACTIVE account. None of those accounts qualified, every
+// sign-in was refused as Errors.User.NotFound, and the seeder's own report
+// listed the address as a way in. USER_STATE_INITIAL is also a dead end: the
+// address cannot be corrected, cannot be verified, and no password can be set
+// on it - all three answer `User is not yet initialized`.
+//
+// `POST /v2/users/human` honours the flag. This test is here because the two
+// endpoints look interchangeable, differ in nothing a reviewer can see, and the
+// failure they produce points at the identity provider rather than at the line
+// that caused it.
+func TestSeederDoesNotImportHumans(t *testing.T) {
+	body, err := os.ReadFile("zitadel/bootstrap.mjs")
+	if err != nil {
+		t.Fatalf("bootstrap.mjs: %v", err)
+	}
+	// The quoted form, so the comment explaining why it is gone does not
+	// trip its own test.
+	if bytes.Contains(body, []byte("'/management/v1/users/human/_import'")) {
+		t.Error("deploy/zitadel/bootstrap.mjs calls /management/v1/users/human/_import. " +
+			"That endpoint silently ignores isEmailVerified when no password is sent, " +
+			"leaving the account in USER_STATE_INITIAL with an unverified address, which " +
+			"no SSO sign-in can ever be matched to. Use POST /v2/users/human.")
+	}
+	if !bytes.Contains(body, []byte("'/v2/users/human'")) {
+		t.Error("deploy/zitadel/bootstrap.mjs no longer creates people through " +
+			"POST /v2/users/human, which is the only create path that leaves an " +
+			"account active with a verified address and no password.")
+	}
+}

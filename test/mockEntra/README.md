@@ -20,12 +20,12 @@ here has nothing to go on. This makes the string controllable.
 ## Running it
 
 ```sh
-./deploy/mock-entra/mkcerts.sh
+./test/mockEntra/mkcerts.sh
 docker compose -f docker-compose.yml -f test/mockEntra/docker-compose.mock-entra.yml up -d --force-recreate
 ```
 
 `mkcerts.sh` needs `openssl` and nothing else. It writes an authority and a
-certificate into `deploy/mock-entra/certs/`, which is not tracked: a private key
+certificate into `test/mockEntra/certs/`, which is not tracked: a private key
 that ships with a project is a private key that ends up trusted somewhere it was
 never meant to be.
 
@@ -48,7 +48,7 @@ has no `mail` attribute, ZITADEL silently falls back to the user principal name,
 and an administrator who provisioned the person under their mailbox address gets
 a refusal that names nothing.
 
-`deploy/mock-entra/directory.json` holds the people. Four of them cover the
+`test/mockEntra/directory.json` holds the people. Four of them cover the
 outcomes that differ:
 
 | id | asserts | expected |

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dress the development database with the two things a local run cannot produce.
 
-Everything else here is real: dev/fakeregistry serves the release trees, the
+Everything else here is real: test/cmd/fakeregistry serves the release trees, the
 Coordinator discovers them, and a Worker moves the bytes. Two facts have no
 local source, so they are written here rather than faked in the interface:
 
@@ -17,7 +17,7 @@ local source, so they are written here rather than faked in the interface:
 
 Run it once discovery and the transfers have settled:
 
-    python3 dev/seed/dress.py dev/swgw.db
+    python3 test/seed/dress.py dev/swgw.db
 """
 import hashlib, json, random, sqlite3, sys
 from datetime import datetime, timedelta, timezone

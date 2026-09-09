@@ -8,8 +8,8 @@
 //
 // This wraps test/fakeregistry - the same in-process OCI Distribution server
 // the suite runs against - in a TLS listener per vendor hostname, seeded with
-// the release trees dev/seed/seed.py records in the database. One binary, no
-// Docker, and the products in dev/products keep their real-looking names.
+// the release trees test/seed record in the database. One binary, no Docker,
+// and the products in test/products.example keep their real-looking names.
 package main
 
 import (
@@ -56,7 +56,7 @@ type release struct {
 // discovery ran again. Which is thirty minutes away by default, so in practice
 // the estate was simply broken until somebody re-seeded it.
 //
-// A day is stable enough that restarting the registry - which dev/seed/up.sh
+// A day is stable enough that restarting the registry - which test/seed/up.sh
 // itself does, to switch the declared sizes - leaves the database valid, and
 // coarse enough that nothing on screen reads differently.
 func (r release) published() time.Time {
@@ -69,7 +69,7 @@ type component struct {
 	layers int
 }
 
-// catalogue mirrors dev/seed/seed.py. The two are seeded together, so a release
+// catalogue mirrors test/seed/seed.py. The two are seeded together, so a release
 // the database lists is a release this serves.
 var catalogue = map[string][]release{
 	"mavenir/converged-core": {
@@ -250,7 +250,7 @@ var hosts = []struct {
 // once the bytes have moved. Every page then agrees on what a release weighs,
 // including the release comparison, which reads the registry live rather than
 // the database. A transfer started after that WILL fail - restart without the
-// flag first. dev/seed/up.sh does both halves in order.
+// flag first. test/seed/up.sh does both halves in order.
 var inflate = flag.Bool("inflate", false,
 	"declare realistic layer sizes without storing them (run only after transfers have settled)")
 
@@ -387,7 +387,7 @@ func seed(reg *fakeregistry.Registry, repos []string) {
 // The total is derived from the component NAME rather than randomly, so the same
 // component weighs the same in every release: a User Plane Function that is
 // 3.4 GB in one release and 0.9 GB in the next would make every comparison read
-// as a rebuild. dev/seed/dress.py derives the database's sizes the same way, so
+// as a rebuild. test/seed/dress.py derives the database's sizes the same way, so
 // the two agree without either reading the other.
 func layerWeights(comp component) []int64 {
 	const gb = 1 << 30

@@ -1,8 +1,8 @@
 # A local deployment with data in it
 
 ```sh
-dev/seed/up.sh          # fresh database, discovery, transfers, dressing
-dev/seed/up.sh --keep   # leave the existing database alone
+test/seed/up.sh          # fresh database, discovery, transfers, dressing
+test/seed/up.sh --keep   # leave the existing database alone
 cd web && pnpm dev      # http://localhost:5173
 ```
 
@@ -11,7 +11,7 @@ the Coordinator and one Worker.
 
 ## What is real
 
-Almost all of it. `dev/fakeregistry` wraps `test/fakeregistry` - the same
+Almost all of it. `test/cmd/fakeregistry` wraps `test/fakeregistry` - the same
 in-process OCI Distribution server the test suite runs against - in a TLS
 listener per vendor hostname, seeded with release trees. From there the ordinary
 system runs: discovery walks the tag lists and records the artifact trees, the
@@ -53,4 +53,4 @@ will fail. Re-run `up.sh` to move bytes again.
 | `up.sh` | Brings the whole thing up, in order, and waits for each stage |
 | `dress.py` | Writes scanner findings, signatures and display sizes |
 | `../fakeregistry/` | The vendor and destination registries |
-| `../products.example/` | The three products, copied into `dev/products/` |
+| `../products.example/` | The products the estate is built from, read in place through SWGW_PRODUCTSDIR |

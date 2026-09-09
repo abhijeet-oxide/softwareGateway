@@ -411,6 +411,13 @@ services:
       # was one startup line saying "DEVELOPMENT ONLY" beside the Postgres URL
       # it had ignored. `docker compose down` then took the data with it.
       # A mismatch is refused at startup now rather than defaulted around.
+      # THE SAME CONFIGURATION FILE `task run` uses, mounted below, with only
+      # what genuinely differs in a container stated here. configDir points at
+      # ./data on a laptop and at the mount root in an image; the credentials
+      # are mounted straight at their in-container path, so secretsDir is the
+      # derived one again.
+      SWGW_CONFIGDIR: /etc/softwaregateway
+      SWGW_SECRETSDIR: /etc/softwaregateway/secrets
       SWGW_DATABASE_DRIVER: postgres
       SWGW_DATABASE_DSN: postgres://swgw:${POSTGRES_PASSWORD:-INSECURE-local-dev-password}@postgres:5432/swgw?sslmode=disable
       # The issuer must be the PUBLIC url: it is what ZITADEL stamps into the
@@ -430,6 +437,7 @@ services:
     # controller ships no CORS middleware) AND lets this service scale: a fixed
     # host port would collide the moment CONTROLLER_REPLICAS > 1.
     volumes:
+      - ${DATA_DIR:-./data}/config.yaml:/etc/softwaregateway/config.yaml:ro
       - ${DATA_DIR:-./data}/products:/etc/softwaregateway/products:ro
       # REGISTRY CREDENTIALS, in the layout a projected Kubernetes Secret
       # produces: <secretName>/<key>, one file per key. The same path, the same
@@ -496,6 +504,10 @@ services:
         condition: service_completed_successfully
     environment:
       SWGW_WORKER_COORDINATORENDPOINT: http://controller:8080
+      # As on the controller: one configuration file, two paths that a
+      # container places differently.
+      SWGW_CONFIGDIR: /etc/softwaregateway
+      SWGW_SECRETSDIR: /etc/softwaregateway/secrets
       # WHAT THIS WORKER IS CALLED in the fleet. Docker and Podman set a
       # container's hostname to its ID, so without this the fleet list reads
       # `16b81c38de5c` and nothing on the screen says which container that is.
@@ -511,6 +523,7 @@ services:
     # A worker must see the SAME product configuration as the controller, or it
     # leases jobs it cannot execute and says so rather than failing quietly.
     volumes:
+      - ${DATA_DIR:-./data}/config.yaml:/etc/softwaregateway/config.yaml:ro
       - ${DATA_DIR:-./data}/products:/etc/softwaregateway/products:ro
       # REGISTRY CREDENTIALS, in the layout a projected Kubernetes Secret
       # produces: <secretName>/<key>, one file per key. The same path, the same

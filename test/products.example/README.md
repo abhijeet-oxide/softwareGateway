@@ -1,12 +1,15 @@
-# Example product configuration
+# Example products
 
-Three vendor products pointed at `dev/fakeregistry`, which serves their release
-trees locally over TLS. `dev/seed/up.sh` copies these into `dev/products/` when
-that directory is empty, so a fresh clone gets a working estate without anybody
-writing YAML first.
+Three vendor products pointed at `test/cmd/fakeregistry`, which serves their
+release trees locally over TLS. `test/seed/up.sh` reads them IN PLACE, through
+`SWGW_PRODUCTSDIR`, so a seeded demo estate never writes into `data/products` -
+the directory that describes what a real deployment replicates.
 
-`dev/products/` itself is gitignored: it is where a developer's own
-configuration goes, and a demo file overwriting it would be a surprise.
+They are also the richer half of `task validate`: credentials, promotion
+targets and compliance packs that the shipped `data/products` samples
+deliberately leave out, because a validator only ever exercised against the
+simple case is a validator nobody has tested.
+
 
 | Product | Source | Releases |
 |---|---|---|

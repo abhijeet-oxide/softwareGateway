@@ -578,7 +578,7 @@ Neither half is a copy of the other, and neither can drift, because neither is
 written twice.
 
 This is worth doing for its own sake, before Quay enters it.
-`dev/products.example/nokia-cmm.yaml` writes
+`test/products.example/nokia-cmm.yaml` writes
 `artifactory.internal.example.com:9444` three times, `credentialsRef:
 internal-registry` twice, and an `xrayEndpoint` that restates the registry host
 it is already sitting next to. Every product document in the estate repeats the
@@ -730,7 +730,7 @@ as every registry credential, from `<secretsDir>/<name>/<key>`, defaulting to th
   `transferctl config check` already prints.
 - `transferctl config migrate <file>` writes the `v1alpha2` form to stdout, so an
   operator converts a document by reading the diff rather than by hand.
-- The example products under `dev/products.example/` are converted as part of
+- The example products under `test/products.example/` are converted as part of
   the change, and are the readable proof the schema works on the four shapes
   already there.
 
@@ -793,7 +793,7 @@ types rather than maintained.
 validation, `config check` and `config migrate`, and the four example products
 converted. No runtime behaviour changes: the loader produces the same resolved
 model it does today. *This is the whole of the simplification ask, and it is
-reviewable as a diff of `dev/products.example/`.*
+reviewable as a diff of `test/products.example/`.*
 
 **Step 2 — Type-owned config blocks.** `jfrog:` and `quay:` blocks, each
 validated by its own plugin; the ~25 keys leave the core schema. Depends on 1.

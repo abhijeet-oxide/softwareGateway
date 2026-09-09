@@ -258,7 +258,7 @@ task dev:worker                       # second terminal
 go run ./cmd/transferctl health --endpoint http://localhost:8080
 ```
 
-The identical configuration loader reads `./dev/products/` and `./dev/secrets/` as plain directories ([02](02-configuration.md) §9) - no cluster, no ConfigMaps, no mocking of client-go. That is the payoff for choosing volume mounts over the Kubernetes API ([02](02-configuration.md) §3), and it is a large one for developer experience.
+The identical configuration loader reads `./data/products/` and `./data/secrets/local/` as plain directories ([02](02-configuration.md) §9) - no cluster, no ConfigMaps, no mocking of client-go. That is the payoff for choosing volume mounts over the Kubernetes API ([02](02-configuration.md) §3), and it is a large one for developer experience.
 
 ### 5.2 With PostgreSQL
 
@@ -308,7 +308,7 @@ The task runner is [Task](https://taskfile.dev) (`Taskfile.yml`), not make. `tas
 | `task ci` | Exactly what the pipeline runs |
 | `task dev:coordinator` / `dev:worker` | Run against SQLite |
 | `task dev:registry` | Local registry seeded with a multi-arch test package |
-| `task validate` | Validate `./dev/products` |
+| `task validate` | Validate `./data/products` |
 
 > **Decision - Task over make.**
 >

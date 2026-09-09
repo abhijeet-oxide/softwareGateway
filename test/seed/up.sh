@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 # Bring up a complete local deployment with data in it.
 #
-#   dev/seed/up.sh            fresh database, discovery, transfers, dressing
-#   dev/seed/up.sh --keep     leave the existing database alone
-#   dev/seed/up.sh --inflate  finish with registries that DECLARE realistic sizes
+#   test/seed/up.sh            fresh database, discovery, transfers, dressing
+#   test/seed/up.sh --keep     leave the existing database alone
+#   test/seed/up.sh --inflate  finish with registries that DECLARE realistic sizes
 #
 # --inflate leaves the estate unable to serve anything the database recorded.
 # See the comment on the restart at the bottom of this script.
 #
 # Three processes: the fake vendor registries, the Coordinator and one Worker.
-# Everything they need is in dev/ - no Docker, no Postgres, no cluster.
+# No Docker, no Postgres, no cluster; the only thing written is dev/swgw.db.
+#
+# It reads data/config.yaml, the same file compose and Flux read, and overrides
+# exactly two paths: the products and the secrets come from test/, so a seeded
+# demo estate never writes into the directory a deployment is described by.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$PWD
@@ -24,19 +28,12 @@ for h in registry.mavenir.example.com registry.ericsson.example.com \
   grep -q "$h" /etc/hosts || echo "127.0.0.1 $h" >> /etc/hosts
 done
 
-# dev/products/ is gitignored - it is where a developer's own product
-# configuration lives - so the demo estate ships beside it and is copied in only
-# when there is nothing there to overwrite.
-if [ -z "$(ls -A dev/products 2>/dev/null)" ]; then
-  echo "==> installing the example products"
-  mkdir -p dev/products
-  cp dev/products.example/*.yaml dev/products/
-fi
+mkdir -p dev
 
 echo "==> building"
 go build -o "$BIN/coordinator" ./cmd/coordinator
 go build -o "$BIN/worker"      ./cmd/worker
-go build -o "$BIN/fakeregistry" ./dev/fakeregistry
+go build -o "$BIN/fakeregistry" ./test/cmd/fakeregistry
 
 echo "==> stopping anything already running"
 pkill -9 -x coordinator  2>/dev/null || true
@@ -51,7 +48,10 @@ sleep 1
 run() {
   name=$1; shift
   env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy \
-      NO_PROXY='*' no_proxy='*' setsid nohup "$@" > "/tmp/$name.log" 2>&1 < /dev/null &
+      NO_PROXY='*' no_proxy='*' \
+      SWGW_PRODUCTSDIR="$ROOT/test/products.example" \
+      SWGW_SECRETSDIR="$ROOT/test/secrets" \
+      setsid nohup "$@" > "/tmp/$name.log" 2>&1 < /dev/null &
 }
 
 echo "==> starting registries"
@@ -59,9 +59,9 @@ run fakeregistry "$BIN/fakeregistry"
 sleep 2
 
 echo "==> starting coordinator and worker"
-run coordinator "$BIN/coordinator" --config ./dev/config.yaml
+run coordinator "$BIN/coordinator" --config ./data/config.yaml
 sleep 6
-run worker "$BIN/worker" --config ./dev/config.yaml
+run worker "$BIN/worker" --config ./data/config.yaml
 
 echo "==> waiting for discovery"
 for _ in $(seq 1 40); do
@@ -99,7 +99,7 @@ c=sqlite3.connect('dev/swgw.db')
 print('   transfers', dict(c.execute('select state,count(*) from transfers group by state')))"
 
 echo "==> dressing in scanner findings and signatures"
-python3 dev/seed/dress.py dev/swgw.db
+python3 test/seed/dress.py dev/swgw.db
 
 # THE INFLATE RESTART IS OPT-IN, and this is why.
 #
@@ -107,7 +107,7 @@ python3 dev/seed/dress.py dev/swgw.db
 # without this it reports the kilobytes that actually moved while every other
 # page reports the scaled size. Restarting with -inflate makes the registry
 # declare the sizes dress.py wrote, and both derive them from the component
-# name, so they agree. See the comment on `inflate` in dev/fakeregistry.
+# name, so they agree. See the comment on `inflate` in test/cmd/fakeregistry.
 #
 # The cost is that a descriptor's size is part of its manifest, so every digest
 # changes: the Coordinator then holds digests nothing serves, and every walk,

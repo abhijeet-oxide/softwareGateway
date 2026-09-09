@@ -31,5 +31,5 @@ spec:
         targets: [jfrog-lab]
   network:
     tls:
-      # Development only: dev/fakeregistry issues its own certificate.
+      # Development only: test/cmd/fakeregistry issues its own certificate.
       insecureSkipVerify: true

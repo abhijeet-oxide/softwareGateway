@@ -1,19 +1,43 @@
-# Local development configuration.
+# The system configuration, for every runtime.
 #
-# The zero-setup path: SQLite, no cluster, no containers.
+# ONE FILE. It used to be dev/config.yaml, read only by `task run`, while the
+# containers ran on their compiled-in defaults plus a dozen SWGW_ environment
+# variables and a cluster would have had a third description again. Three
+# statements of the same settings, and the only way to know they agreed was to
+# read all three.
 #
-#   go run ./cmd/coordinator --config ./dev/config.yaml
-#   go run ./cmd/worker      --config ./dev/config.yaml
+# So this is the settings, and the environment is the DIFFERENCES:
+#
+#   task run          --config ./data/config.yaml, as it stands
+#   docker compose    mounted at /etc/softwaregateway/config.yaml, with
+#                     SWGW_CONFIGDIR, SWGW_SECRETSDIR and the database
+#                     overridden for a container
+#   Flux              the same file as a ConfigMap, same two overrides
+#
+# The loader layers defaults, then this file, then SWGW_* - so an environment
+# states only what genuinely differs there, and everything else is here where
+# it can be reviewed once. An unknown SWGW_ variable is refused rather than
+# ignored, so an override that binds to nothing is a startup failure and not a
+# setting that silently did not apply.
+#
+#   go run ./cmd/coordinator --config ./data/config.yaml
+#   go run ./cmd/worker      --config ./data/config.yaml
 #   go run ./cmd/transferctl health
 #
-# The same loader reads this file and ./dev/products as a plain directory that
-# it reads as projected volumes in Kubernetes - which is the payoff for
-# choosing volume mounts over the Kubernetes API. See docs/design/02 section 3.
 apiVersion: softwaregateway.io/v1alpha1
 kind: SystemConfig
 
-# Root for products/ and secrets/. In-cluster this is /etc/softwaregateway.
-configDir: ./dev
+# Root for products/ and secrets/. In a container this is /etc/softwaregateway,
+# set through SWGW_CONFIGDIR, and the two directories are mounted under it.
+configDir: ./data
+
+# The credentials are NOT under configDir here, and that is the one place the
+# local layout and the cluster's differ. `data/secrets/` holds two things: the
+# manifests that produce a Secret in a cluster, which are committed and carry
+# references rather than values, and `local/`, which is the projected shape
+# filled in by hand and is never committed. A container mounts the second of
+# those AT /etc/softwaregateway/secrets, so it needs no override there.
+secretsDir: ./data/secrets/local
 
 server:
   address: :8080
@@ -22,10 +46,10 @@ server:
 database:
   # SQLite is the DEVELOPMENT default and is not supported in production; the
   # Coordinator warns about it at startup. For Postgres:
-  #   docker compose up -d postgres
+  #   task dev:postgres
   #   SWGW_DATABASE_DRIVER=postgres \
   #   SWGW_DATABASE_DSN='postgres://swgw:swgw@localhost:5432/swgw?sslmode=disable' \
-  #     go run ./cmd/coordinator --config ./dev/config.yaml
+  #     go run ./cmd/coordinator --config ./data/config.yaml
   driver: sqlite
   dsn: ./dev/swgw.db
 
@@ -91,13 +115,22 @@ tls:
   # network.tls.insecureSkipVerify does NOT help - that failure happens while
   # PARSING the certificate, before any verification runs. Measured, not
   # assumed: internal/platform/tlscompat carries the test.
-  allowNegativeSerialNumbers: true
+  #
+  # OFF, because this file is now read by production as well as by a laptop and
+  # a relaxation that only one of them needs must not arrive as a default in
+  # both. Turn it on where a registry actually needs it - the whole process is
+  # affected, so it is a deployment's decision:
+  #
+  #   SWGW_TLS_ALLOWNEGATIVESERIALNUMBERS=true
+  allowNegativeSerialNumbers: false
 
 observability:
   log:
     level: info
-    # `text` is easier to read at a terminal; production uses json.
-    format: text
+    # JSON, because this file is shared and an aggregator is the reader that
+    # cannot cope with the other one. `task run` and `task dev:*` override it
+    # to `text` for a terminal.
+    format: json
   metrics:
     enabled: true
     path: /metrics

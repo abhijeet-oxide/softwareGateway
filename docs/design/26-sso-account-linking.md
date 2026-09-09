@@ -106,7 +106,7 @@ address an administrator typed into `users.json`.
 
 ## 5. Reproducing it without a tenant
 
-`docker-compose.mock-entra.yml` and `deploy/mock-entra/` stand a mock directory
+`test/mockEntra/docker-compose.mock-entra.yml` and `deploy/mock-entra/` stand a mock directory
 behind `login.microsoftonline.com` and `graph.microsoft.com` - those two names
 are compiled into ZITADEL's Microsoft connector, so a network alias, a
 certificate for both names and `SSL_CERT_FILE` are what it takes to be them. The
@@ -279,7 +279,7 @@ The console steps that produce a linkable account are in
 - [`deploy/zitadel/bootstrap.mjs`](../../deploy/zitadel/bootstrap.mjs) - `createHuman`, `replaceIfUninitialised`, the attempt report
 - [`deploy/deploy_test.go`](../../deploy/deploy_test.go) - `TestSeederDoesNotImportHumans`
 - [`deploy/mock-entra/`](../../deploy/mock-entra/README.md) - the mock directory
-- [`docker-compose.mock-entra.yml`](../../docker-compose.mock-entra.yml) - the overlay
+- [`test/mockEntra/docker-compose.mock-entra.yml`](../../test/mockEntra/docker-compose.mock-entra.yml) - the overlay
 - [`deploy/zitadel/docker-entrypoint.sh`](../../deploy/zitadel/docker-entrypoint.sh) - the contact on the refusal page
 - [`web/src/pages/Profile.tsx`](../../web/src/pages/Profile.tsx), [`web/src/auth/session.ts`](../../web/src/auth/session.ts) - the Directory section and the claims behind it
 - [`docs/design/25-zitadel-login-v2-and-sso-redirect.md`](25-zitadel-login-v2-and-sso-redirect.md) - the sign-in flow this sits on

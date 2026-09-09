@@ -1,7 +1,11 @@
 # The Microsoft directory, replaced by one whose answers can be read.
 #
 #   ./deploy/mock-entra/mkcerts.sh
-#   docker compose -f docker-compose.yml -f docker-compose.mock-entra.yml up -d --force-recreate
+#   docker compose -f docker-compose.yml -f test/mockEntra/docker-compose.mock-entra.yml up -d --force-recreate
+#
+# Paths below are relative to the PROJECT directory, which compose takes from
+# the FIRST -f file - the repository root - and not from this file's own
+# directory. The mock itself lives in deploy/mock-entra.
 #
 # NEVER part of a deployment. It is a second file, named explicitly on the
 # command line, and it exists so that a sign-in failure can be reproduced on a

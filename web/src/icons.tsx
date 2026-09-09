@@ -96,7 +96,7 @@ import PhSpinner from '~icons/ph/spinner'
 import PhSquaresFour from '~icons/ph/squares-four'
 import PhStack from '~icons/ph/stack'
 import PhStorefront from '~icons/ph/storefront'
-import NetworkChartIcon from '~icons/bx/network-chart';
+import BoxiconsNetworkChart from '~icons/boxicons/network-chart'
 import PhTrash from '~icons/ph/trash'
 import PhTrayArrowDown from '~icons/ph/tray-arrow-down'
 import PhTreeStructure from '~icons/ph/tree-structure'
@@ -159,7 +159,7 @@ export const HistoryOutlined = make('history', PhClockCounterClockwise)
 export const SettingOutlined = make('setting', PhGear)
 export const BellOutlined = make('bell', PhBell)
 export const ShopOutlined = make('shop', PhStorefront)
-export const NetworkOutlined = make('network-chart', NetworkChartIcon)
+export const NetworkOutlined = make('network-chart', BoxiconsNetworkChart)
 export const ApiOutlined = make('api', PhPlugsConnected)
 export const PartitionOutlined = make('partition', PhTreeStructure)
 export const ClusterOutlined = make('cluster', PhStack)

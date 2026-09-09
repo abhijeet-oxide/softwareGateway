@@ -777,6 +777,62 @@ A FULL SCREEN, with no navigation, saying one thing.
 > mistypes. Unset, the sentence still completes and names no route: a refusal
 > that invents one sends people to a mailbox nobody reads.
 
+### 8.5 Taking access away, and how long that takes
+
+The Coordinator verifies a JWT **offline**, against the issuer's published keys.
+No introspection, no callback, no ZITADEL credential in any service - which is
+what §8.1 gets right and is worth keeping: the API decides for itself and keeps
+deciding while ZITADEL restarts.
+
+The cost of that is exact, and it is the answer to *"I deleted them and they
+can still use the tool"*:
+
+> **A token already issued is valid until it expires. Nothing asks whether it
+> still should be.** Removing an account, disabling it, or withdrawing every
+> role it holds changes nothing the bearer of a live token can notice.
+
+What removal stops immediately is the **renewal**: ZITADEL refuses to refresh a
+token for an account that is gone or inactive, and the SPA renews within a
+minute of expiry or on the first 401. So the access token's lifetime *is* the
+window - the browser renews, is refused, and the person is signed out.
+
+> **Decision - the access token lives 15 minutes, not ZITADEL's default 12
+> hours.**
+>
+> Twelve hours means somebody removed at 09:00 keeps every permission they held
+> until the end of the working day, on a system whose entire subject is who may
+> take delivery of software. Fifteen minutes costs one token request per active
+> session per quarter hour, which is not a cost. `ACCESS_TOKEN_LIFETIME` sets
+> it; the seeder warns when it is set above an hour, and states the number
+> under **Token lifetimes** on every run, next to what it means.
+>
+> Written through `PUT /admin/v1/settings/oidc` rather than
+> `ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_*`. First-instance settings are ignored
+> by an instance that already exists - the same trap as the login client in
+> §25 - so the environment variable would fix a fresh stack and leave every
+> stack that needs it unchanged.
+
+> **This is not revocation, and no value of that setting makes it so.** The
+> floor is however long the current token has left. Immediate cut-off needs
+> opaque access tokens and an introspection call on every request: ZITADEL
+> supports it (`OIDC_TOKEN_TYPE_BEARER` plus `/oauth/v2/introspect`), and it
+> buys immediacy by giving the Coordinator a credential, a network dependency
+> on the identity provider in the request path, and a decision about what to do
+> when that call fails. Not taken. When it is needed the trade is the whole
+> design of §8.1 and belongs in its own document, not in a default.
+
+> **When somebody must be out NOW**, the lifetime is not the tool. Deactivate
+> or delete the account so no renewal succeeds, then either wait out the
+> remaining minutes or rotate the instance's signing key, which invalidates
+> every token the instance has issued - everybody signs in again. The blunt one
+> is blunt on purpose: there is no per-token revocation to reach for.
+
+**Machine accounts have no refresh token** and re-request with the client
+credentials grant, so the same lifetime bounds them. `TokenSource` holds one
+until a minute before expiry and clamps that to half the lifetime, so a short
+token shortens the hold rather than breaking the data plane
+(`pkg/authz/workload.go`).
+
 ## 9. Policy lives in this repository
 
 Cerbos policies are YAML under `deploy/auth/policies/`, versioned with the code

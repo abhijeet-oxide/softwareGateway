@@ -195,6 +195,45 @@ func TestSeederGrantsProductRolesOnPlatform(t *testing.T) {
 	}
 }
 
+// TestSeederSetsTokenLifetimes guards the number that decides how long taking
+// somebody's access away takes to have any effect.
+//
+// The Coordinator verifies a JWT offline and never asks the issuer whether it
+// is still good, so a token already issued outlives the account behind it.
+// ZITADEL's default lifetime is twelve hours: remove somebody at 09:00 and
+// they keep every permission they hold until the end of the day.
+//
+// It must be written through the ADMIN API. ZITADEL's
+// DefaultInstance.OIDCSettings block reads like the place for it and is a
+// first-instance setting: ignored by an instance that already exists, which is
+// every stack that would be picking this up. Setting it there looks correct,
+// reviews as correct, and changes nothing on the deployment that needs it.
+func TestSeederSetsTokenLifetimes(t *testing.T) {
+	body, err := os.ReadFile("zitadel/bootstrap.mjs")
+	if err != nil {
+		t.Fatalf("bootstrap.mjs: %v", err)
+	}
+	if !bytes.Contains(body, []byte("'/admin/v1/settings/oidc'")) {
+		t.Error("deploy/zitadel/bootstrap.mjs no longer writes the OIDC token lifetimes. " +
+			"Without them the instance keeps ZITADEL's 12h default, and a removed account " +
+			"keeps working for twelve hours because nothing re-checks a token.")
+	}
+	compose, err := os.ReadFile("../docker-compose.yml")
+	if err != nil {
+		t.Fatalf("docker-compose.yml: %v", err)
+	}
+	if bytes.Contains(compose, []byte("ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS")) {
+		t.Error("docker-compose.yml sets token lifetimes through ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_*. " +
+			"Those are first-instance settings and are ignored by an instance that already " +
+			"exists, so this reaches a fresh stack only. The seeder writes them through " +
+			"PUT /admin/v1/settings/oidc, which reaches both.")
+	}
+	if !bytes.Contains(compose, []byte("ACCESS_TOKEN_LIFETIME:")) {
+		t.Error("docker-compose.yml no longer passes ACCESS_TOKEN_LIFETIME to zitadel-init, " +
+			"so the seeder cannot see a value set in .env and silently applies its own default.")
+	}
+}
+
 // TestSeederInventsNoPersonName guards a small thing that lands on the one
 // screen where it is least welcome.
 //

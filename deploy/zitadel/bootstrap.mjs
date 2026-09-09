@@ -105,6 +105,23 @@ const duplicates = [];
 const superseded = [];
 const list = (v, d) => (v ?? d).split(',').map(s => s.trim()).filter(Boolean);
 
+/* A duration from .env, as the seconds string protobuf wants ("900s").
+ *
+ * Refused rather than guessed at. A misread lifetime is not a visible failure
+ * - the stack comes up, everybody signs in - and the effect only shows up as
+ * somebody keeping access for longer than intended, which is the one class of
+ * mistake nobody notices until it matters. */
+function duration(value, fallback, name) {
+  const raw = String(value ?? '').trim() || fallback;
+  const m = /^(\d+)\s*([smh])$/.exec(raw);
+  if (!m) {
+    dataError(`FATAL: ${name}=${raw} is not a duration.`,
+      '  Write it as a whole number and one of s, m or h - 30s, 15m, 12h.');
+  }
+  const scale = { s: 1, m: 60, h: 3600 }[m[2]];
+  return { text: raw, seconds: Number(m[1]) * scale, proto: `${Number(m[1]) * scale}s` };
+}
+
 /* A credential, shown well enough to recognise and not well enough to use. */
 function mask(v) {
   if (v.length < 12) return `${v.length} characters (too short to show safely)`;
@@ -1396,6 +1413,82 @@ for (const p of products) {
     note('  Single-page application: ZITADEL redeems the code server side with a');
     note('  client secret, and Entra requires PKCE for anything registered as an');
     note('  SPA, which fails as AADSTS9002325.');
+  }
+}
+
+/* --- 9a. how long a token lives, which is how long a REMOVAL TAKES --------
+ *
+ * THE ANSWER TO "I DELETED THEM AND THEY CAN STILL USE IT".
+ *
+ * Nothing in this stack asks ZITADEL whether a token is still good. The
+ * Coordinator verifies a JWT offline against the issuer's public keys - no
+ * introspection, no callback, deliberately, because that is what lets it
+ * decide without holding a credential of its own and keeps it answering while
+ * ZITADEL restarts. The cost of that choice is exact: a token already issued
+ * stays valid until it expires, whatever happens to the account behind it.
+ *
+ * ZITADEL's own default is TWELVE HOURS, and this stack used to inherit it. So
+ * removing somebody, disabling them, or withdrawing every role they hold did
+ * nothing they could notice for the rest of the working day.
+ *
+ * What removal DOES take effect on immediately is the refresh: ZITADEL refuses
+ * to renew a token for an account that is gone or inactive. So the access
+ * token's lifetime IS the window - the person's browser renews, is refused,
+ * and is signed out. Fifteen minutes rather than twelve hours is the whole of
+ * the fix, and it costs one token request per active session per quarter hour.
+ *
+ * It is not zero, and no setting here makes it zero. That needs opaque tokens
+ * and an introspection call on every request, which is a different design with
+ * a different failure mode - see docs/design/24 section 8.5.
+ *
+ * WRITTEN THROUGH THE ADMIN API, not `ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_*`.
+ * Those are first-instance settings: ignored by an instance that already
+ * exists, which is every stack that would be picking this up. That trap is the
+ * same one documented for the login client in docs/design/25.
+ */
+{
+  const access  = duration(process.env.ACCESS_TOKEN_LIFETIME, '15m', 'ACCESS_TOKEN_LIFETIME');
+  /* The other three are ZITADEL's own defaults, stated rather than omitted:
+   * this request replaces all four, so a field left out is a field set to
+   * zero. The ID token is the client's own and carries no authority here; the
+   * refresh window is what decides how long somebody may be away and still
+   * come back without signing in. */
+  const idToken = duration(process.env.ID_TOKEN_LIFETIME, '12h', 'ID_TOKEN_LIFETIME');
+  const idle    = duration(process.env.REFRESH_TOKEN_IDLE, '720h', 'REFRESH_TOKEN_IDLE');
+  const absolute = duration(process.env.REFRESH_TOKEN_MAX, '2160h', 'REFRESH_TOKEN_MAX');
+
+  const body = {
+    accessTokenLifetime: access.proto,
+    idTokenLifetime: idToken.proto,
+    refreshTokenIdleExpiration: idle.proto,
+    refreshTokenExpiration: absolute.proto,
+  };
+  const current = await api('GET', '/admin/v1/settings/oidc');
+  // No settings stored yet answers an error rather than an empty document, and
+  // Update refuses when there is nothing to update while Add refuses when
+  // there is. So which call to make is decided by what is there.
+  const r = current.settings
+    ? await api('PUT', '/admin/v1/settings/oidc', body)
+    : await api('POST', '/admin/v1/settings/oidc', body);
+
+  head('Token lifetimes');
+  if (r.__status >= 400 && !unchanged(r)) {
+    warn(`the token lifetimes were not applied: ${(r.message || JSON.stringify(r)).slice(0, 140)}`);
+    warn(`Tokens keep whatever lifetime this instance already has - ZITADEL's own`);
+    warn('default is 12h, and a removed account keeps working for that long.');
+  } else {
+    item('access token', `${access.text} - this is how long a removal takes to bite`);
+    item('id token', idToken.text);
+    item('refresh token', `${idle.text} idle, ${absolute.text} at most`);
+    if (access.seconds > 3600) {
+      warn(`ACCESS_TOKEN_LIFETIME is ${access.text}: somebody removed from`);
+      warn('config/users/users.yaml keeps every permission they hold for that long.');
+    }
+    note();
+    note('A token already issued is valid until it expires: nothing in this stack');
+    note('asks the identity provider whether it still should be. Removing or');
+    note('disabling an account stops the RENEWAL, so the lifetime above is the');
+    note('longest anybody keeps access after you take it away.');
   }
 }
 

@@ -212,6 +212,16 @@ services:
       # with a machine token rather than through the sign-in screen, so setting
       # this and re-running it puts the password box back.
       SSO_ALLOW_PASSWORD_LOGIN: ${SSO_ALLOW_PASSWORD_LOGIN:-false}
+      # HOW LONG A REMOVAL TAKES TO BITE. The Coordinator verifies tokens
+      # offline and never asks whether one is still good, so a token already
+      # issued works until it expires - whoever has been removed meanwhile.
+      # A removal does stop the RENEWAL, so this is the window. ZITADEL's own
+      # default is 12h; the seeder writes these through the admin API, which is
+      # the only path that reaches an instance that already exists.
+      ACCESS_TOKEN_LIFETIME: ${ACCESS_TOKEN_LIFETIME:-15m}
+      ID_TOKEN_LIFETIME: ${ID_TOKEN_LIFETIME:-12h}
+      REFRESH_TOKEN_IDLE: ${REFRESH_TOKEN_IDLE:-720h}
+      REFRESH_TOKEN_MAX: ${REFRESH_TOKEN_MAX:-2160h}
       BRANDING_PRIMARY_COLOR: ${BRANDING_PRIMARY_COLOR:-}
       BRANDING_PRIMARY_COLOR_DARK: ${BRANDING_PRIMARY_COLOR_DARK:-}
       BRANDING_LOGO_FILE: ${BRANDING_LOGO_FILE:-}

@@ -500,6 +500,26 @@ try {
 const orgRoles = roles.tenant?.roles || [];
 const productRoles = roles.product?.roles || [];
 const ownerRole = roles.product?.ownerRole || '';
+/* MEMBERSHIP. Granted to every person this file provisions, on top of whatever
+ * else they hold, and it grants nothing.
+ *
+ * It is what tells a provisioned person apart from a stranger. With a
+ * corporate directory federated, every employee can authenticate; only the
+ * people in users.yaml have been provisioned, and until this existed both
+ * arrived at the Coordinator holding exactly the same thing - no roles - so
+ * both got the same closed door. A person who has been added here and not yet
+ * given a product is not a stranger, and telling them so is a support ticket.
+ *
+ * Blank in roles.yaml means no baseline, and the two become indistinguishable
+ * again. That is a configuration this file allows and does not recommend. */
+const baselineRole = roles.tenant?.baselineRole || '';
+if (baselineRole && !orgRoles.includes(baselineRole)) {
+  dataError(`FATAL: ${ROLES_FILE} names '${baselineRole}' as tenant.baselineRole,`,
+    '  but does not list it under tenant.roles.',
+    '',
+    '  The role has to exist before it can be granted: every person provisioned',
+    '  here is given it, so a missing one fails every grant rather than one.');
+}
 if (!orgRoles.length || !productRoles.length) {
   dataError(`FATAL: ${ROLES_FILE} declares no roles.`,
     '  Both tenant.roles and product.roles are required: the first covers',
@@ -643,6 +663,9 @@ item('source', CONFIG_DIR);
 item('tenant roles', orgRoles.join(', '));
 item('product roles', productRoles.join(', '));
 item('owner role', ownerRole || 'not required');
+item('baseline role', baselineRole
+  ? `${baselineRole}, granted to everybody provisioned here`
+  : 'none: a provisioned person with no product looks like a stranger');
 item('products', String(products.length));
 item('people', `${(doc.users || []).length} human, ${(doc.apiUsers || []).length} machine`);
 
@@ -1671,7 +1694,10 @@ for (const p of products) {
      * screen works, holds no permissions, and says "No roles" under their own
      * name. Granting is idempotent, so doing it unconditionally costs one
      * search on a run that changes nothing. */
-    await grantRoles(id, PLATFORM, ['org-admin']);
+    // The baseline goes on the administrator too. Holding org-admin already
+    // makes them a member - membership is holding any role at all - but a
+    // console that shows who is provisioned here should show all of them.
+    await grantRoles(id, PLATFORM, baselineRole ? [baselineRole, 'org-admin'] : ['org-admin']);
     await api('POST', '/management/v1/orgs/me/members', { userId: id, roles: ['ORG_OWNER'] });
     if (pw) warn('BOOTSTRAP_ADMIN_PASSWORD is still set. Unset it once a real administrator exists.');
   }
@@ -1967,9 +1993,18 @@ async function grantRoles(userId, projectId, roleKeys) {
       }
     }
 
+    /* MEMBERSHIP FIRST, and unconditionally. It is the grant that says this
+     * person was provisioned rather than merely able to sign in, so it must
+     * not depend on their having been given anything else. */
+    if (baselineRole) await grantRoles(uid, PLATFORM, [baselineRole]);
     if (u.orgRoles?.length) {
       await grantRoles(uid, PLATFORM, u.orgRoles);
       sub('tenant-wide', u.orgRoles.join(', '));
+    }
+    if (!u.orgRoles?.length && !Object.keys(u.products || {}).length) {
+      sub('access', baselineRole
+        ? `${baselineRole} only: signs in, sees no products`
+        : 'none, and no baseline role: this account cannot sign in usefully');
     }
     for (const [product, roles] of Object.entries(u.products || {})) {
       const pid = projectOf.get(product);

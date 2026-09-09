@@ -283,19 +283,29 @@ func (i Identity) principal() authz.Identity {
 	return out
 }
 
-// Refusal is what the caller is told, and the two cases are worth telling
+// Refusal is what the caller is told, and the three cases are worth telling
 // apart.
 //
-// "You hold no roles" is a different problem from "you hold the wrong ones",
-// and only the first has an answer the person can act on themselves. It is
-// also by far the likelier one: an account provisioned by nobody, created by
-// the identity provider at a first sign-in, is the shape this whole gate was
-// written for.
+// "Nobody has provisioned you", "you have been provisioned and given nothing
+// yet" and "you hold the wrong roles for this" are three different problems.
+// The first two have an answer the person can act on and the third mostly does
+// not, and the first two are by far the likelier: an account created by the
+// identity provider at a first sign-in, and an account added to
+// config/users/users.yaml before anybody decided which products it should
+// reach, are the two shapes this gate was written for.
 func Refusal(id Identity, req Requirement) string {
-	if len(id.Grants) == 0 && len(id.Roles) == 0 {
+	if !id.IsMember() {
 		return "This account holds no roles, so it may not read or change anything here. " +
 			"Roles are granted in the identity provider; ask an administrator to grant one, " +
 			"then sign out and in again."
+	}
+	// Provisioned, and holding nothing that reaches anything: the baseline
+	// role and no other. Saying "may not read this" to them describes the
+	// request rather than their situation, and their situation is the answer.
+	if len(id.Grants) == 0 {
+		return "This account has been provisioned but has not been granted access to any " +
+			"product. Ask an administrator for access to the products you need, then sign " +
+			"out and in again."
 	}
 	what := "this"
 	if req.Product != "" {

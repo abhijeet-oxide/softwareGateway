@@ -442,6 +442,18 @@ services:
       # ZITADEL picks its instance from Host and 404s on one it does not know.
       SWGW_AUTH_HOSTHEADER: ${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}
       SWGW_AUTH_CERBOSADDR: http://cerbos:3592
+      # THE TENANT THIS DEPLOYMENT SERVES, and the boundary around it.
+      #
+      # ZITADEL signs every organization's tokens with the same keys, so a
+      # signature says who minted a token and nothing about who it was minted
+      # for. Without this, a token from another organization at the same issuer
+      # verifies perfectly and its roles are read as if they had been granted
+      # here - `org-admin` over there is spelled exactly like `org-admin` here.
+      #
+      # It is the ZITADEL organization NAME, which is this same variable: the
+      # seeder creates the org with it and the sign-in asserts it in the
+      # token's resourceowner claim.
+      SWGW_AUTH_TENANT: ${GATEWAY_TENANT:-default}
     # No published port on purpose. The API is reached through the web tier at
     # http://localhost:${WEB_PORT:-8000}/api/v1, which is same-origin (the
     # controller ships no CORS middleware) AND lets this service scale: a fixed

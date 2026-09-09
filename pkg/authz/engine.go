@@ -35,7 +35,21 @@ type Engine interface {
 type Cerbos struct {
 	// Addr is the PDP base URL, e.g. http://cerbos:3592.
 	Addr string
-	HTTP *http.Client
+	// Tenant is the tenant this deployment serves, and it is what the resource
+	// is labelled with.
+	//
+	// EVERY derived role in config/access/policies compares
+	// `R.attr.tenant == P.attr.tenant`. Labelling the resource with the
+	// PRINCIPAL's tenant made that comparison compare a value with itself:
+	// always true, in every rule, for every caller - a tenancy condition
+	// written eleven times and enforced nowhere. The resource belongs to this
+	// deployment, so it is this deployment that says which tenant it is in.
+	//
+	// Empty keeps the old behaviour and the old tautology, for a deployment
+	// that has not been told its tenant yet; the Coordinator says so at
+	// startup rather than leaving it to be discovered.
+	Tenant string
+	HTTP   *http.Client
 }
 
 // NewCerbos builds a client with sane timeouts.
@@ -129,7 +143,13 @@ func (c *Cerbos) Check(ctx context.Context, id Identity, res Resource, actions .
 	for k, v := range res.Attr {
 		attr[k] = v
 	}
-	attr["tenant"] = id.Tenant
+	// The RESOURCE's tenant is the deployment's, not the caller's. See
+	// Cerbos.Tenant: taking it from the caller made every tenancy condition in
+	// every policy compare a value with itself.
+	attr["tenant"] = c.Tenant
+	if c.Tenant == "" {
+		attr["tenant"] = id.Tenant
+	}
 	if res.Product != "" {
 		attr["product"] = res.Product
 	}

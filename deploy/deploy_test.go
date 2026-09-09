@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -409,6 +410,81 @@ func TestEveryAccountHasOneLoginName(t *testing.T) {
 				name)
 		}
 		byLoginName[key] = true
+	}
+}
+
+// TestBaselineRoleExistsAndGrantsNothing guards the one role every person in
+// this deployment holds.
+//
+// It answers "has somebody provisioned this account here", which with a
+// corporate directory federated is the only thing separating a colleague from
+// everybody else in the company - being able to sign in separates nobody. Two
+// things must hold, and neither is visible while reading a policy file:
+//
+//   - the role must EXIST, or every grant the seeder writes fails at once
+//     rather than one of them failing.
+//   - it must grant NOTHING. It is held by everybody, so a permission added to
+//     it is a permission given to everybody who can sign in - and it would be
+//     added by somebody solving a real problem, in a file that says nothing
+//     about who holds this role.
+func TestBaselineRoleExistsAndGrantsNothing(t *testing.T) {
+	var roles struct {
+		Tenant struct {
+			Roles        []string `json:"roles"`
+			BaselineRole string   `json:"baselineRole"`
+		} `json:"tenant"`
+	}
+	readYAML(t, "../config/access/roles.yaml", &roles)
+
+	baseline := roles.Tenant.BaselineRole
+	if baseline == "" {
+		t.Fatal("config/access/roles.yaml declares no tenant.baselineRole. Without one, an " +
+			"account somebody provisioned and has not yet given a product to is " +
+			"indistinguishable from an account nobody has ever heard of, and both are " +
+			"refused as strangers")
+	}
+	if !slices.Contains(roles.Tenant.Roles, baseline) {
+		t.Errorf("tenant.baselineRole is %q, which is not listed under tenant.roles. The "+
+			"seeder creates the roles it lists there, so this one would never exist and "+
+			"every grant of it would fail", baseline)
+	}
+
+	policies, err := filepath.Glob("../config/access/policies/*.yaml")
+	if err != nil || len(policies) == 0 {
+		t.Fatalf("found no policies to check (%v), which means this test is not testing anything", err)
+	}
+	for _, file := range policies {
+		body, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		if bytes.Contains(body, []byte(baseline)) {
+			t.Errorf("%s names %q. That role is held by EVERY provisioned account, so any "+
+				"permission reachable through it is a permission held by everyone who can "+
+				"sign in. Whatever it should be able to do belongs on a role somebody is "+
+				"granted deliberately", file, baseline)
+		}
+	}
+}
+
+// TestControllerIsToldItsTenant guards the boundary between one tenant's
+// deployment and another's.
+//
+// ZITADEL signs every organization's tokens with the same keys, so a valid
+// signature says who MINTED a token and nothing about who it was minted for.
+// Without a tenant the Coordinator accepts a token from any organization at
+// the same issuer and reads its roles as if they had been granted here -
+// `org-admin` in somebody else's organization is spelled exactly like
+// `org-admin` in this one.
+func TestControllerIsToldItsTenant(t *testing.T) {
+	compose, err := os.ReadFile("../docker-compose.yml")
+	if err != nil {
+		t.Fatalf("docker-compose.yml: %v", err)
+	}
+	if !bytes.Contains(compose, []byte("SWGW_AUTH_TENANT:")) {
+		t.Error("docker-compose.yml does not set SWGW_AUTH_TENANT on the controller, so the " +
+			"deployment accepts tokens from every organization the identity provider hosts " +
+			"and reads their roles as its own")
 	}
 }
 

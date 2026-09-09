@@ -120,23 +120,49 @@ func suffix(role string) string {
 	return role
 }
 
+// OIDCOptions is everything the authenticator needs.
+//
+// A struct rather than seven positional strings, which is what this was: two
+// of them were adjacent, both optional, both an address, and telling
+// `discoveryURL, hostHeader` from `hostHeader, discoveryURL` at a call site
+// required counting. The one that matters most for security - Tenant - would
+// have been the eighth.
+type OIDCOptions struct {
+	Issuer       string
+	DiscoveryURL string
+	HostHeader   string
+	// Audience is the client or project id tokens must name. Empty accepts a
+	// token minted for any application at the same issuer.
+	Audience string
+	// Tenant is the ONE tenant this deployment serves. A token from any other
+	// is refused before it becomes an identity. See authz.Config.Tenant.
+	Tenant     string
+	CerbosAddr string
+	SkipIssuer bool
+}
+
 // NewOIDCAuthenticator builds the authenticator from configuration. It fails
 // fast: a service that starts with broken auth configuration looks healthy
 // while rejecting everyone.
-func NewOIDCAuthenticator(ctx context.Context, issuer, discoveryURL, hostHeader, audience, cerbosAddr string, skipIssuer bool) (OIDCAuthenticator, error) {
+func NewOIDCAuthenticator(ctx context.Context, o OIDCOptions) (OIDCAuthenticator, error) {
 	v, err := authz.NewVerifier(ctx, authz.Config{
-		Issuer:          issuer,
-		DiscoveryURL:    discoveryURL,
-		HostHeader:      hostHeader,
-		Audience:        audience,
-		SkipIssuerCheck: skipIssuer,
+		Issuer:          o.Issuer,
+		DiscoveryURL:    o.DiscoveryURL,
+		HostHeader:      o.HostHeader,
+		Audience:        o.Audience,
+		Tenant:          o.Tenant,
+		SkipIssuerCheck: o.SkipIssuer,
 	})
 	if err != nil {
 		return OIDCAuthenticator{}, err
 	}
 	a := OIDCAuthenticator{Verifier: v}
-	if cerbosAddr != "" {
-		a.Engine = authz.NewCerbos(cerbosAddr)
+	if o.CerbosAddr != "" {
+		engine := authz.NewCerbos(o.CerbosAddr)
+		// The policies compare the resource's tenant with the caller's. The
+		// resource's is this deployment's, and this is where it is told.
+		engine.Tenant = o.Tenant
+		a.Engine = engine
 	}
 	return a, nil
 }

@@ -25,7 +25,16 @@
 #   firstName   optional. Derived from the address when it spells a name, and
 #   lastName    replaced by the directory's own at the second sign-in.
 #   password    LOCAL AND TEST ONLY. Ignored once SSO_ISSUER is set.
-#   orgRoles    tenant-wide roles, from config/access/roles.yaml
+#   orgRoles    tenant-wide roles, from config/access/roles.yaml. OPTIONAL, and
+#               an empty list is a normal answer: everybody listed here is also
+#               granted the baseline role (`tenant.baselineRole`, `org-member`)
+#               whether or not they are given anything else. It carries no
+#               permission. It is what says this person was PROVISIONED, which
+#               is what lets somebody with no product access sign in, see the
+#               application, and be told who to ask - rather than meeting a
+#               door saying their account does not exist. Being able to sign in
+#               does not make somebody a member: with a corporate directory
+#               federated, everybody in the company can sign in.
 #   products    per-product roles, from the same file
 #
 # TWO PEOPLE, TWO DOMAINS, ONE NAME. test@domain1.com and test@domain2.com are

@@ -22,6 +22,8 @@ import {
 import type { Product } from '../api/types'
 import { TargetTag } from '../components/chips'
 import { ConfigErrorDetail, ConfigErrorPill, isNotLoaded } from '../components/configerror'
+import { useIdentity } from '../auth/permissions'
+import { AccessRoute, useSupportContact } from '../auth/contact'
 
 /**
  * Page 2 - Products.
@@ -128,6 +130,16 @@ export default function Products() {
   const [showDisabled, setShowDisabled] = useState(false)
   const [search, setSearch] = useState('')
 
+  // Whether an empty listing is about this ACCOUNT rather than about the
+  // deployment. Held here rather than derived in the render so the two empty
+  // states below read as the two different facts they are.
+  const { who, can } = useIdentity()
+  const contact = useSupportContact()
+  const noProductAccess = Boolean(
+    who?.authenticated && !can('read') &&
+    Object.keys(who.productPermissions ?? {}).length === 0,
+  )
+
   const [expanded, setExpanded] = useState<string[]>(routeProduct ? [routeProduct] : [])
   // A rejected product OPENS ITSELF, once, the first time it is seen.
   //
@@ -231,7 +243,27 @@ export default function Products() {
         <RunDiscoveryButton products={rows} />
       </div>
 
-      {!products.isLoading && rows.length === 0 ? (
+      {!products.isLoading && rows.length === 0 && !search.trim() && noProductAccess ? (
+        /*
+          EMPTY BECAUSE OF WHO IS ASKING, not because of what is configured.
+
+          This listing is filtered by the server to the products the caller may
+          see, so a member who has been given none gets the same zero rows as a
+          deployment with nothing in it - and telling them "no products are
+          configured" sends them to look for a problem that is not there, or to
+          Settings, where they may change nothing. The two states are told apart
+          by what this account holds, and only this screen can tell them apart:
+          the server correctly answered the question it was asked.
+        */
+        <EmptyStateCard
+          title="This account has access to no products"
+          explanation={
+            'Access is granted per product by an administrator. Nothing has been granted ' +
+            'for this account yet, so there is nothing to show here.'
+          }
+          action={<span><AccessRoute contact={contact} /></span>}
+        />
+      ) : !products.isLoading && rows.length === 0 ? (
         <EmptyStateCard
           title={search.trim() ? `Nothing matches "${search.trim()}"` : 'No products are configured'}
           explanation={

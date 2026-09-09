@@ -460,6 +460,56 @@ the fallback exists.
 > thing to do as a side effect of adding somebody to a file, so the seeder warns
 > and names the console setting instead.
 
+### 5.1e Membership is its own tier, and it grants nothing
+
+Signing in proves the identity provider recognised somebody. With a corporate
+directory federated that is **every employee**, which is exactly the hole §8.2
+was written to close - and closing it left a second question unanswered:
+
+> An account nobody provisioned and an account provisioned this morning, before
+> anybody decided which products it should reach, held the same thing: no roles
+> at all.
+
+One is a stranger. The other is a colleague waiting on an administrator. Told
+apart by nothing, both met the same full-screen refusal saying their account was
+not enabled, and the second one is a support ticket - the person was added to
+`config/users/users.yaml`, the file plainly says so, and the product says they
+do not exist.
+
+> **Decision - a baseline role, granted to every provisioned person, carrying
+> no permission at all.**
+>
+> `tenant.baselineRole` in `config/access/roles.yaml`, `org-member` as shipped.
+> The seeder grants it to everybody it provisions, on top of whatever else they
+> hold, so holding it means *somebody put them in that file* and holding
+> nothing means an account the identity provider let in and nobody has claimed.
+>
+> It is a third tier rather than a weak version of the first. `org-reader` is
+> "may read everything"; `org-member` is "is one of us", which is not a
+> permission and must never quietly become one - it is held by everybody who
+> can sign in, so a permission added to it is a permission granted to the whole
+> directory. `go test ./deploy/...` fails if the baseline role's name appears
+> anywhere in `config/access/policies`.
+
+> **Decision - membership is holding ANY role, not holding that one.**
+>
+> `Identity.IsMember` is true for any role of either tier. Pinning the string
+> `org-member` into Go would make renaming the baseline in configuration a
+> lockout in the binary, and anybody holding a real role is a member by having
+> it. The baseline is the *mechanism* that gives a product-less person their
+> one role - not the definition.
+
+What each of the three tiers answers, in the order they are asked:
+
+| Question | Answered by | Grants |
+|---|---|---|
+| Is this a valid token from this tenant? | signature, issuer, audience, `Config.Tenant` (§8.6) | nothing |
+| Has anybody provisioned this account? | the baseline role → `member` | nothing |
+| May they do X to Y? | org-tier and product-tier roles, via Cerbos | everything else |
+
+A member with no product access gets the application, an empty product list
+that says so, and the support contact - not a door.
+
 ### 5.2 The four personas
 
 | Persona | How it is expressed | Scope |
@@ -777,29 +827,42 @@ A FULL SCREEN, with no navigation, saying one thing.
 > mistypes. Unset, the sentence still completes and names no route: a refusal
 > that invents one sends people to a mailbox nobody reads.
 
-> **Decision - `/whoami` reports the VERBS a caller holds anywhere, and
-> `products` says where they apply.**
+> **Decision - the closed door is shown to a NON-MEMBER, and `/whoami` reports
+> permissions PER SCOPE.**
 >
-> The interface shows the screen above when `permissions` comes back empty.
-> `permissionsFor` used to answer the TENANT-WIDE question - may you read
-> across this tenant - which a product-scoped caller correctly cannot, so
-> somebody granted `product-owner` on one product got an empty list and was
-> shown a locked door with their own address on it. The only grant they need,
-> and the whole reason the product tier exists, read as no grant at all.
+> The interface used to show this screen when `permissions` came back empty,
+> and `permissionsFor` answered the tenant-wide question - which a
+> product-scoped caller correctly cannot. So somebody granted `product-owner`
+> on one product, the only grant they need and the whole reason the product
+> tier exists, was shown a locked door with their own address on it. Adding any
+> `org-` role appeared to fix it, and fixed it by making them tenant-wide over
+> everything.
 >
-> That is the same mistake twice. The comment above `permissionsFor` already
-> recorded it for the EMPTY scope, where it disabled every control for an
-> org-admin; narrowing the question from "the estate" to "the tenant" fixed the
-> tier it was noticed on and left the tier below it broken. So the question is
-> now the one the answer is used for: `CanAny`, the same primitive a
-> self-filtering listing asks, paired with `products` for the narrowing. `*`
-> still means unrestricted and is still decided tenant-wide, because the client
-> short-circuits on it before it narrows - a product-owner holding all four
-> verbs on one product must not report the same thing as an org-admin.
+> Empty tenant-wide permissions is the RIGHT answer for that person. What was
+> wrong was reading it as "this account does not exist here". Those are two
+> questions and they are now asked separately:
 >
-> It stayed invisible because product grants never reached a token at all
-> (§8.1): with the token carrying nothing, this code path had never once been
-> given a caller who held only product roles.
+> - **`member`** says the account was provisioned in this tenant (§5.1e). That
+>   is what this screen is for, and a non-member is the only caller who sees
+>   it.
+> - **`permissions`** is what the caller may do TENANT-WIDE, `*` meaning
+>   unrestricted, and **`productPermissions`** is what they may do on each
+>   product they hold. A client answers "may I do X to product P" the way
+>   `Scope.covers` does: yes when X is tenant-wide, or when it is in that
+>   product's list.
+>
+> **A flat union across scopes was the wrong shape, and it was the first fix
+> attempted.** Somebody who reads product A and owns product B holds four verbs
+> and two products; unioned into one verb list beside one product list they
+> read as four verbs on BOTH, and every control on A lights up. The server
+> refuses them - Cerbos compares the resource's product against the caller's
+> own - so the result is an interface offering what the API denies, which is a
+> permission model the screen and the server disagree about. Guarded by
+> `TestWhoAmIDoesNotFlattenVerbsAcrossProducts`.
+>
+> The whole class stayed invisible because product grants never reached a token
+> at all (§8.1): this code had never once been given a caller who held only
+> product roles.
 
 > **The same error, in `VisibleProducts`.** It asked `Can(read, Scope{})` -
 > estate-wide - to decide "is this caller unrestricted", and an `org-` role
@@ -809,6 +872,14 @@ A FULL SCREEN, with no navigation, saying one thing.
 > entire purpose is to name no product. Every scoped store filter takes that
 > list. Also invisible until product grants started arriving, and guarded now
 > by `TestAnOrgRoleIsNotNarrowedByAProductRole`.
+
+> **The refusal itself names which of three situations this is.** "Nobody has
+> provisioned you", "you are provisioned and hold no product yet" and "you hold
+> the wrong roles for this" have different answers, and the first two are the
+> ones the person can act on. An empty product listing is the same distinction
+> on a page rather than in a refusal: the listing is filtered server-side, so a
+> member with no products sees what a deployment with no products configured
+> would show, and only the interface can tell those apart.
 
 ### 8.5 Taking access away, and how long that takes
 
@@ -865,6 +936,64 @@ credentials grant, so the same lifetime bounds them. `TokenSource` holds one
 until a minute before expiry and clamps that to half the lifetime, so a short
 token shortens the hold rather than breaking the data plane
 (`pkg/authz/workload.go`).
+
+### 8.6 One tenant, and the boundary around it
+
+An identity provider hosting more than one organization signs **all** of their
+tokens with the same keys. A signature therefore says who minted a token and
+nothing whatever about who it was minted for, and until this section existed
+that was the only thing being checked:
+
+- **No audience.** `SWGW_AUTH_AUDIENCE` was unset, so `SkipClientIDCheck` was
+  on and a token minted for any other application at the same issuer was
+  accepted.
+- **No tenant.** A token from another organization verified, and its roles were
+  read as if they had been granted here. `org-admin` in somebody else's
+  organization is spelled exactly like `org-admin` in this one.
+- **A tenancy condition that could not fail.** Every derived role in
+  `config/access/policies` compares `R.attr.tenant == P.attr.tenant`, and the
+  resource was labelled with the *principal's* tenant - so the comparison
+  compared a value with itself. Eleven rules, written carefully, enforcing
+  nothing.
+
+> **Decision - the deployment is told its tenant, and refuses every other.**
+>
+> `SWGW_AUTH_TENANT` (compose passes `GATEWAY_TENANT`, which is also the name
+> the seeder gives the ZITADEL organization). `authz.Config.Tenant` refuses a
+> mismatched token in the verifier, before it becomes an identity - a caller
+> from another tenant is not a person with no permissions here, they are a
+> caller this deployment has no relationship with, and the two want different
+> answers and different log lines.
+>
+> **A token asserting no tenant is refused by the same rule.** "Cannot tell" is
+> not "belongs here". That is why both sign-in flows now request
+> `urn:zitadel:iam:user:resourceowner`: without it the tenant had to be guessed
+> from the first label of an organization's primary domain, which is a
+> domain-naming coincidence rather than a fact about the account.
+>
+> **The Cerbos resource carries the DEPLOYMENT's tenant**, so the condition in
+> every policy can now actually disagree. Guarded by
+> `TestResourceCarriesTheDeploymentsTenant`.
+
+> **Rollout, stated because it bites in one direction.** The scope is requested
+> by the SPA and by `pkg/authz/workload.go`; a browser holding a token minted
+> before this is refused and signs in again, which is what should happen. Deploy
+> the web tier and the Coordinator together - compose does.
+
+> **Unset is still allowed, and says so.** An existing deployment that has not
+> been told its tenant keeps working and the Coordinator logs a warning at
+> startup naming the remedy; the same for an unset audience. Neither gap is
+> visible from inside a request - every token verifies, every screen loads -
+> so a boundary that is off has to announce itself somewhere, and startup is
+> the only place anybody is looking.
+
+**The audience check is still not on by default,** and that is the one thing
+here left undone. It wants the OIDC client or project id, which ZITADEL
+generates, so it cannot be a static value in `.env` the way the tenant can - it
+would have to be published by the seeder the way the web client id already is.
+The tenant boundary is the one that matters for cross-organization access; the
+audience boundary narrows it further, to tokens minted for *this application*.
+Recorded here rather than half-built.
 
 ## 9. Policy lives in this repository
 

@@ -55,19 +55,30 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
     retry: false,
   })
 
+  /*
+    THE SAME RULE THE SERVER APPLIES, in the same order: Scope.covers.
+
+    A tenant-wide permission covers every product, including products that do
+    not exist yet - that is what the org tier is for. A product permission
+    covers the product it names and nothing else, so it can only answer a
+    question that NAMES a product: "may I operate", asked with no product, is
+    the estate-wide question and a caller scoped to one product cannot answer
+    it. The server refuses exactly there.
+
+    The two lists are read separately on purpose. They used to be one flat list
+    of verbs beside one flat list of products, and a caller who read product A
+    and owned product B held four verbs and two products - which paired up as
+    four verbs on BOTH, lighting up "approve download" on a product they may
+    only read. The server refused it, so the screen offered what the API then
+    denied.
+  */
   const can = (action: Action, scope?: Scope): boolean => {
     if (!data) return false
-    const permissions = data.permissions ?? []
-    if (permissions.includes('*')) return true
-    if (!permissions.includes(action)) return false
-
-    // A caller restricted to some products may act within those products, and
-    // not estate-wide. An action with no product named is the estate-wide
-    // question, which a narrowed caller cannot answer - the same rule the
-    // server applies in Scope.covers.
-    const products = data.products ?? []
-    if (products.length === 0) return true
-    return Boolean(scope?.product && products.includes(scope.product))
+    const tenantWide = data.permissions ?? []
+    if (tenantWide.includes('*')) return true
+    if (tenantWide.includes(action)) return true
+    if (!scope?.product) return false
+    return (data.productPermissions?.[scope.product] ?? []).includes(action)
   }
 
   return (

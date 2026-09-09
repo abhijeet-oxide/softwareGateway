@@ -305,15 +305,22 @@ func tokenURL(c WorkloadCredentials) string {
 	return strings.TrimRight(c.Issuer, "/") + "/oauth/v2/token"
 }
 
-// scopeFor asks for the two things that are not defaults.
+// scopeFor asks for the three things that are not defaults.
 //
-// Both are load bearing. The first puts the project in the token's audience;
-// the second is what makes the provider assert the roles granted on it. Ask
-// for neither and the token verifies perfectly and arrives carrying no roles,
-// which reads as a permissions problem rather than as a missing scope.
+// All three are load bearing. The first puts the project in the token's
+// audience; the second is what makes the provider assert the roles granted on
+// it. Ask for neither and the token verifies perfectly and arrives carrying no
+// roles, which reads as a permissions problem rather than as a missing scope.
+//
+// The third carries WHICH TENANT this account belongs to, and a Coordinator
+// configured with a tenant refuses a token that does not say (Config.Tenant).
+// Without it the tenant had to be guessed from the first label of an
+// organization's primary domain, which is a domain-naming coincidence rather
+// than a fact about the account.
 func scopeFor(c WorkloadCredentials) string {
 	return "openid urn:zitadel:iam:org:project:id:" + c.ProjectID + ":aud" +
-		" urn:zitadel:iam:org:projects:roles"
+		" urn:zitadel:iam:org:projects:roles" +
+		" urn:zitadel:iam:user:resourceowner"
 }
 
 // fetch performs the client credentials grant.

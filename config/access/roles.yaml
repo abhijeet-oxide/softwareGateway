@@ -22,8 +22,14 @@ tenant:
     - org-security
     - org-reader
 
-# Per-product roles. Created on every product's own project, and held as
-# `<product>:<role>` so a token can say WHICH product a role refers to.
+# Per-product roles, held as `<product>:<role>` so a token can say WHICH
+# product a role refers to - a role claim is keyed by an opaque project id.
+#
+# GRANTED ON `platform`, the project the web application itself belongs to,
+# because that is the only project whose roles a token carries. Each product
+# also gets its own project carrying the same keys, and a grant written there
+# is invisible to every token this stack issues: the person signs in and holds
+# nothing. See docs/design/24-identity-and-access.md section 8.1.
 product:
   roles:
     - product-owner

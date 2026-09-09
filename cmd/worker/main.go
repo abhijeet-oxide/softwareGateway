@@ -107,15 +107,7 @@ func run() error {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
-	workerID := cfg.Worker.WorkerID
-	if workerID == "" {
-		// Defaults to the pod name in Kubernetes, the hostname elsewhere.
-		if h, err := os.Hostname(); err == nil {
-			workerID = h
-		} else {
-			workerID = "worker-unknown"
-		}
-	}
+	workerID := workerName(cfg.Worker.WorkerID, cfg.Worker.Name)
 
 	logger := plog.New(plog.Config{
 		Level:  cfg.Observability.Log.Level,
@@ -176,25 +168,32 @@ func run() error {
 	}
 	products.Swap(loaded)
 
-	// A worker with no products can lease nothing it could execute. Refusing to
-	// start is the whole point: the alternative is what happened on the first
-	// real run - the worker came up, leased two and a half thousand jobs, and
-	// failed every one of them, consuming an attempt each time because attempts
-	// are counted at LEASE time. A worker that cannot do the work must not take
-	// it.
+	// A WORKER WITH NO PRODUCTS DOES NOT LEASE. It still starts.
 	//
-	// The loader returns no error for a missing directory, which is right for
-	// the Coordinator - configuration can arrive later via the watcher - and
-	// wrong here, so the check belongs at this end.
+	// The rule worth keeping is that a worker which cannot do the work must not
+	// take it: on the first real run one came up with no configuration, leased
+	// two and a half thousand jobs and failed every one, consuming an attempt
+	// each time because attempts are counted at LEASE time.
+	//
+	// That was implemented as refusing to START, and those are different
+	// things. Refusing to start makes the data plane depend on configuration
+	// arriving first, which is the opposite of what a deployment wants: a
+	// product added at ten past three should be picked up by a fleet that has
+	// been running since Tuesday, and a fleet that cannot boot until somebody
+	// writes a product file is a fleet that cannot be rolled out ahead of one.
+	//
+	// So the loop gates instead - see CanLease below. The worker starts,
+	// reports the condition in its readiness for as long as it lasts, leases
+	// nothing, and begins working the moment the watcher loads a product. No
+	// restart, and nothing to do on the worker when a product is added.
 	if products.Count() == 0 {
-		return fmt.Errorf(
-			"no product configuration in %s: this worker would lease jobs it cannot execute"+
-				"\npoint it at the same configuration the Coordinator uses, with --config",
-			cfg.ProductsDir())
+		logger.Warn("no product configuration yet; this worker will not lease until there is some",
+			"dir", cfg.ProductsDir())
+	} else {
+		logger.Info("product configuration loaded",
+			"products", products.Count(), "invalid", len(products.Invalid()),
+			"dir", cfg.ProductsDir())
 	}
-	logger.Info("product configuration loaded",
-		"products", products.Count(), "invalid", len(products.Invalid()),
-		"dir", cfg.ProductsDir())
 
 	/* ---- who this worker is, to the Coordinator ----------------------------
 	 *
@@ -257,6 +256,16 @@ func run() error {
 			CopyBufferSize:    int(cfg.Worker.CopyBufferSize),
 			HeartbeatInterval: cfg.Worker.HeartbeatInterval,
 			StallTimeout:      cfg.Worker.StallTimeout,
+			// Asked on every pass rather than captured once, because the
+			// watcher below swaps the registry in place: this is what turns a
+			// deployed product into a working fleet with no restart.
+			CanLease: func() (bool, string) {
+				if products.Count() == 0 {
+					return false, "no product configuration in " + cfg.ProductsDir() +
+						"; a job's repositories cannot be resolved into a registry client"
+				}
+				return true, ""
+			},
 		},
 		logger,
 	)
@@ -363,6 +372,15 @@ func run() error {
 	// `docker ps` and `podman ps`. A worker the Coordinator will not accept is
 	// not a degraded worker. It is a worker doing nothing.
 	hreg.AddReadiness("registration", func(context.Context) health.Result {
+		// NOT LEASING ON PURPOSE is not a failure. A worker with no product
+		// configuration deliberately asks for no work, so it never registers -
+		// and reporting that as DOWN would paint every worker red on a
+		// deployment that is simply ahead of its configuration, which is the
+		// ordinary order of a rollout. Degraded says it, keeps the container
+		// green, and clears itself the moment a product lands.
+		if products.Count() == 0 {
+			return health.Degraded("waiting for product configuration in " + cfg.ProductsDir())
+		}
 		ok, _, detail := loop.Registered()
 		if ok {
 			return health.OK(detail)
@@ -517,4 +535,45 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// workerName is what this process calls itself in the fleet.
+//
+// The hostname alone is not a name. Under Kubernetes it is the POD name and
+// reads perfectly - `swgw-worker-7d9c5f8b6d-x2k9p` says what it is and which
+// replica. Under Docker and Podman it is the CONTAINER ID, so the same fleet
+// list reads `16b81c38de5c`: unique, and nothing on the screen says which
+// container that is or even that it is a worker.
+//
+// So the deployment supplies a name, and the host keeps replicas apart:
+//
+//	--worker-id            wins outright. An operator naming one worker.
+//	name + "-" + host      `worker-16b81c38de5c` under compose.
+//	host                   when the name already contains it, which is what
+//	                       Kubernetes produces by setting the name from the
+//	                       downward API - appending the pod name to itself
+//	                       would be worse than the id ever was.
+//	"worker-unknown"       when there is no hostname at all.
+func workerName(explicit, name string) string {
+	if explicit != "" {
+		return explicit
+	}
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		if name != "" {
+			return name
+		}
+		return "worker-unknown"
+	}
+	if name == "" || strings.Contains(name, host) {
+		return firstNonEmpty(name, host)
+	}
+	return name + "-" + host
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

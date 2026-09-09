@@ -418,7 +418,7 @@ tarred.
 
 | Task | Command |
 |---|---|
-| Add a product | Add YAML to `deploy/products/`, add to the projected volume, merge. Flux applies; reload within ~60 s |
+| Add a product | Add YAML to `data/products/`, add to the projected volume, merge. Flux applies; reload within ~60 s |
 | Rotate a credential | Rotate in Vault. VSO updates the Secret; the mount refreshes; no restart |
 | Change rate limits | Edit the product YAML, merge. Applies to new transfers; in-flight keep planned settings ([02](02-configuration.md) §6) |
 | Scale workers manually | `kubectl scale deploy/worker --replicas=20` (HPA will reassert) |

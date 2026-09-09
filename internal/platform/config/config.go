@@ -696,12 +696,25 @@ type GCConfig struct {
 }
 
 type WorkerConfig struct {
-	CoordinatorEndpoint string        `koanf:"coordinatorEndpoint"`
-	WorkerID            string        `koanf:"workerID"`
-	Address             string        `koanf:"address"`
-	MaxConcurrentJobs   int           `koanf:"maxConcurrentJobs"`
-	CopyBufferSize      int64         `koanf:"copyBufferSize"`
-	HeartbeatInterval   time.Duration `koanf:"heartbeatInterval"`
+	CoordinatorEndpoint string `koanf:"coordinatorEndpoint"`
+	WorkerID            string `koanf:"workerID"`
+	// Name is what this worker calls itself in the fleet, when nothing has set
+	// WorkerID outright.
+	//
+	// The hostname alone is not a name. Under Kubernetes it is the POD name and
+	// reads perfectly; under Docker and Podman it is the container ID, so a
+	// fleet list reads `16b81c38de5c` and nothing on the screen says which
+	// container that is or even that it is a worker.
+	//
+	// So a deployment supplies a name and the id becomes a suffix that keeps
+	// replicas apart: `worker-16b81c38de5c`. Kubernetes sets this from the
+	// downward API to the pod name, which already contains the hostname, and
+	// the suffix is then not appended - see workerName in cmd/worker.
+	Name              string        `koanf:"name"`
+	Address           string        `koanf:"address"`
+	MaxConcurrentJobs int           `koanf:"maxConcurrentJobs"`
+	CopyBufferSize    int64         `koanf:"copyBufferSize"`
+	HeartbeatInterval time.Duration `koanf:"heartbeatInterval"`
 	// StallTimeout is how long one job may make no progress before this worker
 	// abandons it so another attempt can run. Zero uses the default; negative
 	// disables the check.

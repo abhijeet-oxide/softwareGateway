@@ -108,10 +108,13 @@ docker compose run --rm zitadel-init
 | Variable | Default | What it is |
 |---|---|---|
 | `GATEWAY_TENANT` | `default` | The ZITADEL organization. Anything unspecified belongs to it. Leave it alone until you genuinely have a second tenant. |
-| `GATEWAY_PRODUCTS` | `software-01,...` | One ZITADEL project per entry. This is what people are granted access **to**. |
-| `GATEWAY_ORG_ROLES` | `org-admin,org-operator,org-security,org-reader` | Tenant-wide. Name no product. |
-| `GATEWAY_PRODUCT_ROLES` | `product-owner,product-operator,product-reader` | Per product. Stored as `<product>:<role>`. |
+| `DATA_DIR` | `./data` | Where the products, people, roles and policies are. Point it at a checkout of the configuration repository to keep content apart from code. |
 | `AUTH_ENABLED` | `true` | `false` makes every caller anonymous. Local debugging only. |
+
+The products, the roles and the people are **not** environment variables. They
+are files in `DATA_DIR`, because they are content an administrator manages
+rather than settings a deployment is tuned with - and because the same
+directory is what Flux reconciles in a cluster. See [`data/README.md`](data/README.md).
 
 ---
 
@@ -136,7 +139,7 @@ with **no re-login and no new grant**. That is the whole reason the tier exists.
 
 ## 3. Adding people: the file IS the deployment
 
-`deploy/zitadel/users.json` is the provisioning mechanism. Edit it, commit it,
+`data/users/users.yaml` is the provisioning mechanism. Edit it, commit it,
 re-run the init container. Who has access is then reviewable in a pull request
 rather than being clicks in a console nobody can audit later.
 
@@ -182,17 +185,25 @@ is using it.
 ### Adding a product
 
 ```bash
-# 1. add it to GATEWAY_PRODUCTS in .env
-# 2. put its product YAML in deploy/products/
+# 1. write data/products/software-04.yaml
+# 2. give it an owner in data/users/users.yaml:
+#        products:
+#          software-04: [product-owner]
 docker compose run --rm zitadel-init
 ```
 
-Only the new project and its roles are created.
+Only the new project and its roles are created. Step 2 is not optional: the
+seeder refuses a product nobody owns, and `go test ./deploy/...` fails the pull
+request that adds one.
+
+The **replication** side needs nothing at all. The controller and every worker
+watch `data/products` and reload in place, so the new product is visible in the
+interface within seconds and no worker is restarted.
 
 ### Adding a role
 
-Add it to `GATEWAY_ORG_ROLES` or `GATEWAY_PRODUCT_ROLES`, re-run the init
-container, then say what it may do in `deploy/cerbos/policies/`. The two halves
+Add it to `data/access/roles.yaml`, re-run the init container, then say what it
+may do in `data/access/policies/` beside it. The two halves
 are deliberately separate: **ZITADEL holds roles, Cerbos holds permissions**,
 so a new gated endpoint is one line of policy and one code change in one
 commit, with no console work and no re-assigning anybody.
@@ -201,7 +212,7 @@ commit, with no console work and no re-assigning anybody.
 
 ## 4. Permissions
 
-`deploy/cerbos/policies/` is plain YAML, versioned with the code it gates.
+`data/access/policies/` is plain YAML, versioned with the code it gates.
 
 ```yaml
 # security.yaml
@@ -449,11 +460,11 @@ disable certificate verification.
 | Every token rejected, `iss` mismatch | `ZITADEL_EXTERNAL_DOMAIN` is not how the browser reaches ZITADEL. |
 | ZITADEL answers 404 to a healthy service | The `Host` header does not match `ZITADEL_EXTERNAL_DOMAIN`. |
 | `controller` unhealthy at boot | It fails fast on broken auth config rather than starting and refusing everyone. Read its logs. |
-| Worker restarting | No valid product YAML in `deploy/products/`. A worker says so rather than leasing jobs it cannot run. |
+| Worker up but doing nothing, logging `not leasing` | No valid product YAML in `data/products/`. A worker will not lease work it cannot execute, because attempts are counted when a job is handed out. It starts anyway, says so once, and begins working the moment a product is loaded - no restart. |
 | Sign-in ends on "Account Not Found", or "This account is not recognised" | The address the identity provider asserted matches no account here. The seeder prints every account that can sign in, username and address together - compare that list against what the directory actually sends. If the address is right and it still fails, the directory is asserting something else (commonly a user principal name where there is no mail attribute): set `SSO_LINK_ON=username` and re-run the seeder. |
-| Sign-in ends on "This account is not recognised" | Correct, and the point: accounts are provisioned here, never created by signing in. Add that person's address to `deploy/zitadel/users.json` (or `BOOTSTRAP_ADMIN_EMAIL` for the administrator) and re-run the seeder. The seeder lists which addresses can sign in at the end of every run, and refuses to seed a stack where that list would be empty. |
+| Sign-in ends on "This account is not recognised" | Correct, and the point: accounts are provisioned here, never created by signing in. Add that person's address to `data/users/users.yaml` (or `BOOTSTRAP_ADMIN_EMAIL` for the administrator) and re-run the seeder. The seeder lists which addresses can sign in at the end of every run, and refuses to seed a stack where that list would be empty. |
 | Signed in and every page says "This account has no access yet" | Correct, and the point: routes are refused to an account holding no roles. Grant one - the row below - and sign in again. |
-| Signed in, but the profile says "Tenant roles: none" | The roles are on a different account. A sign-in through the identity provider creates its own account when nothing already holds that address, so the seeded one keeps the roles and the one you actually sign in as holds none. Set `BOOTSTRAP_ADMIN_EMAIL` to the address you sign in with, or add yourself to `deploy/zitadel/users.json` with that address, and re-run the seeder - it matches on the address, so the roles land on the account you use. Roles arrive in the token, so sign out and back in. |
+| Signed in, but the profile says "Tenant roles: none" | The roles are on a different account. A sign-in through the identity provider creates its own account when nothing already holds that address, so the seeded one keeps the roles and the one you actually sign in as holds none. Set `BOOTSTRAP_ADMIN_EMAIL` to the address you sign in with, or add yourself to `data/users/users.yaml` with that address, and re-run the seeder - it matches on the address, so the roles land on the account you use. Roles arrive in the token, so sign out and back in. |
 | Two accounts for you in ZITADEL's account switcher, one you cannot sign in to | Same cause. The seeder now names both at the end of its run. The leftover has no identity at the provider and password sign-in is off, which is exactly why it cannot be signed in to; delete it in the console under Users. |
 | Accounts still there after `docker compose down` | `down` keeps volumes - only `down -v` discards them. ZITADEL's whole directory lives in the `pgdata` volume, so every user, role and grant survives a rebuild. That is what you want almost always, and it is why a duplicate made once stays until somebody removes it. |
 | Worker `unhealthy` | The Coordinator is not accepting it, and the worker's own log says why: `docker compose logs worker`. `UNAUTHENTICATED: no bearer token` means its credentials have not been published - run `docker compose run --rm zitadel-init` and it recovers by itself within seconds, no restart. The full report is at `:8081/readyz` on the worker, which names the failing check. |

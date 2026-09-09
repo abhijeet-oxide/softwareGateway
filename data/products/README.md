@@ -3,11 +3,15 @@
 Drop product YAML documents here. They are mounted read-only into the
 controller, which watches the directory and hot-reloads on change.
 
-This directory is separate from `GATEWAY_PRODUCTS` in `.env`, and the split is
-deliberate: this is what the gateway REPLICATES, that is what people can be
-granted ACCESS to. They are expected to name the same products, and
-`transferctl config check` reports a product configured here with no project in
-ZITADEL.
+This directory is the SOURCE OF TRUTH for both halves. It used to be one of two:
+this said what the gateway replicates and `GATEWAY_PRODUCTS` in `.env` said what
+people could be granted access to, in a different format, applied a different
+way, with nothing checking that they named the same products - so a product
+could exist that nobody could be granted access to, and nothing said so.
+
+Now a document here creates the product's ZITADEL project and its roles as well,
+and the seeder refuses to run when nobody in `../users/users.yaml` holds the
+owner role on it. See [`../README.md`](../README.md).
 
 See docs/design/02-configuration.md for the document schema.
 

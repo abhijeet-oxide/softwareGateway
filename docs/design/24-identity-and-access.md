@@ -96,7 +96,7 @@ Organization  = TENANT      (default)
 │
 ├── Project "software-01"   = one PRODUCT
 ├── Project "software-02"     product-owner, product-operator, product-reader
-└── ...                       (one project per entry in GATEWAY_PRODUCTS)
+└── ...                       (one project per document in data/products)
 ```
 
 A **role assignment** binds (user × project × roles) inside an org. That is
@@ -283,7 +283,7 @@ their address.
 > and it is the only one that produces no token at all.
 >
 > Who may use this gateway is decided by an administrator in
-> `deploy/zitadel/users.json`, reviewable in a pull request. It is not decided
+> `data/users/users.yaml`, reviewable in a pull request. It is not decided
 > by who happens to hold an account in the corporate directory, which is
 > everybody.
 
@@ -417,19 +417,29 @@ SSO_CLIENT_ID=<from Entra app registration>
 SSO_CLIENT_SECRET=<from Entra app registration>
 SSO_AUTO_REDIRECT=true          # single IdP: skip ZITADEL's own login form
 
-# --- what exists ------------------------------------------------------------
-GATEWAY_PRODUCTS=software-01,software-02,software-03
-GATEWAY_ORG_ROLES=org-admin,org-operator,org-security,org-reader
-GATEWAY_PRODUCT_ROLES=product-owner,product-operator,product-reader
+# --- what exists: NOT here. See data/README.md ------------------------------
+#   data/products/*.yaml      one project per product, with its roles
+#   data/access/roles.yaml    the roles themselves, both tiers
+#   data/users/users.yaml     the people, and their role on each product
 
 # --- break glass: set EXACTLY ONE (see §7) ----------------------------------
 BOOTSTRAP_ADMIN_EMAIL=platform-admin@example.com    # production
 # BOOTSTRAP_ADMIN_PASSWORD=...                      # local development only
 ```
 
-`GATEWAY_PRODUCTS` is the seeder's input. It is deliberately NOT read from the
-product YAML directory: see §3's decision. The two lists are expected to match,
-and `transferctl config check` should report a product with no project.
+**The product directory is the seeder's input, and that is a reversal.** It was
+`GATEWAY_PRODUCTS`, a comma-separated list in `.env`, deliberately separate from
+the product documents on the reasoning that replication and access are different
+concerns. They are - but they are not different SUBJECTS, and keeping them in two
+formats meant nothing could check one against the other: a product could be
+replicated with no project to grant access to, or a project could outlive the
+product it was made for, and the only symptom either way was somebody unable to
+open something.
+
+One list now, in `data/products`, with the access rule enforced where the two
+files first meet: a product nobody holds `product.ownerRole` on in
+`data/users/users.yaml` refuses to seed. `go test ./deploy/...` makes the same
+check on the pull request.
 
 ## 7. The bootstrap admin exists to appoint a real one
 
@@ -554,7 +564,7 @@ consulted. **A permission model no handler asks is documentation.**
 > closed, which is why a product-scoped caller cannot list every transfer.
 
 > **Corrected while doing this:** the role ladder gave `operator` `ActionApply`.
-> `deploy/cerbos/policies/download.yaml` grants `apply` to `org_wide_admin` and
+> `data/access/policies/download.yaml` grants `apply` to `org_wide_admin` and
 > `product_owner` only, and §5.2 describes org-operator in the same terms. The
 > disagreement cost nothing while nothing consulted the ladder, and would have
 > handed every operator the one action that writes into somebody else's
@@ -564,7 +574,7 @@ consulted. **A permission model no handler asks is documentation.**
 
 The policy engine was constructed at startup and never consulted; the decision
 came from a role ladder compiled into the binary. That is the opposite of why a
-PDP is in this stack. `deploy/cerbos/policies` is now the only answer whenever
+PDP is in this stack. `data/access/policies` is now the only answer whenever
 an engine is configured - not a second opinion layered over the ladder, which
 would be two answers that can disagree and a shipped behaviour decided by
 whichever was checked last.
@@ -702,7 +712,7 @@ and easy to miss:
 
 1. `docker compose up` on a clean machine yields a working login and an
    authorized request, with no manual step.
-2. Re-running the seeder after adding to `GATEWAY_PRODUCTS` adds only the new
+2. Re-running the seeder after adding a product document adds only the new
    project and its roles.
 3. A global role authorizes a product created after the token was issued.
 4. A user with no grant on a product is refused it.
@@ -739,7 +749,7 @@ docker compose up -d          # start, in dependency order
 docker compose down           # stop, reverse order, data kept
 docker compose down -v        # stop and discard the databases
 
-# after editing GATEWAY_PRODUCTS in .env:
+# after adding a document to data/products and an owner to data/users/users.yaml:
 docker compose run --rm zitadel-init
 ```
 

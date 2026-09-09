@@ -416,7 +416,7 @@ transferctl audit list --subject-id 9c1e8f2a          # everything about one tra
 ### "Is my config valid?" - runs in CI, pre-merge
 
 ```bash
-transferctl config validate ./deploy/products/
+transferctl config validate ./data/products/
 ```
 
 ---
@@ -438,8 +438,8 @@ Five people, ten situations. Each scenario names **the design decision that prod
 Dan writes **one file**. Everything about the product - sources, targets, credentials, CA bundle, proxy, rate limits, notification recipients, the download and the rules that trigger it, verification policy - is in that one ConfigMap.
 
 ```bash
-$ vim deploy/products/vendor-c-analytics.yaml
-$ transferctl config validate ./deploy/products/
+$ vim data/products/vendor-c-analytics.yaml
+$ transferctl config validate ./data/products/
 
   vendor-a-platform.yaml     OK   2 sources, 2 targets, 2 rules
   vendor-c-analytics.yaml    ERROR

@@ -1,0 +1,40 @@
+# The roles this deployment grants, and nothing else.
+#
+# WHY THIS IS A FILE AND NOT THREE ENVIRONMENT VARIABLES. It used to be
+# GATEWAY_ORG_ROLES and GATEWAY_PRODUCT_ROLES in .env, which meant the names a
+# Cerbos policy is written against lived in a different place from the policy,
+# in a different format, applied by a different mechanism. They are one subject,
+# so they are one directory: the roles here, the policies that decide what each
+# one may do beside them.
+#
+# Applied by the seeder (`docker compose run --rm zitadel-init`, or the seeding
+# Job under Flux). Adding a role here creates it on every project on the next
+# run; removing one does NOT delete it, because a role somebody still holds is
+# not a line in a file.
+
+# Tenant-wide roles. They cover products that do not exist yet, which is what
+# makes them different in kind from the product roles below rather than just
+# broader.
+tenant:
+  roles:
+    - org-admin
+    - org-operator
+    - org-security
+    - org-reader
+
+# Per-product roles. Created on every product's own project, and held as
+# `<product>:<role>` so a token can say WHICH product a role refers to.
+product:
+  roles:
+    - product-owner
+    - product-operator
+    - product-reader
+
+  # THE ROLE EVERY PRODUCT MUST HAVE SOMEBODY HOLDING.
+  #
+  # Seeding fails when a product in data/products has nobody in
+  # data/users/users.yaml holding this role on it. A product nobody owns is a
+  # product whose downloads nobody can approve and whose configuration nobody
+  # is accountable for; it is worth refusing to deploy rather than discovering
+  # months later.
+  ownerRole: product-owner

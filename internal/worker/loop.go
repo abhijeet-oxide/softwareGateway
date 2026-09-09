@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/semaphore"
@@ -58,6 +59,21 @@ type Options struct {
 	// hours, which an 8 GB blob on a slow link legitimately needs. See
 	// watchdog.go for why the distinction is movement rather than elapsed time.
 	StallTimeout time.Duration
+
+	// CanLease reports whether this worker is currently able to execute what it
+	// would be handed, and says why not when it is not.
+	//
+	// A worker with no product configuration can execute nothing: it cannot
+	// resolve a job's repositories into a registry client. It must therefore
+	// not LEASE - attempts are counted when a job is handed out, so a worker
+	// that takes work it cannot do burns the queue's retries rather than merely
+	// wasting its own time.
+	//
+	// That is not the same as refusing to run, which is what this used to be.
+	// Configuration arrives on its own schedule, is watched, and is reloaded in
+	// place; the worker waits for it and starts working when it lands. Nil
+	// means always able.
+	CanLease func() (bool, string)
 }
 
 // Loop runs jobs until its context is cancelled.
@@ -96,6 +112,10 @@ type Loop struct {
 	// a worker serves nothing, so a probe server that answers proves only that
 	// the probe server is alive.
 	pulse pulse
+
+	// blocked records whether the last pass declined to lease, so the reason is
+	// logged when it starts and when it stops rather than every few seconds.
+	blocked atomic.Bool
 
 	// active tracks what this worker holds, for the heartbeat to renew.
 	mu     sync.Mutex
@@ -224,6 +244,23 @@ func (l *Loop) Run(ctx context.Context) error {
 
 // tick performs one lease-and-dispatch, returning how long to wait next.
 func (l *Loop) tick(ctx context.Context) time.Duration {
+	// Asked before capacity, because a worker that cannot execute anything has
+	// no business asking for work however much room it has. Logged on the
+	// EDGE only: this is checked every few seconds and the condition lasts
+	// until somebody deploys a file, so logging each pass would bury the run.
+	if l.opts.CanLease != nil {
+		if ok, why := l.opts.CanLease(); !ok {
+			if !l.blocked.Swap(true) {
+				l.log.WarnContext(ctx, "not leasing", "worker", l.opts.WorkerID, "reason", why)
+			}
+			l.pulse.sleeping(idleRecheck)
+			return idleRecheck
+		}
+		if l.blocked.Swap(false) {
+			l.log.InfoContext(ctx, "leasing again", "worker", l.opts.WorkerID)
+		}
+	}
+
 	capacity := l.capacity()
 	if capacity == 0 {
 		// Full. A completion wakes this loop, so this is a safety net for the
@@ -306,6 +343,15 @@ const DefaultLeaseRetry = 5 * time.Second
 // worker holding sixteen multi-gigabyte blobs asking for more work every two
 // seconds is a lease call per second per worker that can never return anything.
 const fullWorkerRecheck = 30 * time.Second
+
+// idleRecheck is how long a worker that cannot execute anything waits before
+// asking itself again.
+//
+// Short, because the thing it is waiting for is a file appearing in a watched
+// directory and the answer is a map lookup: the cost of asking is nothing, and
+// the cost of asking late is a fleet that sits idle for half a minute after a
+// product is deployed. Nothing leaves this process while it holds.
+const idleRecheck = 3 * time.Second
 
 // refillDebounce is how long a refill waits for the rest of a burst.
 //

@@ -72,7 +72,7 @@ func (p *Packages) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEvent, 
 		SELECT a.id, a.occurred_at, a.event_type, a.actor, a.actor_kind,
 		       COALESCE(a.product_name, ''), COALESCE(a.subject_kind, ''),
 		       COALESCE(a.subject_id, ''), COALESCE(a.request_id, ''),
-		       COALESCE(a.trace_id, ''), a.outcome, COALESCE(a.detail, '')
+		       COALESCE(a.trace_id, ''), a.outcome, ` + p.dialect.JSONText("a.detail") + `
 		  FROM audit_events a
 		 WHERE 1 = 1`
 	var args []any

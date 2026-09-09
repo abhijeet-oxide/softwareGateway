@@ -313,3 +313,71 @@ func TestRefusalNamesTheSituation(t *testing.T) {
 		t.Errorf("a caller with the wrong product is not told which one: %q", wrongOne)
 	}
 }
+
+// oneProduct is an engine that allows a resource only when it names the
+// product it was built with. It is the shape of a product-tier grant, without
+// needing a PDP to express it.
+type oneProduct struct{ product string }
+
+func (e oneProduct) Check(_ context.Context, _ authz.Identity, res authz.Resource, actions ...string) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, a := range actions {
+		out[a] = res.Product == e.product
+	}
+	return out, nil
+}
+
+// A route that acts across products hands the handler the products it was
+// authorized for, and the handler is what narrows.
+//
+// This is the pair that makes AnyScope safe. Widening the door without it is
+// how a caller scoped to one product reaches all of them, so the two are
+// tested together rather than separately.
+func TestAnAnyScopeRouteTellsTheHandlerWhatItMayTouch(t *testing.T) {
+	id := fromAuthz(authz.Identity{
+		Subject: "u1", Tenant: "default",
+		OrgRoles: []string{"org-member"},
+		Products: map[string][]string{"software-01": {"product-owner"}, "software-02": {"product-reader"}},
+	})
+
+	var permitted []string
+	h := Authorize(oneProduct{product: "software-01"},
+		func(w http.ResponseWriter, _ *http.Request, _ string) {
+			w.WriteHeader(http.StatusForbidden)
+		})(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		permitted = PermittedProducts(r.Context())
+	}))
+
+	r := httptest.NewRequest("POST", "/api/v1/products:discover", nil)
+	r = r.WithContext(context.WithValue(r.Context(), ctxKeyIdentity{}, id))
+	h.ServeHTTP(httptest.NewRecorder(), r)
+
+	if len(permitted) != 1 || permitted[0] != "software-01" {
+		t.Fatalf("the handler was told it may touch %v, want only software-01", permitted)
+	}
+}
+
+// A caller who passes the TENANT-WIDE question is told nothing, because empty
+// means unrestricted - and a handler reading an empty list as "no products"
+// would show an org administrator an empty estate.
+func TestATenantWideCallerIsNotNarrowed(t *testing.T) {
+	id := fromAuthz(authz.Identity{
+		Subject: "u2", Tenant: "default", OrgRoles: []string{"org-admin"},
+	})
+
+	narrowed := true
+	h := Authorize(authz.AllowAll{},
+		func(w http.ResponseWriter, _ *http.Request, _ string) {
+			w.WriteHeader(http.StatusForbidden)
+		})(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		narrowed = PermittedProducts(r.Context()) != nil
+	}))
+
+	r := httptest.NewRequest("POST", "/api/v1/products:discover", nil)
+	r = r.WithContext(context.WithValue(r.Context(), ctxKeyIdentity{}, id))
+	h.ServeHTTP(httptest.NewRecorder(), r)
+
+	if narrowed {
+		t.Fatal("a tenant-wide caller was narrowed to today's products")
+	}
+}

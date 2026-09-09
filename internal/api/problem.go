@@ -96,7 +96,7 @@ func internalErrorWriter(logger *slog.Logger) func(http.ResponseWriter, *http.Re
 // that was working perfectly.
 func permissionDeniedWriter(w http.ResponseWriter, r *http.Request, detail string) {
 	if detail == "" {
-		detail = "This credential does not permit that."
+		detail = "Access denied: this credential does not have permission to perform this request."
 	}
 	Error(w, r, v1.CodePermissionDenied, detail)
 }

@@ -16,6 +16,7 @@ import {
   useProduct, useRunDownload,
 } from '../api/queries'
 import { useCan, useIdentity } from '../auth/permissions'
+import { ActionButton } from '../components/access'
 import {
   deriveStatus, downloadedAt, failureReason, isLive, matches, packageReference, promotableTargets,
   promotedAt, repositoryOf, repositoryUrl, titleCase, verification, version,
@@ -207,7 +208,7 @@ function MeasurePanel({ pkg, inspect, cancel, disabled }: {
             </Typography.Text>
           </Space>
         }
-        action={<Button size="small" onClick={run}>Try again</Button>}
+        action={<Button size="small" loading={inspect.isPending} onClick={run}>Try again</Button>}
       />
     )
   }
@@ -339,9 +340,15 @@ function MeasurePanel({ pkg, inspect, cancel, disabled }: {
           </Space>
         }
         action={
-          <Button size="small" disabled={disabled} onClick={run}>
+          <ActionButton
+            permission="package.inspect"
+            scope={{ product: pkg?.product }}
+            size="small"
+            disabled={disabled}
+            onClick={run}
+          >
             Analyze again
-          </Button>
+          </ActionButton>
         }
       />
     )
@@ -364,14 +371,16 @@ function MeasurePanel({ pkg, inspect, cancel, disabled }: {
   if (analysed) {
     return (
       <Space direction="vertical" size={4} style={{ marginTop: 12 }}>
-        <Button
+        <ActionButton
+          permission="package.inspect"
+          scope={{ product: pkg?.product }}
           size="small"
           icon={<Icon as={AnalyzeIcon} title="Analyze" />}
           disabled={disabled}
           onClick={run}
         >
           Analyze again
-        </Button>
+        </ActionButton>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           Re-reads anything this release's record is missing. A tree that has already been
           walked cannot change - it is addressed by digest - so this contacts the vendor
@@ -383,14 +392,16 @@ function MeasurePanel({ pkg, inspect, cancel, disabled }: {
 
   return (
     <Space direction="vertical" size={4} style={{ marginTop: 12 }}>
-      <Button
+      <ActionButton
+        permission="package.inspect"
+        scope={{ product: pkg?.product }}
         size="small"
         icon={<Icon as={AnalyzeIcon} title="Analyze" />}
         disabled={disabled}
         onClick={run}
       >
         Analyze package
-      </Button>
+      </ActionButton>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         Walks the manifest tree in the vendor registry to establish what this release contains -
         its files, and what each part weighs. Nothing is downloaded.
@@ -1096,7 +1107,7 @@ export default function PackageDetail() {
     setParams(next, { replace: true })
   }
 
-  const mayOperate = useCan('operate', { product: productName })
+  const mayOperate = useCan('software_download.request', { product: productName })
   const { who } = useIdentity()
   const downloadEnabled = who?.features?.fileDownloads ?? false
   const [confirming, setConfirming] = useState(false)
@@ -1163,8 +1174,9 @@ export default function PackageDetail() {
           : `This release was already requested; the existing download continues.`,
       )
       navigate('/downloads')
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'The download could not be started.')
+    } catch {
+      // Reported centrally; the confirmation stays open so the reader can see
+      // what was refused beside what they were confirming.
     }
   }
 
@@ -1254,13 +1266,15 @@ export default function PackageDetail() {
               feature is broken.
             */}
             {p && promotableTargets(p, prod).length > 0 && (
+              // The permission is the button's own now - promotion is
+              // `software_download.promote`, which is an owner's and an
+              // administrator's, and is a narrower thing than being allowed to
+              // start a download. See components/promote.
               <PromoteButton
                 product={productName!}
                 reference={reference!}
                 repository={repository}
                 packageLabel={`${packageName(p)}:${version(p)}`}
-                disabled={!mayOperate}
-                disabledReason="You do not have permission to promote a release."
               />
             )}
             {existingDownload ? (
@@ -1268,22 +1282,17 @@ export default function PackageDetail() {
                 <Button type="primary" icon={<Icon as={DownloadIcon} title="Download" />}>View download</Button>
               </Link>
             ) : (
-              <Tooltip
-                title={
-                  mayOperate
-                    ? 'Downloads the whole release into the internal repositories and configures the mirror OpenShift pulls from.'
-                    : 'You do not have permission to start a download.'
-                }
+              <ActionButton
+                permission="software_download.request"
+                scope={{ product: productName }}
+                type="primary"
+                icon={<Icon as={DownloadIcon} title="Download" />}
+                disabled={!p}
+                title="Downloads the whole release into the internal repositories and configures the mirror OpenShift pulls from."
+                onClick={() => setConfirming(true)}
               >
-                <Button
-                  type="primary"
-                  icon={<Icon as={DownloadIcon} title="Download" />}
-                  disabled={!mayOperate || !p}
-                  onClick={() => setConfirming(true)}
-                >
-                  Download
-                </Button>
-              </Tooltip>
+                Download
+              </ActionButton>
             )}
           </Space>
         }

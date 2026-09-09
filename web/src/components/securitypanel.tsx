@@ -10,6 +10,7 @@ import {
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
 import { CopyOutlined, DownloadOutlined, ExportOutlined, LoadingOutlined } from '../icons'
+import { reportFailure } from './feedback'
 import {
   packageSecurityExportUrl, useCancelPackageReplication, useCancelPackageSecuritySync,
   usePackageSecurity, useReplicatePackageSecurity, useSecurityDocument, useSyncPackageSecurity,
@@ -166,7 +167,10 @@ export function SecurityTab({ product, reference, repository }: {
           : 'A sync is already running for this release.')
         void security.refetch()
       },
-      onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be started.'),
+      // No onError. Every mutation failure is reported by the query client with
+      // the code, the detail and the request id the Coordinator sent, which a
+      // hand-written `message.error(e.message)` here threw away - and adding one
+      // now would say the same thing twice, worse. See components/feedback.
     })
   }
 
@@ -178,7 +182,6 @@ export function SecurityTab({ product, reference, repository }: {
           : 'That sync had already finished.')
         void security.refetch()
       },
-      onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be stopped.'),
     })
   }
 
@@ -205,9 +208,6 @@ export function SecurityTab({ product, reference, repository }: {
         }
         void security.refetch()
       },
-      onError: (e) => message.error(e instanceof Error
-        ? e.message
-        : 'This release could not be replicated.'),
       onSettled: () => setReplicating(undefined),
     })
   }
@@ -227,9 +227,6 @@ export function SecurityTab({ product, reference, repository }: {
           : 'That replication had already finished.')
         void security.refetch()
       },
-      onError: (e) => message.error(e instanceof Error
-        ? e.message
-        : 'The replication could not be stopped.'),
     })
   }
 
@@ -3502,7 +3499,6 @@ const ArtifactTable = memo(function ArtifactTable({ reports, whole, freshness }:
  */
 function SbomButton({ doc }: { doc?: SecurityDocumentRef }) {
   const [running, setRunning] = useState(false)
-  const { message } = App.useApp()
 
   if (!doc?.url) return null
 
@@ -3511,9 +3507,7 @@ function SbomButton({ doc }: { doc?: SecurityDocumentRef }) {
     try {
       await download(doc.url!)
     } catch (err) {
-      message.error(err instanceof Error
-        ? `The SBOM could not be produced: ${err.message}`
-        : 'The SBOM could not be produced.')
+      reportFailure(err, 'Download SBOM')
     } finally {
       setRunning(false)
     }

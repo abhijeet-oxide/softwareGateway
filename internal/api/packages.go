@@ -1621,7 +1621,34 @@ func (s *Server) handleDiscoverAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	products := s.deps.Discovery.Products()
+	// WHAT "EVERYTHING" MEANS FOR THIS CALLER.
+	//
+	// The loop says which products discovery is polling; the authorization
+	// decision says which of them this caller may scan. A product owner asking
+	// for a fleet-wide scan gets their own fleet - which is the whole of the
+	// estate they can see - rather than a refusal, and an org operator gets all
+	// of it, because an empty narrowing means unrestricted.
+	//
+	// The narrowing comes from the middleware rather than being derived here:
+	// it has already asked the policy engine product by product, and a second
+	// derivation from the identity would be a second authorization decision
+	// written somewhere nobody reviews it against the policies. See
+	// middleware.PermittedProducts.
+	polled := s.deps.Discovery.Products()
+	products := permitted(r, polled)
+	// NOTHING TO SCAN and NOTHING YOU MAY SCAN are two different answers.
+	//
+	// A deployment polling no product at all is an empty result, not a
+	// failure - there is nothing to refuse anybody. A caller narrowed to
+	// nothing while the loop is polling products is a refusal, and saying "no
+	// products" to them would report the estate as empty because of their
+	// roles.
+	if len(products) == 0 && len(polled) > 0 {
+		Error(w, r, v1.CodePermissionDenied,
+			"Access denied: this account does not have the product.discover permission "+
+				"on any product this deployment is polling.")
+		return
+	}
 	resp := v1.DiscoverAllResponse{Products: []v1.DiscoverAllProduct{}}
 
 	for _, name := range products {

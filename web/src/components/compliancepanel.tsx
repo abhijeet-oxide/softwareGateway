@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  App, Button, Card, Descriptions, Drawer, Empty, Input, Segmented, Select, Skeleton,
+  Button, Card, Descriptions, Drawer, Empty, Input, Segmented, Select, Skeleton,
   Space, Table, Tag, Tooltip, Typography,
 } from 'antd'
 import type { ReactNode } from 'react'
@@ -178,8 +178,6 @@ export function ComplianceTab({ product, reference, repository }: {
   reference: string
   repository?: string
 }) {
-  const { message } = App.useApp()
-
   /*
    * WHAT IS ON SCREEN, and how much of it the server has to answer for.
    *
@@ -264,10 +262,12 @@ export function ComplianceTab({ product, reference, repository }: {
     [manifests.data],
   )
 
+  // No onError: `message.error(String(e))` printed `ApiError: ...` at somebody,
+  // which is a stringified exception rather than a sentence. The query client
+  // reports it with the Coordinator's own detail and its request id. See
+  // components/feedback.
   const start = () => {
-    run.mutate({ product, ref: reference, repository }, {
-      onError: (e) => message.error(String(e)),
-    })
+    run.mutate({ product, ref: reference, repository })
   }
 
   /*

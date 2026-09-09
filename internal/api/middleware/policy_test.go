@@ -205,6 +205,16 @@ func TestPolicyDecisionsAgainstCerbos(t *testing.T) {
 		// ... except the audit trail, which the handler narrows by product.
 		{"owner reads the audit trail", owner, "GET", "/api/v1/auditEvents", true},
 		{"owner lists products", owner, "GET", "/api/v1/products", true},
+		// THE HEADLINE CASE. A fleet-wide scan is one product owner asking
+		// about the fleet they hold, and the handler narrows it to exactly
+		// that - see handleDiscoverAll. Refusing it disabled the one control
+		// this product exists to offer for the people most likely to use it.
+		{"owner runs a fleet-wide scan", owner, "POST", "/api/v1/products:discover", true},
+		{"owner scans their own product", owner, "POST",
+			"/api/v1/products/software-01/packages:discover", true},
+		{"owner scans another product", owner, "POST",
+			"/api/v1/products/software-02/packages:discover", false},
+		{"nobody runs a fleet-wide scan", nobody, "POST", "/api/v1/products:discover", false},
 	}
 
 	for _, c := range cases {

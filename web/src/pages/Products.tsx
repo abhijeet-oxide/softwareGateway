@@ -133,12 +133,9 @@ export default function Products() {
   // Whether an empty listing is about this ACCOUNT rather than about the
   // deployment. Held here rather than derived in the render so the two empty
   // states below read as the two different facts they are.
-  const { who, can } = useIdentity()
+  const { who, canAny } = useIdentity()
   const contact = useSupportContact()
-  const noProductAccess = Boolean(
-    who?.authenticated && !can('read') &&
-    Object.keys(who.productPermissions ?? {}).length === 0,
-  )
+  const noProductAccess = Boolean(who?.authenticated && !canAny('product.view'))
 
   const [expanded, setExpanded] = useState<string[]>(routeProduct ? [routeProduct] : [])
   // A rejected product OPENS ITSELF, once, the first time it is seen.

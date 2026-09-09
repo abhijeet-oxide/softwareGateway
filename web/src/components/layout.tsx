@@ -15,6 +15,7 @@ import { bytes, formatAbsolute, formatBytes, formatCount } from '../domain/forma
 import { ARTIFACT_ICONS, DownloadIcon, Icon, PackageIcon, RocketIcon } from './icons'
 import type { IconComponent } from './icons'
 import { usePresentComponents } from '../api/queries'
+import { describeFailure } from '../api/errors'
 import { c, EmptyArt, EmptyState, mono } from '../uikit'
 import { NA } from './value'
 
@@ -177,16 +178,56 @@ export function EmptyStateCard({
   )
 }
 
-/** An error that says what happened, what it means, and what to do. */
+/**
+ * A failure, in the band every page puts one in.
+ *
+ * # What it says now that it did not
+ *
+ * It used to say "This could not be loaded" over `error.message` and offer a
+ * Try again on every failure alike. Three things were wrong with that, and all
+ * three cost somebody a support conversation:
+ *
+ *   - A REFUSAL is not a loading failure. "This could not be loaded" over a 403
+ *     sends a person to check the network for a system that is working
+ *     perfectly and has told them exactly what is missing.
+ *   - The REQUEST ID was dropped. It is the one thing that ties this screen to
+ *     a line in the Coordinator's log, and it arrives on every problem
+ *     document.
+ *   - TRY AGAIN was offered for failures that cannot succeed on a retry. A
+ *     button whose honest outcome is the same error is worse than no button.
+ *
+ * All three are decided in `api/errors`, once, so this band and the toasts and
+ * the boot screens read a failure the same way.
+ */
 export function ErrorState({ error, retry }: { error: unknown; retry?: () => void }) {
-  const message = error instanceof Error ? error.message : 'Something went wrong.'
+  const failure = describeFailure(error)
   return (
     <Alert
-      type="error"
+      // A refusal is not a fault. Amber says "this is deliberate and it is
+      // about your account"; red says "something is broken", and only one of
+      // those is true.
+      type={failure.kind === 'denied' ? 'warning' : 'error'}
       showIcon
-      message="This could not be loaded"
-      description={message}
-      action={retry && <Button size="small" onClick={retry}>Try again</Button>}
+      message={failure.title}
+      description={
+        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+          <span>{failure.detail}</span>
+          {failure.requestId && (
+            <Typography.Text
+              type="secondary"
+              copyable={{ text: failure.requestId, tooltips: ['Copy request id', 'Copied'] }}
+              style={{ fontFamily: mono, fontSize: 11.5, wordBreak: 'break-all' }}
+            >
+              {failure.requestId}
+            </Typography.Text>
+          )}
+        </Space>
+      }
+      action={
+        retry && failure.retryable && (
+          <Button size="small" onClick={retry}>Try again</Button>
+        )
+      }
     />
   )
 }

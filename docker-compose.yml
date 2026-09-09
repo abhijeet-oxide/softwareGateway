@@ -183,9 +183,11 @@ services:
       ZITADEL_PUBLIC_URL: http://${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}
       WEB_PUBLIC_URL: http://localhost:${WEB_PORT:-8000}
       GATEWAY_TENANT: ${GATEWAY_TENANT:-default}
-      GATEWAY_PRODUCTS: ${GATEWAY_PRODUCTS:-software-01,software-02,software-03}
-      GATEWAY_ORG_ROLES: ${GATEWAY_ORG_ROLES:-org-admin,org-operator,org-security,org-reader}
-      GATEWAY_PRODUCT_ROLES: ${GATEWAY_PRODUCT_ROLES:-product-owner,product-operator,product-reader}
+      # WHAT THIS DEPLOYMENT IS, in one directory. The products, the people,
+      # the roles and the policies were four formats in four places applied by
+      # four mechanisms; they are one subject, so they are one mount. The same
+      # directory Flux reconciles in a cluster - see data/README.md.
+      GATEWAY_DATA_DIR: /data
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
       # Defaulted so a zero-config run has an admin who can actually sign in.
       # Setting SSO_ISSUER makes the seeder REFUSE this, so the convenience
@@ -215,7 +217,6 @@ services:
       BRANDING_LOGO_FILE: ${BRANDING_LOGO_FILE:-}
       BRANDING_LOGO_DARK_FILE: ${BRANDING_LOGO_DARK_FILE:-}
       BRANDING_LANGUAGES: ${BRANDING_LANGUAGES:-en}
-      BOOTSTRAP_USERS_FILE: /bootstrap-users.json
       # Who the worker credentials are written FOR. This container is root and
       # the worker image is distroless nonroot, so a 0600 file written here is
       # unreadable there unless it is handed over. 65532 is the nonroot uid in
@@ -236,7 +237,10 @@ services:
       # The data plane's credentials. Its own volume: see the volumes block.
       - workercreds:/workercreds
       - ./deploy/zitadel/bootstrap.mjs:/bootstrap.mjs:ro
-      - ./deploy/zitadel/users.json:/bootstrap-users.json:ro
+      # Read-only and whole: the seeder reads products, users, roles and the
+      # relationships between them, and refuses to write anything if they
+      # disagree - a product with no owner, a document with no name.
+      - ${DATA_DIR:-./data}:/data:ro
       # The sign-in screen's logo. Mount another directory here to brand it
       # without touching the repository - see deploy/zitadel/branding/README.md.
       - ${BRANDING_DIR:-./deploy/zitadel/branding}:/branding:ro
@@ -358,7 +362,7 @@ services:
       # connection in one that has.
       CERBOS_NO_TELEMETRY: "1"
     volumes:
-      - ./deploy/cerbos/policies:/policies:ro
+      - ${DATA_DIR:-./data}/access/policies:/policies:ro
       - ./deploy/cerbos/config.yaml:/config/config.yaml:ro
     healthcheck:
       # Defaults to the gRPC health protocol on :3593, which the REST API sits on.
@@ -426,7 +430,12 @@ services:
     # controller ships no CORS middleware) AND lets this service scale: a fixed
     # host port would collide the moment CONTROLLER_REPLICAS > 1.
     volumes:
-      - ./deploy/products:/etc/softwaregateway/products:ro
+      - ${DATA_DIR:-./data}/products:/etc/softwaregateway/products:ro
+      # REGISTRY CREDENTIALS, in the layout a projected Kubernetes Secret
+      # produces: <secretName>/<key>, one file per key. The same path, the same
+      # shape and the same code in both deployments; locally the files are
+      # written by hand and are not committed. See data/secrets/README.md.
+      - ${DATA_DIR:-./data}/secrets/local:/etc/softwaregateway/secrets:ro
     expose:
       - "8080"
     deploy:
@@ -487,6 +496,13 @@ services:
         condition: service_completed_successfully
     environment:
       SWGW_WORKER_COORDINATORENDPOINT: http://controller:8080
+      # WHAT THIS WORKER IS CALLED in the fleet. Docker and Podman set a
+      # container's hostname to its ID, so without this the fleet list reads
+      # `16b81c38de5c` and nothing on the screen says which container that is.
+      # The id becomes a suffix instead: `worker-16b81c38de5c`. Under
+      # Kubernetes this is set from the downward API to the pod name, which is
+      # already both readable and unique, and no suffix is added.
+      SWGW_WORKER_NAME: ${WORKER_NAME:-worker}
       # NO DATABASE. A worker holds no database credentials and contains no
       # SQL (docs/design/00 section 5.2) - it leases over HTTP and streams
       # blobs registry to registry. The DSN that used to be here was never
@@ -495,7 +511,12 @@ services:
     # A worker must see the SAME product configuration as the controller, or it
     # leases jobs it cannot execute and says so rather than failing quietly.
     volumes:
-      - ./deploy/products:/etc/softwaregateway/products:ro
+      - ${DATA_DIR:-./data}/products:/etc/softwaregateway/products:ro
+      # REGISTRY CREDENTIALS, in the layout a projected Kubernetes Secret
+      # produces: <secretName>/<key>, one file per key. The same path, the same
+      # shape and the same code in both deployments; locally the files are
+      # written by hand and are not committed. See data/secrets/README.md.
+      - ${DATA_DIR:-./data}/secrets/local:/etc/softwaregateway/secrets:ro
       # WHO THIS WORKER IS. A machine account in the identity provider, written
       # by the seeder, mounted read-only, identical for every replica. Nothing
       # to configure and nothing to rotate by hand: scaling the fleet is a

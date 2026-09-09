@@ -154,7 +154,7 @@ func productIn(path string) string {
 // The POLICY ENGINE, whenever one is configured, and it is the only decision -
 // not a second opinion on top of the role ladder. Cerbos exists in this
 // deployment precisely so that "who may do what" is data in
-// deploy/cerbos/policies, reviewable and changeable without a rebuild; asking
+// data/access/policies, reviewable and changeable without a rebuild; asking
 // it and then also consulting a hard-coded ladder would mean two answers that
 // can disagree, and the one that shipped would be whichever was checked last.
 //

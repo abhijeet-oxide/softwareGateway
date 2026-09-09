@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/yaml"
 )
 
 // TestBuildSecretDefaultsAreEmpty guards a fact whose violation breaks every
@@ -188,5 +190,94 @@ func TestSeederInventsNoPersonName(t *testing.T) {
 		t.Error("deploy/zitadel/bootstrap.mjs no longer builds a person's profile through " +
 			"nameFor, which is the one place that decides what to write when the name is " +
 			"not known.")
+	}
+}
+
+// TestEveryProductHasAnOwner enforces, on the pull request, the rule the
+// seeder enforces at apply time.
+//
+// A product nobody holds the owner role on is a product whose downloads nobody
+// can approve and whose configuration nobody is accountable for. The seeder
+// refuses to finish on one, which is correct and also late: by then the change
+// is merged and somebody is watching a deployment fail. This is the same check
+// against the same two files, run by `go test ./deploy/...`.
+//
+// It reads the files with a real YAML library on purpose. The seeder parses
+// them with a deliberately small reader of its own (deploy/zitadel/bootstrap.mjs
+// explains why it cannot take a dependency), so this is also the test that a
+// document written here is one that reader can read.
+func TestEveryProductHasAnOwner(t *testing.T) {
+	var roles struct {
+		Tenant  struct{ Roles []string } `json:"tenant"`
+		Product struct {
+			Roles     []string `json:"roles"`
+			OwnerRole string   `json:"ownerRole"`
+		} `json:"product"`
+	}
+	readYAML(t, "../data/access/roles.yaml", &roles)
+	if len(roles.Tenant.Roles) == 0 || len(roles.Product.Roles) == 0 {
+		t.Fatal("data/access/roles.yaml declares no roles; both tiers are required")
+	}
+	if roles.Product.OwnerRole == "" {
+		t.Skip("data/access/roles.yaml sets no product.ownerRole, so no product needs one")
+	}
+
+	var users struct {
+		Users    []userEntry `json:"users"`
+		APIUsers []userEntry `json:"apiUsers"`
+	}
+	readYAML(t, "../data/users/users.yaml", &users)
+
+	owned := map[string]bool{}
+	for _, u := range append(append([]userEntry{}, users.Users...), users.APIUsers...) {
+		for product, granted := range u.Products {
+			for _, role := range granted {
+				if role == roles.Product.OwnerRole {
+					owned[product] = true
+				}
+			}
+		}
+	}
+
+	files, err := filepath.Glob("../data/products/*.yaml")
+	if err != nil {
+		t.Fatalf("glob products: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("found no products to check, which means this test is not testing anything")
+	}
+	for _, file := range files {
+		var doc struct {
+			Metadata struct{ Name string } `json:"metadata"`
+		}
+		readYAML(t, file, &doc)
+		if doc.Metadata.Name == "" {
+			t.Errorf("%s declares no metadata.name, so nobody can be granted access to it", file)
+			continue
+		}
+		if !owned[doc.Metadata.Name] {
+			t.Errorf("product %q (%s) has no owner. Add it to somebody's `products:` mapping in "+
+				"data/users/users.yaml with the %q role, or nobody can approve a download for it:"+
+				"\n      products:\n        %s: [%s]",
+				doc.Metadata.Name, file, roles.Product.OwnerRole,
+				doc.Metadata.Name, roles.Product.OwnerRole)
+		}
+	}
+}
+
+// A person or a machine account, as far as this check is concerned.
+type userEntry struct {
+	Username string              `json:"username"`
+	Products map[string][]string `json:"products"`
+}
+
+func readYAML(t *testing.T, path string, into any) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	if err := yaml.Unmarshal(body, into); err != nil {
+		t.Fatalf("%s is not valid YAML: %v", path, err)
 	}
 }

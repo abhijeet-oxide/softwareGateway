@@ -15,7 +15,7 @@ import (
 //
 // # Why these names
 //
-// They are the resource kinds in deploy/cerbos/policies, which is where the
+// They are the resource kinds in data/access/policies, which is where the
 // decision is actually made. A kind here with no policy there is refused by
 // Cerbos, because a policy that does not exist allows nothing; that is the
 // correct direction to fail, and `make` will not catch it, so the two are kept

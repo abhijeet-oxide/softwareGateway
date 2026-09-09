@@ -243,6 +243,167 @@ function request(method, path, body, contentType) {
  * (COMMAND-1m88i)" - and every one of them means the seeder asked for exactly
  * what is already true. That is the normal outcome of an idempotent re-run, so
  * it is not reported as a fault; anything else is. */
+/* --- reading data/ -------------------------------------------------------
+ *
+ * A DELIBERATELY SMALL YAML READER, and the reason it is here rather than a
+ * dependency: this container is `node:alpine` and nothing else. Adding js-yaml
+ * means an npm install at deploy time, which means a registry, which means
+ * this file stops working in the air-gapped estates the product ships into -
+ * for the sake of parsing two documents whose shape this repository defines.
+ *
+ * So it reads a SUBSET, and says so. Maps, lists, lists of maps, inline `[]`
+ * and `{}`, quoted and plain scalars, comments, blank lines. Not anchors, not
+ * multi-line scalars, not flow maps with nested structure, not multiple
+ * documents. data/access/roles.yaml and data/users/users.yaml are written
+ * inside that subset and `go test ./deploy/...` parses both with a real YAML
+ * library on every build, so a document this cannot read fails in CI rather
+ * than at three in the morning.
+ *
+ * PRODUCT FILES ARE NOT PARSED HERE. They are arbitrary user documents with a
+ * schema the Go side owns, and all this file needs from one is its name - so
+ * it takes the name and nothing else. See productNames.
+ */
+function parseYaml(text) {
+  const lines = [];
+  for (const raw of String(text).split(/\r?\n/)) {
+    const line = stripComment(raw);
+    if (!line.trim()) continue;
+    lines.push({ indent: line.length - line.trimStart().length, text: line.trim() });
+  }
+  const [value] = parseBlock(lines, 0, 0);
+  return value;
+}
+
+/* A `#` inside quotes is content, not a comment. Anywhere else it ends the
+ * line - which is what lets every file in data/ carry its reasoning with it. */
+function stripComment(line) {
+  let quote = '';
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote) { if (ch === quote) quote = ''; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
+  }
+  return line;
+}
+
+function parseBlock(lines, i, indent) {
+  if (i >= lines.length) return [null, i];
+  const isList = lines[i].text.startsWith('- ') || lines[i].text === '-';
+  return isList ? parseList(lines, i, indent) : parseMap(lines, i, indent);
+}
+
+function parseMap(lines, i, indent) {
+  const out = {};
+  while (i < lines.length && lines[i].indent >= indent) {
+    if (lines[i].indent > indent) { i++; continue; }        // stray deeper line
+    const { text } = lines[i];
+    const at = splitKey(text);
+    if (at < 0) break;
+    const key = unquote(text.slice(0, at).trim());
+    const rest = text.slice(at + 1).trim();
+    i++;
+    if (rest) { out[key] = scalar(rest); continue; }
+    if (i < lines.length && lines[i].indent > indent) {
+      const [child, next] = parseBlock(lines, i, lines[i].indent);
+      out[key] = child; i = next;
+    } else {
+      out[key] = null;
+    }
+  }
+  return [out, i];
+}
+
+function parseList(lines, i, indent) {
+  const out = [];
+  while (i < lines.length && lines[i].indent === indent && lines[i].text.startsWith('-')) {
+    const first = lines[i].text.replace(/^-\s*/, '');
+    i++;
+    if (!first) {                                            // `-` then a block
+      if (i < lines.length && lines[i].indent > indent) {
+        const [child, next] = parseBlock(lines, i, lines[i].indent);
+        out.push(child); i = next;
+      } else out.push(null);
+      continue;
+    }
+    if (splitKey(first) < 0) { out.push(scalar(first)); continue; }
+    /* `- key: value`, and every following line indented past the dash belongs
+     * to the same entry. Re-parsed as a map with the dash's own text put back
+     * at that indent, so one code path handles both halves of the entry. */
+    const inner = [{ indent: indent + 2, text: first }];
+    while (i < lines.length && lines[i].indent > indent) { inner.push(lines[i]); i++; }
+    const [entry] = parseMap(inner, 0, indent + 2);
+    out.push(entry);
+  }
+  return [out, i];
+}
+
+/* The first `:` that ends a key: not one inside quotes, and not one inside a
+ * URL, which is the case that makes a naive indexOf wrong on real data. */
+function splitKey(text) {
+  let quote = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) { if (ch === quote) quote = ''; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === ':' && (i + 1 === text.length || /\s/.test(text[i + 1]))) return i;
+  }
+  return -1;
+}
+
+function unquote(v) {
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+    return v.slice(1, -1);
+  }
+  return v;
+}
+
+function scalar(v) {
+  if (v === '[]') return [];
+  if (v === '{}') return {};
+  if (v.startsWith('[') && v.endsWith(']')) {
+    const body = v.slice(1, -1).trim();
+    return body ? body.split(',').map(x => scalar(x.trim())) : [];
+  }
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  if (v === 'null' || v === '~') return null;
+  if (/^-?\d+$/.test(v)) return Number(v);
+  return unquote(v);
+}
+
+/* The NAME of every product, and nothing else from the file.
+ *
+ * A product document belongs to the Go side, which validates it properly and
+ * hot-reloads it; this file only has to know which projects to create. So it
+ * looks for the name where the schema puts it - `metadata.name` at the top
+ * level - and refuses the file rather than guessing if it is not there, because
+ * a product silently skipped here is a product nobody can be granted access to.
+ */
+async function productNames(dir) {
+  let entries = [];
+  try { entries = await fs.readdir(dir); }
+  catch { return { names: [], missing: true }; }
+  const names = [];
+  const unnamed = [];
+  for (const file of entries.filter(f => /\.ya?ml$/i.test(f)).sort()) {
+    const text = await fs.readFile(`${dir}/${file}`, 'utf8');
+    let inMetadata = false, name = '';
+    for (const raw of text.split(/\r?\n/)) {
+      const line = stripComment(raw);
+      if (!line.trim()) continue;
+      const indent = line.length - line.trimStart().length;
+      if (indent === 0) { inMetadata = line.trim() === 'metadata:'; continue; }
+      if (inMetadata && /^name:\s*\S/.test(line.trim())) {
+        name = unquote(line.trim().slice(5).trim());
+        break;
+      }
+    }
+    if (name) names.push({ name, file }); else unnamed.push(file);
+  }
+  return { names, unnamed, missing: false };
+}
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const unchanged = r => r.__status >= 400 &&
@@ -271,6 +432,113 @@ if (!PAT) { console.error('\nFATAL: ZITADEL did not publish a credential at ' + 
 head('ZITADEL');
 item('reachable', `after ${Math.round((Date.now() - startedAt) / 1000)}s`);
 item('credential', PAT_FILE);
+
+/* --- 1b. what this deployment is, read from data/ --------------------------
+ *
+ * ONE DIRECTORY, read before anything is written.
+ *
+ * The roles used to be three environment variables, the product list a fourth,
+ * and the people a JSON file somewhere else again - four formats, four places,
+ * four ways to apply a change, and no way for any of them to check the others.
+ * A product could exist with nobody able to administer it and nothing would
+ * say so.
+ *
+ * They are one subject, so they are one directory, and the checks between them
+ * happen HERE, before the first write. A run that would produce a deployment
+ * nobody can administer refuses to start rather than half-applying itself.
+ */
+const DATA_DIR = process.env.GATEWAY_DATA_DIR || '/data';
+const ROLES_FILE = `${DATA_DIR}/access/roles.yaml`;
+const USERS_FILE = `${DATA_DIR}/users/users.yaml`;
+const PRODUCTS_DIR = `${DATA_DIR}/products`;
+
+const dataError = (...lines) => {
+  console.error('');
+  for (const l of lines) console.error(l);
+  console.error('');
+  process.exit(1);
+};
+
+let roles, doc;
+try {
+  roles = parseYaml(await fs.readFile(ROLES_FILE, 'utf8')) || {};
+} catch (e) {
+  dataError(`FATAL: ${ROLES_FILE} could not be read: ${e.message}`,
+    '  It declares the roles this deployment grants. Without it there is',
+    '  nothing to create and nothing for a policy to refer to.');
+}
+try {
+  doc = parseYaml(await fs.readFile(USERS_FILE, 'utf8')) || {};
+} catch (e) {
+  dataError(`FATAL: ${USERS_FILE} could not be read: ${e.message}`,
+    '  It declares who may use this gateway. An empty file is a valid answer;',
+    '  a missing one is a mistake, because nobody would be provisioned.');
+}
+
+const orgRoles = roles.tenant?.roles || [];
+const productRoles = roles.product?.roles || [];
+const ownerRole = roles.product?.ownerRole || '';
+if (!orgRoles.length || !productRoles.length) {
+  dataError(`FATAL: ${ROLES_FILE} declares no roles.`,
+    '  Both tenant.roles and product.roles are required: the first covers',
+    '  products that do not exist yet, the second is granted per product.');
+}
+
+const found = await productNames(PRODUCTS_DIR);
+if (found.missing) {
+  dataError(`FATAL: ${PRODUCTS_DIR} does not exist.`,
+    '  It holds one document per product this gateway replicates, and it is',
+    '  what decides which projects exist to grant access to.');
+}
+if (found.unnamed?.length) {
+  dataError(`FATAL: ${found.unnamed.length} document(s) in ${PRODUCTS_DIR} declare no metadata.name:`,
+    ...found.unnamed.map(f => `    ${f}`),
+    '  A product with no name cannot be granted access to. Every document',
+    '  here needs `metadata.name` at the top level - see data/products/README.md.');
+}
+const products = found.names.map(p => p.name);
+
+/* EVERY PRODUCT NEEDS AN OWNER, and this is where that is enforced.
+ *
+ * A product nobody holds the owner role on is a product whose downloads
+ * nobody can approve and whose configuration nobody is accountable for. It is
+ * a deployment mistake, not a runtime one, so it is refused at the point the
+ * two files are first read together - naming the product, the role and the
+ * file to add it to. `go test ./deploy/...` makes the same check on the pull
+ * request, so this one is the backstop rather than the first line of defence. */
+if (ownerRole) {
+  const owned = new Set();
+  for (const u of [...(doc.users || []), ...(doc.apiUsers || [])]) {
+    for (const [product, granted] of Object.entries(u.products || {})) {
+      if ((granted || []).includes(ownerRole)) owned.add(product);
+    }
+  }
+  const orphans = products.filter(p => !owned.has(p));
+  if (orphans.length) {
+    dataError('FATAL: these products have no owner.',
+      '',
+      ...orphans.map(p => `    ${p}`),
+      '',
+      `  Every product in ${PRODUCTS_DIR} needs at least one person or machine`,
+      `  account in ${USERS_FILE} holding the '${ownerRole}' role on it.`,
+      '  Nobody can approve a download for a product nobody owns.',
+      '',
+      '  Add it under that person\'s `products:` mapping:',
+      '',
+      `      products:`,
+      `        ${orphans[0]}: [${ownerRole}]`,
+      '',
+      `  The role that must be held is data/access/roles.yaml's product.ownerRole.`);
+  }
+}
+
+head('Configuration');
+item('source', DATA_DIR);
+item('tenant roles', orgRoles.join(', '));
+item('product roles', productRoles.join(', '));
+item('owner role', ownerRole || 'not required');
+item('products', String(products.length));
+item('people', `${(doc.users || []).length} human, ${(doc.apiUsers || []).length} machine`);
 
 /* --- 2. the organization is the tenant ------------------------------------ */
 const TENANT = process.env.GATEWAY_TENANT || 'default';
@@ -348,7 +616,6 @@ async function ensureRoles(projectId, roles) {
 head('Projects and roles');
 const PLATFORM = await ensureProject('platform');
 {
-  const orgRoles = list(process.env.GATEWAY_ORG_ROLES, 'org-admin,org-operator,org-security,org-reader');
   const added = await ensureRoles(PLATFORM, orgRoles);
   item('platform', created.has('platform') ? 'created' : 'exists');
   sub('tenant-wide roles', orgRoles.join(', '));
@@ -364,9 +631,6 @@ const PLATFORM = await ensureProject('platform');
  * stateless: no project-id map to ship, no ZITADEL credential in any service
  * just to resolve a name. See pkg/authz/identity.go splitProductRole.
  */
-const products = list(process.env.GATEWAY_PRODUCTS, '');
-const productRoles = list(process.env.GATEWAY_PRODUCT_ROLES,
-  'product-owner,product-operator,product-reader');
 const projectOf = new Map();          // product name -> project id
 for (const p of products) {
   const pid = await ensureProject(p);
@@ -564,7 +828,7 @@ for (const p of products) {
    * one, so it goes where only the seeder and the workers can see it. */
   const path = '/workercreds/worker.json';
 
-  /* Ensured separately from GATEWAY_ORG_ROLES, which an operator may replace
+  /* Ensured separately from the tenant roles, which an operator may replace
    * wholesale. This role is not a choice about how the estate is organised -
    * without it the data plane cannot authenticate at all. */
   await ensureRoles(PLATFORM, [WORKER_ROLE]);
@@ -768,7 +1032,7 @@ for (const p of products) {
     /* NOBODY IS CREATED BY SIGNING IN.
      *
      * This is a closed system: who may use this gateway is decided by an
-     * administrator, in deploy/zitadel/users.json, reviewable in a pull
+     * administrator, in data/users/users.yaml, reviewable in a pull
      * request. It is not decided by who happens to hold an account at the
      * identity provider - which, federating a corporate directory, is
      * everybody who works here.
@@ -996,7 +1260,7 @@ for (const p of products) {
       '',
       'Anybody at that identity provider can sign in, be given a new account',
       'with no roles, and be issued a valid token with it. Who may use this',
-      'stack is decided in deploy/zitadel/users.json, not by the directory.',
+      'stack is decided in data/users/users.yaml, not by the directory.',
       '',
       'Remedy: re-run this container with SSO_DISPLAY_NAME set to the name',
       'above, which reconciles that connector; or delete it in the console',
@@ -1162,14 +1426,14 @@ for (const p of products) {
     note('  at the identity provider holds that one, so no sign-in reaches this');
     note('  account.');
     note('  Remedy: set BOOTSTRAP_ADMIN_EMAIL to the address that signs in, or');
-    note('  add that person to deploy/zitadel/users.json, then re-run this');
+    note('  add that person to data/users/users.yaml, then re-run this');
     note('  container.');
   }
 }
 
 /* --- 13. additional users, from a file that IS the deployment mechanism ----
  *
- * Add a person to deploy/zitadel/users.json, commit it, re-run this container.
+ * Add a person to data/users/users.yaml, commit it, re-run this container.
  * That is the whole user-provisioning story, and it is reviewable in a pull
  * request rather than being clicks in a console that nobody can audit later.
  */
@@ -1333,12 +1597,7 @@ async function grantRoles(userId, projectId, roleKeys) {
   }
 }
 
-let doc = null;
 {
-  const path = process.env.BOOTSTRAP_USERS_FILE || '/bootstrap-users.json';
-  try { doc = JSON.parse(await fs.readFile(path, 'utf8')); }
-  catch { item('users file', 'absent; no additional people'); }
-
   for (const u of (doc?.users || [])) {
     if (!u.username) continue;
     const found = await replaceIfUninitialised(
@@ -1370,7 +1629,7 @@ let doc = null;
     }
     for (const [product, roles] of Object.entries(u.products || {})) {
       const pid = projectOf.get(product);
-      if (!pid) { warn(`${u.username}: product '${product}' is not in GATEWAY_PRODUCTS`); continue; }
+      if (!pid) { warn(`${u.username}: no product named '${product}' in ${PRODUCTS_DIR}`); continue; }
       await grantRoles(uid, pid, roles.map(r => `${product}:${r}`));
       sub(product, roles.join(', '));
     }
@@ -1466,7 +1725,7 @@ for (const a of (doc?.apiUsers || [])) {
     lines.push('Usually the account was created by the identity provider at a first');
     lines.push('sign-in, and this file has never been told about it.');
     lines.push('');
-    lines.push('Remedy: add each of them to deploy/zitadel/users.json under the');
+    lines.push('Remedy: add each of them to data/users/users.yaml under the');
     lines.push('address that signs in - that address is what matches them to the');
     lines.push('account that already exists - then re-run this container. For the');
     lines.push('administrator, BOOTSTRAP_ADMIN_EMAIL is the same thing.');
@@ -1540,7 +1799,7 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
     console.error('');
     console.error('  Remedy, then re-run this container:');
     console.error('    BOOTSTRAP_ADMIN_EMAIL=<the address that signs in>');
-    console.error('  or add that person to deploy/zitadel/users.json with their address.');
+    console.error('  or add that person to data/users/users.yaml with their address.');
     console.error('  To keep the password box instead: SSO_ALLOW_PASSWORD_LOGIN=true');
     console.error('');
     process.exit(1);
@@ -1664,7 +1923,7 @@ if (process.env.SSO_ISSUER) {
     note('verified address.');
     note();
     note('Remedy for an unmatched address: correct it in .env or in');
-    note('deploy/zitadel/users.json, then re-run this container.');
+    note('data/users/users.yaml, then re-run this container.');
   }
 }
 }

@@ -9,6 +9,15 @@ import { ErrorState, PageHeader } from '../components/layout'
 import { SpeedTest } from '../components/speedtest'
 import { c, mono, StatusPill } from '../uikit'
 
+const HEALTH_STATUS: Record<string, { tone: 'ok' | 'danger' | 'neutral'; message: string }> = {
+  ok: { tone: 'ok', message: 'Healthy' },
+  healthy: { tone: 'ok', message: 'Healthy' },
+}
+
+function healthStatus(status: string) {
+  return HEALTH_STATUS[status.toLowerCase()] ?? { tone: 'danger' as const, message: 'Unhealthy' }
+}
+
 /**
  * Page 10 - Settings.
  *
@@ -81,10 +90,10 @@ export default function Settings() {
                   {
                     title: 'Result',
                     width: 110,
-                    render: (_, c) =>
-                      c.status === 'ok' || c.status === 'OK'
-                        ? <StatusPill tone="ok">OK</StatusPill>
-                        : <StatusPill tone="danger">{c.status}</StatusPill>,
+                    render: (_, c) => {
+                      const result = healthStatus(c.status)
+                      return <StatusPill tone={result.tone} title={c.status}>{result.message}</StatusPill>
+                    },
                   },
                   { title: 'Detail', render: (_, c) => <Value>{c.detail}</Value> },
                 ]}

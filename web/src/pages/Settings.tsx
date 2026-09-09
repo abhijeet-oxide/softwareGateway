@@ -65,7 +65,7 @@ export default function Settings() {
       />
 
       <Row gutter={[16, 16]}>
-        <Col xs={24} xl={12}>
+        <Col span={24}>
           <Card title="System health" loading={version.isLoading}>
             <Descriptions column={2} size="small">
               <Descriptions.Item label="Version">
@@ -107,7 +107,7 @@ export default function Settings() {
           </Card>
         </Col>
 
-        <Col xs={24} xl={12}>
+        <Col span={24}>
           <Card title="Discovery and verification" extra={<ManagedInGit />} loading={products.isLoading}>
             <Table
               size="small"
@@ -167,7 +167,7 @@ export default function Settings() {
           <SpeedTest />
         </Col>
 
-        <Col xs={24} xl={12}>
+        <Col span={24}>
           <Card title="Background workers" loading={workers.isLoading}>
             {(workers.data?.workers ?? []).length === 0 ? (
               <Typography.Text type="secondary">

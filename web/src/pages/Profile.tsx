@@ -54,7 +54,7 @@ export default function Profile() {
        at one edge and its value at the other. Flush, because the identity band
        runs to the card's own edges - a tinted strip inset by the body padding
        is a rectangle inside a rectangle. */
-    <SectionCard padded={false} style={{ maxWidth: 880 }}>
+    <SectionCard padded={false} style={{ width: '100%' }}>
       <div
         style={{
           display: 'flex',
@@ -100,102 +100,83 @@ export default function Profile() {
 
       <div style={{ padding: '4px 28px 24px' }}>
         {anonymous ? (
-          <Section label="Authentication" first>
-            <Alert
-              type="info"
-              showIcon
-              message="Authentication is not enabled"
-              description={
-                <Space direction="vertical" size={4}>
-                  <Typography.Text>
-                    This Coordinator accepts every caller as{' '}
-                    <Typography.Text code>{who?.subject}</Typography.Text> with full
-                    permissions. The only control protecting it is network isolation.
-                  </Typography.Text>
-                  <Typography.Text type="secondary">
-                    Everything this interface shows and does is already asked through a
-                    permission check, so switching authentication on changes what people can
-                    do without changing any page.
-                  </Typography.Text>
-                </Space>
-              }
-            />
-          </Section>
-        ) : (
-          <>
-            <Section label="Sign-in" first>
-              <Field label="Method">{methodLabel(who?.method)}</Field>
-              <Field label="Tenant">{who?.tenant || 'All tenants'}</Field>
-              <Field label="Account id">
-                {/* Named for what it is. It was the only thing this page showed,
-                    under the label "Signed in as", which made a person's own
-                    screen introduce them as a number. */}
-                <Typography.Text
-                  type="secondary"
-                  copyable={Boolean(who?.subject)}
-                  style={{ fontFamily: mono, fontSize: 12.5 }}
-                >
-                  {who?.subject}
-                </Typography.Text>
-              </Field>
+          <div style={{ maxWidth: 960 }}>
+            <Section label="Authentication" first>
+              <Alert
+                type="error"
+                showIcon
+                message={
+                  <Space direction="vertical" size={4}>
+                    <Typography.Text>
+                      Authentication is not enabled.
+                    </Typography.Text>
+                  </Space>
+                }
+              />
             </Section>
-
-            {who?.method === 'oidc' && (
-              <Section label="Directory">
-                {/* WHERE THE DETAILS CAME FROM, and which of them arrived.
-                    A profile that shows a name and an address from nowhere
-                    cannot answer the question it provokes - why is that all
-                    there is? - and the answer is never this product's: it is
-                    what the directory asserted. So the fields are listed, the
-                    ones that did not arrive are named as not arriving, and the
-                    source is stated. */}
-                <Field label="Source">{provider || 'This system'}</Field>
-                <Field label="Full name">
-                  <Asserted value={claims.name} provider={provider} />
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 420px), 1fr))', gap: '0 36px' }}>
+            <div>
+              <Section label="Sign-in" first>
+                <Field label="Method">{methodLabel(who?.method)}</Field>
+                <Field label="Tenant">{who?.tenant || 'All tenants'}</Field>
+                <Field label="Account id">
+                  <Typography.Text
+                    type="secondary"
+                    copyable={Boolean(who?.subject)}
+                    style={{ fontFamily: mono, fontSize: 12.5 }}
+                  >
+                    {who?.subject}
+                  </Typography.Text>
                 </Field>
-                {/* The halves are shown only when they SAY something the full
-                    name does not. Where an account was provisioned under a
-                    login id, both halves carry that id - ZITADEL requires two
-                    and there is only one - and three rows then repeat one
-                    word. Two names that are identical is that case and no
-                    other. */}
-                {claims.givenName !== claims.familyName && (
-                  <>
-                    <Field label="Given name">
-                      <Asserted value={claims.givenName} provider={provider} />
-                    </Field>
-                    <Field label="Family name">
-                      <Asserted value={claims.familyName} provider={provider} />
-                    </Field>
-                  </>
-                )}
-                <Field label="Language">
-                  <Asserted value={claims.locale} provider={provider} />
-                </Field>
-                <Field label="Details updated">
-                  <Asserted
-                    value={claims.updatedAt
-                      ? formatAbsolute(new Date(claims.updatedAt * 1000).toISOString()) ?? undefined
-                      : undefined}
-                    provider={provider}
-                  />
-                </Field>
-                {provider ? (
-                  <Note>
-                    Read from {provider} at each sign-in. A field {provider} does not hold is
-                    not held here. The first sign-in links the account only; details recorded
-                    at provisioning are replaced from the second.
-                  </Note>
-                ) : (
-                  <Note>
-                    These details are held on the account in this system, and are changed
-                    where accounts are provisioned.
-                  </Note>
-                )}
               </Section>
-            )}
 
-            <Section label="Access">
+              {who?.method === 'oidc' && (
+                <Section label="Directory">
+                  <Field label="Source">{provider || 'This system'}</Field>
+                  <Field label="Full name">
+                    <Asserted value={claims.name} provider={provider} />
+                  </Field>
+                  {claims.givenName !== claims.familyName && (
+                    <>
+                      <Field label="Given name">
+                        <Asserted value={claims.givenName} provider={provider} />
+                      </Field>
+                      <Field label="Family name">
+                        <Asserted value={claims.familyName} provider={provider} />
+                      </Field>
+                    </>
+                  )}
+                  <Field label="Language">
+                    <Asserted value={claims.locale} provider={provider} />
+                  </Field>
+                  <Field label="Details updated">
+                    <Asserted
+                      value={claims.updatedAt
+                        ? formatAbsolute(new Date(claims.updatedAt * 1000).toISOString()) ?? undefined
+                        : undefined}
+                      provider={provider}
+                    />
+                  </Field>
+                  {provider ? (
+                    <Note>
+                      Read from {provider} at each sign-in. A field {provider} does not hold is
+                      not held here. The first sign-in links the account only; details recorded
+                      at provisioning are replaced from the second.
+                    </Note>
+                  ) : (
+                    <Note>
+                      These details are held on the account in this system, and are changed
+                      where accounts are provisioned.
+                    </Note>
+                  )}
+                </Section>
+              )}
+            </div>
+
+            <div>
+              <Section label="Access" first>
               <Field label="Tenant roles">
                 {/* The two tiers are shown apart because they mean different
                     things: a tenant role covers products that do not exist yet,
@@ -230,13 +211,14 @@ export default function Profile() {
                 Roles are granted in the identity provider and arrive in the sign-in token.
                 Changing one takes effect at the next sign-in.
               </Note>
-            </Section>
-          </>
-        )}
+              </Section>
 
-        <Section label="Appearance">
-          <AppearanceSettings />
-        </Section>
+              <Section label="Appearance">
+                <AppearanceSettings />
+              </Section>
+            </div>
+          </div>
+        )}
       </div>
     </SectionCard>
   )

@@ -157,11 +157,82 @@ is not hydrated. The cost is that the address is text rather than a link.
 The **asserted** address cannot be shown there. It is not in the page, not in
 the URL, and not in any redirect the browser sees - §4 is where it lives.
 
-## 7. Files
+## 7. What a person sees on their own profile
+
+Two things were wrong with it, and both come from the same place: the seeder
+writes a profile for somebody it has never met.
+
+**It invented a name.** ZITADEL requires both a given and a family name, and
+what was written was `Platform` / `Administrator` for the first administrator
+and `User` as a surname for everybody in `users.json`. A fabricated person's
+name, on a real person's account, under their own initials.
+
+**And the invention outlived the sign-in.** The connector carries
+`isAutoUpdate`, so the directory's own name does replace it - but not on the
+sign-in that LINKS the account, only on the next one. Measured against the
+mock, three consecutive sign-ins on a fresh stack:
+
+| sign-in | `name` claim |
+|---|---|
+| 1 | `Platform Administrator` |
+| 2 | `Alex Hart` |
+| 3 | `Alex Hart` |
+
+So there is a real window - usually somebody's first impression of the product
+- where whatever the seeder chose is what they read.
+
+`nameFor` replaced the invention with three sources, in order of how likely
+each is to be true:
+
+1. what the operator supplied: `firstName`/`lastName` in `users.json`, or
+   `BOOTSTRAP_ADMIN_FIRST_NAME`/`BOOTSTRAP_ADMIN_LAST_NAME`;
+2. what the ADDRESS spells, when it spells a name: `alex.hart@example.com` is
+   Alex Hart in every directory that issues addresses that way. Only when every
+   part is letters - `ap999e@` spells nothing, and a login id capitalised into
+   a surname is worse than no name at all;
+3. the username, in the DISPLAY name, so the page reads `ap999e` rather than
+   `ap999e ap999e` - which is what setting only the two halves gives, because
+   ZITADEL's `name` claim is the display name.
+
+The first sign-in on a fresh stack now reads `Alex Hart`.
+
+**The page says where the details came from.** A profile showing a name and an
+address and nothing else cannot answer the question it provokes, and the answer
+was never this product's to give: it is what the directory asserted. So the
+fields are listed, the ones that did not arrive are named as not arriving
+("Not provided by Microsoft"), and the source is stated:
+
+```
+DIRECTORY
+  Source            Microsoft
+  Full name         Alex Hart
+  Given name        Alex
+  Family name       Hart
+  Language          Not provided by Microsoft
+  Details updated   09 Sept 2026, 07:55 am
+
+  Read from Microsoft at each sign-in. A field Microsoft does not hold is not
+  held here. The first sign-in links the account only; details recorded at
+  provisioning are replaced from the second.
+```
+
+There is no more to show than this. ZITADEL's Microsoft connector reads Graph
+`/v1.0/me` and maps `id`, `givenName`, `surname`, `displayName`, `mail` or
+`userPrincipalName`, and `preferredLanguage` onto its user; job title,
+department and the rest of the Graph document are not carried into ZITADEL at
+all, so they are not in the token and cannot be shown without a ZITADEL Action.
+
+`SSO_DISPLAY_NAME` is published into `/runtime-config.json` so the page can name
+the provider. It is one string across three surfaces - the sign-in button, the
+refusal page and this - which is what stops them disagreeing about what the
+organization's identity provider is called.
+
+## 8. Files
 
 - [`deploy/zitadel/bootstrap.mjs`](../../deploy/zitadel/bootstrap.mjs) - `createHuman`, `replaceIfUninitialised`, the attempt report
 - [`deploy/deploy_test.go`](../../deploy/deploy_test.go) - `TestSeederDoesNotImportHumans`
 - [`deploy/mock-entra/`](../../deploy/mock-entra/README.md) - the mock directory
 - [`docker-compose.mock-entra.yml`](../../docker-compose.mock-entra.yml) - the overlay
 - [`deploy/zitadel/docker-entrypoint.sh`](../../deploy/zitadel/docker-entrypoint.sh) - the contact on the refusal page
+- [`web/src/pages/Profile.tsx`](../../web/src/pages/Profile.tsx), [`web/src/auth/session.ts`](../../web/src/auth/session.ts) - the Directory section and the claims behind it
 - [`docs/design/25-zitadel-login-v2-and-sso-redirect.md`](25-zitadel-login-v2-and-sso-redirect.md) - the sign-in flow this sits on

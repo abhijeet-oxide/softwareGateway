@@ -150,3 +150,43 @@ func TestSeederDoesNotImportHumans(t *testing.T) {
 			"account active with a verified address and no password.")
 	}
 }
+
+// TestSeederInventsNoPersonName guards a small thing that lands on the one
+// screen where it is least welcome.
+//
+// ZITADEL requires both a given and a family name, and this seeder does not
+// know anybody's. What it used to write was 'Platform' / 'Administrator' for
+// the first administrator and 'User' as a surname for everybody in users.json:
+// a fabricated person's name, on a real person's account, shown to them on
+// their own profile page under their own initials.
+//
+// It does not stay fabricated forever - the connector carries isAutoUpdate, so
+// the directory's own name replaces it - but NOT on the sign-in that links the
+// account, only on the next one. So there is a real window, usually somebody's
+// first impression of the product, where whatever the seeder chose is what
+// they read.
+//
+// nameFor is what replaced it: the operator's value, or the name the address
+// spells, or the username. All three are true.
+func TestSeederInventsNoPersonName(t *testing.T) {
+	body, err := os.ReadFile("zitadel/bootstrap.mjs")
+	if err != nil {
+		t.Fatalf("bootstrap.mjs: %v", err)
+	}
+	for _, invented := range []string{
+		"lastName: 'Administrator'",
+		"lastName: 'User'",
+		"u.lastName || 'User'",
+	} {
+		if bytes.Contains(body, []byte(invented)) {
+			t.Errorf("deploy/zitadel/bootstrap.mjs writes %q as part of a person's name. "+
+				"It does not know their name. Derive one with nameFor, which uses what the "+
+				"operator supplied, then what the address spells, then the username.", invented)
+		}
+	}
+	if !bytes.Contains(body, []byte("profile: nameFor(")) {
+		t.Error("deploy/zitadel/bootstrap.mjs no longer builds a person's profile through " +
+			"nameFor, which is the one place that decides what to write when the name is " +
+			"not known.")
+	}
+}

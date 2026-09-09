@@ -51,6 +51,12 @@ REDIRECT_URI=${OIDC_REDIRECT_URI:-}
 # route; what it must never do is invent one.
 SUPPORT=${SUPPORT_CONTACT:-}
 
+# WHAT THE DIRECTORY IS CALLED, so a person's own profile can say where their
+# name and address came from instead of showing them from nowhere. The same
+# string the sign-in screen puts on the button. Empty when no identity provider
+# is configured, and the page then names no source rather than guessing one.
+IDP_NAME=${SSO_DISPLAY_NAME:-}
+
 cat > "$OUT" <<JSON
 {
   "oidc": {
@@ -60,6 +66,9 @@ cat > "$OUT" <<JSON
   },
   "support": {
     "contact": "$SUPPORT"
+  },
+  "identityProvider": {
+    "name": "$IDP_NAME"
   }
 }
 JSON

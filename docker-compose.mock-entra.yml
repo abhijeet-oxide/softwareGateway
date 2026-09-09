@@ -67,6 +67,14 @@ services:
     volumes:
       - ./deploy/mock-entra/certs:/mock/certs:ro
 
+  # The mock configures SSO through this file rather than through .env, so the
+  # web tier's own gate on SSO_ISSUER cannot see it. Named here instead, so the
+  # Profile page says where a person's details came from under the mock exactly
+  # as it does against a real tenant.
+  web:
+    environment:
+      SSO_DISPLAY_NAME: ${SSO_DISPLAY_NAME:-Microsoft}
+
   zitadel-init:
     depends_on:
       mock-entra:

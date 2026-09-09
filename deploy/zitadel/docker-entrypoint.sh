@@ -22,39 +22,52 @@ rm -f /etc/nginx/conf.d/default.conf
 sed "s/__DNS_RESOLVER__/$RESOLVER/" /etc/nginx/templates/zitadel.conf \
   > /etc/nginx/conf.d/app.conf
 
-# WHO TO ASK, on the one screen that actually turns somebody away.
+# THE REFUSAL, in one sentence.
 #
 # A person the directory authenticated but this system does not know is refused
 # INSIDE ZITADEL: they read its Account Not Found page and never reach the
-# application, so nothing the product draws can speak to them. That page ends
-# "contact your administrator for assistance", which names nobody.
+# application, so nothing the product draws can speak to them. What that page
+# says by default is written for whoever built the integration:
 #
-# SUPPORT_CONTACT names somebody, and this proxy is already the only thing
-# between that page and a browser. Unset, this writes an empty include and
-# ZITADEL's own wording stands: an invented address is worse than a general
-# sentence.
+#   We couldn't find an account associated with your identity provider
+#   credentials.
+#   No existing account was found. Please sign in with an existing account or
+#   contact your administrator for assistance.
+#
+# Two sentences, one of them about identity providers and credentials, and
+# neither naming anybody to ask. The reader is a colleague who has been told no.
+# What they need is the fact and the address:
+#
+#   This account is not registered. Kindly reach out to <address> for access.
+#
+# The address is SUPPORT_CONTACT, which defaults to the bootstrap administrator
+# - the person who provisions accounts here. With neither set the sentence still
+# completes and names a role instead, because an invented address sends people
+# to a mailbox nobody reads.
 #
 # DONE IN CSS, and that is not a shortcut. The obvious version - rewrite the
 # sentence in the HTML with sub_filter - was written, deployed and watched: the
-# server sends the new text, React hydrates over it, and the original sentence
-# is back before anybody reads it. A stylesheet is not hydrated. So the
-# paragraph is zeroed and its replacement is the ::after content, which costs
-# the address being text rather than a mailto link and buys a rule that cannot
-# be undone by the app and cannot execute anything.
+# server sends the new text, React hydrates over it, and the original is back
+# before anybody reads it. A stylesheet is not hydrated. The cost is that the
+# address is text rather than a mailto link.
 #
-# The anchor is the paragraph's i18n key, not its English text, so a deployment
-# running in another language is matched too. If a later login image renames
-# the key the rule stops matching and the page reads as it always did, which is
-# cosmetic and not a broken sign-in.
+# The anchors are the paragraphs' i18n keys, not their English text, so a
+# deployment running in another language is matched too. If a later login image
+# renames them the rules stop matching and the page reads as it always did,
+# which is cosmetic and not a broken sign-in.
 inc=/etc/nginx/conf.d/support-contact.inc
 : > "$inc"
 if [ -n "${SUPPORT_CONTACT:-}" ]; then
-  key='[data-i18n-key="idp.accountNotFound.info"]'
-  line="No account on this system holds the address the directory provided. Request access from ${SUPPORT_CONTACT}."
-  # </title> rather than </head>: the rule above already claims </head>, and
-  # two sub_filters competing for one anchor is a coin toss.
-  printf "sub_filter '</title>' '</title><style>%s{font-size:0}%s::after{font-size:.875rem;content:\"%s\"}</style>';\n" \
-    "$key" "$key" "$line" > "$inc"
+  line="This account is not registered. Kindly reach out to ${SUPPORT_CONTACT} for access."
+else
+  line="This account is not registered. Kindly reach out to an administrator for access."
 fi
+info='[data-i18n-key="idp.accountNotFound.info"]'
+desc='[data-i18n-key="idp.accountNotFound.description"]'
+# </title> rather than </head>: the branding rule in the login location already
+# claims </head>, and two sub_filters competing for one anchor is a coin toss.
+printf "sub_filter '</title>' '</title><style>%s</style>';\n" \
+  "$desc{display:none}p:has(>$desc){display:none}$info{font-size:0}$info::after{font-size:.875rem;content:\"$line\"}" \
+  > "$inc"
 
 exec nginx -g 'daemon off;'

@@ -106,6 +106,10 @@ func (c WorkloadCredentials) Validate() error {
 // the seeder has not run, and neither is improved by a JSON error.
 func LoadWorkloadCredentials(path string) (WorkloadCredentials, error) {
 	var c WorkloadCredentials
+	// #nosec G304 -- the path is this process's own configuration
+	// (SWGW_AUTH_WORKLOAD_CREDENTIALS, or the compose default), read once at the
+	// privilege level the worker already runs at. It is not request input, and
+	// an operator who can set it can read the file anyway.
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

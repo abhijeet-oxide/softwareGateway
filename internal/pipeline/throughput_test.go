@@ -2,6 +2,7 @@ package pipeline_test
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -146,27 +147,54 @@ func TestResolveDoesNotMutateTheSiteTasks(t *testing.T) {
 // A page render's worth of resolution has to stay in the microseconds, because
 // it happens per row and the row count is the size of somebody's catalogue.
 //
-// The bound is deliberately loose - a hundred microseconds is thirty times what
-// this measures on an idle machine - because the assertion worth keeping is
-// "this is not doing I/O", and anything doing I/O misses it by orders of
-// magnitude rather than by a factor.
+// The assertion worth keeping is "this is not doing I/O", and anything doing
+// I/O misses the bound by orders of magnitude rather than by a factor. Two
+// things follow from that, and both were learned by watching this test fail in
+// CI on a change that touched nothing near this package:
+//
+//   - THE BEST RUN COUNTS, not the average. A shared runner deschedules the
+//     goroutine mid-measurement, and the same binary on the same machine
+//     measured 60µs, 145µs and 70µs on three consecutive runs. Noise can only
+//     ever make a measurement slower, so taking the fastest of several attempts
+//     removes the runner without weakening the claim: real I/O on this path is
+//     slow in every attempt.
+//   - THE RACE DETECTOR IS NOT FREE. CI runs `go test -race`, which instruments
+//     every memory access; a budget calibrated on an uninstrumented build is
+//     not a budget at all there. It gets its own, which is still two orders of
+//     magnitude below anything that touches a disk.
+//
+// A budget that fails on a busy machine is not a performance test. It is a
+// retry somebody has to remember to press, and it teaches a team to ignore red.
 func TestResolutionStaysCheapEnoughForAPageRender(t *testing.T) {
 	tasks := siteTasks()
 	p := bigProduct(12) // 36 targets: a fan-out nobody has yet
 
-	const iterations = 1000
-	start := time.Now()
-	for range iterations {
-		pl := pipeline.Resolve(tasks, p)
-		_ = pl.Actions(pipeline.Location{Stage: "external"})
+	budget := 100 * time.Microsecond
+	if raceEnabled {
+		budget = 1 * time.Millisecond
 	}
-	per := time.Since(start) / iterations
 
-	if per > 100*time.Microsecond {
-		t.Errorf("resolve+actions took %s each, want under 100µs - "+
-			"something on this path is doing more than reading two documents", per)
+	const iterations = 1000
+	const attempts = 5
+	best := time.Duration(math.MaxInt64)
+	for range attempts {
+		start := time.Now()
+		for range iterations {
+			pl := pipeline.Resolve(tasks, p)
+			_ = pl.Actions(pipeline.Location{Stage: "external"})
+		}
+		if per := time.Since(start) / iterations; per < best {
+			best = per
+		}
 	}
-	t.Logf("resolve+actions over %d targets: %s each", len(p.Spec.Targets), per)
+
+	if best > budget {
+		t.Errorf("resolve+actions took %s each at best of %d, want under %s - "+
+			"something on this path is doing more than reading two documents",
+			best, attempts, budget)
+	}
+	t.Logf("resolve+actions over %d targets: %s each (best of %d, budget %s)",
+		len(p.Spec.Targets), best, attempts, budget)
 }
 
 func BenchmarkResolve(b *testing.B) {

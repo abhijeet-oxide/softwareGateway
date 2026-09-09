@@ -248,13 +248,17 @@ then `docker compose up -d`), driven through a real browser:
   were running an image built before that commit, so this was a stale image
   and not a missing flag. The probe work in [09](09-api.md) §9.1 went over the
   whole probe surface afterwards.
-- **The seeder logs "tenant 'default' created" on a fresh stack when it did
-  not create one.** ZITADEL's org projection has not caught up when the seeder
-  first searches, so the search misses, the create fails on the duplicate name,
-  and `ORG_ID` is left empty. Everything then lands in the PAT's own
-  organization, which happens to be the right one - so the outcome is correct
-  and the log is not. It would stop being correct the moment `GATEWAY_TENANT`
-  names an org the seeder's PAT does not already belong to.
+- ~~**The seeder logs "tenant 'default' created" on a fresh stack when it did
+  not create one.**~~ **Fixed**, and it was worse than a wrong log line. The
+  org projection is behind the write that fills it, so the search misses, the
+  create is refused on the duplicate name, and `ORG_ID` was left `undefined`.
+  Everything then landed in the PAT's own organization, which happens to be the
+  right one - so the outcome was correct and the log was not. On a loaded
+  machine the same lag reaches one line further, into the project created next,
+  and the run then comes up with NO OIDC CLIENT: the web tier loads and answers
+  "Sign-in is not configured", which was reproduced here. Both the tenant and
+  the web application now wait for the projection rather than assuming it, and
+  a tenant that cannot be resolved at all is fatal instead of `undefined`.
 - The login screen's Content-Security-Policy carries `http://zitadel:8080` for
   `font-src`/`img-src`, taken from `ZITADEL_API_URL`. Custom branding assets
   will not load in a browser, which cannot reach that name. Upstream's own

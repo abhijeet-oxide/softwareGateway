@@ -78,6 +78,21 @@ export interface IdentityClaims {
   name?: string
   email?: string
   preferredUsername?: string
+  /**
+   * The halves of the name, kept apart from `name`.
+   *
+   * Not redundant with it, and not decoration: which of these the provider
+   * actually asserted is the difference between a directory that knows who
+   * somebody is and one that holds a login id and nothing else. A profile that
+   * shows the fields it received, and says plainly which it did not, is the
+   * only place an administrator can see that without a console.
+   */
+  givenName?: string
+  familyName?: string
+  /** BCP-47, when the directory holds one. */
+  locale?: string
+  /** Epoch SECONDS, as OpenID Connect defines `updated_at`. */
+  updatedAt?: number
 }
 
 const TOKENS_KEY = 'swgw.auth.tokens'
@@ -224,6 +239,7 @@ export function authConfig(): Promise<AuthConfig | null> {
 interface RuntimeConfig {
   oidc?: Partial<AuthConfig>
   support?: { contact?: string }
+  identityProvider?: { name?: string }
 }
 
 let runtimePromise: Promise<RuntimeConfig | null> | undefined
@@ -260,6 +276,19 @@ function runtimeConfig(): Promise<RuntimeConfig | null> {
 export async function supportContact(): Promise<string> {
   const doc = await runtimeConfig()
   return doc?.support?.contact?.trim() || ''
+}
+
+/**
+ * What this deployment's directory is CALLED.
+ *
+ * The same string the sign-in screen puts on the button, so a profile can name
+ * where somebody's details came from rather than presenting them from nowhere.
+ * Empty when no identity provider is configured; the page then names no source
+ * instead of guessing one.
+ */
+export async function identityProviderName(): Promise<string> {
+  const doc = await runtimeConfig()
+  return doc?.identityProvider?.name?.trim() || ''
 }
 
 let endpointsPromise: Promise<Endpoints | null> | undefined
@@ -593,10 +622,15 @@ export function identityClaims(): IdentityClaims {
     const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'))
     const claims = JSON.parse(json) as Record<string, unknown>
     const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
     return {
       name: str(claims.name) ?? str(claims.given_name),
       email: str(claims.email),
       preferredUsername: str(claims.preferred_username),
+      givenName: str(claims.given_name),
+      familyName: str(claims.family_name),
+      locale: str(claims.locale),
+      updatedAt: num(claims.updated_at),
     }
   } catch {
     // A provider that returns something other than a JWT here is not a reason

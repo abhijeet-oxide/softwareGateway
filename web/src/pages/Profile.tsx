@@ -1,7 +1,9 @@
 import type { ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import { Alert, Button, Space, Tag, Typography } from 'antd'
 import { initialsOf, useIdentity } from '../auth/permissions'
-import { identityClaims, isSignedIn, signOut } from '../auth/session'
+import { identityClaims, identityProviderName, isSignedIn, signOut } from '../auth/session'
+import { formatAbsolute } from '../domain/format'
 import { AppearanceSettings, c, mono, SectionCard } from '../uikit'
 
 /**
@@ -29,6 +31,7 @@ export default function Profile() {
      carry one - a name is in the ID token, which is the client's to read. So
      the verified answer wins where it exists and this fills the rest. */
   const claims = identityClaims()
+  const provider = useIdentityProviderName()
   const name = who?.name || claims.name
   const email = who?.email || claims.email
   const username = claims.preferredUsername
@@ -136,6 +139,61 @@ export default function Profile() {
                 </Typography.Text>
               </Field>
             </Section>
+
+            {who?.method === 'oidc' && (
+              <Section label="Directory">
+                {/* WHERE THE DETAILS CAME FROM, and which of them arrived.
+                    A profile that shows a name and an address from nowhere
+                    cannot answer the question it provokes - why is that all
+                    there is? - and the answer is never this product's: it is
+                    what the directory asserted. So the fields are listed, the
+                    ones that did not arrive are named as not arriving, and the
+                    source is stated. */}
+                <Field label="Source">{provider || 'This system'}</Field>
+                <Field label="Full name">
+                  <Asserted value={claims.name} provider={provider} />
+                </Field>
+                {/* The halves are shown only when they SAY something the full
+                    name does not. Where an account was provisioned under a
+                    login id, both halves carry that id - ZITADEL requires two
+                    and there is only one - and three rows then repeat one
+                    word. Two names that are identical is that case and no
+                    other. */}
+                {claims.givenName !== claims.familyName && (
+                  <>
+                    <Field label="Given name">
+                      <Asserted value={claims.givenName} provider={provider} />
+                    </Field>
+                    <Field label="Family name">
+                      <Asserted value={claims.familyName} provider={provider} />
+                    </Field>
+                  </>
+                )}
+                <Field label="Language">
+                  <Asserted value={claims.locale} provider={provider} />
+                </Field>
+                <Field label="Details updated">
+                  <Asserted
+                    value={claims.updatedAt
+                      ? formatAbsolute(new Date(claims.updatedAt * 1000).toISOString()) ?? undefined
+                      : undefined}
+                    provider={provider}
+                  />
+                </Field>
+                {provider ? (
+                  <Note>
+                    Read from {provider} at each sign-in. A field {provider} does not hold is
+                    not held here. The first sign-in links the account only; details recorded
+                    at provisioning are replaced from the second.
+                  </Note>
+                ) : (
+                  <Note>
+                    These details are held on the account in this system, and are changed
+                    where accounts are provisioned.
+                  </Note>
+                )}
+              </Section>
+            )}
 
             <Section label="Access">
               <Field label="Tenant roles">
@@ -276,6 +334,40 @@ function Chips({ values }: { values: string[] }) {
 
 function Muted({ children }: { children: ReactNode }) {
   return <span style={{ color: c.text3 }}>{children}</span>
+}
+
+/**
+ * A field the directory either asserted or did not.
+ *
+ * The absent case NAMES the directory rather than reading "None", because the
+ * two are different facts and only one of them is actionable: this product is
+ * not withholding the value, the directory did not send it. That sentence is
+ * what turns a sparse profile from a defect into an answer.
+ */
+function Asserted({ value, provider }: { value?: string; provider: string }) {
+  if (value) return <>{value}</>
+  return <Muted>{provider ? `Not provided by ${provider}` : 'Not set'}</Muted>
+}
+
+/**
+ * What this deployment's directory is called, once per mount.
+ *
+ * Read from the runtime document rather than guessed: the same string the
+ * sign-in screen puts on its button, so the two surfaces cannot disagree about
+ * what the organization's identity provider is called.
+ */
+function useIdentityProviderName(): string {
+  const [name, setName] = useState('')
+  useEffect(() => {
+    let live = true
+    void identityProviderName().then((n) => {
+      if (live) setName(n)
+    })
+    return () => {
+      live = false
+    }
+  }, [])
+  return name
 }
 
 /**

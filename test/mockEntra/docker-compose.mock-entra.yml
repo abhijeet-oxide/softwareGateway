@@ -1,7 +1,11 @@
 # The Microsoft directory, replaced by one whose answers can be read.
 #
 #   ./deploy/mock-entra/mkcerts.sh
-#   docker compose -f docker-compose.yml -f docker-compose.mock-entra.yml up -d --force-recreate
+#   docker compose -f docker-compose.yml -f test/mockEntra/docker-compose.mock-entra.yml up -d --force-recreate
+#
+# Paths below are relative to the PROJECT directory, which compose takes from
+# the FIRST -f file - the repository root - and not from this file's own
+# directory. The mock itself lives in deploy/mock-entra.
 #
 # NEVER part of a deployment. It is a second file, named explicitly on the
 # command line, and it exists so that a sign-in failure can be reproduced on a
@@ -66,6 +70,14 @@ services:
       ZITADEL_HTTPCLIENT_DENYLIST: '255.255.255.255/32'
     volumes:
       - ./deploy/mock-entra/certs:/mock/certs:ro
+
+  # The mock configures SSO through this file rather than through .env, so the
+  # web tier's own gate on SSO_ISSUER cannot see it. Named here instead, so the
+  # Profile page says where a person's details came from under the mock exactly
+  # as it does against a real tenant.
+  web:
+    environment:
+      SSO_DISPLAY_NAME: ${SSO_DISPLAY_NAME:-Microsoft}
 
   zitadel-init:
     depends_on:

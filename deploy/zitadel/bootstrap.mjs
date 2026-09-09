@@ -55,6 +55,21 @@ const item = (label, value = '') => console.log(`    ${String(label).padEnd(COL)
 const sub  = (label, value = '') => console.log(`      ${String(label).padEnd(COL - 2)}${value}`.trimEnd());
 const note = (text = '') => console.log(text ? `    ${text}` : '');
 const warn = (text) => console.log(`    ! ${text}`);
+/* A fixed-width table sized to its own contents.
+ *
+ * padEnd against a guessed width is fine until one value is longer than the
+ * guess, and then the row runs into the next column and the table stops being
+ * a table - `zitadel-admin@default.localhost` is 31 characters and plenty of
+ * real login names are longer than the one in front of you. Sized from the
+ * data, two spaces of gutter, and the last column never padded. */
+const table = (header, rows) => {
+  const widths = header.map((h, i) =>
+    Math.max(h.length, ...rows.map(row => String(row[i] ?? '').length)) + 2);
+  const line = cells => cells.map((v, i) =>
+    i === cells.length - 1 ? String(v ?? '') : String(v ?? '').padEnd(widths[i])).join('');
+  return [line(header), ...rows.map(line)];
+};
+
 const panel = (title, lines) => {
   console.log('');
   console.log('  ' + '-'.repeat(72));
@@ -228,6 +243,8 @@ function request(method, path, body, contentType) {
  * (COMMAND-1m88i)" - and every one of them means the seeder asked for exactly
  * what is already true. That is the normal outcome of an idempotent re-run, so
  * it is not reported as a fault; anything else is. */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
 const unchanged = r => r.__status >= 400 &&
   /not\s*been\s*changed|NotChanged|no\s*changes/i.test(r.message || '');
 
@@ -258,16 +275,44 @@ item('credential', PAT_FILE);
 /* --- 2. the organization is the tenant ------------------------------------ */
 const TENANT = process.env.GATEWAY_TENANT || 'default';
 {
-  const found = await api('POST', '/admin/v1/orgs/_search', {});
-  ORG_ID = (found.result || []).find(o => o.name === TENANT)?.id || '';
-  if (!ORG_ID) {
-    ORG_ID = (await api('POST', '/management/v1/orgs', { name: TENANT })).id;
-    head('Tenant');
-    item(TENANT, `created (${ORG_ID})`);
-  } else {
-    head('Tenant');
-    item(TENANT, `exists (${ORG_ID})`);
+  /* SEARCH, CREATE, SEARCH AGAIN - and the third step is the whole point.
+   *
+   * ZITADEL answers a search from a PROJECTION, and the projection is behind
+   * the write that filled it. On a stack coming up for the first time the
+   * organization ZITADEL just made for itself is not in that projection yet,
+   * so the search misses, the create is refused because the name is taken, and
+   * `.id` on a failed create is undefined.
+   *
+   * That used to be the end of it: the run reported `default created
+   * (undefined)` and carried on. It appeared to work, because a request with
+   * no org header lands in the PAT's own organization, which happens to be
+   * this one. It stops appearing to work the moment GATEWAY_TENANT names an
+   * organization the seeder's own account is not in - and on a loaded machine
+   * the same lag reaches further, into the project that was created one line
+   * later, which is how a stack comes up with no OIDC client and nobody able
+   * to sign in.
+   *
+   * So it waits for the projection instead of assuming it. Ten attempts over
+   * ten seconds, and a FATAL if the tenant cannot be resolved at all, because
+   * everything below this is addressed relative to it. */
+  let created = false;
+  for (let attempt = 0; attempt < 10 && !ORG_ID; attempt++) {
+    if (attempt) await sleep(1000);
+    const found = await api('POST', '/admin/v1/orgs/_search', {});
+    const hit = (found.result || []).find(o => o.name === TENANT);
+    if (hit) { ORG_ID = hit.id; break; }
+    const made = await api('POST', '/management/v1/orgs', { name: TENANT });
+    if (made.id) { ORG_ID = made.id; created = true; }
   }
+  head('Tenant');
+  if (!ORG_ID) {
+    console.error(`FATAL: the tenant '${TENANT}' could neither be found nor created.`);
+    console.error('  ZITADEL answered a search that did not list it and a create that was');
+    console.error('  refused. Re-running this container is the first thing to try: this is');
+    console.error('  usually a projection that has not caught up on a first start.');
+    process.exit(1);
+  }
+  item(TENANT, `${created ? 'created' : 'exists'} (${ORG_ID})`);
 }
 
 /* --- 3. idempotent project + roles ---------------------------------------- */
@@ -373,11 +418,26 @@ for (const p of products) {
   let clientId = '';
 
   if (!existing) {
-    const r = await api('POST', `/management/v1/projects/${PLATFORM}/apps/oidc`,
+    /* Retried for the same reason the tenant above is: the project this app is
+     * created ON was written moments ago, and ZITADEL's projection of it can
+     * be behind. A create that answers without a client id has failed, however
+     * it is dressed, and publishing an empty one leaves a web tier that loads
+     * and can sign nobody in. The search is repeated first, because a create
+     * that failed on the second attempt may well have succeeded on the first. */
+    let r = await api('POST', `/management/v1/projects/${PLATFORM}/apps/oidc`,
       { name: 'software-gateway-web', ...oidc });
+    for (let attempt = 0; !r.clientId && attempt < 5; attempt++) {
+      await sleep(1000);
+      const again = await api('POST', `/management/v1/projects/${PLATFORM}/apps/_search`, {});
+      const made = (again.result || []).find(a => a.name === 'software-gateway-web');
+      if (made?.oidcConfig?.clientId) { r = { clientId: made.oidcConfig.clientId }; break; }
+      r = await api('POST', `/management/v1/projects/${PLATFORM}/apps/oidc`,
+        { name: 'software-gateway-web', ...oidc });
+    }
     clientId = r.clientId || '';
     head('Applications');
-    item('software-gateway-web', 'created');
+    item('software-gateway-web', clientId ? 'created' : 'NOT created');
+    if (!clientId) warn(`ZITADEL refused the application: ${JSON.stringify(r).slice(0, 160)}`);
   } else {
     clientId = existing.oidcConfig?.clientId || '';
     head('Applications');
@@ -1025,7 +1085,9 @@ for (const p of products) {
 
   if (!id) {
     const r = await createHuman({
-      username: user, firstName: 'Platform', lastName: 'Administrator', email, password: pw,
+      username: user, email, password: pw,
+      firstName: process.env.BOOTSTRAP_ADMIN_FIRST_NAME || '',
+      lastName: process.env.BOOTSTRAP_ADMIN_LAST_NAME || '',
     });
     id = r.id;
     if (!id) { console.error('FATAL: could not create admin:', r.error); process.exit(1); }
@@ -1209,12 +1271,52 @@ async function replaceIfUninitialised(found, label) {
 async function createHuman({ username, firstName, lastName, email, password }) {
   const body = {
     username,
-    profile: { givenName: firstName, familyName: lastName },
+    profile: nameFor({ username, email, firstName, lastName }),
     email: { email, isVerified: true },
   };
   if (password) body.password = { password, changeRequired: false };
   const r = await api('POST', '/v2/users/human', body);
   return { id: r.userId || '', error: r.userId ? '' : JSON.stringify(r).slice(0, 200) };
+}
+
+/* A person's NAME, in order of how likely each source is to be true.
+ *
+ * This file does not know who anybody is. It knows a username, an address, and
+ * whatever an operator typed into users.json - and ZITADEL requires BOTH a
+ * given and a family name, so something has to be written. What used to be
+ * written was 'Platform Administrator', or 'User' as a surname: a fabricated
+ * person's name, on a real person's account, shown to them on their own
+ * profile page under their own photograph.
+ *
+ * It does not stay fabricated forever. The connector is configured with
+ * isAutoUpdate, so the directory's own name replaces all of this - but NOT on
+ * the sign-in that links the account, only on the next one. So there is a real
+ * window, usually somebody's first impression of the product, where whatever
+ * is chosen here is what they read. It should be true.
+ *
+ *   1. what the operator supplied. Two fields in users.json, or
+ *      BOOTSTRAP_ADMIN_FIRST_NAME / BOOTSTRAP_ADMIN_LAST_NAME.
+ *   2. what the ADDRESS spells, when it spells a name: alex.hart@example.com
+ *      is Alex Hart in every directory that issues addresses that way. Only
+ *      when every part is letters - ap999e@ spells nothing, and a corporate
+ *      login id capitalised into a surname is worse than no name at all.
+ *   3. the username. It is the one label that is certainly this person's, and
+ *      it goes in the DISPLAY name so the page reads `ap999e` rather than
+ *      `ap999e ap999e` - which is what setting only the two halves gives you,
+ *      because ZITADEL's `name` claim is the display name.
+ */
+function nameFor({ username, email, firstName, lastName }) {
+  if (firstName && lastName) {
+    return { givenName: firstName, familyName: lastName, displayName: `${firstName} ${lastName}` };
+  }
+  const parts = String(email || '').split('@')[0].split(/[._-]+/).filter(Boolean);
+  if (parts.length >= 2 && parts.every(w => /^[a-z]+$/i.test(w))) {
+    const cap = w => w[0].toUpperCase() + w.slice(1).toLowerCase();
+    const givenName = cap(parts[0]);
+    const familyName = parts.slice(1).map(cap).join(' ');
+    return { givenName, familyName, displayName: `${givenName} ${familyName}` };
+  }
+  return { givenName: username, familyName: username, displayName: username };
 }
 
 async function grantRoles(userId, projectId, roleKeys) {
@@ -1246,8 +1348,8 @@ let doc = null;
     if (!uid) {
       const r = await createHuman({
         username: u.username,
-        firstName: u.firstName || u.username,
-        lastName: u.lastName || 'User',
+        firstName: u.firstName || '',
+        lastName: u.lastName || '',
         email: u.email || `${u.username}@example.invalid`,
         // A password here is for local and test use. With SSO configured the
         // person signs in through Microsoft and never needs one.
@@ -1452,18 +1554,57 @@ if (process.env.SSO_ISSUER && process.env.SSO_CLIENT_ID) {
   item('matched on', linkOn === 'username' ? 'the ZITADEL username' : 'a verified e-mail address');
   item('count', String(signInAddresses.length));
   note();
-  note(`${'USERNAME'.padEnd(30)}ADDRESS`);
   /* Username AND address, because the failure this is meant to catch is that
    * the provider asserts one and this directory holds the other. Printing
    * only the matched field hides exactly the mismatch worth seeing. */
-  for (const u of matchable.slice(0, 20)) {
-    note(`${String(u.userName).padEnd(30)}${u.human?.email?.email || ''}`);
-  }
+  for (const row of table(['USERNAME', 'ADDRESS'],
+    matchable.slice(0, 20).map(u => [u.userName, u.human?.email?.email || '']))) note(row);
   if (matchable.length > 20) note(`... and ${matchable.length - 20} more`);
   note();
   note('A sign-in is refused unless the provider asserts one of these exactly.');
   note('The section below reports what it did assert.');
   if (passwordLoginOn) item('password sign-in', 'also on');
+
+  /* AND WHO CANNOT, with the reason.
+   *
+   * The list above is the answer to "can this person get in". Its complement
+   * is the answer to "why can they not", and until this existed there was
+   * nowhere to read it: an account that cannot be matched is simply absent
+   * from the list, which looks the same as an account nobody has added.
+   *
+   * The reason that matters is the one nothing announces. Creating a person in
+   * ZITADEL's console leaves their address UNVERIFIED unless the "Email
+   * Verified" box is ticked, and that box is off by default. The account looks
+   * finished - active, addressed, listed among the users - and auto-linking
+   * matches a verified address only, so every sign-in comes back
+   * Errors.User.NotFound. There is no message anywhere that connects those two
+   * facts. This is that message. */
+  const humans = (all.result || []).filter(u => u.human);
+  const blocked = [];
+  for (const u of humans) {
+    if (matchable.includes(u)) continue;
+    const address = u.human?.email?.email || '';
+    const why = !address ? 'no address on the account'
+      : placeholder.test(address) ? 'the address is a placeholder that no directory asserts'
+      : !u.human.email.isEmailVerified ? 'the address is not verified'
+      : u.state !== 'USER_STATE_ACTIVE' ? `the account is ${String(u.state).replace('USER_STATE_', '').toLowerCase()}`
+      : 'unknown';
+    blocked.push({ user: u.userName || '', address: address || '(none)', why });
+  }
+  if (blocked.length) {
+    head(`Accounts that cannot sign in through ${process.env.SSO_DISPLAY_NAME || 'Microsoft'}`);
+    item('count', String(blocked.length));
+    note();
+    for (const row of table(['USERNAME', 'ADDRESS', 'REASON'],
+      blocked.slice(0, 12).map(b => [b.user, b.address, b.why]))) note(row);
+    if (blocked.length > 12) note(`... and ${blocked.length - 12} more`);
+    note();
+    note('A sign-in is matched to a VERIFIED address on an ACTIVE account. In');
+    note("ZITADEL's console that is the \"Email Verified\" box on the create-user");
+    note('form, which is off by default; on an account that already exists it is');
+    note('under Contact Information. An account listed here can still be signed');
+    note('in to with a password where password sign-in is on.');
+  }
 
 /* --- 17. what the directory actually asserted -----------------------------
  *
@@ -1511,12 +1652,11 @@ if (process.env.SSO_ISSUER) {
     head(`Sign-in attempts through ${process.env.SSO_DISPLAY_NAME || 'Microsoft'}`);
     item('recorded', String(seen.size));
     note();
-    note(`${'WHEN'.padEnd(21)}${'ASSERTED ADDRESS'.padEnd(36)}MATCHED ACCOUNT`);
-    for (const a of [...seen.values()].slice(0, 10)) {
+    const rows = [...seen.values()].slice(0, 10).map(a => {
       const addr = asserted(a.raw) || a.name;
-      const who = held.get(addr.toLowerCase());
-      note(`${a.when.padEnd(21)}${addr.padEnd(36)}${who || 'none'}`);
-    }
+      return [a.when, addr, held.get(addr.toLowerCase()) || 'none'];
+    });
+    for (const row of table(['WHEN', 'ASSERTED ADDRESS', 'MATCHED ACCOUNT'], rows)) note(row);
     note();
     note("The asserted address is the directory's own value for that person: the");
     note('Graph mail attribute, or the user principal name when the account has');

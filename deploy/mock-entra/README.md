@@ -1,6 +1,6 @@
 # A Microsoft directory whose answers can be read
 
-`docker-compose.mock-entra.yml` replaces Microsoft Entra with a mock that
+`test/mockEntra/docker-compose.mock-entra.yml` replaces Microsoft Entra with a mock that
 ZITADEL's own Microsoft connector talks to unmodified, so a sign-in failure can
 be reproduced on a laptop instead of diagnosed by redeploying against a live
 tenant.
@@ -21,7 +21,7 @@ here has nothing to go on. This makes the string controllable.
 
 ```sh
 ./deploy/mock-entra/mkcerts.sh
-docker compose -f docker-compose.yml -f docker-compose.mock-entra.yml up -d --force-recreate
+docker compose -f docker-compose.yml -f test/mockEntra/docker-compose.mock-entra.yml up -d --force-recreate
 ```
 
 `mkcerts.sh` needs `openssl` and nothing else. It writes an authority and a

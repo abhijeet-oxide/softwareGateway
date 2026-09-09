@@ -84,6 +84,18 @@ type AuthConfig struct {
 	// Audience is the client or project id tokens must be issued for. Empty
 	// skips the audience check, which is only correct behind a trusted proxy.
 	Audience string `koanf:"audience"`
+	// Tenant is the ONE tenant this deployment serves, by name - the same
+	// name as the identity provider's organization, which is GATEWAY_TENANT.
+	//
+	// A token asserting any other tenant is refused before it becomes an
+	// identity. An issuer that hosts more than one organization signs all of
+	// their tokens with the same keys, so without this the only thing between
+	// another tenant's user and this data is whether they happen to hold a
+	// role of the same name - and `org-admin` granted in their organization is
+	// spelled exactly like `org-admin` here.
+	//
+	// Empty disables the check, and the Coordinator says so at startup.
+	Tenant string `koanf:"tenant"`
 	// CerbosAddr is the policy decision point, e.g. http://cerbos:3592.
 	// Empty means no authorization engine: identities are established and
 	// every permission check then allows, which is a deliberate half-step for

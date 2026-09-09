@@ -3,9 +3,11 @@ package authz
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -181,5 +183,83 @@ func TestRoleClaimedTwiceIsHeldOnce(t *testing.T) {
 	// role claims still names its tenant.
 	if id.Tenant != "default" {
 		t.Fatalf("tenant: got %q, want %q", id.Tenant, "default")
+	}
+}
+
+// TestTokenFromAnotherTenantIsRefused is the boundary, stated as a test.
+//
+// An issuer that hosts more than one organization signs all of their tokens
+// with the same keys, so signature, issuer and expiry - everything else this
+// package checks - are satisfied by a token from a tenant this deployment has
+// nothing to do with. The only thing left between it and the data was whether
+// its bearer happened to hold a role of the same NAME, and `org-admin` granted
+// in somebody else's organization is spelled exactly like `org-admin` here.
+func TestTokenFromAnotherTenantIsRefused(t *testing.T) {
+	if err := wrongTenant("acme", "default"); err == nil {
+		t.Error("a token from tenant 'acme' was accepted by a deployment serving 'default'")
+	}
+	if err := wrongTenant("default", "default"); err != nil {
+		t.Errorf("a token from this deployment's own tenant was refused: %v", err)
+	}
+	// ZITADEL org names are matched case-insensitively, as ZITADEL does.
+	if err := wrongTenant("Default", "default"); err != nil {
+		t.Errorf("tenant matching is case-sensitive: %v", err)
+	}
+
+	// A token that asserts NO tenant is the shape a caller has when the
+	// sign-in did not ask for the claim that carries one. "Cannot tell" is not
+	// "belongs here": a boundary that waves through what it cannot read is not
+	// a boundary.
+	err := wrongTenant("", "default")
+	if err == nil {
+		t.Fatal("a token asserting no tenant was accepted")
+	}
+	if !strings.Contains(err.Error(), "resourceowner") {
+		t.Errorf("the refusal does not name the scope that fixes it: %v", err)
+	}
+
+	// Unset: single-tenant deployments and every stack that predates this keep
+	// working, and the Coordinator warns about it at startup instead.
+	if err := wrongTenant("anything", ""); err != nil {
+		t.Errorf("an unconfigured deployment refused a token: %v", err)
+	}
+}
+
+// TestResourceCarriesTheDeploymentsTenant guards a tenancy condition that was
+// written eleven times and enforced nowhere.
+//
+// Every derived role in config/access/policies compares
+// `R.attr.tenant == P.attr.tenant`. The resource was labelled with the
+// PRINCIPAL's tenant, so that comparison compared a value with itself: always
+// true, for every caller, in every rule.
+func TestResourceCarriesTheDeploymentsTenant(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"results":[{"actions":{"view":"EFFECT_DENY"}}]}`))
+	}))
+	defer srv.Close()
+
+	c := &Cerbos{Addr: srv.URL, Tenant: "default", HTTP: srv.Client()}
+	_, err := c.Check(context.Background(),
+		Identity{Subject: "u", Tenant: "acme", OrgRoles: []string{"org-admin"}},
+		Resource{Kind: "product", ID: "*"}, "view")
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+
+	var sent struct {
+		Resources []struct {
+			Resource struct {
+				Attr map[string]any `json:"attr"`
+			} `json:"resource"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	if got := sent.Resources[0].Resource.Attr["tenant"]; got != "default" {
+		t.Errorf("resource tenant = %v, want the DEPLOYMENT's 'default' rather than the "+
+			"caller's 'acme' - a policy comparing the two must be able to disagree", got)
 	}
 }

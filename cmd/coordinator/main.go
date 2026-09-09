@@ -102,6 +102,15 @@ func main() {
 	}
 }
 
+// orUnset labels an empty setting in a log line, because `tenant=""` reads as
+// a bug in the logging rather than as the fact it is reporting.
+func orUnset(v string) string {
+	if v == "" {
+		return "(not set)"
+	}
+	return v
+}
+
 func run() error {
 	var (
 		configPath  = flag.String("config", config.DefaultPath, "path to the system configuration file")
@@ -562,9 +571,15 @@ func run() error {
 	var authenticator middleware.Authenticator
 	var policyEngine authz.Engine
 	if cfg.Auth.Enabled {
-		a, err := middleware.NewOIDCAuthenticator(ctx,
-			cfg.Auth.Issuer, cfg.Auth.DiscoveryURL, cfg.Auth.HostHeader, cfg.Auth.Audience,
-			cfg.Auth.CerbosAddr, cfg.Auth.SkipIssuerCheck)
+		a, err := middleware.NewOIDCAuthenticator(ctx, middleware.OIDCOptions{
+			Issuer:       cfg.Auth.Issuer,
+			DiscoveryURL: cfg.Auth.DiscoveryURL,
+			HostHeader:   cfg.Auth.HostHeader,
+			Audience:     cfg.Auth.Audience,
+			Tenant:       cfg.Auth.Tenant,
+			CerbosAddr:   cfg.Auth.CerbosAddr,
+			SkipIssuer:   cfg.Auth.SkipIssuerCheck,
+		})
 		if err != nil {
 			return fmt.Errorf("authentication is enabled but not usable: %w", err)
 		}
@@ -572,7 +587,28 @@ func run() error {
 		policyEngine = a.Engine
 		logger.Info("authentication enabled",
 			"issuer", cfg.Auth.Issuer,
+			"tenant", orUnset(cfg.Auth.Tenant),
 			"authorization", map[bool]string{true: "cerbos", false: "roles only"}[cfg.Auth.CerbosAddr != ""])
+
+		// TWO BOUNDARIES THIS PROCESS IS NOT ENFORCING, said at startup rather
+		// than left to be discovered.
+		//
+		// Neither is visible from inside a request: every token still verifies,
+		// every screen still loads, and what is missing only shows up as a
+		// caller who should not have been let in at all. An issuer signs for
+		// every application and every organization it hosts with the same keys,
+		// so a signature proves who MINTED the token and nothing about who it
+		// was minted for.
+		if cfg.Auth.Tenant == "" {
+			logger.Warn("no tenant boundary: a token from any organization at this issuer "+
+				"is accepted, and its roles are read as if they had been granted here",
+				"remedy", "set SWGW_AUTH_TENANT to this deployment's organization name")
+		}
+		if cfg.Auth.Audience == "" {
+			logger.Warn("no audience check: a token minted for a different application at "+
+				"this issuer is accepted",
+				"remedy", "set SWGW_AUTH_AUDIENCE to this deployment's OIDC client or project id")
+		}
 
 		// DEEP, never readiness, and the reason is the same for both of them:
 		// each one is a dependency this process TOLERATES losing for a while.

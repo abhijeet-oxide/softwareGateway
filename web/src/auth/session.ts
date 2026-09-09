@@ -381,7 +381,13 @@ export async function beginSignIn(): Promise<void> {
     response_type: 'code',
     // offline_access is what earns a refresh token, and a refresh token is
     // what keeps an eight-hour shift from being interrupted by a redirect.
-    scope: 'openid profile email offline_access',
+    //
+    // The resourceowner scope carries WHICH TENANT this person belongs to.
+    // The Coordinator refuses a token that does not say, because an issuer
+    // hosting more than one organization signs all of their tokens with the
+    // same keys - so without it, "valid token" and "belongs to this
+    // deployment" are two different facts and only the first was checked.
+    scope: 'openid profile email offline_access urn:zitadel:iam:user:resourceowner',
     state: pending.state,
     code_challenge: await challengeFor(verifier),
     code_challenge_method: 'S256',

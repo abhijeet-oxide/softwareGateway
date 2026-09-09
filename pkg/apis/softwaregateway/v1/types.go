@@ -2773,9 +2773,43 @@ type WhoAmIResponse struct {
 	// tenant-wide role covers products that do not exist yet, a product role
 	// names one. A screen that merged them could not say which was which.
 	ProductRoles map[string][]string `json:"productRoles,omitempty"`
-	// Permissions are the actions this caller may perform. `["*"]` means
-	// everything, which is what an unauthenticated deployment reports.
+	// Member says this account has been PROVISIONED in this tenant, which is a
+	// different fact from having been let in by the identity provider.
+	//
+	// With a corporate directory federated, everybody in the company can
+	// authenticate; only the people somebody put in config/users/users.yaml
+	// are members, and they are marked by holding the baseline role
+	// (`tenant.baselineRole` in config/access/roles.yaml) whether or not they
+	// have been given anything else.
+	//
+	// A client shows a closed door to a non-member and the application to a
+	// member who holds no product yet: the first is a stranger, the second is
+	// a colleague waiting on an administrator, and telling the second they are
+	// the first is a support ticket.
+	Member bool `json:"member"`
+
+	// Permissions are the actions this caller may perform TENANT-WIDE - over
+	// every product, including ones that do not exist yet. `["*"]` means
+	// unrestricted.
+	//
+	// It is not a summary of everything the caller may do anywhere. A flat
+	// union across scopes cannot be narrowed back down by a client: somebody
+	// who reads product A and owns product B would union to "read, operate,
+	// apply, admin" over "A, B", and every control on A would light up. The
+	// server refuses those, so it renders as an interface that offers what the
+	// API then denies. Per-product verbs are in ProductPermissions.
 	Permissions []string `json:"permissions"`
+
+	// ProductPermissions are the actions this caller may perform ON ONE
+	// PRODUCT, keyed by product name.
+	//
+	// Tenant-wide permissions above are NOT repeated into it - they already
+	// cover every product, and copying them in would make a caller's rights
+	// depend on which products happened to exist when they signed in. A client
+	// asking "may I do X to product P" answers yes when X is in Permissions or
+	// in ProductPermissions[P], which is the same rule the server applies in
+	// Scope.covers.
+	ProductPermissions map[string][]string `json:"productPermissions,omitempty"`
 
 	// Products limits what this caller may see. Empty means every product -
 	// the same convention the server-side scope filters use, so a client

@@ -1419,8 +1419,19 @@ export interface WhoAmIResponse {
    *  because the tiers differ: a tenant role covers products that do not exist
    *  yet, a product role names one. */
   productRoles?: Record<string, string[]>
-  /** `["*"]` means everything, which is what an unauthenticated deployment reports. */
+  /** PROVISIONED in this tenant, which is not the same as having been let in
+   *  by the identity provider - with a corporate directory federated, everyone
+   *  in the company can authenticate. A non-member meets a closed door; a
+   *  member holding no product yet gets the application and an empty list. */
+  member: boolean
+  /** Actions permitted TENANT-WIDE, over every product including ones that do
+   *  not exist yet. `["*"]` means unrestricted. Not a union across scopes: a
+   *  caller who reads one product and owns another would flatten to every verb
+   *  on both, and the interface would offer what the API refuses. */
   permissions: string[]
+  /** Actions permitted on ONE product, keyed by product name. Tenant-wide
+   *  verbs are not repeated here - they already cover every product. */
+  productPermissions?: Record<string, string[]>
   /** Empty means every product. */
   products?: string[]
   /** Deployment-wide switches, off a config file rather than a role. */

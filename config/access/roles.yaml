@@ -21,6 +21,30 @@ tenant:
     - org-operator
     - org-security
     - org-reader
+    # MEMBERSHIP, and deliberately no permission at all.
+    #
+    # It answers one question the other roles cannot: is this person
+    # provisioned in this tenant? Every account here is granted it, so holding
+    # it means somebody put them in this file, and holding NOTHING means an
+    # account the identity provider let sign in that nobody has provisioned -
+    # which, with a corporate directory federated, is every employee.
+    #
+    # Those two are different answers and want different screens. Without this
+    # role they are the same fact: no roles at all. With it, a person who has
+    # been provisioned and has not been given a product yet gets the
+    # application and an empty list that names who to ask, and a stranger gets
+    # a closed door.
+    #
+    # It grants nothing, and that is not an oversight to be corrected later. A
+    # baseline role that acquires one permission acquires it for EVERYONE, and
+    # the day somebody adds `view` to it is the day the whole directory can
+    # read the estate. Whatever it may do belongs on org-reader.
+    - org-member
+
+  # The role every provisioned person is granted, on top of whatever else they
+  # hold. Blank means the seeder grants no baseline, and then "provisioned" and
+  # "unknown" are indistinguishable again.
+  baselineRole: org-member
 
 # Per-product roles, held as `<product>:<role>` so a token can say WHICH
 # product a role refers to - a role claim is keyed by an opaque project id.

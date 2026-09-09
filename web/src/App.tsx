@@ -168,13 +168,23 @@ export function App() {
   usePreloadRoutes(ROUTES)
 
   /*
-    Gated on AUTHENTICATED, not on the permission list alone. A deployment with
-    authentication switched off reports `authenticated: false` and permissions
-    of `["*"]`, and one that is still fetching reports nothing at all; neither
-    is a person who has been granted nothing, and showing this page to either
-    would be the application inventing a problem.
+    Gated on MEMBERSHIP, not on the permission list.
+
+    Two different questions, and reading one as the other is what put this
+    screen in front of the wrong people. `permissions` is what the caller may
+    do TENANT-WIDE, and holding nothing there is the CORRECT answer for
+    somebody whose access is one product - which is the whole point of the
+    product tier - so a colleague provisioned as product-owner met a door
+    telling them their account was not enabled. `member` answers the question
+    this screen actually asks: has anybody provisioned this account here at
+    all. With a corporate directory federated, being able to sign in does not.
+
+    Still gated on AUTHENTICATED as well. A deployment with authentication off
+    reports `authenticated: false`, and one still fetching reports nothing;
+    neither is a stranger, and showing this to either would be the application
+    inventing a problem.
   */
-  const noAccess = Boolean(who?.authenticated && (who.permissions ?? []).length === 0)
+  const noAccess = Boolean(who?.authenticated && !who.member)
 
   /*
     ONE KEY, doing two jobs.

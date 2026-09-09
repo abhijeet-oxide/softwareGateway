@@ -125,6 +125,7 @@ The prefix is the scope. The suffix is the level.
 
 | Role | May do | Over |
 |---|---|---|
+| `org-member` | **nothing** - it says this account was provisioned here | the tenant |
 | `org-admin` | everything | every product, **including ones added later** |
 | `org-operator` | read, request, retry | every product |
 | `org-security` | read security detail | every product |
@@ -135,6 +136,14 @@ The prefix is the scope. The suffix is the level.
 
 An `org-` role names no product, so a product created next month is covered
 with **no re-login and no new grant**. That is the whole reason the tier exists.
+
+`org-member` is different in kind from the rest: it grants nothing at all, and
+the seeder gives it to everybody it provisions. It is what separates a
+colleague who has been added to `config/users/users.yaml` and not yet given a
+product - who signs in, sees the application, and is told which administrator
+to ask - from somebody the identity provider let in whom nobody has ever heard
+of, who gets a closed door. Being able to sign in does not make you a member:
+with a corporate directory federated, everybody in the company can sign in.
 
 ---
 
@@ -468,6 +477,10 @@ disable certificate verification.
 | `controller` unhealthy at boot | It fails fast on broken auth config rather than starting and refusing everyone. Read its logs. |
 | Worker up but doing nothing, logging `not leasing` | No valid product YAML in `config/products/`. A worker will not lease work it cannot execute, because attempts are counted when a job is handed out. It starts anyway, says so once, and begins working the moment a product is loaded - no restart. |
 | A person with only product roles signs in and gets **"This account is not enabled"** | The interface shows that screen when `/whoami` reports no permissions, and the server was answering the tenant-wide question - which a product-scoped account correctly cannot. Fixed in the Coordinator: it now reports the verbs held anywhere, with `products` saying where they apply. Pull and redeploy the controller; no seeding or re-login needed. |
+| A user with only product roles is shown **"This account is not enabled"** | Fixed. That screen now means "nobody has provisioned this account", which is a different question from "holds no tenant-wide permission" - the two were the same test. Pull and redeploy the controller and the web tier. |
+| Somebody signs in, sees the application, and the products list is empty | Expected when they hold no product role: the listing is filtered to what they may see, and the page says so and names the support contact (`SUPPORT_CONTACT`). Grant them a product in `config/users/users.yaml` and re-run the seeder. |
+| Sign-in fails with `token is for tenant "X", this deployment serves "Y"` | Working as intended: this deployment serves one tenant (`SWGW_AUTH_TENANT`, from `GATEWAY_TENANT`) and refuses tokens from any other organization at the same issuer. If X is genuinely this deployment's tenant, the two names disagree - the ZITADEL organization name is the value to use. |
+| Sign-in fails with `token asserts no tenant` | The browser is holding a token minted before the sign-in started requesting the `urn:zitadel:iam:user:resourceowner` scope. Sign out and in again. If it persists, the web tier is older than the controller - deploy them together. |
 | A person granted product roles signs in and holds nothing - every screen refuses them, and adding an `org-` role appears to fix it | Their grant was written on the product's own ZITADEL project. A token carries roles only for the project the web application belongs to (`platform`), so ZITADEL never loads the others and the console shows a grant that the token does not carry. Re-run `docker compose run --rm zitadel-init`: it writes the grant on `platform`, removes the one that did nothing, and names each move in its summary. The person signs in again to pick it up. Granting by hand in the console means the `platform` project, whose keys are named `<product>:<role>`. |
 | A person was removed from `config/users/users.yaml` (or deleted in the console) and can still use the tool | Their access token has not expired yet. It is verified offline against the identity provider's keys and never re-checked, so removal cannot reach a token already issued - what it stops is the renewal. The wait is `ACCESS_TOKEN_LIFETIME`, 15m by default and 12h on a stack seeded before that was set: re-run `docker compose run --rm zitadel-init` and it prints the value in force under **Token lifetimes**. To end every session now, rotate the instance signing key in the ZITADEL console - everybody signs in again. |
 | Sign-in ends on "Account Not Found", or "This account is not recognised" | The address the identity provider asserted matches no account here. The seeder prints every account that can sign in, username and address together - compare that list against what the directory actually sends. If the address is right and it still fails, the directory is asserting something else (commonly a user principal name where there is no mail attribute): set `SSO_LINK_ON=username` and re-run the seeder. |

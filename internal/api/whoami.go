@@ -30,15 +30,17 @@ func (s *Server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 	id := middleware.IdentityFrom(r.Context())
 
 	out := v1.WhoAmIResponse{
-		Subject:       id.Subject,
-		Name:          id.Name,
-		Email:         id.Email,
-		Method:        id.Method,
-		Authenticated: id.Method != "" && id.Method != "none",
-		Tenant:        id.Tenant,
-		Products:      id.VisibleProducts(),
-		ProductRoles:  id.ProductRoles,
-		Permissions:   permissionsFor(id),
+		Subject:            id.Subject,
+		Name:               id.Name,
+		Email:              id.Email,
+		Method:             id.Method,
+		Authenticated:      id.Method != "" && id.Method != "none",
+		Tenant:             id.Tenant,
+		Products:           id.VisibleProducts(),
+		ProductRoles:       id.ProductRoles,
+		Member:             id.IsMember(),
+		Permissions:        permissionsFor(id),
+		ProductPermissions: productPermissionsFor(id),
 		Features: v1.Features{
 			FileDownloads: s.deps.FileDownloadsEnabled,
 		},
@@ -49,58 +51,69 @@ func (s *Server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, r, http.StatusOK, out)
 }
 
-// permissionsFor lists the actions this identity may take ANYWHERE, leaving
-// the client to narrow them by product.
+// permissionsFor lists the actions this identity may take TENANT-WIDE.
 //
-// This is a list of verbs, not of doors. `Products` beside it says where they
-// apply, and the client pairs the two exactly as the server does - an action
-// with no product named is the estate-wide question, which a caller holding
-// one product cannot answer (scope.go: "a narrow grant cannot answer a
-// question that names nothing").
+// Tenant-wide, not estate-wide: an empty scope is the strictest question there
+// is (scope.go), which a grant carrying a tenant deliberately cannot answer -
+// asking it here once reported nothing for a user holding org-admin over
+// everything they could see, and the interface disabled every control for the
+// most privileged person in the system.
 //
-// Asking the narrow question HERE has now produced the same bug twice, in the
-// one place where the answer is not a refused request but a locked door:
+// And tenant-wide rather than a union across every scope, which is the other
+// way to get this wrong. A caller who reads product A and owns product B holds
+// four verbs and two products; flattened into one list they read as four verbs
+// on both products, and the interface offers actions on A that the server then
+// refuses. Where a verb applies to one product, it belongs in
+// productPermissionsFor - and the two are read together, exactly as
+// Scope.covers reads them.
 //
-//   - with an EMPTY scope it reported nothing for a user holding org-admin
-//     over everything they could see, and the UI disabled every control for the
-//     most privileged person in the system.
-//   - with the TENANT scope it reported nothing for a caller whose grants are
-//     all product-scoped. Empty permissions is precisely what the SPA reads as
-//     "this account is not enabled", so somebody granted product-owner on one
-//     product - correctly, deliberately, and the only grant they need - signed
-//     in and was shown a door with their own address on it. Adding any `org-`
-//     role appeared to fix it and fixed it by making them tenant-wide.
-//
-// So the question asked is the one the answer is used for: CanAny, the same
-// primitive a self-filtering listing uses.
-//
-// `*` still means UNRESTRICTED and is decided tenant-wide, because the client
-// short-circuits on it before narrowing by product. A product-owner holds all
-// four actions on their product and must not collapse to the same answer as an
-// org-admin.
+// `*` means UNRESTRICTED and is decided here, tenant-wide, because that is
+// what a client short-circuits on before it narrows by product.
 func permissionsFor(id middleware.Identity) []string {
-	all := []middleware.Action{
-		middleware.ActionRead,
-		middleware.ActionOperate,
-		middleware.ActionApply,
-		middleware.ActionAdmin,
-	}
-
-	wide := 0
-	for _, a := range all {
+	out := make([]string, 0, len(reportedActions))
+	for _, a := range reportedActions {
 		if id.Can(a, middleware.Scope{Tenant: id.Tenant}) {
-			wide++
-		}
-	}
-	if wide == len(all) {
-		return []string{"*"}
-	}
-
-	out := make([]string, 0, len(all))
-	for _, a := range all {
-		if id.CanAny(a) {
 			out = append(out, string(a))
 		}
 	}
+	if len(out) == len(reportedActions) {
+		return []string{"*"}
+	}
 	return out
+}
+
+// productPermissionsFor lists the actions this identity may take on each
+// product it holds anything on.
+//
+// Tenant-wide permissions are not copied in. They already cover every product,
+// including products that do not exist yet, and copying them into a map keyed
+// by today's products would quietly turn "covers everything" into "covers
+// these" - which is the tier boundary this whole model exists to keep.
+func productPermissionsFor(id middleware.Identity) map[string][]string {
+	var out map[string][]string
+	for _, product := range id.ProductNames() {
+		var verbs []string
+		for _, a := range reportedActions {
+			if id.Can(a, middleware.Scope{Tenant: id.Tenant, Product: product}) {
+				verbs = append(verbs, string(a))
+			}
+		}
+		if len(verbs) == 0 {
+			continue
+		}
+		if out == nil {
+			out = map[string][]string{}
+		}
+		out[product] = verbs
+	}
+	return out
+}
+
+// The actions a client is told about. ActionWork is not among them: it is the
+// data plane's, held by no person, and a worker does not render a screen.
+var reportedActions = []middleware.Action{
+	middleware.ActionRead,
+	middleware.ActionOperate,
+	middleware.ActionApply,
+	middleware.ActionAdmin,
 }

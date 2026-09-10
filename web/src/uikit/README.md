@@ -47,6 +47,7 @@ things, and both live OUTSIDE this folder:
 | `color.ts` | how a component reads a colour: `c.brand`, `withAlpha`, `severity`, `envHex`. Every one of them a `var()`, never a hex. |
 | `prefs.ts` | the appearance preference model, for an app that has none of its own. |
 | `primitives/` | the components: card, page header, stat tile, status pill, severity tag, notice, empty state, stepper, toolbar, keycap, motion - and `StatePages.tsx`, the four pages a tool shows instead of itself. |
+| `connection.ts` | whether the service is answering: the schedule, the backoff, and the one place that decides. Paired with `primitives/ConnectionStatus.tsx`, the three surfaces that show it. |
 | `vitePluginBrand.ts` | inlines the colour variables, the favicon and the title into `index.html` at build time. |
 
 ## What the system is built to look like
@@ -163,6 +164,65 @@ caption are different widths, so on a card that centres its text the short name
 floated to the middle of the box the caption sized, and read as a mark with a
 hole punched between it and its own name. `.ui-lockup-text` states
 `align-items: flex-start` for that reason.
+
+## Is the service there?
+
+`connection.ts` and `ConnectionStatus.tsx` are the third shared-whole surface,
+for the same reason as the other two: **every tool's service goes away
+sometimes, and a tool that improvises its own answer improvises the same wrong
+one.** The wrong one is a toast per failed request - twelve identical cards
+about one cause, none of which says whether the thing is still down - followed
+eventually by a page that replaces itself with an error and takes the work on
+it away.
+
+The model is one monitor and three faces:
+
+| piece | what it is |
+| --- | --- |
+| `connection` | the monitor. Holds the phase, the schedule and the last answer; owns no HTTP. |
+| `ConnectionPill` | the standing indicator for `TopBar`. A dot when healthy, a word when not. |
+| `ConnectionAlert` | the confirmed outage, as a card in the bottom-LEFT corner. Mount once. |
+| `ConnectionNotice` | the same fact inside a page whose first load met the outage. |
+
+An app wires it in three lines:
+
+```ts
+connection.configure({ probe })           // one request, app's own address
+connection.onRestore(() => refetch())     // what to do when it comes back
+```
+
+```tsx
+<TopBar right={<ConnectionPill service={brand.appName} />} />
+<ConnectionAlert service={brand.appName} workNote={…} />
+```
+
+Five rules are built into it, and each one is a defect somebody shipped first:
+
+- **Ordinary traffic is the health signal.** Every request reports what
+  happened to it (`reportReachable` / `reportUnreachable`), so a screen doing
+  work polls nothing. The probe exists for the screen doing nothing, and for
+  the seconds after the answers stop.
+- **A failure is confirmed before it is announced.** The first failed request
+  buys a check a second later, not a card. Dropped requests happen on healthy
+  systems several times a day, and an interface that cries wolf for each one is
+  an interface people learn to dismiss unread.
+- **Nothing is taken away from anybody.** No modal, no mask, no disabled
+  interface, no unmounted form. A person halfway through something during a
+  thirty-second restart keeps typing and saves when it returns. `useHeldWork`
+  lets a screen declare unsaved work so the card can SAY that, and `useOnRestore`
+  lets it retry the save that failed.
+- **The card states times, not sensations.** "Last connected 15:04:22" answers
+  how old the numbers on screen are; "Checking again in 8s" is what stops
+  somebody pressing a retry button every two seconds.
+- **The technical sentence is kept and folded.** The address, the status and
+  what the browser actually said go behind Details, where the person who can
+  act on them will look. The headline is written for the person who cannot.
+
+**The service is named by the APP, never here.** `service` is a prop, and it
+should be the product's own name - what a person calls the thing they are
+using, not what its processes are called internally. A tool whose outage card
+names its server process is a tool telling a release manager to go and check
+something they have never heard of.
 
 ## What counts as a difference
 

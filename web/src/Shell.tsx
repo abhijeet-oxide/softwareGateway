@@ -13,7 +13,8 @@ import { useTransferActivity, useVersion, useWorkers } from './api/queries'
 import { describeFleet, summariseFleet } from './domain/fleet'
 import brand from './brand'
 import {
-  AppShell, c, envHex, SideNav, ThemeToggleButton, TopBar, withAlpha,
+  AppShell, c, ConnectionAlert, ConnectionPill, envHex, SideNav, ThemeToggleButton, TopBar,
+  useConnection, withAlpha,
   type NavItem, type NavProfile,
 } from './uikit'
 
@@ -376,6 +377,22 @@ export function Shell({ children }: { children: ReactNode }) {
                 />
               )}
               {/*
+                WHETHER THE SERVICE IS THERE, permanently on screen.
+
+                A dot while everything works, and a word the moment it does
+                not. It is here rather than beside the version at the
+                navigation's foot because this is where a person's eye already
+                goes when a screen stops answering - the same corner as the
+                activity, the theme and the account - and because a fact that
+                changes belongs beside the other facts that change.
+
+                It names the product rather than the process. "Coordinator" is
+                this system's word for its own server; the person reading a bar
+                at half past four wants to know whether Software Gateway is
+                working.
+              */}
+              <ConnectionPill service={brand.appName} />
+              {/*
                 Light and dark, in the one place a person looks for it. The
                 control comes from the shared kit, so both tools put the same
                 button in the same corner.
@@ -397,8 +414,39 @@ export function Shell({ children }: { children: ReactNode }) {
       }
     >
       {children}
+      {/*
+        THE OUTAGE CARD, mounted once for the whole application.
+
+        Inside the shell rather than at the root, which is deliberate: the boot
+        gate owns the screen until the service has answered once, and a corner
+        card explaining an outage on top of a full page explaining the same
+        outage is two voices saying one thing. From here on it is the only
+        voice, and it never takes the page away from whoever is using it.
+      */}
+      <ConnectionAlert service={brand.appName} workNote={<UnsavedWorkNote />} />
     </AppShell>
   )
+}
+
+/**
+ * The line under an outage that answers the only question somebody in the
+ * middle of something actually has.
+ *
+ * It is rendered only when there IS something to lose. A blanket reassurance
+ * shown on a dashboard nobody is typing into is noise, and worse, it teaches
+ * people to stop reading the line for the one time it matters. `holdWork` is
+ * how a screen declares itself - see `useHeldWork` in the shared kit - and a
+ * form calls it while it has changes that have not been saved.
+ */
+function UnsavedWorkNote() {
+  // Read from the snapshot, so declaring work re-renders this: a note that
+  // appeared on the next unrelated render would appear seconds late, or never.
+  const { heldWork } = useConnection()
+  if (heldWork === 0) return null
+  // One clause, because it is appended to the card's sentence rather than
+  // given a paragraph of its own. "Saving is possible again as soon as the
+  // connection is back" is already what the sentence in front of it says.
+  return <>Unsaved changes on this screen are kept.</>
 }
 
 /**

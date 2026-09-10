@@ -1555,3 +1555,467 @@
 .ui-setting-row.is-stacked .ui-setting-row-control {
   flex-shrink: 1;
 }
+
+/* --- the connection --------------------------------------------------------
+   What an application looks like while its service is not answering.
+
+   Three surfaces on one state (see primitives/ConnectionStatus.tsx): a dot in
+   the bar, a card in the corner the page does not use, and an inline block for
+   a page that has nothing to show. NONE of them takes the screen away from the
+   person using it - there is no mask, no modal and no disabled interface here,
+   because almost every outage a browser sees lasts seconds and the correct
+   behaviour for all of them is to keep the work and wait.
+
+   The colour is carried by ONE variable per tone, `--conn`, set on the root of
+   each surface. Everything inside reads `currentColor` or that variable, so a
+   tone is one declaration rather than a fan-out of four. */
+.ui-conn-pill,
+.ui-conn-alert,
+.ui-conn-inline,
+.ui-conn-detail {
+  --conn: var(--text-3);
+  --conn-bg: var(--surface-2);
+  --conn-bd: var(--border);
+}
+/* Scoped with :is() rather than written as a bare `.tone-ok`, which would set
+   these variables on the status pill and the inline notice as well - two
+   components that already own a `tone-` class of their own. A shared folder
+   cannot afford a class name that means one thing here and another there. */
+:is(.ui-conn-pill, .ui-conn-alert, .ui-conn-inline, .ui-conn-detail).tone-ok {
+  --conn: var(--c-ok);
+  --conn-bg: var(--c-ok-bg);
+  --conn-bd: var(--c-ok-bd);
+}
+:is(.ui-conn-pill, .ui-conn-alert, .ui-conn-inline, .ui-conn-detail).tone-checking {
+  --conn: var(--c-review);
+  --conn-bg: var(--c-review-bg);
+  --conn-bd: var(--c-review-bd);
+}
+:is(.ui-conn-pill, .ui-conn-alert, .ui-conn-inline, .ui-conn-detail).tone-warn {
+  --conn: var(--c-pending);
+  --conn-bg: var(--c-pending-bg);
+  --conn-bd: var(--c-pending-bd);
+}
+:is(.ui-conn-pill, .ui-conn-alert, .ui-conn-inline, .ui-conn-detail).tone-down {
+  --conn: var(--c-danger);
+  --conn-bg: var(--c-danger-bg);
+  --conn-bd: var(--c-danger-bd);
+}
+
+/* The standing indicator. A circle when everything is fine - it says what it
+   has to say with position and colour and spends no words on it - and it grows
+   a label when it does not. The width transition is the notification: movement
+   at the edge of vision is noticed without interrupting anything. */
+.ui-conn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--conn-bd);
+  border-radius: var(--r-pill);
+  background: var(--conn-bg);
+  color: var(--conn);
+  font: inherit;
+  font-size: var(--fs-12);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--dur-hover) var(--ease),
+    border-color var(--dur-hover) var(--ease),
+    padding var(--dur-panel) var(--ease);
+}
+.ui-conn-pill.is-quiet {
+  padding: 0 7px;
+  border-color: transparent;
+  background: transparent;
+}
+.ui-conn-pill.is-quiet:hover {
+  background: var(--surface-2);
+}
+.ui-conn-pill-label {
+  animation: ui-conn-label var(--dur-panel) var(--ease-out) both;
+}
+@keyframes ui-conn-label {
+  from {
+    opacity: 0;
+    max-width: 0;
+  }
+  to {
+    opacity: 1;
+    max-width: 120px;
+  }
+}
+.ui-conn-dot {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: currentColor;
+}
+/* The halo only ever appears on a state that is UNRESOLVED. A healthy dot that
+   pulsed would be an animation running on every screen forever, which is both
+   a battery cost and the visual equivalent of a smoke alarm chirping. */
+.ui-conn-pill.tone-checking .ui-conn-dot,
+.ui-conn-pill.tone-warn .ui-conn-dot,
+.ui-conn-pill.tone-down .ui-conn-dot {
+  animation: ui-conn-halo 2s var(--ease-out) infinite;
+}
+@keyframes ui-conn-halo {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 7px color-mix(in srgb, currentColor 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 0%, transparent);
+  }
+}
+
+/* The panel behind the pill: the facts, and the one control. */
+.ui-conn-detail {
+  width: 268px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.ui-conn-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ui-conn-detail-icon,
+.ui-conn-alert-icon,
+.ui-conn-inline-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--conn);
+}
+.ui-conn-detail-icon {
+  font-size: 15px;
+}
+.ui-conn-detail-title {
+  font-size: var(--fs-13);
+  font-weight: 620;
+  color: var(--text);
+  letter-spacing: var(--tr-snug);
+}
+.ui-conn-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+}
+.ui-conn-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+.ui-conn-facts dt {
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.ui-conn-facts dd {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The technical sentence, wherever it is shown: the address, the status, the
+   thing the browser actually said. Monospace because it is a value to be
+   copied into a ticket rather than prose to be read. */
+.ui-conn-technical {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  line-height: 1.5;
+  color: var(--text-3);
+  word-break: break-word;
+}
+
+/* --- the corner card ------------------------------------------------------
+   Bottom LEFT, and that is a decision rather than a taste: toasts land
+   bottom-right in both tools and would bury it, and a form's own controls are
+   never in this corner. Above the component library's modal layer, because an
+   outage is true of the whole application including whatever sheet is open
+   over it - but in a corner, so it never sits on that sheet's buttons. */
+.ui-conn-alert {
+  position: fixed;
+  left: var(--sp-4);
+  bottom: var(--sp-4);
+  z-index: 1040;
+  /* A grid rather than a row of two columns, so everything under the heading
+     hangs off the same left edge as the heading itself. Nested flex columns
+     put the icon beside a block and let the block's own padding drift; one
+     grid states the alignment once, and the sentence, the disclosure and the
+     footer cannot fall out of it. */
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  column-gap: 10px;
+  row-gap: 5px;
+  align-items: start;
+  width: min(376px, calc(100vw - 2 * var(--sp-4)));
+  padding: 13px 14px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow:
+    inset 0 0 0 1px var(--conn-bd),
+    var(--el-overlay);
+  animation: ui-conn-rise var(--dur-panel) var(--ease-out) both;
+}
+.ui-conn-alert > :not(.ui-conn-alert-icon):not(.ui-conn-alert-close) {
+  grid-column: 2;
+  min-width: 0;
+}
+.ui-conn-alert-icon {
+  grid-column: 1;
+  grid-row: 1;
+}
+@keyframes ui-conn-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.ui-conn-alert-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--conn-bg);
+  font-size: 14px;
+}
+.ui-conn-alert-title {
+  font-size: var(--fs-13);
+  font-weight: 620;
+  letter-spacing: var(--tr-snug);
+  color: var(--text);
+  padding-right: var(--sp-4);
+}
+.ui-conn-alert-text {
+  margin: 0;
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  color: var(--text-2);
+}
+/* The line that answers the only question somebody halfway through a form
+   has. It is tinted rather than grey because it is reassurance, and grey
+   reassurance reads as fine print. */
+/* --- the disclosure, under the sentence it elaborates ---------------------- */
+.ui-conn-alert-disclosure {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.ui-conn-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: var(--fs-11);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color var(--dur-hover) var(--ease),
+    background var(--dur-hover) var(--ease);
+}
+.ui-conn-more:hover {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.ui-conn-more .ui-icon {
+  font-size: 11px;
+  transition: transform var(--dur-hover) var(--ease);
+}
+.ui-conn-more.is-open .ui-icon {
+  transform: rotate(180deg);
+}
+
+/* --- the footer: what is known, then the one thing to press ---------------
+   The action is on the RIGHT. That is where a dialog's confirming button sits
+   in every application on this platform, it is where a right hand already is,
+   and putting it on the left had it standing in front of the very line that
+   tells somebody they do not need to press it. */
+.ui-conn-alert-foot {
+  /* Two rows, not two columns. Both facts and the button do not fit across a
+     370px card, and squeezing them made a five-word status wrap onto three
+     lines beside a button - so the line that is read gets the width, and the
+     button that is pressed gets the corner nearest the hand. */
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: 3px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+}
+.ui-conn-alert-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.ui-conn-alert-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: var(--fs-11);
+  line-height: 1.4;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.ui-conn-sep {
+  opacity: 0.55;
+}
+.ui-conn-alert-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background var(--dur-hover) var(--ease);
+}
+.ui-conn-alert-close:hover {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+/* The ring that drains between one check and the next. The number beside it
+   already states the count; this is what makes it legible without reading. */
+.ui-conn-ring {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  transform: rotate(-90deg);
+}
+.ui-conn-ring-track {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 2.5;
+  opacity: 0.5;
+}
+.ui-conn-ring-arc {
+  fill: none;
+  stroke: var(--conn);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  /* 2 * pi * r, r = 8 */
+  stroke-dasharray: 50.27;
+  animation-name: ui-conn-drain;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+@keyframes ui-conn-drain {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 50.27;
+  }
+}
+
+/* --- the inline block -----------------------------------------------------
+   For a page whose first load met the outage. Not an Alert, and not red: there
+   is nothing wrong with the request and nothing for the reader to correct. */
+.ui-conn-inline {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--conn-bd);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+.ui-conn-inline-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--conn-bg);
+  font-size: 15px;
+}
+.ui-conn-inline-main {
+  flex: 1;
+  min-width: 0;
+}
+.ui-conn-inline-title {
+  font-size: var(--fs-14);
+  font-weight: 620;
+  letter-spacing: var(--tr-snug);
+  color: var(--text);
+}
+.ui-conn-inline-text {
+  /* A sentence that runs the width of a dashboard is a sentence nobody
+     finishes; the measure is capped where prose stops being scannable. */
+  max-width: 68ch;
+  margin: 3px 0 0;
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.ui-conn-inline-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.ui-conn-inline-next {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (max-width: 560px) {
+  .ui-conn-inline {
+    flex-wrap: wrap;
+  }
+  .ui-conn-inline-side {
+    align-items: flex-start;
+    flex-direction: row;
+    align-items: center;
+  }
+}
+
+/* A countdown is information; a pulse is decoration on top of it. With motion
+   reduced the ring stands still at full rather than disappearing, so the
+   surface still says there is an interval being waited out. */
+@media (prefers-reduced-motion: reduce) {
+  .ui-conn-pill .ui-conn-dot,
+  .ui-conn-alert,
+  .ui-conn-pill-label {
+    animation: none;
+  }
+  .ui-conn-ring-arc {
+    animation: none;
+  }
+}

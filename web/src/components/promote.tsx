@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { usePromote, usePromotionOptions } from '../api/queries'
 import { ActionButton } from './access'
 import { Icon, RocketIcon, environmentIcon } from './icons'
-import { c, envHex, InlineNotice, isProductionEnv, mono, StatusPill } from '../uikit'
+import { c, envHex, InlineNotice, isProductionEnv, mono, StatusPill, useHeldWork } from '../uikit'
 import type { PromotionDestination, PromotionOptionsResponse } from '../api/types'
 
 /**
@@ -142,6 +142,23 @@ function PromoteModal({
   const data = options.data
   const origin = from ?? data?.defaultOrigin ?? ''
   const chosen = to ?? []
+
+  /*
+    A CHOSEN DESTINATION IS UNSAVED WORK, and this dialog is the first place in
+    the application to say so.
+
+    Somebody who has read a promotion's warnings and ticked two destinations
+    has done the thinking; the click is the cheap part. If the service goes
+    away in that second, nothing here is lost - the dialog is not unmounted and
+    the selection is still on screen - but nothing on screen SAID so, and a
+    person watching an outage card appear over a half-made decision assumes the
+    worst and starts again.
+
+    Declaring it puts one line on that card: the changes are kept, and saving
+    works again as soon as the connection does. It changes no behaviour, which
+    is the point - see `useHeldWork` in the shared kit.
+  */
+  useHeldWork(chosen.length > 0 && !promote.isPending)
 
   const destinations = useMemo(
     () => (data?.destinations ?? []).filter((d) => d.name !== origin),

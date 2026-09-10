@@ -9,6 +9,7 @@ import { IdentityProvider } from './auth/permissions'
 import { SessionGate } from './auth/SessionGate'
 import { BootGate } from './BootGate'
 import { FeedbackBridge, reportFailure } from './components/feedback'
+import { watchService } from './api/health'
 import { AppErrorBoundary } from './routing'
 import { ThemeProvider } from './uikit'
 import './uikit/styles.css'
@@ -65,6 +66,28 @@ const queryClient = new QueryClient({
       staleTime: 30_000,
     },
   },
+})
+
+/*
+  IS THE SERVICE THERE - asked once, for the whole application.
+
+  Every request already reports what happened to it (see api/client), so this
+  adds no polling to a screen that is doing anything at all. What it adds is
+  the answer for the screen that is doing NOTHING, and the schedule that keeps
+  asking once the answers stop: a check a second or so after the first failure
+  to decide whether it meant anything, and then a widening interval for as long
+  as it is down.
+
+  The other half is what happens when it comes back. Everything on screen
+  during an outage is as old as the last successful read, and a page that
+  simply stopped failing would go on showing those numbers with no way to tell.
+  So the moment the service answers again, every query the reader is actually
+  looking at is refetched - active ones only, because refetching the pages they
+  are not looking at would hit a service that has just come back up with the
+  whole session's cache at once.
+*/
+watchService(() => {
+  void queryClient.invalidateQueries({ type: 'active' })
 })
 
 // ThemeProvider is the shared design system's one entry point: it builds the

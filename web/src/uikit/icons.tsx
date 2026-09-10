@@ -8,6 +8,10 @@
 //
 // They render as `span.anticon > svg` so Ant Design's own spacing rules (the
 // gap it puts between an icon and a button label) apply to them unchanged.
+//
+// "Six paths" was true when it was six. The rule it stands for is the one that
+// matters: a glyph is added here, drawn on this 16px grid at this weight, and
+// never imported from a package one of the two tools does not have.
 
 import type { CSSProperties, ReactNode } from "react";
 
@@ -124,6 +128,51 @@ export function SpinnerIcon(p: IconProps) {
         <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.5" opacity="0.2" />
         <path d="M14 8a6 6 0 0 0-6-6" {...stroke} />
       </g>
+    </Glyph>
+  );
+}
+
+/**
+ * The connection, and the connection cut.
+ *
+ * Two arcs and a source, which is the shape every operating system draws for
+ * "signal" - so the crossed version needs no label to be read as its absence.
+ * The slash is drawn in the same weight as the arcs rather than heavier: a
+ * thick bar over a thin glyph reads as an error badge stuck onto an icon.
+ */
+export function SignalIcon(p: IconProps) {
+  return (
+    <Glyph {...p}>
+      <path d="M3.1 6.4a7 7 0 0 1 9.8 0M5.4 8.9a3.7 3.7 0 0 1 5.2 0" {...stroke} />
+      <path d="M8 12.1v.01" {...stroke} />
+    </Glyph>
+  );
+}
+
+export function SignalOffIcon(p: IconProps) {
+  return (
+    <Glyph {...p}>
+      <path d="M3.1 6.4a7 7 0 0 1 3.1-1.8M10.4 5.1a7 7 0 0 1 2.5 1.3M6.2 9.3a3.7 3.7 0 0 1 2.6-.5" {...stroke} />
+      <path d="M8 12.1v.01" {...stroke} />
+      <path d="M2.6 2.6l10.8 10.8" {...stroke} />
+    </Glyph>
+  );
+}
+
+/** Try that again: a circular arrow, for a retry that is offered rather than waited for. */
+export function RefreshIcon(p: IconProps) {
+  return (
+    <Glyph {...p}>
+      <path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.7" {...stroke} />
+      <path d="M13.4 2.9v2.9h-2.9" {...stroke} />
+    </Glyph>
+  );
+}
+
+export function ChevronDownIcon(p: IconProps) {
+  return (
+    <Glyph {...p}>
+      <path d="m4 6.2 4 4 4-4" {...stroke} />
     </Glyph>
   );
 }

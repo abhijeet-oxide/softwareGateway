@@ -41,6 +41,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"sigs.k8s.io/yaml"
 )
 
 // Source is one tree or file copied into the chart, and where it lands.
@@ -230,4 +232,34 @@ func Fingerprint(dir string) (string, error) {
 		h.Write(b)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// EnvironmentValues returns the `spec.values` block of an environment's
+// HelmRelease, as YAML.
+//
+// It is here rather than as a line of yq in the pipeline for the reason the
+// rest of this repository moved off make: a pipeline that reimplements
+// something drifts from what a developer runs, and the drift is found when CI
+// passes and the laptop does not. `task chart:template -- prod` and the CD
+// workflow's render step call this same function, so what CI proves is what a
+// developer sees.
+func EnvironmentValues(root, env string) ([]byte, error) {
+	path := filepath.Join(root, "deploy", "environments", env, "helmrelease.yaml")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", filepath.ToSlash(filepath.Join("deploy/environments", env, "helmrelease.yaml")), err)
+	}
+	var hr struct {
+		Spec struct {
+			Values map[string]any `json:"values"`
+		} `json:"spec"`
+	}
+	if err := yaml.Unmarshal(b, &hr); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if len(hr.Spec.Values) == 0 {
+		return nil, fmt.Errorf("%s has no spec.values - an environment that states no "+
+			"differences is one nobody can read the differences of", path)
+	}
+	return yaml.Marshal(hr.Spec.Values)
 }

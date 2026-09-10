@@ -328,6 +328,121 @@ jobs:
       - name: Confirm the validator rejects the broken fixture
         run: task validate:rejects-broken
 
+  chart:
+    name: The chart renders what a cluster would get
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: azure/setup-helm@v4
+        with:
+          # The version the Coordinator's own image ships, so a chart that
+          # renders here renders there. See deploy/build/Dockerfile.coordinator.
+          version: v3.21.3
+
+      # config/ is copied into the chart because helm packages a directory and
+      # .Files cannot reach outside it. Doing it here rather than committing the
+      # copy is what keeps one config directory serving all three runtimes.
+      - name: Stage config/ into the chart
+        run: go run ./deploy/chartstage/cmd/chartstage
+
+      - name: Lint
+        run: |
+          helm lint deploy/charts/software-gateway \
+            --set postgresql.password.value=lint \
+            --set identity.masterkey.value=0123456789abcdef0123456789abcdef \
+            --set identity.rootPassword.value=lint
+
+      # BOTH ENVIRONMENTS, WITH THEIR REAL VALUES - the same files Flux reads.
+      # helm lint proves the chart parses; this proves that what lab and
+      # production would actually be given renders, and that no validation rule
+      # in templates/_validate.tpl is tripped by either of them.
+      - name: Render lab and production
+        run: |
+          set -euo pipefail
+          for env in lab prod; do
+            ns=$([ "$env" = prod ] && echo swgw || echo swgw-lab)
+            go run ./deploy/chartstage/cmd/chartstage -values "$env" > "/tmp/$env-values.yaml"
+            helm template swgw deploy/charts/software-gateway \
+              --namespace "$ns" --values "/tmp/$env-values.yaml" > "/tmp/$env.yaml"
+            echo "$env: $(grep -c '^kind:' "/tmp/$env.yaml") objects"
+          done
+
+      # The compensation for there being no admission controller in front of a
+      # `helm template`: a misspelled field renders perfectly and is rejected by
+      # the API server at apply time, which under Flux means a failed
+      # reconciliation somebody has to go and read.
+      - name: Validate the rendered objects against the Kubernetes schemas
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /tmp kubeconform
+          for env in lab prod; do
+            # CRDs are skipped rather than fetched: VaultStaticSecret,
+            # SecretProviderClass and ServiceMonitor belong to operators this
+            # repository does not own, and pinning their schemas here would be
+            # a fourth place their versions are declared.
+            /tmp/kubeconform -strict -summary -ignore-missing-schemas \
+              -kubernetes-version 1.29.0 "/tmp/$env.yaml"
+          done
+
+      # The validator must actually reject. Same rule as `validate:rejects-broken`
+      # above: a check that passes everything is worse than none, because it is
+      # trusted.
+      - name: Confirm the chart refuses a configuration that cannot work
+        run: |
+          set -euo pipefail
+          fails=0
+          try() {
+            if helm template t deploy/charts/software-gateway "${@:2}" >/dev/null 2>&1; then
+              echo "::error::the chart accepted $1, which cannot work"
+              fails=1
+            else
+              echo "refused: $1"
+            fi
+          }
+          base=(--set postgresql.password.value=p
+                --set identity.masterkey.value=0123456789abcdef0123456789abcdef
+                --set identity.rootPassword.value=r)
+          try "a database with no password" \
+            --set identity.masterkey.value=0123456789abcdef0123456789abcdef \
+            --set identity.rootPassword.value=r
+          try "a masterkey that is not 32 bytes" \
+            --set postgresql.password.value=p --set identity.masterkey.value=short \
+            --set identity.rootPassword.value=r
+          try "single sign-on with the client secret in values" "${base[@]}" \
+            --set identity.sso.issuer=https://example.com --set identity.sso.clientId=x
+          try "an issuer that is not the host the ingress serves" "${base[@]}" \
+            --set ingress.enabled=true --set ingress.app.host=a.example.com \
+            --set ingress.identity.host=b.example.com
+          try "a pull secret that no inventory entry produces" "${base[@]}" \
+            --set secrets.backend=vault --set secrets.registryPullSecret.enabled=true \
+            --set secrets.registryPullSecret.from=nothing-declares-this
+          exit $fails
+
+  release:
+    name: The version a release would carry
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The algorithm asks which release first contained a commit, which a
+          # shallow clone answers wrongly rather than failing.
+          fetch-depth: 0
+
+      # Printed on every pull request, so the answer to "does this ship new
+      # images or reuse the running ones" is visible before the merge rather
+      # than after it. It also exercises the script: a change that breaks it
+      # would otherwise be found by the first release after the merge.
+      - name: What merging this would publish
+        env:
+          CHANNEL: main
+        run: .github/scripts/version.sh
+
   schema:
     name: Schema boots end to end
     runs-on: ubuntu-latest

@@ -204,14 +204,23 @@ rollingUpdate:
 {{- end }}
 {{- end -}}
 
-{{/* The names of the Secrets the inventory produces, as a YAML list so callers
-     can `fromYamlArray` it. Read from the STAGED config directory, so the list
-     is whatever config/secrets/secrets.yaml says and nothing has to be
-     restated in values. */}}
+{{/* The Secrets projected into /etc/softwaregateway/secrets, as a YAML list so
+     callers can `fromYamlArray` it. Read from the STAGED config directory, so
+     the list is whatever config/secrets/secrets.yaml says and nothing has to
+     be restated in values.
+
+     THE REGISTRY PULL CREDENTIAL IS LEFT OUT. It is in the inventory because
+     the backend has to produce it, and it is read by the kubelet rather than
+     by any process in these containers - so projecting it would put a
+     credential for a registry the application never talks to inside the
+     directory the application reads credentials from. */}}
 {{- define "swgw.secretNames" -}}
 {{- $inv := .Files.Get "files/config/secrets/secrets.yaml" | fromYaml -}}
+{{- $pull := .Values.secrets.registryPullSecret -}}
 {{- range (default (list) $inv.secrets) }}
+{{- if not (and $pull.enabled (eq .name $pull.from)) }}
 - {{ .name }}
+{{- end }}
 {{- end }}
 {{- end -}}
 

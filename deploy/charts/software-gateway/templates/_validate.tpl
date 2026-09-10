@@ -59,6 +59,20 @@ who cannot sign in.
 {{- fail "\n\nsecrets.registryPullSecret.enabled is set with secrets.backend \"none\".\n\nNothing would create the pull Secret. Either choose a backend, or create the\nSecret yourself and name it in image.pullSecrets.\n" }}
 {{- end }}
 
+{{/* THE HOLE THIS CLOSES. Every pod gets imagePullSecrets naming the Secret,
+     and the Secret is produced from the inventory - so a pull secret enabled
+     without an inventory entry is a deployment whose every pod sits in
+     ImagePullBackOff with a Secret that was never going to exist. Nothing else
+     would have said so. */}}
+{{- if .Values.secrets.registryPullSecret.enabled }}
+{{- $inv := .Files.Get "files/config/secrets/secrets.yaml" | fromYaml }}
+{{- $names := list }}
+{{- range (default (list) $inv.secrets) }}{{ $names = append $names .name }}{{ end }}
+{{- if not (has .Values.secrets.registryPullSecret.from $names) }}
+{{- fail (printf "\n\nsecrets.registryPullSecret.from is %q, which is not in\nconfig/secrets/secrets.yaml.\n\nEvery pod would be given an imagePullSecret naming a Secret that nothing\ncreates, and the whole release would sit in ImagePullBackOff. Declare it in the\ninventory with the single key .dockerconfigjson - the inventory's own comment\nsays how to produce that value.\n\ndeclared: %s\n" .Values.secrets.registryPullSecret.from (join ", " $names)) }}
+{{- end }}
+{{- end }}
+
 {{/* PRODUCTS THAT REFERENCE A CREDENTIAL NOBODY DECLARED. The Go test makes
      the same check on the pull request; this one covers a chart installed from
      the registry with an inventory that was edited afterwards. */}}

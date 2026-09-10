@@ -6,7 +6,7 @@ import { Alert, App, Button, Card, Col, Descriptions, Divider, Modal, Row, Space
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
 import {
-  DatabaseOutlined, FolderOutlined, LoadingOutlined, PackageOutlined,
+  CompareOutlined, DatabaseOutlined, FolderOutlined, LoadingOutlined, PackageOutlined,
   SafetyCertificateOutlined, ScaleOutlined,
 } from '../icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -35,7 +35,7 @@ import { PromoteButton } from '../components/promote'
 import { ComplianceTab } from '../components/compliancepanel'
 import { SecurityTab } from '../components/securitypanel'
 import { COMPARISON_PRODUCT_FILTER } from '../domain/compare'
-import { EmptyState, c, mono } from '../uikit'
+import { EmptyArt, EmptyState, c, mono } from '../uikit'
 import type {
   Artifact, CancelAnalysisResponse, InspectPackageResponse, Package, PackageFile, PackageTransfer,
   Product, RelatedArtifact,
@@ -585,18 +585,29 @@ function ComponentTable({ artifacts, kind }: { artifacts: Artifact[]; kind: stri
 
   return (
     <Space direction="vertical" size={8} style={{ width: '100%' }}>
-      <SearchBar
-        value={search}
-        onChange={setSearch}
-        placeholder={`Search ${kind.toLowerCase()} by name, tag or digest`}
-        matched={rows.length}
-        total={artifacts.length}
-        width={320}
-      />
-
       <DataTable<Artifact>
         tableEnhancedKey="release-artifacts"
         allow_export
+        /*
+          The search sits IN the toolbar, beside the export.
+
+          Both act on the same rows - what the reader has narrowed to is what
+          the file should contain - and they were on two lines, the search
+          above the table and the kit's toolbar below it holding one button.
+          One row, and the export offers CSV, Excel and JSON of exactly the
+          contents on screen.
+        */
+        toolbarExtra={
+          <SearchBar
+            value={search}
+            onChange={setSearch}
+            placeholder={`Search ${kind.toLowerCase()} by name, tag or digest`}
+            matched={rows.length}
+            total={artifacts.length}
+            width={320}
+            style={{ marginBottom: 0 }}
+          />
+        }
         size="small"
         dataSource={rows}
         rowKey={(a) => a.artifactId}
@@ -702,7 +713,30 @@ function FileTree({
       />
 
       {shown.length === 0 ? (
-        <EmptyState title="No file matches that" />
+        /*
+          TWO DIFFERENT NOTHINGS, and they need different answers.
+
+          "No file matches that" was shown for both, so a release that simply
+          carries no files read as a failed search over files that were there
+          - and offered no way out, because there was nothing to clear. The
+          shared empty state carries the platform's own illustration, the way
+          every other absence in this product does.
+        */
+        search.trim() ? (
+          <EmptyState
+            art={<EmptyArt size={110} />}
+            title="No files match that search"
+            hint={`Nothing in this release's ${files.length.toLocaleString()} file${files.length === 1 ? '' : 's'} matches what you typed.`}
+            actionLabel="Clear search"
+            onAction={() => setSearch('')}
+          />
+        ) : (
+          <EmptyState
+            art={<EmptyArt size={110} />}
+            title="This release carries no files"
+            hint="Its components are images rather than file bundles. The Images tab lists what it does carry."
+          />
+        )
       ) : (
         <Tree
           treeData={tree}
@@ -1231,7 +1265,14 @@ export default function PackageDetail() {
             <Link to={p
               ? `/packages?compare=1&cmp=${encodeURIComponent(productName!)}&product=${encodeURIComponent(productName!)}&${COMPARISON_PRODUCT_FILTER}=1&a=${encodeURIComponent(packageReference(p))}`
               : '/packages'}>
-              <Button>Compare</Button>
+              {/*
+                An icon, because the two buttons beside it have one. A row of
+                three actions where one is bare reads as an accident rather
+                than as a difference, and it is the same glyph the listing's
+                own Compare packages button uses - the same picture meaning the
+                same thing.
+              */}
+              <Button icon={<CompareOutlined />}>Compare</Button>
             </Link>
             {/*
               PROMOTE sits beside Download rather than under a menu, and it is
@@ -1253,7 +1294,18 @@ export default function PackageDetail() {
               disabled control that never says why is how people conclude a
               feature is broken.
             */}
-            {p && promotableTargets(p, prod).length > 0 && (
+            {/*
+              AND it has actually landed. Promotion copies a release from the
+              internal repositories to a production one, so a release that was
+              never downloaded has nothing to copy: the button could only fail,
+              and it failed late, after a dialog and a confirmation.
+
+              This is a different absence from the one below. Nowhere left to
+              send it means the work is DONE; not downloaded means it has not
+              started, and the Download button beside this one is the thing to
+              press.
+            */}
+            {p && downloadedAt(p) && promotableTargets(p, prod).length > 0 && (
               <PromoteButton
                 product={productName!}
                 reference={reference!}

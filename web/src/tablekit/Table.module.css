@@ -552,3 +552,14 @@
 .fitsX :global(.ant-table-body)::-webkit-scrollbar:horizontal {
   display: none;
 }
+
+/* The caller's own controls, at the start of the toolbar row.
+   margin-right: auto keeps them left while the kit's export and column
+   controls stay pinned to the right, whatever either side contains. */
+.toolbarExtra {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-right: auto;
+  min-width: 0;
+}

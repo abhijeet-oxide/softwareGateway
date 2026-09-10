@@ -84,6 +84,7 @@ type StyleName =
   | "titleRoot"
   | "titleText"
   | "toolbar"
+  | "toolbarExtra"
   | "toolbarButton"
   | "toolbarDropdown"
   | "toolbarExternal"
@@ -141,6 +142,15 @@ export type TableEnhancedProps<RecordType extends AnyRecord = AnyRecord> =
     defaultColumnWidth?: number;
     showColumnControls?: "always" | "hover" | "off";
     toolbarPlacement?: "inside" | "outside";
+    /**
+     * The caller's own controls, rendered at the start of the toolbar row.
+     *
+     * A table's search acts on the same rows its export does, so the two
+     * belong on one line. Without this the call site had to put its search
+     * above the table and the kit's toolbar sat under it as a second, emptier
+     * row. Supplying it also turns the toolbar on by itself.
+     */
+    toolbarExtra?: React.ReactNode;
     tableEnhancedDensity?: "comfortable" | "middle" | "compact";
     tableEnhancedBorderedHeader?: boolean;
     storage?: Storage;
@@ -2100,6 +2110,7 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
     className,
     dataSource,
     pagination,
+    toolbarExtra,
     onTableEnhancedColumnResize,
     onTableEnhancedColumnReorder,
     onTableEnhancedColumnPin,
@@ -3225,7 +3236,7 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
     };
   }, [pagination]);
 
-  const showToolbar = allow_export || show_column_visibility;
+  const showToolbar = allow_export || show_column_visibility || Boolean(toolbarExtra);
 
   return (
     <div
@@ -3265,6 +3276,14 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
             toolbarPlacement === "outside" && s.toolbarExternal,
           )}
         >
+          {/* The caller's own controls, in the same row as the kit's.
+              A table's search belongs beside its export - they act on the
+              same rows - and without a slot the call site had to put its
+              search in a line of its own above the table, leaving the kit's
+              toolbar as a second, emptier line saying nothing. */}
+          {toolbarExtra ? (
+            <div className={s.toolbarExtra}>{toolbarExtra}</div>
+          ) : null}
           <Space size={8}>
             {allow_export ? (
               <Dropdown

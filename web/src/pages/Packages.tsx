@@ -102,72 +102,15 @@ function ComparePick({ slot, blocked, onToggle }: {
  * download), and a menu for the rest. The menu is one button wide whatever it
  * contains, which is what stops the column growing every time a verb is added.
  */
-function RowActions({ product, pkg, config, autoProductFilter }: {
+function RowActions({ product, pkg, config }: {
   product: string
   pkg: Package
   /** The product's configuration, so the row knows where this could still go. */
   config?: Product
-  autoProductFilter: boolean
 }) {
-  const { message } = App.useApp()
-  const navigate = useNavigate()
-  const sync = useSyncPackageSecurity()
   const mayOperate = useCan('operate', { product })
 
-  // "Compare with another release" now PRE-SELECTS this one and stays here.
-  //
-  // It used to leave for a page whose first job was to ask which release the
-  // reader meant - which they had just told it by clicking this row - and whose
-  // second was to ask for the other one from a dropdown of two hundred. Both
-  // halves of that are this listing's job, and it is already open.
-  const compareHref = `/packages?compare=1`
-    + `&cmp=${encodeURIComponent(product)}`
-    + `&product=${encodeURIComponent(product)}`
-    + (autoProductFilter ? `&${COMPARISON_PRODUCT_FILTER}=1` : '')
-    // The REPOSITORY travels with the tag. One version tag exists in every
-    // repository a product watches, so a reference carrying only the tag does
-    // not name a package.
-    + `&a=${encodeURIComponent(packageReference(pkg))}`
-
-  const locationsHref = `/packages/compare?mode=locations`
-    + `&product=${encodeURIComponent(product)}`
-    + `&a=${encodeURIComponent(packageReference(pkg))}`
-
   const detail = releaseHref(product, pkg)
-  const securityHref = `${detail}${detail.includes('?') ? '&' : '?'}tab=security`
-  const security = pkg.security
-  // Not a sync whose Coordinator went away: see PackageSecuritySummary.stalled.
-  const syncing = security?.state === 'syncing' && !security.stalled
-
-  const startSync = () => sync.mutate(
-    { product, ref: packageReference(pkg), repository: pkg.sourceRepository },
-    {
-      onSuccess: (res) => {
-        message.info(res.started
-          ? `Syncing ${res.artifacts} artifacts of ${version(pkg)}.`
-          : 'A sync is already running for this release.')
-        // Straight to where the progress is. A background job somebody cannot
-        // watch is a background job they start twice.
-        navigate(securityHref)
-      },
-      onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be started.'),
-    },
-  )
-
-  const syncItem: MenuProps['items'] = syncing
-    ? [{ key: 'progress', label: <Link to={securityHref}>View sync progress</Link> }]
-    : security?.canSync
-      ? [{
-          key: 'sync',
-          label: security.state === '' ? 'Sync vulnerabilities' : 'Sync vulnerabilities again',
-          disabled: !mayOperate,
-          onClick: startSync,
-        }]
-      : [{
-          key: 'sync-off',
-          label: <Tooltip title={security?.reason}><span>Sync vulnerabilities</span></Tooltip>,
-          disabled: true,
-        }]
 
   // WHAT HAS HAPPENED TO THIS RELEASE, split by kind. Everything below reads
   // from this rather than from `pkg.transfers` directly: the button and the
@@ -175,13 +118,22 @@ function RowActions({ product, pkg, config, autoProductFilter }: {
   // recompute it separately.
   const history = releaseHistory(pkg)
 
+  /*
+    WHAT IS NOT ALREADY INSIDE THE RELEASE.
+
+    This menu had grown to six entries, and four of them led somewhere the
+    release's own page already offers: "View vulnerabilities" and the two sync
+    entries are the Security tab, and "Compare with another release" is the
+    Compare packages button at the top of this very table. A menu that mostly
+    restates the page it sits on is a menu a reader learns to ignore, and it
+    made the two entries that ARE only here - the transfers this release came
+    out of - the hardest to find.
+
+    "Compare across locations" is a real question this table cannot ask
+    (one release, several places, did it arrive intact) but it is not wanted
+    yet, so it is not offered yet.
+  */
   const items: MenuProps['items'] = [
-    // "View download" lives HERE now rather than in the row.
-    //
-    // Promote took its place, and that is the right trade: once a release has
-    // landed, promoting it is the thing somebody is about to do and looking at
-    // the download that brought it is the thing they might. A row has space
-    // for one of those.
     ...(history.download
       ? [{
           key: 'download',
@@ -194,19 +146,6 @@ function RowActions({ product, pkg, config, autoProductFilter }: {
           label: <Link to={`/downloads/${history.promotion.id}`}>View promotion</Link>,
         }]
       : []),
-    ...(history.download || history.promotion ? [{ type: 'divider' as const }] : []),
-    { key: 'security', label: <Link to={securityHref}>View vulnerabilities</Link> },
-    ...syncItem,
-    { type: 'divider' },
-    { key: 'compare', label: <Link to={compareHref}>Compare with another release</Link> },
-    // The OTHER comparison, and it is a different question: not "what changed
-    // between these two releases" but "did this one arrive intact". It is about
-    // ONE release, so it cannot be expressed by ticking two rows - it keeps a
-    // small form of its own, on a page that already knows which release.
-    {
-      key: 'compare-locations',
-      label: <Link to={locationsHref}>Compare across locations</Link>,
-    },
   ]
 
   return (
@@ -231,9 +170,16 @@ function RowActions({ product, pkg, config, autoProductFilter }: {
         mayOperate={mayOperate}
         promotable={promotableTargets(pkg, config).length > 0}
       />
-      <Dropdown menu={{ items }} trigger={['click']} placement="bottomRight">
-        <Button size="small" icon={<MoreOutlined />} aria-label="More actions" loading={sync.isPending} />
-      </Dropdown>
+      {/*
+        No entries, no button. A release nothing has happened to yet has
+        nothing behind the dots, and a control that opens an empty menu is a
+        control that has to be tried before it can be dismissed.
+      */}
+      {items.length > 0 && (
+        <Dropdown menu={{ items }} trigger={['click']} placement="bottomRight">
+          <Button size="small" icon={<MoreOutlined />} aria-label="More actions" />
+        </Dropdown>
+      )}
     </Space>
   )
 }
@@ -1003,7 +949,6 @@ export default function Packages() {
                     product={r.product.productId}
                     pkg={r.pkg}
                     config={r.product}
-                    autoProductFilter={!selected}
                   />
                 ),
               },

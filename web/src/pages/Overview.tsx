@@ -4,10 +4,10 @@ import { Table as DataTable } from '../tablekit'
 import { c, FieldLabel } from '../uikit'
 import { CloudDownloadOutlined, DashboardOutlined, RadarChartOutlined } from '../icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { useProducts, usePackagesByProducts, useReports, useTransfers } from '../api/queries'
+import { useAllPackages, useProducts, useReports, useTransfers } from '../api/queries'
 import {
-  deriveLocations, deriveStatus, downloadSeconds, isRecent, publishedAt, releaseHref, transferIndex,
-  failureReason, verification, version, withTransfers, type SoftwareStatus,
+  deriveLocations, deriveStatus, downloadSeconds, isRecent, releaseHref,
+  failureReason, verification, version, type SoftwareStatus,
 } from '../domain/derive'
 import { formatBytes, formatDuration, formatSpeed } from '../domain/format'
 import { Stat, Value } from '../components/value'
@@ -65,37 +65,52 @@ export default function Overview() {
   // product missing from it cannot be asked about.
   const productList = allProducts.filter((p) => p.enabled)
 
-  // One request per product. There is no estate-wide package listing endpoint,
-  // so this composes product listings into one "recent releases" view.
-  const packageLists = usePackagesByProducts(
-    productList.map((p) => p.productId),
-    { pageSize: 30 },
-  )
+  /*
+    ONE REQUEST for the newest releases in the estate.
+
+    It was one per product - thirty on a real deployment - because there was no
+    estate-wide package listing to ask, so this page composed product listings
+    into a "recent releases" view in the browser. The listing is ordered by
+    publication date across every product now, so the newest thirty ARE the
+    newest thirty and the ten this table shows come off the front of them.
+
+    Thirty rather than ten, because the table wants the ten most recent
+    releases PUBLISHED IN THE LAST SEVEN DAYS and that filter is a date on the
+    row: fetching ten would show fewer than ten whenever any of them were
+    older. Thirty is the margin, and a week that produced more than thirty
+    releases is a week whose ten newest are still the ten newest.
+  */
+  const packageLists = useAllPackages({ pageSize: 30 })
 
   const transfers = useTransfers({ pageSize: 100, view: 'summary' })
   const reports = useReports({ period: '7d' })
 
   const rows = useMemo<Row[]>(() => {
-    // A package listing carries no transfer history, so the status is joined in
-    // from the transfer listing rather than derived from the package alone -
-    // otherwise every row reads NEW, including releases already in production.
-    const index = transferIndex(transfers.data?.transfers ?? [])
     const out: Row[] = []
-    productList.forEach((product, i) => {
-      for (const listed of packageLists[i]?.data?.packages ?? []) {
-        const pkg = withTransfers(listed, index)
-        out.push({ pkg, product, status: deriveStatus(pkg, product) })
-      }
-    })
+    for (const pkg of packageLists.data?.packages ?? []) {
+      // A DISABLED product does nothing on purpose - nothing is discovered for
+      // it and nothing is downloaded - so its releases are noise on a page
+      // about what needs attention. Dropped here rather than by not asking,
+      // because the listing is one request for the estate: the server answers
+      // for every product this account can see, and which of them are enabled
+      // is configuration this page already holds.
+      const product = productList.find((p) => p.productId === pkg.product)
+      if (!product) continue
+      // The listing carries each row's own transfer history now, so the status
+      // is derived from the row rather than joined in from a hundred-transfer
+      // fetch - a join that was wrong for anything but the most recent
+      // releases. See attachTransfers.
+      out.push({ pkg, product, status: deriveStatus(pkg, product) })
+    }
     // PUBLISHED RECENTLY, newest first. A dashboard answers "what is new",
     // and a list that falls back on old releases to fill ten rows answers a
     // different question quietly - the reader cannot tell which rows are the
     // news and which are the padding.
-    return out
-      .filter((r) => isRecent(r.pkg))
-      .sort((a, b) => publishedAt(b.pkg).localeCompare(publishedAt(a.pkg)))
-      .slice(0, 10)
-  }, [productList, packageLists, transfers.data])
+    //
+    // The listing is already ordered by publication date, so this filters
+    // rather than re-sorts.
+    return out.filter((r) => isRecent(r.pkg)).slice(0, 10)
+  }, [productList, packageLists.data])
 
   const counts = useMemo(() => {
     const all = rows.map((r) => r.status)
@@ -157,7 +172,7 @@ export default function Overview() {
     )
   }
 
-  const loading = products.isLoading || packageLists.some((q) => q.isLoading)
+  const loading = products.isLoading || packageLists.isLoading
 
   /* Whether the right-hand column has anything to hold. Both panels below are
    * estate-wide facts with no product tier on their policies, so a caller

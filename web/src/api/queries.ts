@@ -162,17 +162,41 @@ export interface PackageFilters {
   repository?: string
   tag?: string
   state?: string
+  /**
+   * The text somebody typed, matched by the SERVER against the repository path
+   * and the tag - both spellings of each.
+   *
+   * Spelled `q` because that is what the endpoint takes, and because the
+   * alternative is what this replaces: the listing fetched a hundred rows per
+   * product and ran a substring test over them in the browser, which searches
+   * what happened to be loaded rather than what exists. A release on the
+   * second page came back as "nothing matches", confidently.
+   *
+   * Debouncing is the caller's job, as it is for the security search: the
+   * right delay depends on whether somebody is typing a name or pasting a
+   * version, and the page knows which.
+   */
+  q?: string
   pageSize?: number
   pageToken?: string
 }
 
-export function usePackages(product: string | undefined, filters: PackageFilters = {}) {
+export function usePackages(
+  product: string | undefined, filters: PackageFilters = {},
+  opts: { enabled?: boolean } = {},
+) {
+  const { enabled = true } = opts
   return useQuery({
     queryKey: ['packages', product, filters],
     queryFn: () => api.get<ListPackagesResponse>(
       `/products/${encodeURIComponent(product!)}/packages${query({ ...filters })}`),
-    enabled: Boolean(product),
+    enabled: enabled && Boolean(product),
     staleTime: MINUTE,
+    // The page, the page size and the search term are part of the query key,
+    // so each of them starts a NEW query with no data of its own. Holding the
+    // previous answer is what stops the table emptying and coming back on
+    // every keystroke and every page turn.
+    placeholderData: (previous) => previous,
     // Only while a release on THIS page is being walked, and it stops the
     // moment none is. Discovery analyses new releases on its own, so a listing
     // that never refreshed would show `Analyzing` on rows that finished
@@ -184,21 +208,72 @@ export function usePackages(product: string | undefined, filters: PackageFilters
   })
 }
 
-/** Package listings for several products at once, preserving per-product query keys. */
-export function usePackagesByProducts(products: string[], filters: PackageFilters = {}) {
-  return useQueries({
-    queries: products.map((product) => ({
-      queryKey: ['packages', product, filters],
-      queryFn: () => api.get<ListPackagesResponse>(
-        `/products/${encodeURIComponent(product)}/packages${query({ ...filters })}`),
-      staleTime: MINUTE,
-      // Poll only while this product has releases currently being analysed.
-      refetchInterval: (q: { state: { data?: ListPackagesResponse } }) =>
-        (q.state.data?.packages ?? []).some((p) => p.analysisState === 'analyzing')
-          ? 5000
-          : false,
-    })),
+/**
+ * Releases across EVERY product this account can see, in one paged request.
+ *
+ * # Why this exists beside usePackages
+ *
+ * Because the estate listing was built out of usePackages, called once per
+ * product and merged in the browser. Three things follow from that merge, and
+ * all three were reported:
+ *
+ *   - one request per product on every visit, thirty on a real deployment;
+ *   - it cannot page. Each product's page is its own, so twenty-five merged
+ *     rows meant fetching a hundred from every product first;
+ *   - it cannot search, for the reason PackageFilters.q describes.
+ *
+ * `repository` is deliberately not accepted: resolving a repository shorthand
+ * needs a product, so that filter belongs where one is named.
+ */
+export function useAllPackages(
+  filters: Omit<PackageFilters, 'repository'> = {}, opts: { enabled?: boolean } = {},
+) {
+  const { enabled = true } = opts
+  return useQuery({
+    queryKey: ['packages', '*', filters],
+    queryFn: () => api.get<ListPackagesResponse>(`/packages${query({ ...filters })}`),
+    enabled,
+    staleTime: MINUTE,
+    // The same scoped poll usePackages uses, and it stops the moment no row on
+    // THIS page is being walked. Discovery analyses new releases on its own, so
+    // a listing that never refreshed would show `Analyzing` on rows that
+    // finished minutes ago.
+    refetchInterval: (q) =>
+      (q.state.data?.packages ?? []).some((p) => p.analysisState === 'analyzing')
+        ? 5000
+        : false,
+    // KEEP THE LAST PAGE ON SCREEN while the next one is fetched. The page
+    // number, the page size and the search term are all part of the query key,
+    // so each of them starts a NEW query - and a new query has no data, so the
+    // table emptied and came back on every keystroke and every page turn.
+    placeholderData: (previous) => previous,
   })
+}
+
+/**
+ * One listing, scoped or estate-wide, chosen by whether a product is named.
+ *
+ * A single hook rather than a caller mounting both and ignoring one: two
+ * queries where one answer is wanted is two requests, and the version that
+ * did that had to disable each of them by hand with `enabled` - a shape whose
+ * failure mode is both firing.
+ */
+export function usePackageListing(
+  product: string | undefined, filters: PackageFilters = {},
+) {
+  const scoped = usePackages(product, filters, { enabled: Boolean(product) })
+  // `repository` is dropped rather than passed and ignored: it resolves against
+  // one product's repositories, so an estate-wide listing has nothing to
+  // resolve it with and a server that silently discarded it would be answering
+  // a different question from the one asked.
+  const all = useAllPackages({
+    tag: filters.tag,
+    state: filters.state,
+    q: filters.q,
+    pageSize: filters.pageSize,
+    pageToken: filters.pageToken,
+  }, { enabled: !product })
+  return product ? scoped : all
 }
 
 /**

@@ -49,6 +49,18 @@ func TestListPackagesSearchesEitherSpellingOfBothFields(t *testing.T) {
 		// Whitespace is not a search. A cleared box must list everything rather
 		// than matching the space that was left in it.
 		{"blank", "   ", 2},
+		// THE THREE SPELLINGS OF A RELEASE. People write one down the way they
+		// say it, and no single column contains the separator - the path is one
+		// field and the tag is another - so all three have to become terms.
+		{"colon pair", "cfx-5000-k8s:23.8.1076", 1},
+		{"at pair", "cfx-5000-k8s@23.8.1076", 1},
+		{"spaced pair", "cfx-5000-k8s 23.8.1076", 1},
+		// EVERY term has to match. A pair whose halves name different releases
+		// is not a release.
+		{"pair naming nothing", "cfx-5000-k8s:99.9.9999", 0},
+		// A DIGEST stays whole: `ccbd…` does not open like a version, so the
+		// colon is not a separator and the query is matched as typed.
+		{"digest is not a pair", "sha256:1111", 0},
 	}
 
 	for _, tc := range cases {
@@ -108,5 +120,46 @@ func TestListPackagesAcrossNamedProducts(t *testing.T) {
 
 	if _, err := h.packages.ListPackages(t.Context(), ListPackagesFilter{Limit: 10}); err == nil {
 		t.Fatal("a filter naming no product listed something; it must refuse instead")
+	}
+}
+
+// The term split is the whole of what makes the three spellings work, so it is
+// pinned on its own rather than only through the query above.
+func TestSearchTerms(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want []string
+	}{
+		{"", nil},
+		{"   ", nil},
+		{"cmm", []string{"cmm"}},
+		// Lowercased once, here, so every caller compares the same way.
+		{"CMM", []string{"cmm"}},
+		{"nokia/cmm:24.Q3.4", []string{"nokia/cmm", "24.q3.4"}},
+		{"nokia/cmm@24.Q3.4", []string{"nokia/cmm", "24.q3.4"}},
+		{"nokia/cmm v1.2", []string{"nokia/cmm", "v1.2"}},
+		// The LAST separator, because a path may carry one of its own.
+		{"a:b:1.0", []string{"a:b", "1.0"}},
+		// Not a version, so not a pair: matched as typed.
+		{"sha256:ccbd", []string{"sha256:ccbd"}},
+		{"orbs/cfx:latest", []string{"orbs/cfx:latest"}},
+		// Already two terms, so a colon inside one of them is part of it.
+		{"a:b 1.0", []string{"a:b", "1.0"}},
+		// Nothing after the separator is nothing to split off.
+		{"cmm:", []string{"cmm:"}},
+	}
+
+	for _, tc := range cases {
+		got := SearchTerms(tc.raw)
+		if len(got) != len(tc.want) {
+			t.Errorf("SearchTerms(%q) = %q, want %q", tc.raw, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("SearchTerms(%q) = %q, want %q", tc.raw, got, tc.want)
+				break
+			}
+		}
 	}
 }

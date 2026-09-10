@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -804,6 +805,54 @@ type ListPackagesFilter struct {
 	Offset int
 }
 
+// versionish opens like a version: a digit, or a v in front of one.
+var versionish = regexp.MustCompile(`^v?[0-9]`)
+
+// SearchTerms splits what somebody typed into the terms a row must match.
+//
+// # Why this is not just the string
+//
+// Because people write a release down the way they SAY it, and they say it
+// three ways: `chart:1.4.2`, `chart@1.4.2` and `chart 1.4.2`. No single column
+// contains the separator - the path is one field and the tag is another - so a
+// single LIKE over the whole query answers "nothing found" for a reference
+// pasted straight out of the thing being searched for. That was reported
+// against the browser-side search this replaced, and fixing it there and not
+// here would move the defect rather than remove it.
+//
+// So a query becomes TERMS, each of which must match some field. Whitespace
+// splits, and so does a colon or an at-sign BETWEEN A NAME AND SOMETHING THAT
+// OPENS LIKE A VERSION - the last one, because a repository path may carry a
+// separator of its own and the version is what follows the final one.
+//
+// The version test is what keeps a digest whole: `sha256:ccbd…` is not split,
+// because `ccbd…` does not open like a version, so it is matched as typed
+// rather than turned into two terms that match nothing.
+//
+// Exported because both the search and anything that has to explain it - a CLI
+// help string, a placeholder - should read from one definition of what a term
+// is.
+func SearchTerms(raw string) []string {
+	q := strings.ToLower(strings.TrimSpace(raw))
+	if q == "" {
+		return nil
+	}
+
+	fields := strings.Fields(q)
+	// The punctuated form is one word, so it is only ever considered when the
+	// query IS one word: `nokia/cmm 24.Q3` is already two terms and splitting
+	// its path on a colon it does not have would be inventing a third.
+	if len(fields) == 1 {
+		if i := strings.LastIndexAny(q, ":@"); i > 0 && i < len(q)-1 {
+			name, version := q[:i], q[i+1:]
+			if versionish.MatchString(version) {
+				return []string{name, version}
+			}
+		}
+	}
+	return fields
+}
+
 // scope names what a filter asked for, for an error message.
 func (f ListPackagesFilter) scope() string {
 	if f.ProductName != "" {
@@ -871,7 +920,8 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 		query += " AND pk.state = ?"
 		args = append(args, f.State)
 	}
-	// THE SEARCH, as four LIKEs over one lowered term.
+	// THE SEARCH: every term has to match somewhere, and "somewhere" is four
+	// fields.
 	//
 	// LOWER on both sides rather than a collation, because the two dialects
 	// disagree about what LIKE does with case: SQLite folds ASCII case for
@@ -883,7 +933,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 	// query is already bounded by the product set and by LIMIT, and the
 	// alternative on offer - filtering a hundred rows per product in the
 	// browser - is not a faster search, it is a wrong one.
-	if term := strings.ToLower(strings.TrimSpace(f.Search)); term != "" {
+	for _, term := range SearchTerms(f.Search) {
 		pattern := "%" + escapeLike(term) + "%"
 		query += ` AND (LOWER(COALESCE(sr.repository_path,'')) LIKE ? ESCAPE '\'
 		            OR LOWER(COALESCE(sr.display_path,'')) LIKE ? ESCAPE '\'

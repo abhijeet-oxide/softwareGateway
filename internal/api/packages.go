@@ -265,10 +265,6 @@ func (s *Server) attachTransfers(
 		ids = append(ids, row.ID)
 	}
 
-	// Bounded by the page: a release with more attempts than this has had
-	// something go wrong repeatedly, and what a listing needs from it - is
-	// anything running, did anything fail, where did it land - is answered by
-	// the most recent ones. The detail page reads them unbounded.
 	transfers, err := s.deps.Packages.ListTransfers(ctx, store.ListTransfersFilter{
 		PackageIDs: ids,
 		// WITHOUT the job rollups. Twelve correlated aggregates over `jobs` per
@@ -276,7 +272,27 @@ func (s *Server) attachTransfers(
 		// row draws none of them: it needs the state, the destination and the
 		// reason a failure gives.
 		WithoutJobCounts: true,
-		Limit:            len(ids) * 8,
+		/*
+		 * BOUNDED, and here is what the bound costs.
+		 *
+		 * Twenty per release on the page, which is the same allowance the
+		 * single-release read gives one - and generous: a release's transfers
+		 * are one per destination target plus its promotions, and a retry
+		 * RESUMES a transfer rather than creating another.
+		 *
+		 * The truncation is shared rather than per release, because this is one
+		 * query ordered newest-first across the page. So a release with two
+		 * hundred attempts could crowd its neighbours off the end, and their
+		 * rows would then read as though nothing had been attempted with them.
+		 * That is the honest limit of doing it in one query, and it is bounded
+		 * the useful way round: what survives is the most recent history, which
+		 * is what a status is derived from.
+		 *
+		 * Capped absolutely as well, because the page size is the caller's:
+		 * five hundred releases would otherwise ask for ten thousand rows to
+		 * decorate a table.
+		 */
+		Limit: min(len(ids)*20, 4000),
 	})
 	if err != nil {
 		s.deps.Logger.Warn("could not read transfer history for listing", "error", err)

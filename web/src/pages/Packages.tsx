@@ -455,14 +455,19 @@ export default function Packages() {
     is a thin thing to narrow. The same is true of the vulnerabilities intent,
     which hides a release no scanner has answered for.
 
-    So either of them WIDENS the fetch, to the largest page the server will
-    serve. The table still shows `pageSize` rows at a time; what changes is how
-    many releases the filter got to look at, and the line under the toolbar says
-    what that was. An unfiltered listing - the ordinary case - still fetches
-    exactly one page.
+    So either of them WIDENS the fetch. The table still shows `pageSize` rows
+    at a time; what changes is how many releases the filter got to look at, and
+    the line under the toolbar says what that was. An unfiltered listing - the
+    ordinary case - still fetches exactly one page.
+
+    Two hundred rather than the five hundred the server will serve, because
+    each of those rows carries its transfer history and that history is read
+    under one shared bound: a wider page spreads the same allowance thinner,
+    until a release's own attempts start falling off the end and its status
+    reads as though nothing had been tried. See attachTransfers.
   */
   const filtering = Boolean(status) || forVulnerabilities
-  const fetchSize = filtering ? 500 : pageSize
+  const fetchSize = filtering ? 200 : pageSize
   const fetchPage = filtering ? 1 : page
 
   // Debounced, so the server sees one query per pause rather than one per key.

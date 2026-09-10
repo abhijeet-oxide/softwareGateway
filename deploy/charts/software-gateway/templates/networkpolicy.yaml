@@ -1,0 +1,82 @@
+{{- if .Values.networkPolicy.enabled }}
+{{/*
+THE ONLY CONTROL IN FRONT OF THE COORDINATOR'S API that does not depend on a
+token being checked. Off by default, because a policy naming the wrong
+namespace is an outage and a cluster whose CNI does not enforce them is a false
+sense of safety - both worse than the honest absence.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "swgw.fullname" . }}-coordinator
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "coordinator") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "coordinator") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: worker}
+        - podSelector:
+            matchLabels: {app: web}
+{{- range .Values.networkPolicy.allowFromNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+{{- end }}
+      ports:
+        - {port: 8080, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "swgw.fullname" . }}-cerbos
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "cerbos") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "cerbos") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    # The PDP answers one caller. Nothing else in the namespace has a reason to
+    # ask it whether an action is permitted.
+    - from:
+        - podSelector:
+            matchLabels: {app: coordinator}
+      ports:
+        - {port: 3592, protocol: TCP}
+        - {port: 3593, protocol: TCP}
+{{- if not .Values.postgresql.external.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "swgw.fullname" . }}-postgres
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "postgres") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "postgres") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    # WORKERS ARE ABSENT, and that is the invariant made visible: a worker holds
+    # no database credentials and contains no SQL. If this list ever needs
+    # `app: worker`, something has gone wrong in the code rather than here.
+    - from:
+        - podSelector:
+            matchLabels: {app: coordinator}
+        - podSelector:
+            matchLabels: {app: zitadel}
+        - podSelector:
+            matchLabels: {app: zitadel-setup}
+        - podSelector:
+            matchLabels: {app: seed}
+      ports:
+        - {port: 5432, protocol: TCP}
+{{- end }}
+{{- end }}

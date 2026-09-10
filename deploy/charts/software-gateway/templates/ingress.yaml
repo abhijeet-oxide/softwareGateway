@@ -1,0 +1,93 @@
+{{- if .Values.ingress.enabled }}
+{{/*
+TWO HOSTS, BECAUSE THEY ARE TWO ORIGINS.
+
+The identity host is not decoration: ZITADEL stamps it into every token's `iss`
+and answers 404 to a Host header it does not recognise as its own. Putting the
+UI and the identity provider on one host with different paths would work for
+the UI and break sign-in in a way that reads as a ZITADEL fault.
+
+The identity host routes to zitadel-proxy, never to the two services behind it.
+See deploy/zitadel/nginx.conf for why that single origin is a requirement.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "swgw.fullname" . }}-app
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+  annotations:
+    # A privileged user's token carries org-wide roles and does not fit an
+    # ingress controller's default header buffers, which rejects it as a 400
+    # the application never sees. Both nginx configs in this repository raise
+    # the same limit for the same reason.
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "32k"
+    # Transfers stream and the UI long-polls.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.app.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ required "ingress.app.host is required" .Values.ingress.app.host | quote }}
+      secretName: {{ required "ingress.app.tls.secretName is required when tls is enabled" .Values.ingress.app.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ required "ingress.app.host is required when ingress.enabled" .Values.ingress.app.host | quote }}
+      http:
+        paths:
+          # ONE BACKEND, and the API is not a second one. The Coordinator ships
+          # no CORS middleware, so the browser must reach /api/v1 on the origin
+          # that served the page; the web tier proxies it same-origin, which is
+          # what vite does in development. Routing /api here instead would work
+          # and would make the two paths differ.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80
+{{- if .Values.identity.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "swgw.fullname" . }}-identity
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-proxy") | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "32k"
+    # ZITADEL's management API is gRPC-Web over HTTP/2 to the core; the console
+    # streams. Both are behind zitadel-proxy, which speaks HTTP/1.1 to this
+    # ingress - so nothing here needs a gRPC backend protocol, and setting one
+    # breaks the sign-in screens, which are a plain Next.js app.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.identity.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ required "ingress.identity.host is required" .Values.ingress.identity.host | quote }}
+      secretName: {{ required "ingress.identity.tls.secretName is required when tls is enabled" .Values.ingress.identity.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ required "ingress.identity.host is required when identity.enabled and ingress.enabled" .Values.ingress.identity.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zitadel-proxy
+                port:
+                  number: 80
+{{- end }}
+{{- end }}

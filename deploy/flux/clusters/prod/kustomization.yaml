@@ -1,0 +1,27 @@
+# What Flux applies in this cluster for this product, and nothing else. Flux
+# reconciles many applications here; this is the one directory that is ours.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: software-gateway
+  namespace: flux-system
+spec:
+  interval: 5m
+  # A failed apply is retried in a minute rather than waiting out the interval
+  # above, so a transient admission or registry error costs a minute.
+  retryInterval: 1m
+  path: ./deploy/environments/prod
+  # PRUNE. An object removed from Git is removed from the cluster. Without it,
+  # deleting a manifest leaves it running forever and Git stops being the
+  # answer to "what is deployed".
+  prune: true
+  wait: true
+  timeout: 20m
+  sourceRef:
+    kind: GitRepository
+    name: software-gateway
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: software-gateway
+      namespace: swgw

@@ -1,0 +1,228 @@
+{{- if and .Values.identity.enabled .Values.seed.enabled }}
+{{- $full := include "swgw.fullname" . -}}
+{{- $hash := include "swgw.identityHash" . -}}
+{{/*
+USER PROVISIONING, and the reason this is a Job with a hash in its name.
+
+config/users/users.yaml IS the provisioning mechanism (see its header). Adding
+a person is a commit; this is what applies it. Three properties, and each one
+is a decision:
+
+  IT RUNS WHEN THE PEOPLE CHANGE, AND NOT OTHERWISE. The name carries a hash of
+  users.yaml, roles.yaml, the product names and the identity settings. A
+  release that only moved an image renders the same Job name, Kubernetes sees
+  an object that already exists and completed, and nothing runs. A release that
+  adds a person renders a new name, so a new Job is created.
+
+  IT IS NOT A HELM HOOK. A hook would run on every upgrade - including the ones
+  that change nothing about identity - and hook failures fail the release. This
+  is an ordinary resource: Helm adopts it, prunes the previous one, and a
+  provisioning problem is a failed Job somebody reads rather than a rolled-back
+  deployment of unrelated code.
+
+  IT RESTARTS NOTHING. No Deployment references it, nothing waits on it. Adding
+  a person is ten seconds of a Job while every replica keeps serving. The one
+  thing that is not instant is a REMOVAL: the Coordinator verifies tokens
+  offline, so an already-issued token works until it expires
+  (identity.tokenLifetimes.accessToken, 15m by default).
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-seed-%s" $full $hash | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "seed") | nindent 4 }}
+  annotations:
+    softwaregateway.io/identity-hash: {{ $hash | quote }}
+spec:
+  backoffLimit: {{ .Values.seed.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.seed.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "swgw.componentLabels" (dict "ctx" . "component" "seed") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $full }}-seeder
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # The seeder authenticates with the machine token the setup Job put in
+        # the state Secret, and drives the management API. Both need ZITADEL
+        # actually serving, so this waits rather than letting the seeder's own
+        # retry loop print a page of failures on every fresh install.
+        - name: wait-for-zitadel
+          image: {{ .Values.images.node }}
+          command: ["node", "-e"]
+          args:
+            - |
+              const url = 'http://zitadel:8080/debug/ready';
+              const deadline = Date.now() + 10 * 60 * 1000;
+              const tick = async () => {
+                while (Date.now() < deadline) {
+                  try {
+                    const r = await fetch(url);
+                    if (r.ok) { console.log('zitadel is ready'); return; }
+                  } catch {}
+                  console.log('waiting for zitadel');
+                  await new Promise(r => setTimeout(r, 3000));
+                }
+                console.error('zitadel did not become ready within ten minutes');
+                process.exit(1);
+              };
+              await tick();
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+      containers:
+        - name: seed
+          image: {{ .Values.images.node }}
+          command: ["/bin/sh", "-c"]
+          args:
+            # THREE STEPS, and the middle one is byte for byte what
+            # `docker compose run --rm zitadel-init` runs. The other two move
+            # the seeder's shared-volume outputs in and out of a Secret,
+            # because a Job has no volume that outlives it. See
+            # deploy/zitadel/k8s-state.mjs.
+            - |
+              set -eu
+              node /seeder/k8s-state.mjs pull
+              node /seeder/bootstrap.mjs
+              node /seeder/k8s-state.mjs push
+          env:
+            - {name: K8S_STATE_SECRET, value: {{ $full }}-state}
+            - {name: NODE_EXTRA_CA_CERTS, value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt}
+            - {name: ZITADEL_INTERNAL_URL, value: "http://zitadel:8080"}
+            - {name: ZITADEL_HOST_HEADER, value: {{ include "swgw.identityHostHeader" . | quote }}}
+            - {name: ZITADEL_PUBLIC_URL, value: {{ include "swgw.identityUrl" . | quote }}}
+            - {name: WEB_PUBLIC_URL, value: {{ include "swgw.webUrl" . | quote }}}
+            - {name: GATEWAY_TENANT, value: {{ .Values.tenant | quote }}}
+            # WHAT THIS DEPLOYMENT IS, in one directory - the same mount
+            # compose makes, assembled here from the ConfigMaps that carry it.
+            - {name: GATEWAY_CONFIG_DIR, value: /config}
+            - {name: BOOTSTRAP_ADMIN_USERNAME, value: {{ .Values.identity.bootstrapAdmin.username | quote }}}
+            - {name: BOOTSTRAP_ADMIN_EMAIL, value: {{ .Values.identity.bootstrapAdmin.email | quote }}}
+            - {name: BOOTSTRAP_ADMIN_FIRST_NAME, value: {{ .Values.identity.bootstrapAdmin.firstName | quote }}}
+            - {name: BOOTSTRAP_ADMIN_LAST_NAME, value: {{ .Values.identity.bootstrapAdmin.lastName | quote }}}
+{{- if or .Values.identity.bootstrapAdmin.password .Values.identity.bootstrapAdmin.existingSecret }}
+            # The seeder REFUSES to run with this set while SSO is configured,
+            # so the local shortcut cannot follow you into production.
+            - name: BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (printf "%s-identity" $full) .Values.identity.bootstrapAdmin.existingSecret }}
+                  key: adminPassword
+{{- end }}
+            - {name: SSO_ISSUER, value: {{ .Values.identity.sso.issuer | quote }}}
+            - {name: SSO_CLIENT_ID, value: {{ .Values.identity.sso.clientId | quote }}}
+{{- if .Values.identity.sso.existingSecret }}
+            # NEVER FROM VALUES. A client secret in a values file is a client
+            # secret in Git, in the HelmRelease, and in `helm get values`.
+            - name: SSO_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.identity.sso.existingSecret }}
+                  key: {{ .Values.identity.sso.clientSecretKey }}
+{{- end }}
+            - {name: SSO_DISPLAY_NAME, value: {{ .Values.identity.sso.displayName | quote }}}
+            - {name: SSO_ALLOW_PASSWORD_LOGIN, value: {{ .Values.identity.sso.allowPasswordLogin | quote }}}
+            - {name: LOGIN_REQUIRE_MFA, value: {{ .Values.identity.sso.requireMfa | quote }}}
+            - {name: ACCESS_TOKEN_LIFETIME, value: {{ .Values.identity.tokenLifetimes.accessToken | quote }}}
+            - {name: ID_TOKEN_LIFETIME, value: {{ .Values.identity.tokenLifetimes.idToken | quote }}}
+            - {name: REFRESH_TOKEN_IDLE, value: {{ .Values.identity.tokenLifetimes.refreshTokenIdle | quote }}}
+            - {name: REFRESH_TOKEN_MAX, value: {{ .Values.identity.tokenLifetimes.refreshTokenMax | quote }}}
+            - {name: BRANDING_PRIMARY_COLOR, value: {{ .Values.identity.branding.primaryColor | quote }}}
+            - {name: BRANDING_PRIMARY_COLOR_DARK, value: {{ .Values.identity.branding.primaryColorDark | quote }}}
+            - {name: BRANDING_LANGUAGES, value: {{ .Values.identity.branding.languages | quote }}}
+            # Who the worker credentials are written for. The chown fails
+            # harmlessly here - a Secret volume is owned by root and the mode
+            # does the job - and the value is kept so the two stacks agree.
+            - {name: WORKER_UID, value: "65532"}
+            - {name: WORKER_ROTATE_SECRET, value: {{ ternary "yes" "" .Values.seed.rotateWorkerSecret | quote }}}
+          resources:
+            {{- toYaml .Values.seed.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: seeder, mountPath: /seeder, readOnly: true}
+            - {name: branding, mountPath: /branding, readOnly: true}
+            # The administrator's directory, reassembled at the paths the
+            # seeder reads: /config/users, /config/access, /config/products.
+            - {name: identity, mountPath: /config/users/users.yaml, subPath: users.yaml, readOnly: true}
+            - {name: identity, mountPath: /config/access/roles.yaml, subPath: roles.yaml, readOnly: true}
+            - {name: products, mountPath: /config/products, readOnly: true}
+            # The shared volumes, for the length of one Job.
+            - {name: state, mountPath: /pat}
+            - {name: oidc, mountPath: /oidc}
+            - {name: workercreds, mountPath: /workercreds}
+      volumes:
+        - name: seeder
+          configMap:
+            name: {{ $full }}-seeder
+            defaultMode: 0444
+        - name: branding
+          configMap:
+            name: {{ $full }}-branding
+            defaultMode: 0444
+        - name: identity
+          configMap:
+            name: {{ $full }}-identity
+        - name: products
+          configMap:
+            name: {{ $full }}-products
+        # Memory-backed: a machine token and a client secret pass through here
+        # and must not touch a node's disk.
+        - name: state
+          emptyDir: {medium: Memory}
+        - name: oidc
+          emptyDir: {medium: Memory}
+        - name: workercreds
+          emptyDir: {medium: Memory}
+{{- end }}
+{{- if .Values.identity.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "swgw.fullname" . }}-seeder
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "seed") | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "swgw.fullname" . }}-seeder
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "seed") | nindent 4 }}
+rules:
+  # ONE SECRET, BY NAME, IN ONE NAMESPACE. It is the cluster's replacement for
+  # the patshare, oidcshare and workercreds volumes in docker-compose.yml.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ printf "%s-state" (include "swgw.fullname" .) | quote }}]
+    verbs: ["get", "patch"]
+  # `create` cannot be limited to a resource name - the RBAC API has nothing to
+  # match against before the object exists. That is a Kubernetes limitation and
+  # not a decision here, and it is the reason this ServiceAccount is used by
+  # two short-lived Jobs and by nothing that keeps running.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "swgw.fullname" . }}-seeder
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "seed") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "swgw.fullname" . }}-seeder
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "swgw.fullname" . }}-seeder
+{{- end }}

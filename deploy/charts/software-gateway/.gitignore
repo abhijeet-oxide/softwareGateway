@@ -1,0 +1,9 @@
+# STAGED, NOT COMMITTED.
+#
+# config/ and the deployment machinery are copied in here by
+# `task chart:stage` (deploy/chartstage). Committing the copy would put the
+# same products, users and policies in two places, and a reviewer looking at
+# one of them would not see the other. The pipeline stages before it packages,
+# and go test ./deploy/... fails when a stage would produce something different
+# from what is here.
+files/

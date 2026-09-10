@@ -1,0 +1,114 @@
+{{/*
+The policy decision point.
+
+It is in this chart rather than beside it because config/access holds BOTH the
+role names and the policies that decide what a role may do, and splitting them
+across two charts would put one subject in two release cadences - which is the
+arrangement docs/design/27 was written to end.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "swgw.fullname" . }}-cerbos
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "cerbos") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cerbos
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "cerbos") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3592
+      targetPort: http
+    - name: grpc
+      port: 3593
+      targetPort: grpc
+  selector:
+    {{- include "swgw.selectorLabels" (dict "ctx" . "component" "cerbos") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "swgw.fullname" . }}-cerbos
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "cerbos") | nindent 4 }}
+spec:
+  replicas: {{ .Values.cerbos.replicas }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  strategy:
+    {{- include "swgw.strategy" . | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "cerbos") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "swgw.componentLabels" (dict "ctx" . "component" "cerbos") | nindent 8 }}
+      annotations:
+        # The PDP's own configuration needs a restart. The POLICIES do not -
+        # storage.disk.watchForChanges is on, which is what makes them
+        # reviewable in a pull request and live without a rollout.
+        checksum/cerbos-config: {{ .Files.Get "files/cerbos/config.yaml" | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "swgw.fullname" . }}-cerbos
+      securityContext:
+        {{- include "swgw.podSecurityContext" . | nindent 8 }}
+        runAsUser: 1000
+      {{- with .Values.cerbos.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.cerbos.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.cerbos.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: cerbos
+          image: {{ .Values.images.cerbos }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["server", "--config=/config/config.yaml"]
+          ports:
+            - name: http
+              containerPort: 3592
+            - name: grpc
+              containerPort: 3593
+          livenessProbe:
+            httpGet: {path: /_cerbos/health, port: http}
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /_cerbos/health, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.cerbos.resources | nindent 12 }}
+          securityContext:
+            {{- include "swgw.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            # NOT a subPath mount: a subPath does not receive ConfigMap
+            # updates, and an unwatched policy directory is the whole feature
+            # switched off without a symptom.
+            - name: policies
+              mountPath: /policies
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "swgw.fullname" . }}-cerbos
+        - name: policies
+          configMap:
+            name: {{ include "swgw.fullname" . }}-policies
+        - name: tmp
+          emptyDir: {}

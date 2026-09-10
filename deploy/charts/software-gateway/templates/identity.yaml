@@ -1,0 +1,397 @@
+{{- if .Values.identity.enabled }}
+{{- $full := include "swgw.fullname" . -}}
+{{- $db := include "swgw.dbSecretName" . -}}
+{{/*
+ZITADEL, its sign-in screens, and the nginx that makes them one origin.
+
+WHY ALL THREE. Since v3 the login UI is a separate Next.js service; deploying
+the core alone gives an identity provider that redirects to a login page which
+does not exist and answers `{"code":5,"message":"Not Found"}`. And the two must
+share an ORIGIN, because the core's redirect to the login screen is relative,
+the login screen's redirect back is absolute from ZITADEL's own external URL,
+and every other part of this stack already agrees on one address for it.
+
+WHY A SETUP JOB. `zitadel start` refuses an unmigrated database, and a ZITADEL
+upgrade needs `zitadel setup` to run before the new binary serves. Running it
+from the Deployment would have every replica racing for the same migration
+lock. So it is a Job, named for the image tag it migrates to, and the
+Deployment waits by crash-looping until the schema is there - which is
+self-healing, visible in `kubectl get pods`, and needs no ordering primitive
+Kubernetes does not have.
+*/}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $full }}-identity
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "identity") | nindent 4 }}
+type: Opaque
+stringData:
+{{- if not .Values.identity.masterkey.existingSecret }}
+  # EXACTLY 32 BYTES. ZITADEL refuses to start otherwise and says so from
+  # inside a migration failure, so count before changing it. This chart does
+  # NOT generate one: a generated key that nothing stores is a database nobody
+  # can decrypt after the next upgrade.
+  masterkey: {{ required "identity.masterkey.value or identity.masterkey.existingSecret is required" .Values.identity.masterkey.value | quote }}
+{{- end }}
+{{- if not .Values.identity.rootPassword.existingSecret }}
+  rootPassword: {{ required "identity.rootPassword.value or identity.rootPassword.existingSecret is required" .Values.identity.rootPassword.value | quote }}
+{{- end }}
+{{- if and .Values.identity.bootstrapAdmin.password (not .Values.identity.bootstrapAdmin.existingSecret) }}
+  adminPassword: {{ .Values.identity.bootstrapAdmin.password | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  # NOT release-prefixed: deploy/zitadel/nginx.conf proxies to `zitadel:8080`
+  # and the login service reaches it by the same name. See _helpers.tpl.
+  name: zitadel
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      # ZITADEL's API is gRPC-Web and HTTP/2 over the same port. AKS's
+      # application routing add-on and most ingress controllers need to be told;
+      # this name is what several of them key off.
+      appProtocol: kubernetes.io/h2c
+  selector:
+    {{- include "swgw.selectorLabels" (dict "ctx" . "component" "zitadel") | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zitadel-login
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-login") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+  selector:
+    {{- include "swgw.selectorLabels" (dict "ctx" . "component" "zitadel-login") | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zitadel-proxy
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-proxy") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  selector:
+    {{- include "swgw.selectorLabels" (dict "ctx" . "component" "zitadel-proxy") | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # NAMED FOR WHAT IT MIGRATES TO. A new ZITADEL image is a new Job; the same
+  # image twice is the same Job and Kubernetes leaves the completed one alone.
+  name: {{ printf "%s-zitadel-setup-%s" $full (.Values.images.zitadel | sha256sum | trunc 8) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-setup") | nindent 4 }}
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-setup") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $full }}-seeder
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: wait-for-database
+          image: {{ .Values.images.postgres }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              until pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1; do
+                echo "waiting for $PGHOST:$PGPORT"
+                sleep 2
+              done
+              echo "database is accepting connections"
+          env:
+            - {name: PGHOST, valueFrom: {secretKeyRef: {name: {{ $db }}, key: host}}}
+            - {name: PGPORT, valueFrom: {secretKeyRef: {name: {{ $db }}, key: port}}}
+            - {name: PGUSER, valueFrom: {secretKeyRef: {name: {{ $db }}, key: user}}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+        - name: setup
+          image: {{ .Values.images.zitadel }}
+          args:
+            - setup
+            - --masterkeyFromEnv
+            - --init-projections=true
+            - --tlsMode
+            - disabled
+          env:
+            {{- include "swgw.zitadelEnv" . | nindent 12 }}
+            # The machine account and its token, created with the first
+            # instance and never again. It is the ONLY write credential in the
+            # stack, and no long-running service ever sees it: the container
+            # below moves it into a Secret and the Job ends.
+            - name: ZITADEL_FIRSTINSTANCE_PATPATH
+              value: /pat/pat.txt
+          volumeMounts:
+            - {name: state, mountPath: /pat}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+      containers:
+        - name: publish
+          image: {{ .Values.images.node }}
+          command: ["node", "/seeder/k8s-state.mjs", "push"]
+          env:
+            - name: K8S_STATE_SECRET
+              value: {{ $full }}-state
+            # node's fetch verifies the API server against the service
+            # account's own CA. Without this it fails with a self-signed
+            # certificate error against an endpoint it is meant to trust.
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          volumeMounts:
+            - {name: state, mountPath: /pat}
+            - {name: seeder, mountPath: /seeder, readOnly: true}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+      volumes:
+        - name: state
+          emptyDir: {medium: Memory}
+        - name: seeder
+          configMap:
+            name: {{ $full }}-seeder
+            defaultMode: 0444
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}-zitadel
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel") | nindent 4 }}
+spec:
+  replicas: {{ .Values.identity.zitadel.replicas }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  strategy:
+    {{- include "swgw.strategy" . | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "zitadel") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel") | nindent 8 }}
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: zitadel
+          image: {{ .Values.images.zitadel }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # `start`, not `start-from-init`. The Job above owns migrations; this
+          # process refuses an unmigrated database and restarts until the Job
+          # has finished, which is how the two are ordered without an ordering
+          # primitive.
+          args: ["start", "--masterkeyFromEnv", "--tlsMode", "disabled"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            {{- include "swgw.zitadelEnv" . | nindent 12 }}
+          readinessProbe:
+            httpGet: {path: /debug/ready, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /debug/healthz, port: http}
+            periodSeconds: 20
+            failureThreshold: 5
+          startupProbe:
+            httpGet: {path: /debug/ready, port: http}
+            periodSeconds: 5
+            # Generous: this waits out the setup Job on a first install.
+            failureThreshold: 120
+          resources:
+            {{- toYaml .Values.identity.zitadel.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}-zitadel-login
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-login") | nindent 4 }}
+spec:
+  replicas: {{ .Values.identity.login.replicas }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  strategy:
+    {{- include "swgw.strategy" . | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "zitadel-login") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-login") | nindent 8 }}
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: login
+          image: {{ .Values.images.zitadelLogin }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            # Server to server, so the internal name - the one URL here that is
+            # NOT the browser-facing one.
+            - name: ZITADEL_API_URL
+              value: http://zitadel:8080
+            - name: NEXT_PUBLIC_BASE_PATH
+              value: /ui/v2/login
+            # The image ships HOSTNAME=:: and its Next.js server binds exactly
+            # that, so on a node without IPv6 it restart-loops on
+            # `listen EAFNOSUPPORT ... :::3000` - a message naming neither
+            # ZITADEL nor IPv6.
+            - name: HOSTNAME
+              value: 0.0.0.0
+            # A service user holding IAM_LOGIN_CLIENT and nothing else.
+            # Deliberately not the seeder's PAT: that one can write every
+            # object in the instance, and this container is the one thing here
+            # a signed-out browser talks to.
+            - name: ZITADEL_SERVICE_USER_TOKEN_FILE
+              value: /pat/login-client.pat
+            # ZITADEL answers 404 to a Host it does not recognise as its own
+            # external name, and this service reaches it as `zitadel:8080`.
+            - name: CUSTOM_REQUEST_HEADERS
+              value: {{ printf "Host:%s,X-Forwarded-Proto:%s" (include "swgw.identityHostHeader" .) (ternary "https" "http" (eq (include "swgw.identitySecure" .) "true")) | quote }}
+          readinessProbe:
+            httpGet: {path: /ui/v2/login/healthy, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /ui/v2/login/healthy, port: http}
+            periodSeconds: 20
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.identity.login.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: pat, mountPath: /pat, readOnly: true}
+      volumes:
+        - name: pat
+          secret:
+            secretName: {{ $full }}-state
+            # Optional, so this schedules before the seeder has issued the
+            # token. Without the file the container exits and is restarted,
+            # which is a pod reporting the truth rather than one stuck Pending
+            # on a Secret key.
+            optional: true
+            defaultMode: 0444
+            items:
+              - key: login-client.pat
+                path: login-client.pat
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}-zitadel-proxy
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-proxy") | nindent 4 }}
+spec:
+  replicas: {{ .Values.identity.proxy.replicas }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  strategy:
+    {{- include "swgw.strategy" . | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "zitadel-proxy") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-proxy") | nindent 8 }}
+      annotations:
+        checksum/proxy-config: {{ .Files.Get "files/zitadel/nginx.conf" | sha256sum }}
+        checksum/proxy-entrypoint: {{ printf "%s|%s" (.Files.Get "files/zitadel/docker-entrypoint.sh") (default "" .Values.web.supportContact) | sha256sum }}
+    spec:
+      securityContext:
+        {{- include "swgw.nginxPodSecurityContext" . | nindent 8 }}
+      containers:
+        - name: proxy
+          image: {{ .Values.images.nginx }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # The same entrypoint compose runs. It renders the resolver address
+          # from /etc/resolv.conf - kube-dns here, aardvark or 127.0.0.11 there
+          # - and writes the one CSS rule that names who to ask on the Account
+          # Not Found page.
+          command: ["/bin/sh", "/entrypoint/docker-entrypoint.sh"]
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            - name: SUPPORT_CONTACT
+              value: {{ default .Values.identity.bootstrapAdmin.email .Values.web.supportContact | quote }}
+          readinessProbe:
+            httpGet: {path: /debug/ready, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            # TCP, not HTTP: every HTTP path here is proxied, so an HTTP
+            # liveness probe would restart the front door whenever ZITADEL was
+            # briefly unavailable - which is when it is most needed.
+            tcpSocket: {port: http}
+            periodSeconds: 20
+            failureThreshold: 5
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5; nginx -s quit"]
+          resources:
+            {{- toYaml .Values.identity.proxy.resources | nindent 12 }}
+          securityContext:
+            {{- include "swgw.nginxContainerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - {name: entrypoint, mountPath: /entrypoint, readOnly: true}
+            # The entrypoint reads the config from here and renders it into
+            # nginx's own directory, because this mount is read-only.
+            - {name: templates, mountPath: /etc/nginx/templates, readOnly: true}
+      volumes:
+        - name: entrypoint
+          configMap:
+            name: {{ $full }}-zitadel-proxy
+            defaultMode: 0555
+            items:
+              - key: docker-entrypoint.sh
+                path: docker-entrypoint.sh
+        - name: templates
+          configMap:
+            name: {{ $full }}-zitadel-proxy
+            items:
+              - key: zitadel.conf
+                path: zitadel.conf
+{{- end }}

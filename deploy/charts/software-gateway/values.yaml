@@ -1,0 +1,426 @@
+# Software Gateway - the values an operator sets.
+#
+# Nothing here has to be set for `helm install` to produce a running stack:
+# the defaults are the compose stack's defaults, which is what makes the
+# QUICKSTART path and the cluster path the same product. What a real
+# deployment must state is small and is listed at the top of README.md.
+#
+# THE SHAPE OF THIS FILE. Every workload gets the same five keys - image,
+# replicas, resources, and the two scheduling ones - so there is one thing to
+# learn rather than nine. What differs per component is stated after them, with
+# the reason.
+
+# --------------------------------------------------------------------- naming
+nameOverride: ""
+fullnameOverride: ""
+
+# --------------------------------------------------------------------- images
+#
+# ONE REGISTRY, ONE REPOSITORY PATH. All three of this product's images live
+# under `<registry>/<repository>/<name>`, tagged with the chart's appVersion.
+# The tag is deliberately not settable per component: three images built from
+# one commit are one artifact, and letting them drift is how a coordinator ends
+# up talking to a worker from another release.
+image:
+  registry: artifactory.internal.example.com
+  repository: swgw
+  # Empty means .Chart.AppVersion, which the pipeline stamps at package time.
+  # Set it only to pin a chart to an image it was not built with, which is a
+  # debugging move and not a deployment.
+  tag: ""
+  pullPolicy: IfNotPresent
+  # The Secret holding the JFrog credentials the kubelet pulls with. Created by
+  # the secrets backend below when `secrets.registryPullSecret.enabled` is set,
+  # or by hand.
+  pullSecrets: []
+  #  - name: jfrog
+
+# Third-party images, listed here rather than beside each component so an
+# air-gapped estate has ONE place to repoint at its mirror. Tags are pinned to
+# the same versions docker-compose.yml runs, so the two stacks are the same
+# software.
+images:
+  postgres: postgres:16.15-alpine
+  zitadel: ghcr.io/zitadel/zitadel:v4.17.3
+  zitadelLogin: ghcr.io/zitadel/zitadel-login:v4.17.3
+  nginx: nginx:1.27.5-alpine
+  cerbos: cerbos/cerbos:0.55.0
+  # The seeder runs a script this chart carries; the image is a plain node.
+  node: node:22.23.2-alpine
+
+# --------------------------------------------------------------- where it is
+#
+# The two addresses a BROWSER uses. Everything internal is a service name and
+# is not configurable, because there is nothing to decide.
+#
+# These are not cosmetic. ZITADEL stamps `identity.externalUrl` into every
+# token's `iss` and answers 404 to a Host header it does not recognise, and the
+# SPA's OIDC redirect is built from `web.externalUrl`. Getting one wrong is a
+# stack that comes up green and cannot sign anybody in.
+externalUrls:
+  web: http://localhost:8000
+  identity: http://localhost:8090
+
+# THE TENANT THIS DEPLOYMENT SERVES, and the boundary around it.
+#
+# ZITADEL signs every organization's tokens with the same keys, so a signature
+# says who minted a token and nothing about who it was minted for. Without a
+# tenant the Coordinator accepts a token from another organization at the same
+# issuer and reads its roles as if they had been granted here. It is the
+# ZITADEL organization NAME; the seeder creates the org with it.
+tenant: default
+
+# ------------------------------------------------------------------ the app
+coordinator:
+  # TWO, not one. The API stays up through a node drain, and one replica holds
+  # the leader lock (docs/design/04 section 9) while both serve reads.
+  replicas: 2
+  resources:
+    requests: {cpu: 200m, memory: 256Mi}
+    # No CPU limit. CFS throttling on a latency-sensitive control plane
+    # produces sporadic multi-hundred-millisecond stalls that look like network
+    # problems. Memory IS limited: unbounded memory is a node-level hazard.
+    limits: {memory: 512Mi}
+  # minAvailable rather than maxUnavailable: with replicas 2 they are the same
+  # number, and this one stays correct if replicas is raised.
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Spread replicas across nodes without making a single-node lab cluster
+  # unschedulable - ScheduleAnyway, not DoNotSchedule.
+  topologySpreadConstraints: []
+  # SERVICE-SIDE GRACE. 45s covers an in-flight discovery call and the
+  # scheduler's tick; the process itself stops accepting at SIGTERM.
+  terminationGracePeriodSeconds: 45
+
+worker:
+  replicas: 2
+  resources:
+    requests: {cpu: "1", memory: 256Mi}
+    limits: {memory: 512Mi}
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  # LONG, and the number is a judgement. A worker streams a blob registry to
+  # registry; on SIGTERM it stops leasing, finishes what it holds and exits.
+  # A blob that outlives this is killed and its lease expires, which is correct
+  # and merely slower. 120s is long enough for a typical layer and short enough
+  # not to stall a node drain.
+  terminationGracePeriodSeconds: 120
+  autoscaling:
+    # OFF by default: the metric below is an external one and needs
+    # prometheus-adapter. Turning it on without that gives an HPA that reports
+    # `unknown` forever and never scales.
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 20
+    # A RATIO, not a queue depth: an absolute count does not converge.
+    metricName: softwaregateway_queue_backlog_per_worker
+    targetAverageValue: "20"
+
+web:
+  replicas: 2
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 128Mi}
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  terminationGracePeriodSeconds: 30
+  # Who somebody is told to ask when this deployment will not let them in. An
+  # address or a URL - a mailbox, a service desk, a wiki page. Unset names no
+  # route, which is better than inventing one.
+  supportContact: ""
+
+cerbos:
+  replicas: 2
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 256Mi}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ------------------------------------------------------------------ identity
+#
+# ZITADEL, its sign-in screens, and the one nginx that puts them on a single
+# origin. `enabled: false` for an estate that already runs ZITADEL: set
+# externalUrls.identity at it, run the seeder against it, and this chart
+# deploys none of the three.
+identity:
+  enabled: true
+
+  # The 32-byte key ZITADEL encrypts its own secrets with. NOT generated by
+  # this chart on purpose: a generated key that is not stored is a database
+  # nobody can decrypt after the next `helm upgrade`. Point this at a Secret
+  # the backend below produces, or create it by hand once.
+  masterkey:
+    existingSecret: ""
+    key: masterkey
+    # Local and evaluation ONLY. The chart refuses to render a production-
+    # looking install with this still set - see templates/_validate.tpl.
+    value: ""
+
+  # The first administrator, created before anybody has signed in.
+  bootstrapAdmin:
+    username: admin
+    email: admin@example.com
+    firstName: ""
+    lastName: ""
+    # LOCAL AND EVALUATION ONLY, and the seeder REFUSES to run with this set
+    # while sso.issuer is configured. The shortcut cannot follow you into
+    # production.
+    password: ""
+    existingSecret: ""
+
+  # ZITADEL's own root account, created at first boot.
+  rootPassword:
+    existingSecret: ""
+    value: ""
+
+  # Single sign-on against the corporate directory. With `issuer` set, the
+  # sign-in screen redirects straight to it and ZITADEL's own form is never
+  # shown. See deploy/STACK.md for registering the app in Entra - the redirect
+  # URI is ${externalUrls.identity}/idps/callback and it must be registered
+  # under the "Web" platform, not "Single-page application".
+  sso:
+    issuer: ""
+    clientId: ""
+    # Read from the Secret the backend produces, never from values.
+    existingSecret: ""
+    clientSecretKey: clientSecret
+    displayName: Microsoft
+    # Keeps ZITADEL's password box after SSO is configured. It also keeps
+    # `zitadel-admin` able to sign in, which is the reason to leave it on until
+    # the directory path is proven.
+    allowPasswordLogin: false
+    requireMfa: false
+
+  # HOW LONG A REMOVAL TAKES TO BITE. The Coordinator verifies tokens offline
+  # and never asks whether one is still good, so a token already issued works
+  # until it expires. Removing somebody stops the RENEWAL; this is the window.
+  tokenLifetimes:
+    accessToken: 15m
+    idToken: 12h
+    refreshTokenIdle: 720h
+    refreshTokenMax: 2160h
+
+  branding:
+    primaryColor: ""
+    primaryColorDark: ""
+    languages: en
+
+  zitadel:
+    replicas: 2
+    resources:
+      requests: {cpu: 200m, memory: 512Mi}
+      limits: {memory: 1Gi}
+  login:
+    replicas: 2
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {memory: 512Mi}
+  proxy:
+    replicas: 2
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {memory: 128Mi}
+
+# ------------------------------------------------------------------- seeding
+#
+# The Job that turns config/users/users.yaml and config/access/roles.yaml into
+# accounts, projects and grants. It runs when those files change AND NOT
+# OTHERWISE: its name carries a hash of what it reads, so a release that only
+# moved an image creates no Job at all.
+#
+# It never restarts a pod. Adding a person is a Job that runs for ten seconds
+# while every replica keeps serving - see docs/design/30 section 5.
+seed:
+  enabled: true
+  # Kept after it finishes so `kubectl logs` can answer "what did the last
+  # provisioning run actually do". An hour is long enough to be asked and short
+  # enough not to accumulate.
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 4
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {memory: 512Mi}
+  # Reissues the worker fleet's credentials on the next run. The old ones stop
+  # working at once and workers take the new ones when their pods restart, so
+  # set it, let the run finish, then roll the workers.
+  rotateWorkerSecret: false
+
+# ------------------------------------------------------------------ database
+#
+# EXTERNAL IS THE RECOMMENDATION - Azure Database for PostgreSQL. Backups,
+# failover, patching and point-in-time recovery are solved problems, and this
+# is the only stateful component in the system.
+postgresql:
+  # The bundled StatefulSet. One instance, one PVC, no failover: it exists so
+  # `helm install` works with nothing else provisioned, and lab clusters use
+  # it. Do not run production on it.
+  enabled: true
+  storage:
+    size: 20Gi
+    className: ""
+  resources:
+    requests: {cpu: 200m, memory: 512Mi}
+    limits: {memory: 1Gi}
+  # The password for the bundled instance. Ignored when `external.enabled`.
+  password:
+    existingSecret: ""
+    key: password
+    value: ""
+
+  external:
+    enabled: false
+    # The Coordinator's DSN, and ZITADEL's connection, come from ONE Secret so
+    # a rotation is one place. Keys: `dsn` for the Coordinator, plus host,
+    # port, user, password, sslmode for ZITADEL, which takes them apart.
+    existingSecret: ""
+
+# ------------------------------------------------------------------- secrets
+#
+# WHERE VALUES COME FROM. The inventory is config/secrets/secrets.yaml - names,
+# keys and a relative path, no values, committed and reviewable. This picks the
+# operator that turns each entry into a Kubernetes Secret. The Secret that
+# lands is identical either way, and so is the path the process reads it from,
+# so switching backends changes nothing above this line.
+secrets:
+  # vault  - HashiCorp Vault Secrets Operator (VaultStaticSecret)
+  # azure  - Azure Key Vault CSI driver (SecretProviderClass, secretObjects)
+  # none   - the Secrets already exist in the namespace, made some other way
+  backend: none
+
+  vault:
+    # The VaultConnection/VaultAuth the operator resolves. Both are cluster
+    # objects installed with VSO, not by this chart: a chart that creates its
+    # own auth method is a chart that has to hold a Vault token.
+    connectionRef: ""
+    authRef: vault-auth
+    mount: kv
+    type: kv-v2
+    # The inventory's `path` is appended to this. Different per environment,
+    # which is exactly why it is here and not in the inventory.
+    pathPrefix: softwaregateway
+    refreshAfter: 1h
+
+  azure:
+    # The CSI driver mounts on a POD, not on a namespace, so a SecretProviderClass
+    # only produces a Secret while a pod referencing it is running. This chart
+    # mounts every SecretProviderClass on the coordinator, which is the workload
+    # that must have them all - see templates/secrets-azure.yaml for why that is
+    # the honest way to do it rather than a workaround.
+    keyvaultName: ""
+    tenantId: ""
+    # workload-identity is the supported path on AKS; the deprecated
+    # aad-pod-identity is not offered.
+    clientId: ""
+    # Object names in the vault are `<objectPrefix><name>-<key>`, so one flat
+    # naming rule covers the whole inventory.
+    objectPrefix: swgw-
+
+  # The credentials the kubelet pulls this product's images with. Rendered from
+  # the backend above into a kubernetes.io/dockerconfigjson Secret, so the one
+  # JFrog credential the pipeline pushes with is the one the cluster pulls
+  # with, held in one place.
+  registryPullSecret:
+    enabled: false
+    name: jfrog
+    # The inventory entry (keys: username, password) holding it.
+    from: jfrog
+
+# --------------------------------------------------------- extra trust roots
+#
+# PEM certificates for internal registries signed by a private CA. Mounted over
+# the image's bundle and named in SSL_CERT_FILE, which Go's crypto/x509 reads.
+# The alternative - network.tls.insecureSkipVerify on the product - turns
+# verification off rather than making it succeed.
+extraCAs:
+  enabled: false
+  # Either paste PEM here, or name a ConfigMap that already holds them under
+  # the key `ca-certificates.crt`.
+  existingConfigMap: ""
+  certificates: ""
+
+# ------------------------------------------------------------------- ingress
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  # Two hosts, because they are two origins and the identity one is stamped
+  # into every token. Leave `identity.host` empty when identity.enabled is
+  # false and an existing provider is used.
+  app:
+    host: ""
+    tls:
+      enabled: false
+      secretName: ""
+  identity:
+    host: ""
+    tls:
+      enabled: false
+      secretName: ""
+
+# --------------------------------------------------------------- networking
+networkPolicy:
+  # OFF by default because a policy that names the wrong namespace is an outage
+  # and a cluster without a CNI that enforces them is a false sense of safety.
+  # On, it is the only control in front of the Coordinator's API.
+  enabled: false
+  # Namespaces allowed to reach the Coordinator directly: monitoring for
+  # Prometheus, whatever runs transferctl.
+  allowFromNamespaces: []
+
+# ------------------------------------------------------------- observability
+metrics:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+
+# ------------------------------------------------- system configuration
+#
+# config/config.yaml is mounted verbatim - the same file `task run` reads and
+# docker-compose.yml mounts. What differs in a cluster is stated HERE as
+# SWGW_ overrides, which is the same layering the loader already does:
+# defaults, then the file, then the environment.
+#
+# An unknown SWGW_ variable is REFUSED at startup rather than ignored, so a
+# typo here is a failed rollout and not a setting that silently did not apply.
+settings: {}
+#  SWGW_OBSERVABILITY_LOG_LEVEL: debug
+#  SWGW_COORDINATOR_SCHEDULER_TICKINTERVAL: 5s
+
+# Anything this chart does not model. Applied to the two components that read
+# product configuration; use it for a setting that is genuinely one-off.
+coordinatorExtraEnv: []
+workerExtraEnv: []
+
+# ------------------------------------------------------------------ rollout
+#
+# NO DISRUPTION, stated as numbers rather than as an intention.
+#
+# maxUnavailable 0 means a replica is only ever removed after its replacement
+# is READY, and readiness on the Coordinator means the database answers, the
+# schema matches this build and products loaded. So a bad image never takes
+# capacity away: the rollout stalls with the old pods serving, Flux's
+# HelmRelease times out, and the release is rolled back with nothing having
+# gone down.
+rollout:
+  maxSurge: 1
+  maxUnavailable: 0
+  # Fails a stuck rollout rather than leaving it half-done forever, which is
+  # what makes Flux's remediation fire.
+  progressDeadlineSeconds: 600

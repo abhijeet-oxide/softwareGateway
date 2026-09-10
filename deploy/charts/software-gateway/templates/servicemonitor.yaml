@@ -1,0 +1,44 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+{{/*
+Two ServiceMonitors, because the two planes answer different questions and one
+of them is a headless Service. `softwaregateway_build_info` carries the version
+stamped into the binary at build time, so a dashboard can line a change in
+behaviour up against the release that caused it - which is the point of the
+version stream in docs/design/30 being one number.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "swgw.fullname" . }}-coordinator
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "coordinator") | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "coordinator") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "swgw.fullname" . }}-worker
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "worker") | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "worker") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+{{- end }}

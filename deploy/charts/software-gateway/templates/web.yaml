@@ -1,0 +1,146 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "swgw.fullname" . }}-web
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  selector:
+    {{- include "swgw.selectorLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "swgw.fullname" . }}-web
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+spec:
+  replicas: {{ .Values.web.replicas }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  strategy:
+    {{- include "swgw.strategy" . | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "web") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "swgw.componentLabels" (dict "ctx" . "component" "web") | nindent 8 }}
+      annotations:
+        # The SPA's runtime configuration is rendered by the entrypoint at
+        # container start, so a change to what feeds it has to roll these pods.
+        # It is three public strings and no traffic is dropped doing it.
+        checksum/runtime-config: {{ printf "%s|%s|%s" (include "swgw.identityUrl" .) .Values.web.supportContact (default "" .Values.identity.sso.displayName) | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "swgw.fullname" . }}-web
+      {{- include "swgw.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "swgw.nginxPodSecurityContext" . | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.web.terminationGracePeriodSeconds }}
+      {{- with .Values.web.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.web.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.web.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.web.topologySpreadConstraints }}
+      topologySpreadConstraints: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: web
+          image: {{ include "swgw.image" (dict "ctx" . "name" "web") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            # Public values only: a public OIDC client has no secret, which is
+            # why this ends up in a file every browser fetches rather than in a
+            # mounted Secret.
+            - name: OIDC_ISSUER
+              value: {{ include "swgw.identityUrl" . | quote }}
+            - name: OIDC_REDIRECT_URI
+              value: {{ printf "%s/auth/callback" (include "swgw.webUrl" .) | quote }}
+            - name: SUPPORT_CONTACT
+              value: {{ default .Values.identity.bootstrapAdmin.email .Values.web.supportContact | quote }}
+            - name: SSO_DISPLAY_NAME
+              value: {{ if .Values.identity.sso.issuer }}{{ .Values.identity.sso.displayName | quote }}{{ else }}""{{ end }}
+            # The client id ZITADEL generated for the SPA. Read from the file
+            # the seeder publishes; the environment above wins when a
+            # deployment provisions its identity provider some other way.
+            - name: OIDC_CONFIG_FILE
+              value: /oidc/web.json
+          # LIVENESS IS LOCAL. /healthz is matched exactly and answers from
+          # nginx itself: a Coordinator outage must not restart the tier that
+          # renders the page explaining it. Readiness proxies to the
+          # Coordinator, so a pod that cannot reach the API stops taking
+          # browsers.
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+            failureThreshold: 30
+          lifecycle:
+            preStop:
+              # nginx is removed from the Service's endpoints and stops taking
+              # new connections at the same moment, and the two propagate at
+              # different speeds. Sleeping through the gap is what makes a
+              # rollout drop zero requests; `sleep` exists in the alpine image.
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5; nginx -s quit"]
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          securityContext:
+            {{- include "swgw.nginxContainerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: oidc
+              mountPath: /oidc
+              readOnly: true
+      volumes:
+        - name: oidc
+          secret:
+            secretName: {{ include "swgw.fullname" . }}-state
+            # Optional: the UI must LOAD before anybody can be told why they
+            # cannot sign in. The entrypoint says so on stdout and the screen
+            # says so to the reader.
+            optional: true
+            items:
+              - key: web.json
+                path: web.json
+{{- if .Values.web.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "swgw.fullname" . }}-web
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.web.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "web") | nindent 6 }}
+{{- end }}

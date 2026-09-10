@@ -1,0 +1,149 @@
+{{/*
+CONFIGURATION, AS FOUR CONFIGMAPS RATHER THAN ONE.
+
+They are split by WHAT APPLYING A CHANGE COSTS, which is the only distinction
+that matters at rollout time and is invisible if they are one object:
+
+  system      config.yaml. A change needs a RESTART, so the Deployments carry
+              its checksum and a change to it rolls them.
+  products    watched by the Coordinator and every Worker. A change is picked
+              up in place, so nothing carries its checksum and adding a product
+              restarts NOTHING.
+  policies    watched by Cerbos (storage.disk.watchForChanges). Same deal.
+  identity    users.yaml and roles.yaml, read only by the seeding Job. A change
+              runs a Job; no pod is touched.
+
+That is the whole "no disruption" story, and it is a property of this file. See
+docs/design/30-continuous-delivery.md section 5.
+*/}}
+{{/* THE VALIDATION GATE. Called from a rendered file rather than from the
+     partial that defines it, so it runs whatever a future Helm decides to do
+     about executing files whose names begin with an underscore. */}}
+{{- include "swgw.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swgw.fullname" . }}-system
+  labels:
+    {{- include "swgw.labels" . | nindent 4 }}
+data:
+  # VERBATIM, the same bytes `task run` reads and docker-compose.yml mounts.
+  # What differs in a cluster is stated as SWGW_ environment overrides on the
+  # Deployments, which is the layering the loader already performs.
+  config.yaml: |
+{{ .Files.Get "files/config/config.yaml" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swgw.fullname" . }}-products
+  labels:
+    {{- include "swgw.labels" . | nindent 4 }}
+    softwaregateway.io/reload: in-place
+  annotations:
+    # Says out loud what the absence of a checksum annotation elsewhere means.
+    softwaregateway.io/note: >-
+      Watched by the Coordinator and every Worker. Changing this does not and
+      must not restart anything.
+data:
+{{- range $path, $_ := .Files.Glob "files/config/products/*.yaml" }}
+  {{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swgw.fullname" . }}-policies
+  labels:
+    {{- include "swgw.labels" . | nindent 4 }}
+    softwaregateway.io/reload: in-place
+data:
+{{- range $path, $_ := .Files.Glob "files/config/access/policies/*.yaml" }}
+  {{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swgw.fullname" . }}-cerbos
+  labels:
+    {{- include "swgw.labels" . | nindent 4 }}
+data:
+  # The PDP's own configuration, not a policy. `cerbos healthcheck` derives
+  # what to probe from this file, which is why it is a file in both stacks.
+  config.yaml: |
+{{ .Files.Get "files/cerbos/config.yaml" | indent 4 }}
+{{- if .Values.identity.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swgw.fullname" . }}-identity
+  labels:
+    {{- include "swgw.labels" . | nindent 4 }}
+data:
+  # users.yaml, roles.yaml and the product names. The seeder reads all three -
+  # it refuses to write anything when a product has nobody holding the owner
+  # role, and it can only make that check with the products in front of it.
+  "users.yaml": |
+{{ .Files.Get "files/config/users/users.yaml" | indent 4 }}
+  "roles.yaml": |
+{{ .Files.Get "files/config/access/roles.yaml" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swgw.fullname" . }}-seeder
+  labels:
+    {{- include "swgw.labels" . | nindent 4 }}
+data:
+  # THE SAME SCRIPT `docker compose run --rm zitadel-init` RUNS. Not a fourth
+  # image: it has no dependencies by design (air-gapped estates), so an image
+  # would be one more artifact to build, push, scan and keep in step for
+  # behaviour that would be identical.
+  bootstrap.mjs: |
+{{ .Files.Get "files/zitadel/bootstrap.mjs" | indent 4 }}
+  # The bridge between a compose volume and a cluster. See its own header.
+  k8s-state.mjs: |
+{{ .Files.Get "files/zitadel/k8s-state.mjs" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swgw.fullname" . }}-branding
+  labels:
+    {{- include "swgw.labels" . | nindent 4 }}
+binaryData:
+{{- range $path, $_ := .Files.Glob "files/zitadel/branding/*" }}
+  {{ base $path }}: {{ $.Files.Get $path | b64enc }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swgw.fullname" . }}-zitadel-proxy
+  labels:
+    {{- include "swgw.labels" . | nindent 4 }}
+data:
+  # The identity provider's front door, byte for byte what compose runs. An
+  # Ingress could route /ui/v2/login and / to two Services and would silently
+  # drop the two sub_filter rules this file carries.
+  zitadel.conf: |
+{{ .Files.Get "files/zitadel/nginx.conf" | indent 4 }}
+  docker-entrypoint.sh: |
+{{ .Files.Get "files/zitadel/docker-entrypoint.sh" | indent 4 }}
+{{- end }}
+{{- if and .Values.extraCAs.enabled (not .Values.extraCAs.existingConfigMap) }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swgw.fullname" . }}-extra-cas
+  labels:
+    {{- include "swgw.labels" . | nindent 4 }}
+data:
+  ca-certificates.crt: |
+{{ required "extraCAs.certificates is required when extraCAs.enabled and no existingConfigMap is given" .Values.extraCAs.certificates | indent 4 }}
+{{- end }}

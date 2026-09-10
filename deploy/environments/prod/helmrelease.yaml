@@ -1,0 +1,153 @@
+# PRODUCTION. Deployed from branch `main`, into namespace swgw.
+#
+# It runs THE SAME IMAGES LAB RAN. That is not a convention here, it is a
+# property of how the version is computed: an image is tagged with the release
+# in which its code first appeared, so a commit that shipped to lab as
+# 1.4.3-lab.87 is still 1.4.3-lab.87 when it reaches production. Nothing is
+# rebuilt on the way in, so there is nothing that could differ.
+# See docs/design/30-continuous-delivery.md section 3.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: software-gateway
+  namespace: swgw
+spec:
+  interval: 10m
+  releaseName: swgw
+  chart:
+    spec:
+      chart: software-gateway
+      # THE DEPLOYMENT POINTER. Moved by the release pipeline on every merge to
+      # `main`, and by a person in a pull request to pin or roll back.
+      version: 0.0.0
+      sourceRef:
+        kind: HelmRepository
+        name: software-gateway
+        namespace: flux-system
+      interval: 0s
+
+  install:
+    remediation:
+      retries: 3
+    timeout: 20m
+  upgrade:
+    timeout: 15m
+    remediation:
+      retries: 2
+      remediateLastFailure: true
+      strategy: rollback
+    cleanupOnFail: true
+  driftDetection:
+    mode: enabled
+
+  values:
+    externalUrls:
+      web: https://swgw.example.com
+      identity: https://id-swgw.example.com
+    tenant: default
+
+    ingress:
+      enabled: true
+      className: nginx
+      app:
+        host: swgw.example.com
+        tls: {enabled: true, secretName: swgw-tls}
+      identity:
+        host: id-swgw.example.com
+        tls: {enabled: true, secretName: id-swgw-tls}
+
+    image:
+      registry: artifactory.internal.example.com
+      repository: swgw
+    secrets:
+      backend: vault
+      vault:
+        authRef: vault-auth
+        mount: kv
+        pathPrefix: softwaregateway/prod
+      registryPullSecret:
+        enabled: true
+        name: jfrog
+        from: jfrog
+
+    coordinator:
+      replicas: 3
+      resources:
+        requests: {cpu: 500m, memory: 512Mi}
+        limits: {memory: 1Gi}
+      podDisruptionBudget: {enabled: true, minAvailable: 2}
+      # Spread across zones, and ScheduleAnyway rather than DoNotSchedule: a
+      # zone outage must degrade the spread, not stop scheduling.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app: coordinator}
+
+    worker:
+      replicas: 4
+      resources:
+        requests: {cpu: "1", memory: 512Mi}
+        limits: {memory: 1Gi}
+      podDisruptionBudget: {enabled: true, minAvailable: 2}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app: worker}
+      autoscaling:
+        # Requires prometheus-adapter to expose the metric. Off until it is
+        # installed: an HPA whose metric reads `unknown` never scales and
+        # pins replicas at minReplicas, which is worse than no HPA.
+        enabled: false
+        minReplicas: 4
+        maxReplicas: 30
+
+    web:
+      replicas: 3
+      supportContact: swgw-support@example.com
+      podDisruptionBudget: {enabled: true, minAvailable: 2}
+
+    cerbos:
+      replicas: 2
+
+    # MANAGED POSTGRESQL. The bundled StatefulSet is one instance with no
+    # failover and no backups; this is the only stateful component in the
+    # system and the one thing worth paying somebody else to run.
+    postgresql:
+      enabled: false
+      external:
+        enabled: true
+        existingSecret: swgw-postgres
+
+    identity:
+      enabled: true
+      masterkey:
+        existingSecret: swgw-zitadel
+        key: masterkey
+      rootPassword:
+        existingSecret: swgw-zitadel
+        key: rootPassword
+      bootstrapAdmin:
+        username: admin
+        email: swgw-admin@example.com
+        # NO PASSWORD. With single sign-on configured the seeder refuses to run
+        # if one is set, and the chart refuses to render. The administrator
+        # signs in through the directory like everybody else.
+      sso:
+        issuer: https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0
+        clientId: "00000000-0000-0000-0000-000000000000"
+        existingSecret: swgw-sso
+        displayName: Microsoft
+      zitadel: {replicas: 2}
+      login: {replicas: 2}
+      proxy: {replicas: 2}
+
+    metrics:
+      serviceMonitor:
+        enabled: true
+    networkPolicy:
+      enabled: true
+      allowFromNamespaces: [monitoring]

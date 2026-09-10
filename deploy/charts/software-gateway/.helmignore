@@ -1,0 +1,6 @@
+.DS_Store
+.git/
+.gitignore
+*.tgz
+# The chart's own documentation and schema stay in the package: `helm show
+# readme` and `helm install --dry-run` are how somebody evaluates it.

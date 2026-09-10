@@ -136,7 +136,7 @@ export function CompareSelectionBar({
       >
         <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
           {chosen === 0
-            ? 'Tick two rows below'
+            ? 'Select two packages below'
             : chosen === 1
               // Named, because once one end is chosen the rows of every other
               // product stop being selectable - and a row that will not tick,

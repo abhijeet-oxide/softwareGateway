@@ -1019,7 +1019,6 @@ export default function Packages() {
                         >
                           {!selected && (
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
-                              <Icon as={PackageIcon} title="Product" size={11} />
                               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 {r.product.displayName || r.product.productId}
                               </span>

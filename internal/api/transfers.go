@@ -212,16 +212,18 @@ func (s *Server) handleListTransfers(w http.ResponseWriter, r *http.Request) {
 	// progress bar leaves it off and pays for the counts it draws.
 	summary := q.Get("view") == "summary"
 
-	// One row over the page size, so "is there another page" is answered
-	// without a second COUNT and without claiming a page that turns out empty.
-	rows, err := s.deps.Packages.ListTransfers(r.Context(), store.ListTransfersFilter{
+	filter := store.ListTransfersFilter{
 		ProductName:      q.Get("product"),
 		State:            state,
 		Operation:        operation,
 		Limit:            pageSize + 1,
 		Offset:           offset,
 		WithoutJobCounts: summary,
-	})
+	}
+
+	// One row over the page size, so "is there another page" is answered
+	// without a COUNT, and without claiming a page that turns out empty.
+	rows, err := s.deps.Packages.ListTransfers(r.Context(), filter)
 	if err != nil {
 		Error(w, r, v1.CodeUnavailable, "could not list transfers: "+err.Error())
 		return
@@ -231,6 +233,24 @@ func (s *Server) handleListTransfers(w http.ResponseWriter, r *http.Request) {
 	if len(rows) > pageSize {
 		out.NextPageToken = strconv.Itoa(offset + pageSize)
 		rows = rows[:pageSize]
+	}
+
+	/*
+	 * HOW MANY THERE ARE, so a pager can be drawn rather than guessed at.
+	 *
+	 * Asked only when the listing does not fit on one page - the extra row
+	 * above is what says which case we are in, and a listing that fits already
+	 * knows its own size. Not fatal: the count draws page numbers, the rows are
+	 * the answer, and a caller with neither falls back to walking the tokens.
+	 */
+	if out.NextPageToken != "" || offset > 0 {
+		if total, err := s.deps.Packages.CountTransfers(r.Context(), filter); err == nil {
+			out.TotalSize = total
+		} else {
+			s.deps.Logger.Warn("could not count transfers for listing", "error", err)
+		}
+	} else {
+		out.TotalSize = len(rows)
 	}
 	for _, t := range rows {
 		dto := transferDTO(t, !summary)

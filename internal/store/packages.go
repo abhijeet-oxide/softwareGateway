@@ -861,8 +861,136 @@ func (f ListPackagesFilter) scope() string {
 	return strings.Join(f.Products, ",")
 }
 
+// packageWhere builds the WHERE clause both the listing and its COUNT use.
+//
+// ONE BUILDER, because the two queries have to agree about what "matching"
+// means. They were about to be two - a SELECT with the filters written out and
+// a COUNT with them written out again - and the failure mode of that is silent:
+// the pager says four pages, the fourth comes back empty, and nobody can tell
+// which of the two queries was wrong. A filter added to one and not the other
+// is not a compile error.
+//
+// Returns the clause with its arguments in order, or an error for a filter that
+// names no scope.
+func (p *Packages) packageWhere(
+	ctx context.Context, f ListPackagesFilter,
+) (string, []any, error) {
+	where := " WHERE 1=1"
+	var args []any
+
+	// ONE PRODUCT, or a named set of them. Never "all products" by omission:
+	// every caller states its scope, so a filter built without one lists
+	// nothing rather than everything.
+	switch {
+	case f.ProductName != "":
+		where += " AND pr.name = ?"
+		args = append(args, f.ProductName)
+	case len(f.Products) > 0:
+		where += " AND pr.name IN (" + placeholders(len(f.Products)) + ")"
+		for _, name := range f.Products {
+			args = append(args, name)
+		}
+	default:
+		return "", nil, errors.New("list packages: a product or a set of products is required")
+	}
+
+	// BOTH SPELLINGS FILTER, for the same reason both spellings resolve in
+	// GetPackageRef: a listing renders the shortened form, and a filter that
+	// accepted only the long one would reject the value the user just copied off
+	// their own screen. `--tag 23.8.1076` and `--tag orb_23.8.1076` are the same
+	// request; so are `--repository cfx-5000-k8s` and `orbs/cfx-5000-k8s`.
+	if f.Repository != "" {
+		full, err := p.resolveRepositoryPath(ctx, f.ProductName, f.Repository)
+		if err != nil {
+			return "", nil, err
+		}
+		where += " AND sr.repository_path = ?"
+		args = append(args, full)
+	}
+	if f.Tag != "" {
+		where += " AND (pk.tag = ? OR pk.display_tag = ?)"
+		args = append(args, f.Tag, f.Tag)
+	}
+	if f.State != "" {
+		where += " AND pk.state = ?"
+		args = append(args, f.State)
+	}
+	// THE SEARCH: every term has to match somewhere, and "somewhere" is four
+	// fields.
+	//
+	// LOWER on both sides rather than a collation, because the two dialects
+	// disagree about what LIKE does with case: SQLite folds ASCII case for
+	// LIKE by default and PostgreSQL does not, so an unlowered `LIKE` would
+	// match `Orb_23` in development and miss it in production - the worst
+	// available shape for a bug.
+	//
+	// A leading wildcard cannot use an index, and that is accepted here: the
+	// query is already bounded by the product set, and the alternative on offer
+	// - filtering a hundred rows per product in the browser - is not a faster
+	// search, it is a wrong one.
+	for _, term := range SearchTerms(f.Search) {
+		pattern := "%" + escapeLike(term) + "%"
+		where += ` AND (LOWER(COALESCE(sr.repository_path,'')) LIKE ? ESCAPE '\'
+		            OR LOWER(COALESCE(sr.display_path,'')) LIKE ? ESCAPE '\'
+		            OR LOWER(pk.tag) LIKE ? ESCAPE '\'
+		            OR LOWER(COALESCE(pk.display_tag,'')) LIKE ? ESCAPE '\')`
+		args = append(args, pattern, pattern, pattern, pattern)
+	}
+	if !f.IncludeAccessories {
+		where += " AND pk.accessory_of IS NULL"
+	}
+
+	return where, args, nil
+}
+
+// The tables a package filter reads, for both queries above.
+const packageFrom = `
+		  FROM packages pk
+		  JOIN products pr ON pr.id = pk.product_id
+		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id`
+
+// CountPackages is how many packages a filter matches, ignoring its page.
+//
+// # Why a listing needs this at all
+//
+// Because a pager without it can only invent. The listing answers "is there
+// another page" by reading one row past the end, which is enough to offer a
+// Next button and not enough to draw page NUMBERS - so an interface that drew
+// them from it showed exactly one page ahead of wherever the reader was, and
+// grew a new one every time they moved. Ten per page read as "twenty packages,
+// at most"; switching to fifty per page still read as two pages. Both were the
+// same artifact, and both are a confident wrong statement about how much there
+// is.
+//
+// # What it costs
+//
+// One aggregate over the rows the filter matches - no projection, no joins
+// beyond the two the filter itself needs, and no per-row work. That is a
+// different thing from the "never fetch everything to count it" rule this
+// package follows: the rule is about pulling rows into memory to call len() on
+// them, which is what the browser used to do. Asking the database how many
+// there are is the alternative to that, not an instance of it.
+func (p *Packages) CountPackages(ctx context.Context, f ListPackagesFilter) (int, error) {
+	where, args, err := p.packageWhere(ctx, f)
+	if err != nil {
+		return 0, err
+	}
+	query := "SELECT count(*)" + packageFrom + where
+
+	var total int
+	if err := p.db.QueryRowContext(ctx, p.dialect.Rewrite(query), args...).Scan(&total); err != nil {
+		return 0, fmt.Errorf("count packages for product %q: %w", f.scope(), err)
+	}
+	return total, nil
+}
+
 // ListPackages backs the packages list API and CLI.
 func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]PackageRow, error) {
+	where, args, err := p.packageWhere(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+
 	query := `
 		SELECT pk.id, pk.product_id, pk.source_repo_id, pk.tag, pk.manifest_digest,
 		       -- total_bytes and blob_count are NOT coalesced: NULL is a real
@@ -876,74 +1004,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 		       COALESCE(pk.analysis_state,''), COALESCE(pk.analysis_error,''),
 		       pk.archived_at,
 		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, ''),
-		       pr.name
-		  FROM packages pk
-		  JOIN products pr ON pr.id = pk.product_id
-		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
-		 WHERE 1=1`
-	var args []any
-
-	// ONE PRODUCT, or a named set of them. Never "all products" by omission:
-	// every caller states its scope, so a filter built without one lists
-	// nothing rather than everything.
-	switch {
-	case f.ProductName != "":
-		query += " AND pr.name = ?"
-		args = append(args, f.ProductName)
-	case len(f.Products) > 0:
-		query += " AND pr.name IN (" + placeholders(len(f.Products)) + ")"
-		for _, name := range f.Products {
-			args = append(args, name)
-		}
-	default:
-		return nil, errors.New("list packages: a product or a set of products is required")
-	}
-
-	// BOTH SPELLINGS FILTER, for the same reason both spellings resolve in
-	// GetPackageRef: a listing renders the shortened form, and a filter that
-	// accepted only the long one would reject the value the user just copied off
-	// their own screen. `--tag 23.8.1076` and `--tag orb_23.8.1076` are the same
-	// request; so are `--repository cfx-5000-k8s` and `orbs/cfx-5000-k8s`.
-	if f.Repository != "" {
-		full, err := p.resolveRepositoryPath(ctx, f.ProductName, f.Repository)
-		if err != nil {
-			return nil, err
-		}
-		query += " AND sr.repository_path = ?"
-		args = append(args, full)
-	}
-	if f.Tag != "" {
-		query += " AND (pk.tag = ? OR pk.display_tag = ?)"
-		args = append(args, f.Tag, f.Tag)
-	}
-	if f.State != "" {
-		query += " AND pk.state = ?"
-		args = append(args, f.State)
-	}
-	// THE SEARCH: every term has to match somewhere, and "somewhere" is four
-	// fields.
-	//
-	// LOWER on both sides rather than a collation, because the two dialects
-	// disagree about what LIKE does with case: SQLite folds ASCII case for
-	// LIKE by default and PostgreSQL does not, so an unlowered `LIKE` would
-	// match `Orb_23` in development and miss it in production - the worst
-	// available shape for a bug.
-	//
-	// A leading wildcard cannot use an index, and that is accepted here: the
-	// query is already bounded by the product set and by LIMIT, and the
-	// alternative on offer - filtering a hundred rows per product in the
-	// browser - is not a faster search, it is a wrong one.
-	for _, term := range SearchTerms(f.Search) {
-		pattern := "%" + escapeLike(term) + "%"
-		query += ` AND (LOWER(COALESCE(sr.repository_path,'')) LIKE ? ESCAPE '\'
-		            OR LOWER(COALESCE(sr.display_path,'')) LIKE ? ESCAPE '\'
-		            OR LOWER(pk.tag) LIKE ? ESCAPE '\'
-		            OR LOWER(COALESCE(pk.display_tag,'')) LIKE ? ESCAPE '\')`
-		args = append(args, pattern, pattern, pattern, pattern)
-	}
-	if !f.IncludeAccessories {
-		query += " AND pk.accessory_of IS NULL"
-	}
+		       pr.name` + packageFrom + where
 
 	limit := f.Limit
 	if limit <= 0 || limit > 1000 {

@@ -278,10 +278,23 @@ function TableToolbar({ children }: { children: React.ReactNode }) {
 }
 
 export default function Downloads() {
+  /*
+    WHICH PAGE, as a number, with the offset computed from it.
+
+    It used to be a page number AND a token, walked forward one page at a time:
+    the response's nextPageToken was stored and followed, so page four was only
+    reachable by having been on page three - and going BACK dropped the token
+    and returned to page one, whatever page you had asked for. Now that the
+    listing reports how many transfers there are, the pager offers page seven
+    directly, and a walk cannot answer that: it would have shown page two's
+    rows labelled page seven.
+
+    The token for this API is an OFFSET (see parseOffset), so the page number is
+    all the state there is and every page is addressable. The token stops being
+    something to carry around and becomes arithmetic.
+  */
   const [transferPage, setTransferPage] = useState(1)
-  const [transferToken, setTransferToken] = useState<string>()
   const [promotionPage, setPromotionPage] = useState(1)
-  const [promotionToken, setPromotionToken] = useState<string>()
   /*
     HOW MANY ROWS EACH LISTING FETCHES, chosen by the reader.
 
@@ -314,10 +327,12 @@ export default function Downloads() {
   // client-side split would leave the promotions table empty on exactly the
   // deployments that promote the most.
   const transfers = useTransfers({
-    pageSize: transferPageSize, operation: 'replicate', pageToken: transferToken,
+    pageSize: transferPageSize, operation: 'replicate',
+    pageToken: transferPage > 1 ? String((transferPage - 1) * transferPageSize) : undefined,
   })
   const promotionsQuery = useTransfers({
-    pageSize: promotionPageSize, operation: 'promote', pageToken: promotionToken,
+    pageSize: promotionPageSize, operation: 'promote',
+    pageToken: promotionPage > 1 ? String((promotionPage - 1) * promotionPageSize) : undefined,
   })
   const replicationPerProduct = useReplicationForAll(names)
 
@@ -329,6 +344,27 @@ export default function Downloads() {
   */
   const workers = useWorkers()
   const fleet = summariseFleet(workers.data?.workers, workers.isSuccess)
+
+  /*
+    HOW MANY THERE ARE, which is what a pager has to be drawn from.
+
+    The server counts them. It used to be inferred from the page token, and
+    that could only be wrong in one direction: the token says "there is at
+    least one more", so the total came out as this page plus one row and the
+    pager drew exactly one page beyond wherever the reader was - which grew
+    another every time they moved, and made a page-size change look like it had
+    done nothing.
+
+    The fallback keeps a walkable pager for a Coordinator that sends no count.
+  */
+  const transferTotal = transfers.data?.totalSize
+    ?? (transfers.data?.nextPageToken
+      ? transferPage * transferPageSize + 1
+      : transferPage * transferPageSize)
+  const promotionTotal = promotionsQuery.data?.totalSize
+    ?? (promotionsQuery.data?.nextPageToken
+      ? promotionPage * promotionPageSize + 1
+      : promotionPage * promotionPageSize)
 
   const all = transfers.data?.transfers ?? []
   const ongoing = all.filter((t) => isLive(t.state) || t.state === 'PAUSED')
@@ -555,21 +591,32 @@ export default function Downloads() {
                 pagination={{
                   current: transferPage,
                   pageSize: transferPageSize,
-                  total: transfers.data?.nextPageToken
-                    ? transferPage * transferPageSize + 1
-                    : transferPage * transferPageSize,
+                  total: transferTotal,
+                  /*
+                    THE COUNT IS OF THE LISTING, and the label says so.
+
+                    Ongoing and Finished are two views of ONE page of transfers
+                    - the request is one, split by state here - so the number
+                    beside the pager is how many downloads there are, not how
+                    many rows are in this table. Naming it "downloads" is what
+                    keeps that from reading as a claim about the three rows
+                    underneath it.
+                  */
+                  showTotal: (n) => `${n.toLocaleString()} download${n === 1 ? '' : 's'}`,
                   // A new size invalidates the token, which addresses an
                   // offset counted in pages of the old one.
                   onShowSizeChange: (_current, size) => {
                     setTransferPageSize(size)
-                    setTransferToken(undefined)
                     setTransferPage(1)
                   },
-                  onChange: (page) => {
-                    if (page > transferPage && transfers.data?.nextPageToken) {
-                      setTransferToken(transfers.data.nextPageToken)
-                      setTransferPage(page)
-                    }
+                  onChange: (page, size) => {
+                    // rc-pagination fires onChange as well as onShowSizeChange
+                    // when the SIZE changes, with the page it clamped to. The
+                    // handler above has already decided where that lands;
+                    // `size` is still the old one here, which tells the two
+                    // calls apart.
+                    if (size !== transferPageSize) return
+                    setTransferPage(page)
                   },
                 }}
                 dataSource={visibleOngoing}
@@ -667,21 +714,32 @@ export default function Downloads() {
                 pagination={{
                   current: transferPage,
                   pageSize: transferPageSize,
-                  total: transfers.data?.nextPageToken
-                    ? transferPage * transferPageSize + 1
-                    : transferPage * transferPageSize,
+                  total: transferTotal,
+                  /*
+                    THE COUNT IS OF THE LISTING, and the label says so.
+
+                    Ongoing and Finished are two views of ONE page of transfers
+                    - the request is one, split by state here - so the number
+                    beside the pager is how many downloads there are, not how
+                    many rows are in this table. Naming it "downloads" is what
+                    keeps that from reading as a claim about the three rows
+                    underneath it.
+                  */
+                  showTotal: (n) => `${n.toLocaleString()} download${n === 1 ? '' : 's'}`,
                   // A new size invalidates the token, which addresses an
                   // offset counted in pages of the old one.
                   onShowSizeChange: (_current, size) => {
                     setTransferPageSize(size)
-                    setTransferToken(undefined)
                     setTransferPage(1)
                   },
-                  onChange: (page) => {
-                    if (page > transferPage && transfers.data?.nextPageToken) {
-                      setTransferToken(transfers.data.nextPageToken)
-                      setTransferPage(page)
-                    }
+                  onChange: (page, size) => {
+                    // rc-pagination fires onChange as well as onShowSizeChange
+                    // when the SIZE changes, with the page it clamped to. The
+                    // handler above has already decided where that lands;
+                    // `size` is still the old one here, which tells the two
+                    // calls apart.
+                    if (size !== transferPageSize) return
+                    setTransferPage(page)
                   },
                 }}
                 dataSource={visibleFinished}
@@ -763,19 +821,15 @@ export default function Downloads() {
                 pagination={{
                   current: promotionPage,
                   pageSize: promotionPageSize,
-                  total: promotionsQuery.data?.nextPageToken
-                    ? promotionPage * promotionPageSize + 1
-                    : promotionPage * promotionPageSize,
+                  total: promotionTotal,
+                  showTotal: (n) => `${n.toLocaleString()} promotion${n === 1 ? '' : 's'}`,
                   onShowSizeChange: (_current, size) => {
                     setPromotionPageSize(size)
-                    setPromotionToken(undefined)
                     setPromotionPage(1)
                   },
-                  onChange: (page) => {
-                    if (page > promotionPage && promotionsQuery.data?.nextPageToken) {
-                      setPromotionToken(promotionsQuery.data.nextPageToken)
-                      setPromotionPage(page)
-                    }
+                  onChange: (page, size) => {
+                    if (size !== promotionPageSize) return
+                    setPromotionPage(page)
                   },
                 }}
                 dataSource={visiblePromotions}

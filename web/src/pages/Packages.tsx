@@ -482,9 +482,14 @@ export default function Packages() {
   // four that survived a new search term would be a page four of a different
   // listing, which is how a filtered table comes back empty for no visible
   // reason.
+  //
+  // The page SIZE is not in here, and that is deliberate rather than an
+  // omission: it changes how much of the listing is shown rather than which
+  // listing it is, and the pager's own handler resets the page for it. Resetting
+  // in both places meant two renders and two fetches for one click.
   useEffect(() => {
     setPage(1)
-  }, [search, selected, status, tag, pageSize])
+  }, [search, selected, status, tag])
 
   const product = productList.find((p) => p.productId === selected)
   const packages = usePackageListing(selected, {
@@ -505,6 +510,28 @@ export default function Packages() {
   */
   const loading = packages.isLoading
   const waiting = { spinning: loading || (packages.isPlaceholderData && packages.isFetching), delay: 250 }
+
+  /*
+    HOW MANY RELEASES THERE ARE, which is what a pager has to be drawn from.
+
+    The server counts them - see totalSize. It used to be inferred from the
+    page token, and that could only ever be wrong in the same direction: the
+    token says "there is at least one more", so the total came out as this page
+    plus one row, the pager drew exactly one page beyond wherever the reader
+    was, and moving to it grew another. Ten per page read as "twenty releases,
+    at most". Switching to fifty per page still read as two pages, because the
+    arithmetic had nothing to do with how many releases exist.
+
+    The fallback keeps that behaviour for a Coordinator that does not send a
+    count, or a count that failed - a walkable pager rather than a pager that
+    thinks the listing ends at this page. It is not a better guess, and it is
+    not presented as one: the total line beside the pager is drawn from the
+    same number, so when it IS a guess the reader can see it move.
+  */
+  const total = packages.data?.totalSize
+    ?? (packages.data?.nextPageToken
+      ? page * pageSize + 1
+      : (page - 1) * pageSize + listed.length)
 
   /*
    * Every release this page has loaded, BEFORE the status filter.
@@ -889,11 +916,33 @@ export default function Packages() {
             } : {
               current: page,
               pageSize,
-              total: packages.data?.nextPageToken
-                ? page * pageSize + 1
-                : (page - 1) * pageSize + rows.length,
-              onShowSizeChange: (_current, size) => setPageSize(size),
-              onChange: (next) => setPage(next),
+              total,
+              showTotal: (n) => `${n.toLocaleString()} release${n === 1 ? '' : 's'}`,
+              // A new size starts again at the first page: page seven of fifty
+              // and page seven of ten are different places in the listing, so
+              // there is no position to preserve - and the first page is the
+              // one that means the same thing at every size.
+              onShowSizeChange: (_current, size) => {
+                setPageSize(size)
+                setPage(1)
+              },
+              onChange: (next, size) => {
+                /*
+                  IGNORE THE SIZE CHANGE'S SECOND CALL.
+
+                  rc-pagination fires onChange as well as onShowSizeChange when
+                  the size changes, carrying the page it clamped to. That is not
+                  a page turn - the handler above has already decided where to
+                  land - and acting on it fetched a page nobody asked for and
+                  then threw it away on the next render.
+
+                  `size` still being the OLD page size is what identifies a real
+                  page turn: the state has not re-rendered yet, so on the size
+                  change these two differ.
+                */
+                if (size !== pageSize) return
+                setPage(next)
+              },
             }}
             /*
               `max-content` rather than a number.

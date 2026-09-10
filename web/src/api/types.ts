@@ -257,7 +257,21 @@ export interface Package {
   transferRootTag?: string
 }
 
-export interface ListPackagesResponse { packages: Package[]; nextPageToken?: string }
+export interface ListPackagesResponse {
+  packages: Package[]
+  nextPageToken?: string
+  /**
+   * How many releases the filter matches, ignoring the page.
+   *
+   * What a pager needs and a page token cannot give: the token says only
+   * whether there is another page, so page NUMBERS drawn from it show exactly
+   * one page beyond wherever the reader is and grow another every time they
+   * move. Absent on an older Coordinator, and absent when the count itself
+   * failed - both mean "no better answer than the token", so a reader has to
+   * cope with it rather than assume zero.
+   */
+  totalSize?: number
+}
 
 /** What an artifact IS, as the API classifies it. A bounded set. */
 export type ArtifactKind =
@@ -573,7 +587,18 @@ export interface Transfer {
   activeSeconds?: number
 }
 
-export interface ListTransfersResponse { transfers: Transfer[]; nextPageToken?: string }
+export interface ListTransfersResponse {
+  transfers: Transfer[]
+  nextPageToken?: string
+  /**
+   * How many transfers the filter matches, ignoring the page.
+   *
+   * See ListPackagesResponse.totalSize: a page token cannot draw page numbers,
+   * only a Next button. Absent on an older Coordinator and absent when the
+   * count failed, so a reader has to cope rather than assume zero.
+   */
+  totalSize?: number
+}
 
 /**
  * What the estate is doing, as three numbers.

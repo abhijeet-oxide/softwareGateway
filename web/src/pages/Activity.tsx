@@ -44,8 +44,16 @@ export default function Activity() {
   const [params, setParams] = useSearchParams()
   const products = useProducts()
   const [open, setOpen] = useState<AuditEvent>()
+  /*
+    WHICH PAGE, as a number, with the offset computed from it.
+
+    It used to be a page number AND a token, walked forward one page at a time -
+    and going BACK dropped the token and returned to page one, whatever page you
+    had asked for. The token for this API is an OFFSET (see parseOffset), so the
+    page number is all the state there is and every page is addressable both
+    ways.
+  */
   const [page, setPage] = useState(1)
-  const [token, setToken] = useState<string>()
   /*
     HOW MANY EVENTS A PAGE HOLDS, and the reader chooses it.
 
@@ -65,7 +73,7 @@ export default function Activity() {
     since: params.get('since') ?? undefined,
     until: params.get('until') ?? undefined,
     pageSize,
-    pageToken: token,
+    pageToken: page > 1 ? String((page - 1) * pageSize) : undefined,
   }
 
   const events = useAuditEvents(filters)
@@ -75,7 +83,8 @@ export default function Activity() {
     if (value) next.set(key, value)
     else next.delete(key)
     setParams(next)
-    setToken(undefined)
+    // A new filter is a new listing, so page four of the old one means
+    // nothing.
     setPage(1)
   }
 
@@ -155,7 +164,7 @@ export default function Activity() {
           title="Nothing has been recorded for this view"
           explanation="Activity is written as the system discovers, downloads and verifies software. Either nothing has happened yet, or these filters exclude it."
           action={
-            <Button onClick={() => { setParams(new URLSearchParams()); setToken(undefined) }}>
+            <Button onClick={() => { setParams(new URLSearchParams()); setPage(1) }}>
               Clear filters
             </Button>
           }
@@ -179,31 +188,56 @@ export default function Activity() {
                   x: 'max-content'
                 } }
             onRow={(e) => ({ onClick: () => setOpen(e), style: { cursor: 'pointer' } })}
+            /*
+              ARROWS, AND NO PAGE NUMBERS. Unusually - and it is the honest
+              shape here rather than a lesser one.
+
+              Every other listing draws page numbers from a count the server
+              takes over the rows the filter matches. The audit trail is the one
+              place that count is not cheap: it is an append-only, partitioned
+              table that grows for the life of the deployment, and an unfiltered
+              `count(*)` over it is a walk of every partition - on a page that
+              is opened to read the last twenty-five events.
+
+              The alternative that was here inferred the total from the page
+              token, which says only "there is at least one more". So the pager
+              drew exactly one page beyond wherever the reader was and grew
+              another every time they moved, which reads as a listing that keeps
+              discovering it is longer than it claimed. A number nobody counted
+              is worse than no number.
+
+              What is left is true: which events these are, and whether there
+              are more. `total` still exists because it is what enables the Next
+              arrow - with no page numbers rendered, that is the only thing it
+              is doing.
+            */
             pagination={{
               current: page,
               pageSize,
               total: events.data?.nextPageToken
                 ? page * pageSize + 1
                 : rows.length + (page - 1) * pageSize,
+              itemRender: (_page, type, element) =>
+                type === 'prev' || type === 'next' ? element : null,
+              showTotal: (_total, range) =>
+                rows.length === 0
+                  ? 'No events'
+                  : `Events ${range[0].toLocaleString()}-${range[1].toLocaleString()}`,
               // A new page SIZE invalidates the token, which addresses an
               // offset counted in pages of the old one. Back to the first
               // page, the one position that means the same thing at both sizes.
               onShowSizeChange: (_current, size) => {
                 setPageSize(size)
-                setToken(undefined)
                 setPage(1)
               },
-              onChange: (next) => {
-                // Server-side paging: the API hands back the token for the next
-                // page rather than a count, so forward paging follows it and
-                // going back returns to the start of the filter.
-                if (next > page && events.data?.nextPageToken) {
-                  setToken(events.data.nextPageToken)
-                  setPage(next)
-                } else if (next < page) {
-                  setToken(undefined)
-                  setPage(1)
-                }
+              onChange: (next, size) => {
+                // rc-pagination fires onChange as well as onShowSizeChange when
+                // the SIZE changes, with the page it clamped to. The handler
+                // above has already decided where a size change lands, and
+                // `size` still being the old one is what tells the two calls
+                // apart.
+                if (size !== pageSize) return
+                setPage(next)
               },
             }}
             columns={[

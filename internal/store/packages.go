@@ -20,8 +20,16 @@ import (
 
 // PackageRow is a row in `packages`.
 type PackageRow struct {
-	ID             int64
-	ProductID      int64
+	ID        int64
+	ProductID int64
+	// ProductName is the product this release belongs to, joined on read.
+	//
+	// Filled by ListPackages and left empty by the readers that were handed a
+	// product name to begin with. It exists for the estate-wide listing, whose
+	// rows span products: without it, a caller merging thirty products' rows
+	// has an id where the name should be and no way to render the product
+	// column it is showing.
+	ProductName    string
 	SourceRepoID   int64
 	Tag            string
 	ManifestDigest string
@@ -768,8 +776,40 @@ type ListPackagesFilter struct {
 	// and cannot be seen is worse - somebody eventually has to find out where a
 	// signature went.
 	IncludeAccessories bool
-	Limit              int
-	Offset             int
+	// Products lists several products at once, for the estate-wide listing.
+	//
+	// It exists because there was no way to ask the question the Packages page
+	// asks - "the newest releases across everything I can see" - so the browser
+	// asked once per product and merged the answers itself. That is one request
+	// per product on every keystroke-free page load, and it cannot page: each
+	// product's page is its own, so a page of twenty-five rows out of the merge
+	// needs a hundred rows fetched from each of thirty products first.
+	//
+	// Empty means "whatever ProductName says", which is every existing caller.
+	// Both set is not a thing any caller needs and ProductName wins, so a
+	// scoped listing can never be widened by a stray slice.
+	Products []string
+	// Search matches the repository path, the display path, the tag or the
+	// display tag, case-insensitively, on a substring.
+	//
+	// SERVER-SIDE, because the alternative is what this replaces: fetch a
+	// hundred rows per product and filter them in the browser, which searches
+	// what happened to be loaded rather than what exists, and answers "nothing
+	// found" for a release on page two. Both spellings of both fields are
+	// matched for the same reason Tag filters on both - a listing renders the
+	// shortened form, and a search that only knew the long one would reject the
+	// text the reader copied off their own screen.
+	Search string
+	Limit  int
+	Offset int
+}
+
+// scope names what a filter asked for, for an error message.
+func (f ListPackagesFilter) scope() string {
+	if f.ProductName != "" {
+		return f.ProductName
+	}
+	return strings.Join(f.Products, ",")
 }
 
 // ListPackages backs the packages list API and CLI.
@@ -786,12 +826,29 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 		       COALESCE(pk.display_tag,''), pk.expanded_at, pk.accessory_of,
 		       COALESCE(pk.analysis_state,''), COALESCE(pk.analysis_error,''),
 		       pk.archived_at,
-		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, '')
+		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, ''),
+		       pr.name
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
 		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
-		 WHERE pr.name = ?`
-	args := []any{f.ProductName}
+		 WHERE 1=1`
+	var args []any
+
+	// ONE PRODUCT, or a named set of them. Never "all products" by omission:
+	// every caller states its scope, so a filter built without one lists
+	// nothing rather than everything.
+	switch {
+	case f.ProductName != "":
+		query += " AND pr.name = ?"
+		args = append(args, f.ProductName)
+	case len(f.Products) > 0:
+		query += " AND pr.name IN (" + placeholders(len(f.Products)) + ")"
+		for _, name := range f.Products {
+			args = append(args, name)
+		}
+	default:
+		return nil, errors.New("list packages: a product or a set of products is required")
+	}
 
 	// BOTH SPELLINGS FILTER, for the same reason both spellings resolve in
 	// GetPackageRef: a listing renders the shortened form, and a filter that
@@ -813,6 +870,26 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 	if f.State != "" {
 		query += " AND pk.state = ?"
 		args = append(args, f.State)
+	}
+	// THE SEARCH, as four LIKEs over one lowered term.
+	//
+	// LOWER on both sides rather than a collation, because the two dialects
+	// disagree about what LIKE does with case: SQLite folds ASCII case for
+	// LIKE by default and PostgreSQL does not, so an unlowered `LIKE` would
+	// match `Orb_23` in development and miss it in production - the worst
+	// available shape for a bug.
+	//
+	// A leading wildcard cannot use an index, and that is accepted here: the
+	// query is already bounded by the product set and by LIMIT, and the
+	// alternative on offer - filtering a hundred rows per product in the
+	// browser - is not a faster search, it is a wrong one.
+	if term := strings.ToLower(strings.TrimSpace(f.Search)); term != "" {
+		pattern := "%" + escapeLike(term) + "%"
+		query += ` AND (LOWER(COALESCE(sr.repository_path,'')) LIKE ? ESCAPE '\'
+		            OR LOWER(COALESCE(sr.display_path,'')) LIKE ? ESCAPE '\'
+		            OR LOWER(pk.tag) LIKE ? ESCAPE '\'
+		            OR LOWER(COALESCE(pk.display_tag,'')) LIKE ? ESCAPE '\')`
+		args = append(args, pattern, pattern, pattern, pattern)
 	}
 	if !f.IncludeAccessories {
 		query += " AND pk.accessory_of IS NULL"
@@ -849,7 +926,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(query), args...)
 	if err != nil {
-		return nil, fmt.Errorf("list packages for product %q: %w", f.ProductName, err)
+		return nil, fmt.Errorf("list packages for product %q: %w", f.scope(), err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -864,6 +941,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 			&r.ExpandedAt, &r.AccessoryOf, &r.AnalysisState, &r.AnalysisError,
 			&r.ArchivedAt,
 			&r.SourceRepository, &r.DisplayRepository,
+			&r.ProductName,
 		); err != nil {
 			return nil, fmt.Errorf("scan package row: %w", err)
 		}

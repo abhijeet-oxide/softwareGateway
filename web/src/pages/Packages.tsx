@@ -790,7 +790,7 @@ export default function Packages() {
                   : ''
               }
               : undefined}
-            pagination={{ pageSize: 20, showSizeChanger: false }}
+            pagination={{ pageSize: 20 }}
             /*
               `max-content` rather than a number.
               A hardcoded width has to be kept in step with the sum of the

@@ -254,6 +254,14 @@ It is a read of in-memory counters behind their own mutex - deliberately not the
 
 `RepositoriesTotal` is zero until enumeration finishes, and that is information rather than a gap: it means the scan is still waiting on `/v2/_catalog`.
 
+### `GET /api/v1/discovery` - the same answer for the whole estate
+
+The per-product route is the right shape for a CLI watching one scan and the wrong shape for a dashboard, which shows discovery for the estate. With only the per-product read to build that from, the web interface asked **once per product, on a timer**: thirty products meant thirty requests every fifteen seconds while nothing was happening at all, and thirty every two seconds while a scan ran. Each one was authorized, logged, and answered out of the same in-memory snapshot as the twenty-nine beside it.
+
+`Loop.Progress("")` already returns every source of every product, so the fan-out was never buying anything. The fleet-wide route returns that snapshot, narrowed to the products the caller may read (`Identity.VisibleProducts`), in one request.
+
+The route is reachable by a caller holding `product.view` on **any** product rather than tenant-wide, and that wider door is only safe because of the narrowing - the two are one change. See `middleware.Requirement.AnyScope`.
+
 ### `wait: false`
 
 `packages:discover` accepts `wait: false`, which registers the scan, returns immediately, and reports how many sources started versus how many were already scanning. The distinction matters - "I started four scans" and "one started, three were already going" are different answers, and only one of them is true.

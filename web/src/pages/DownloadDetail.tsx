@@ -104,7 +104,7 @@ function JobsPanel({ transferId, hasFailures }: { transferId: string; hasFailure
         loading={jobs.isLoading}
         dataSource={rows}
         rowKey={(j) => j.id}
-        pagination={{ pageSize: 20, showSizeChanger: false, size: 'small' }}
+        pagination={{ pageSize: 20, size: 'small' }}
         scroll={{ x: 900 }}
         locale={{
           emptyText: (

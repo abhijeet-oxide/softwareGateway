@@ -117,6 +117,15 @@ func RequiredFor(r *http.Request) Requirement {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/auditEvents":
 		// auditProducts filters by VisibleProducts.
 		req.AnyScope = true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/discovery":
+		// handleFleetDiscoveryStatus filters by VisibleProducts. Without this
+		// the estate-wide question would refuse every product owner the one
+		// panel the Overview exists to show them - and it is the fan-out this
+		// route replaces that they were being refused thirty times a minute.
+		req.AnyScope = true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/packages":
+		// handleListAllPackages filters by VisibleProducts.
+		req.AnyScope = true
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/products:discover":
 		// handleDiscoverAll scans PermittedProducts. A product owner asking for
 		// a fleet-wide scan is asking about the fleet they hold, and refusing

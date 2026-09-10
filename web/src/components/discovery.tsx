@@ -7,7 +7,7 @@ import {
   ArrowRightOutlined, CheckCircleFilled, ExclamationCircleFilled, PlayCircleOutlined,
   SyncOutlined,
 } from '../icons'
-import { useDiscoveryStatuses, useRunDiscovery } from '../api/queries'
+import { useDiscoveryStatus, useRunDiscovery } from '../api/queries'
 import { useProductsWith } from '../auth/permissions'
 import { ActionButton } from './access'
 import { formatCount, formatDuration } from '../domain/format'
@@ -536,13 +536,19 @@ export function DiscoverySummary({
   products: Product[]
   onViewAll: () => void
 }) {
-  const names = products.map((p) => p.productId)
-  const results = useDiscoveryStatuses(names)
+  /*
+   * ONE REQUEST for the estate, not one per product.
+   *
+   * This card is the reason the fan-out was noticed: it sits on the landing
+   * page, it polls, and it was asking once per product for an answer the
+   * server holds whole. See useDiscoveryStatus.
+   */
+  const status = useDiscoveryStatus()
 
-  const loading = results.some((r) => r.isLoading)
-  const leaderElsewhere = results.length > 0 && results.every((r) => r.data && !r.data.running)
+  const loading = status.isLoading
+  const leaderElsewhere = Boolean(status.data) && !status.data!.running
 
-  const allRows: DiscoverySourceState[] = results.flatMap((r) => r.data?.sources ?? [])
+  const allRows: DiscoverySourceState[] = status.data?.sources ?? []
   const scanning = allRows.filter((s) => s.scanning)
   const errors = allRows.filter((s) => s.lastError)
   const newSinceLastRun = allRows.reduce((n, s) => n + (s.lastNewPackages ?? 0), 0)
@@ -593,15 +599,22 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
   const rejected = products.filter((p) => p.configError && !p.configError.loaded)
   const polled = products.filter((p) => !p.configError || p.configError.loaded)
 
-  const names = polled.map((p) => p.productId)
-  const results = useDiscoveryStatuses(names)
+  /*
+   * The SAME query the summary card uses, keyed identically - so opening this
+   * tab from the Overview costs nothing: the answer is already in the cache and
+   * the two surfaces cannot disagree about what is scanning.
+   *
+   * The rejected products above are dropped by the server, which reports the
+   * sources the loop actually holds, so nothing here has to filter them out.
+   */
+  const status = useDiscoveryStatus()
 
-  const loading = results.some((r) => r.isLoading)
+  const loading = status.isLoading
   // A follower replica runs no discovery loop and says so, which is a different
   // answer from "nothing is scheduled".
-  const leaderElsewhere = results.length > 0 && results.every((r) => r.data && !r.data.running)
+  const leaderElsewhere = Boolean(status.data) && !status.data!.running
 
-  const allRows: DiscoverySourceState[] = results.flatMap((r) => r.data?.sources ?? [])
+  const allRows: DiscoverySourceState[] = status.data?.sources ?? []
   const scanning = allRows.filter((s) => s.scanning)
 
   /*
@@ -738,7 +751,7 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
             <div>
               <DataTable<DiscoverySourceState>
                 tableEnhancedKey="discovery-sources"
-                pagination={{ pageSize: 20, showSizeChanger: false }}
+                pagination={{ pageSize: 20 }}
                 dataSource={rows}
                 rowKey={(s) => `${s.product}-${s.source}`}
                 scroll={{ x: 900 }}
@@ -835,7 +848,7 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                 <DataTable<DiscoverySourceState>
                   tableEnhancedKey="discovery-failed-sources"
                   size="small"
-                  pagination={{ pageSize: 8, showSizeChanger: false }}
+                  pagination={{ pageSize: 8 }}
                   dataSource={errors}
                   rowKey={(s) => `${s.product}-${s.source}-failed`}
                   columns={[

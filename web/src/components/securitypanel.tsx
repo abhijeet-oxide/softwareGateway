@@ -1889,7 +1889,7 @@ const MalwareTable = memo(function MalwareTable({ rows, scanUrlFor }: {
         size="small"
         rowKey={(r) => `${r.artifactName}-${r.cve ?? r.id}-${r.component.id}-${r.component.version ?? ''}`}
         dataSource={rows}
-        pagination={rows.length > 25 ? { pageSize: 25, size: 'small', showSizeChanger: false } : false}
+        pagination={rows.length > 25 ? { pageSize: 25, size: 'small' } : false}
         columns={[
           {
             title: 'Package',
@@ -1982,7 +1982,7 @@ const PolicyTable = memo(function PolicyTable({ rows }: { rows: FlatViolation[] 
       size="small"
       rowKey={(r) => `${r.artifactName}-${r.id ?? r.cve}-${r.watch ?? ''}-${r.component.id}`}
       dataSource={rows}
-      pagination={rows.length > 25 ? { pageSize: 25, size: 'small', showSizeChanger: false } : false}
+      pagination={rows.length > 25 ? { pageSize: 25, size: 'small' } : false}
       columns={[
         {
           title: 'Watch',
@@ -2215,7 +2215,7 @@ function ProblemsPanel({ problems, scanned, notApplicable, repository }: {
                 rowKey={(r) => r.artifact.digest || r.artifact.name}
                 dataSource={p.reports}
                 pagination={p.reports.length > 10
-                  ? { pageSize: 10, size: 'small', showSizeChanger: false }
+                  ? { pageSize: 10, size: 'small' }
                   : false}
                 showHeader={false}
                 columns={[
@@ -2449,7 +2449,7 @@ const UniqueCveTable = memo(function UniqueCveTable({ groups, state, detailRowsU
       rowKey={(g) => g.key}
       dataSource={groups}
       scroll={{ x: 'max-content' }}
-      pagination={{ pageSize: 25, showSizeChanger: true, size: 'small' }}
+      pagination={{ pageSize: 25, size: 'small' }}
       expandable={{
         expandedRowRender: (g) => (
           <DataTable<FlatFinding>
@@ -2457,7 +2457,7 @@ const UniqueCveTable = memo(function UniqueCveTable({ groups, state, detailRowsU
             size="small"
             rowKey={(r) => `${r.component.id}-${r.artifactName}-${r.artifactDigest ?? ''}`}
             dataSource={[...g.rows].sort((a, b) => Number(b.fixable) - Number(a.fixable))}
-            pagination={g.rows.length > 10 ? { pageSize: 10, size: 'small', showSizeChanger: false } : false}
+            pagination={g.rows.length > 10 ? { pageSize: 10, size: 'small' } : false}
             columns={[
               {
                 title: 'Package',
@@ -2624,7 +2624,7 @@ function CveDetailDrawer({ group, scanUrlFor, onClose }: {
             rowKey={(r) => `${r.component.id}-${r.artifactName}-${r.artifactDigest ?? ''}`}
             dataSource={rows}
             pagination={rows.length > 12
-              ? { pageSize: 12, size: 'small', showSizeChanger: false }
+              ? { pageSize: 12, size: 'small' }
               : false}
             columns={[
               {
@@ -3219,7 +3219,7 @@ const VulnerabilityTable = memo(function VulnerabilityTable({
       rowKey={(r) => `${r.cve ?? r.id}-${r.component.id}-${r.artifactName}`}
       dataSource={rows}
       scroll={{ x: 'max-content' }}
-      pagination={{ pageSize: 25, showSizeChanger: true, size: 'small' }}
+      pagination={{ pageSize: 25, size: 'small' }}
       locale={{
         emptyText: detailRowsUnavailable
           ? (
@@ -3370,7 +3370,7 @@ const ArtifactTable = memo(function ArtifactTable({ reports, whole, freshness }:
       rowKey={(r) => r.artifact.digest || r.artifact.name}
       dataSource={reports}
       scroll={{ x: 'max-content' }}
-      pagination={{ pageSize: 20, showSizeChanger: true, size: 'small' }}
+      pagination={{ pageSize: 20, size: 'small' }}
       columns={[
         {
           title: 'Image',
@@ -3985,7 +3985,7 @@ function ImageDetailDrawer({ report, onClose }: {
               size="small"
               rowKey={(r) => `${r.cve ?? r.id}-${r.component.id}`}
               dataSource={rows}
-              pagination={rows.length > 12 ? { pageSize: 12, size: 'small', showSizeChanger: false } : false}
+              pagination={rows.length > 12 ? { pageSize: 12, size: 'small' } : false}
               locale={{
                 emptyText: (
                   <Typography.Text type="secondary">

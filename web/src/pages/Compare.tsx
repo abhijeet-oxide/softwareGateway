@@ -508,7 +508,7 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
           size="small"
           dataSource={rows}
           rowKey={(r) => `${r.type}-${r.name}-${r.verdict}-${r.a?.digest ?? ''}-${r.b?.digest ?? ''}`}
-          pagination={{ pageSize: 25, showSizeChanger: false, size: 'small' }}
+          pagination={{ pageSize: 25, size: 'small' }}
           scroll={{ x: 1200 }}
           locale={{
             emptyText: (

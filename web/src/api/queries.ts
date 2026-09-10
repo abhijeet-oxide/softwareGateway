@@ -97,16 +97,45 @@ export function useRunDiscovery() {
   })
 }
 
-/** Discovery status for several products at once, for the estate view. */
-export function useDiscoveryStatuses(products: string[]) {
-  return useQueries({
-    queries: products.map((product) => ({
-      queryKey: ['discovery', product],
-      queryFn: () => api.get<DiscoveryStatusResponse>(
-        `/products/${encodeURIComponent(product)}/discovery`),
-      refetchInterval: (q: { state: { data?: DiscoveryStatusResponse } }) =>
-        (q.state.data?.sources ?? []).some((s) => s.scanning) ? 2000 : 15_000,
-    })),
+/**
+ * What discovery is doing across the whole estate, in ONE request.
+ *
+ * # Why this is not a query per product
+ *
+ * It was, and it is the poll storm this hook exists to end. The Overview shows
+ * discovery for the estate, and with only a per-product read to build it from,
+ * a deployment with thirty products issued thirty requests every fifteen
+ * seconds while nothing was happening and thirty every two seconds while a
+ * scan ran - each one authorized, logged and answered out of the same
+ * in-memory snapshot as the twenty-nine beside it. It reads, correctly, as the
+ * discovery API being called nonstop.
+ *
+ * The server always held the whole answer at once (discovery.Loop.Progress),
+ * so the fan-out bought nothing but requests. See GET /api/v1/discovery.
+ *
+ * # The intervals
+ *
+ * Two seconds while at least one source is scanning, because that is somebody
+ * watching a scan and the numbers move visibly. THIRTY when nothing is - up
+ * from fifteen, which was a compromise with the cost of thirty requests and no
+ * longer has anything to buy: the only thing an idle poll can discover is that
+ * the scheduler has started a scan, and a scan takes minutes.
+ *
+ * Nothing polls behind a tab nobody is looking at - TanStack pauses a query
+ * whose component has unmounted, and `refetchIntervalInBackground` is left off
+ * so a backgrounded tab stops too.
+ */
+export function useDiscoveryStatus(opts: { enabled?: boolean } = {}) {
+  const { enabled = true } = opts
+  return useQuery({
+    queryKey: ['discovery'],
+    queryFn: () => api.get<DiscoveryStatusResponse>('/discovery'),
+    enabled,
+    refetchInterval: (q) =>
+      (q.state.data?.sources ?? []).some((s) => s.scanning) ? 2000 : 30_000,
+    // A panel that briefly disagrees with a scan is better than one that
+    // blinks out: the previous sources stay on screen while the next arrive.
+    placeholderData: (previous) => previous,
   })
 }
 

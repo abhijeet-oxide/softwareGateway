@@ -169,6 +169,114 @@ export type TableEnhancedProps<RecordType extends AnyRecord = AnyRecord> =
 
 const STORAGE_PREFIX = "antd-table-enhanced";
 const STORAGE_WRITE_DEBOUNCE_MS = 240;
+
+/* HOW MANY ROWS A TABLE SHOWS, in one place.
+ *
+ * One ladder for every paginated table in the product, roughly doubling, so
+ * "a screenful", "a working set" and "everything I am likely to have" are all
+ * one click apart. Per-table literals are what produced the inconsistency this
+ * replaces - 8, 10, 12, 20, 25 and 50 across the application, half of them with
+ * no way to change them at all.
+ *
+ * The strings are what antd's Select wants for its options; DEFAULT_PAGE_SIZE
+ * is the number a table gets when neither the reader nor the call site has
+ * said. Twenty-five rather than antd's ten: these are operational listings
+ * read by scanning, and ten rows puts a pager under every one of them. */
+const PAGE_SIZE_OPTIONS = ["10", "25", "50", "100", "200"];
+const DEFAULT_PAGE_SIZE = 25;
+/* The remembered page size lives beside the column layout under its own
+ * suffix rather than inside TableEnhancedState, and that is deliberate: that
+ * state is the COLUMN layout, with its own equality test, its own "is any of
+ * this worth writing" check and a Reset layout action that must not silently
+ * throw the reader's page size away with their column widths. */
+const PAGE_SIZE_SUFFIX = ":pageSize";
+
+/**
+ * The page size a SERVER-PAGED table should fetch, and the setter its pager
+ * calls.
+ *
+ * # Why a hook rather than only the default above
+ *
+ * A table that pages in the browser can be handed rows and left alone: the
+ * pager slices them, and the tablekit remembers the size. A table that pages on
+ * the SERVER cannot - the page size is part of the request, so the component
+ * has to know it before it fetches, and the pager it renders is controlled.
+ * Those tables consequently all shipped with `showSizeChanger: false`, which is
+ * why "how many rows can I see" had a different answer on Activity and
+ * Downloads than on Policies.
+ *
+ * This is the same remembered value, readable before the first fetch, so both
+ * kinds of table offer the same choices out of the same store. Spell the pager
+ * as:
+ *
+ *     const [pageSize, setPageSize] = useTablePageSize('downloads-ongoing')
+ *     pagination={{ current, pageSize, onShowSizeChange: (_, n) => setPageSize(n), ... }}
+ *
+ * `tableEnhancedKey` is the argument, not a storage key, so the size follows
+ * the same table identity its column layout does.
+ */
+export function useTablePageSize(
+  tableEnhancedKey: string,
+  fallback: number = DEFAULT_PAGE_SIZE,
+): [number, (size: number) => void] {
+  const storageKey = `${STORAGE_PREFIX}:${tableEnhancedKey}`;
+  const [size, setSize] = React.useState<number>(
+    () => readPageSize(storageKey) ?? fallback,
+  );
+  const choose = React.useCallback(
+    (next: number) => {
+      setSize(next);
+      writePageSize(storageKey, next, undefined);
+    },
+    [storageKey],
+  );
+  return [size, choose];
+}
+
+/** Every page size a pager offers, for a call site rendering its own. */
+export const TABLE_PAGE_SIZE_OPTIONS = PAGE_SIZE_OPTIONS;
+
+/** The page size this person last chose for this table, if any. */
+function readPageSize(
+  storageKey: string,
+  storage?: Storage,
+  debug?: boolean,
+): number | undefined {
+  const store = storage ?? getDefaultStorage();
+  if (!store) return undefined;
+  try {
+    const raw = store.getItem(storageKey + PAGE_SIZE_SUFFIX);
+    if (!raw) return undefined;
+    const value = Number(raw);
+    // Only a size that is actually on offer. A stored 37 - a hand-edited key,
+    // or an option this build no longer has - would leave the pager showing a
+    // count no menu entry matches, which reads as the selector being broken
+    // again.
+    return PAGE_SIZE_OPTIONS.includes(String(value)) ? value : undefined;
+  } catch (error) {
+    // Private browsing, storage disabled by policy. A preference that cannot
+    // be read must never stop a table rendering.
+    debugWarn(debug, "Could not read page size", error);
+    return undefined;
+  }
+}
+
+/** Remembers a page size for this table, on this device. */
+function writePageSize(
+  storageKey: string,
+  size: number,
+  storage?: Storage,
+  debug?: boolean,
+) {
+  const store = storage ?? getDefaultStorage();
+  if (!store) return;
+  try {
+    store.setItem(storageKey + PAGE_SIZE_SUFFIX, String(size));
+  } catch (error) {
+    // The session keeps the choice; it just will not be remembered.
+    debugWarn(debug, "Could not store page size", error);
+  }
+}
 const REORDER_TOOLTIP_CLASS = "antd-table-enhanced-reorder-tooltip";
 
 /**
@@ -3385,15 +3493,75 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
    *
    * size defaults with it. The pager is chrome under a table, not a second
    * subject, and two tables on one screen wearing different pager heights is
-   * the same inconsistency in a different channel. */
+   * the same inconsistency in a different channel.
+   *
+   * # HOW MANY ROWS, and why the selector used to do nothing
+   *
+   * Every paginated table now offers the same page sizes, and the choice is
+   * remembered per table. That is two fixes in one place.
+   *
+   * The FIRST is a real defect, reported against the Policies page and true
+   * everywhere: `pagination.pageSize` makes the pager CONTROLLED. Ant Design
+   * merges the prop over its own state (`usePagination`), so the size changer
+   * fired, the state moved, and the prop overwrote it on the next render -
+   * a dropdown that visibly changed and did nothing. `defaultPageSize` is the
+   * uncontrolled spelling, so a call site's `pageSize` is translated to it
+   * unless that call site is genuinely driving the pager itself (a
+   * server-paged table passing `current` and `onChange`), where controlled is
+   * what it wants.
+   *
+   * The SECOND is consistency. `showSizeChanger` was decided table by table -
+   * on in some, off in others, absent in most - so the answer to "can I see
+   * more than twenty-five rows" depended on which screen you were on. It is on
+   * wherever there is more than one page's worth to show, with one set of
+   * choices, and a call site can still say `showSizeChanger: false` where the
+   * page count is the point rather than the row count. */
+  const [pageSizeChoice, setPageSizeChoice] = React.useState<number | undefined>(
+    () => readPageSize(storageKey, storage, debug),
+  );
+
   const finalPagination = React.useMemo(() => {
     if (pagination === false || pagination == null) return pagination;
+
+    /* A call site DRIVING the pager keeps every value it passed.
+     *
+     * `current` or `onChange` means the rows on screen are chosen elsewhere -
+     * a server-paged listing fetching one page at a time - and there the
+     * controlled `pageSize` is the whole mechanism rather than a mistake. Only
+     * the defaults below are added. */
+    const driven = "current" in pagination || typeof pagination.onChange === "function";
+
+    const { pageSize, ...rest } = pagination;
+    const remembered = pageSizeChoice;
+    const chosen = remembered ?? pageSize ?? DEFAULT_PAGE_SIZE;
+
     return {
       hideOnSinglePage: true,
       size: "small" as const,
-      ...pagination,
+      showSizeChanger: true,
+      pageSizeOptions: PAGE_SIZE_OPTIONS,
+      /* REMEMBERED, so the choice survives leaving the page.
+       *
+       * Keyed with the column layout, because it is the same kind of fact: how
+       * this person wants to read this table. A page size that reset on every
+       * navigation is a preference the reader has to re-state every time they
+       * come back, which is how they learn to stop setting it. */
+      onShowSizeChange: (_current: number, size: number) => {
+        setPageSizeChoice(size);
+        writePageSize(storageKey, size, storage, debug);
+      },
+      ...(driven ? { pageSize } : { defaultPageSize: chosen }),
+      ...rest,
+      /* A remembered size wins over the call site's, and only for a table the
+       * call site is not driving: the reader chose it, on this table, and the
+       * literal in the source is the default they were choosing away from.
+       *
+       * After `...rest` so it cannot be undone by the spread, and dropped
+       * entirely when driven - there the call site's `pageSize` above is the
+       * page it actually fetched. */
+      ...(driven || remembered === undefined ? {} : { defaultPageSize: remembered }),
     };
-  }, [pagination]);
+  }, [pagination, pageSizeChoice, storageKey, storage, debug]);
 
   const showToolbar = allow_export || show_column_visibility || Boolean(toolbarExtra);
 

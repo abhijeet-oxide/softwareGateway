@@ -5,7 +5,7 @@
 // Everything in this folder is IDENTICAL in every tool that uses it, the same
 // way `uikit/` is. See README.md for what may and may not be changed here.
 
-export { Table } from "./Table";
+export { Table, TABLE_PAGE_SIZE_OPTIONS, useTablePageSize } from "./Table";
 
 export type {
   TableEnhancedActions,

@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/abhijeet-oxide/softwareGateway/internal/api/middleware"
 	"github.com/abhijeet-oxide/softwareGateway/internal/compare"
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
 	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
@@ -83,6 +84,93 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 	if !s.productExists(w, r, productName) {
 		return
 	}
+	s.listPackages(w, r, store.ListPackagesFilter{
+		ProductName: productName,
+		Repository:  r.URL.Query().Get("repository"),
+	})
+}
+
+// handleListAllPackages serves GET /api/v1/packages.
+//
+// EVERY PRODUCT'S RELEASES, newest first, in one paged request.
+//
+// # Why this route exists
+//
+// The Packages page shows the estate rather than one product, and with only a
+// per-product listing to build that from, the browser asked once PER PRODUCT
+// and merged the answers itself. Three things follow, and all three were
+// reported as defects:
+//
+//   - it is one request per product on every visit, thirty of them on a real
+//     deployment, competing for the browser's six connections per host;
+//   - it cannot page. Each product's page is its own, so twenty-five merged
+//     rows meant fetching a hundred from every product first - which is
+//     precisely the "load everything" the page then filtered in memory;
+//   - it cannot search. A substring test over what happened to be loaded
+//     answers "nothing found" for a release that exists, and does it
+//     confidently.
+//
+// One ordered, filtered, paged query answers all of it. `repository` is
+// deliberately absent: resolving a repository shorthand is a per-product
+// lookup (a path means nothing without one), so that filter stays where a
+// product is named.
+//
+// # What it narrows to
+//
+// The products this caller may READ, from Identity.VisibleProducts - the same
+// narrowing handleListProducts uses, and the thing that makes the route safe
+// to reach for a caller scoped to one product. See
+// middleware.Requirement.AnyScope, which is set for this path: the two are one
+// change.
+func (s *Server) handleListAllPackages(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Products == nil {
+		Error(w, r, v1.CodeUnavailable, "product configuration is not loaded")
+		return
+	}
+
+	// WHICH PRODUCTS "EVERYTHING" MEANS, and it is a closed set rather than an
+	// omitted filter: ListPackages refuses a filter that names no scope, so a
+	// narrowing that came back empty lists nothing rather than the estate.
+	var names []string
+	for _, p := range s.deps.Products.List() {
+		names = append(names, p.Metadata.Name)
+	}
+	sort.Strings(names)
+	if visible := middleware.IdentityFrom(r.Context()).VisibleProducts(); len(visible) > 0 {
+		allowed := make(map[string]bool, len(visible))
+		for _, name := range visible {
+			allowed[name] = true
+		}
+		kept := names[:0]
+		for _, name := range names {
+			if allowed[name] {
+				kept = append(kept, name)
+			}
+		}
+		names = kept
+	}
+	if len(names) == 0 {
+		// Not a refusal and not an error: a deployment with no product, and a
+		// caller who may read none of the ones there are, both have an empty
+		// listing to show. The refusal, where there is one to make, was already
+		// made by the authorization middleware.
+		WriteJSON(w, r, http.StatusOK, v1.ListPackagesResponse{Packages: []v1.Package{}})
+		return
+	}
+
+	s.listPackages(w, r, store.ListPackagesFilter{Products: names})
+}
+
+// listPackages is the body both listings share: paging, filtering, search, and
+// the three batched joins that give a row its state.
+//
+// One function rather than two because the difference between the routes is
+// their SCOPE and nothing else, and a second copy is where the two would drift
+// - the estate listing growing a filter the product listing does not have, or
+// missing a join it does.
+func (s *Server) listPackages(
+	w http.ResponseWriter, r *http.Request, filter store.ListPackagesFilter,
+) {
 	if s.deps.Packages == nil {
 		Error(w, r, v1.CodeUnavailable, "package storage is not configured")
 		return
@@ -106,18 +194,20 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	filter.Tag = q.Get("tag")
+	filter.State = state
+	// `q` rather than `search`, matching the security search and the
+	// compliance listing: one spelling for "the text somebody typed" across
+	// the whole API.
+	filter.Search = q.Get("q")
+	filter.IncludeAccessories = q.Get("includeAccessories") == "true"
 	// One row over the page size, so "is there another page" is answered
 	// without a second COUNT query - and without claiming a next page that
 	// turns out to be empty.
-	rows, err := s.deps.Packages.ListPackages(r.Context(), store.ListPackagesFilter{
-		ProductName:        productName,
-		Repository:         q.Get("repository"),
-		Tag:                q.Get("tag"),
-		State:              state,
-		IncludeAccessories: q.Get("includeAccessories") == "true",
-		Limit:              pageSize + 1,
-		Offset:             offset,
-	})
+	filter.Limit = pageSize + 1
+	filter.Offset = offset
+
+	rows, err := s.deps.Packages.ListPackages(r.Context(), filter)
 	if err != nil {
 		s.internal(w, r, "list packages", err)
 		return
@@ -129,14 +219,122 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 		resp.NextPageToken = strconv.Itoa(offset + pageSize)
 	}
 	for _, row := range rows {
-		resp.Packages = append(resp.Packages, toAPIPackage(productName, row))
+		resp.Packages = append(resp.Packages, toAPIPackage(row.ProductName, row))
 	}
-	// One query for the whole page, not one per row. That difference is why the
-	// vulnerability column is always on rather than hidden behind a toggle.
-	s.attachSecurity(r.Context(), productName, rows, resp.Packages)
+	// One query per join for the whole page, not one per row. That difference
+	// is why the vulnerability column is always on rather than hidden behind a
+	// toggle - and why the transfer history below can be carried at all.
+	s.attachSecurityToListing(r.Context(), rows, resp.Packages)
 	s.attachCompliance(r.Context(), rows, resp.Packages)
+	s.attachTransfers(r.Context(), rows, resp.Packages)
 
 	WriteJSON(w, r, http.StatusOK, resp)
+}
+
+// attachTransfers fills in each listed release's transfer history.
+//
+// # Why a listing carries this now, when it deliberately did not
+//
+// Because the alternative was worse, and it was the browser's problem rather
+// than nobody's. A release's STATUS - new, downloading, downloaded, ready for
+// production, failed - is derived from what has been attempted with it, so a
+// listing without this cannot state it: every row reads NEW, including
+// releases that reached production. The web interface worked around that by
+// fetching the two hundred most recent transfers of the whole estate on every
+// listing and joining the two in memory.
+//
+// That join is wrong the moment the listing is paged. Page four's releases were
+// downloaded months ago, so their transfers are nowhere near the two hundred
+// most recent, and every row on it reported as never downloaded. It is also
+// two hundred transfers fetched to decorate twenty-five rows.
+//
+// ONE query for the page, by package id, with the job rollups left off - the
+// same shape as attachSecurity, and the reason the old objection ("fifty
+// packages would be fifty extra queries") does not apply.
+//
+// Silent on failure, like the security join: history is columns, and a listing
+// that 500s because one join failed takes the whole page down for a decoration.
+func (s *Server) attachTransfers(
+	ctx context.Context, rows []store.PackageRow, out []v1.Package,
+) {
+	if len(rows) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+
+	// Bounded by the page: a release with more attempts than this has had
+	// something go wrong repeatedly, and what a listing needs from it - is
+	// anything running, did anything fail, where did it land - is answered by
+	// the most recent ones. The detail page reads them unbounded.
+	transfers, err := s.deps.Packages.ListTransfers(ctx, store.ListTransfersFilter{
+		PackageIDs: ids,
+		// WITHOUT the job rollups. Twelve correlated aggregates over `jobs` per
+		// transfer is what makes a transfer listing expensive, and a listing
+		// row draws none of them: it needs the state, the destination and the
+		// reason a failure gives.
+		WithoutJobCounts: true,
+		Limit:            len(ids) * 8,
+	})
+	if err != nil {
+		s.deps.Logger.Warn("could not read transfer history for listing", "error", err)
+		return
+	}
+
+	byPackage := make(map[int64][]v1.PackageTransfer, len(ids))
+	for _, t := range transfers {
+		byPackage[t.PackageID] = append(byPackage[t.PackageID], v1.PackageTransfer{
+			ID:            t.ID,
+			Target:        targetName(t),
+			Repository:    t.Target,
+			State:         v1.TransferState(strings.ToUpper(t.State)),
+			Operation:     strings.ToUpper(t.Operation),
+			FailureReason: t.FailureReason,
+			CreatedAt:     t.CreatedAt,
+			CompletedAt:   t.CompletedAt,
+		})
+	}
+	for i, row := range rows {
+		out[i].Transfers = byPackage[row.ID]
+	}
+}
+
+// attachSecurityToListing is attachSecurity for a page that may span products.
+//
+// It groups by product before delegating, because whether a scanner exists at
+// all is a property of the PRODUCT - productCanSync - and the estate-wide
+// listing is the first caller whose page has more than one in it. Handing that
+// page one product's answer would report every release of every other product
+// as unscannable, or as scannable when it is not.
+func (s *Server) attachSecurityToListing(
+	ctx context.Context, rows []store.PackageRow, out []v1.Package,
+) {
+	if len(rows) == 0 {
+		return
+	}
+
+	// The common case is one product, and grouping it is a map with one entry.
+	// Worth doing anyway rather than branching: two code paths for one join is
+	// how the estate listing would end up with a different answer from the
+	// product listing about the same release.
+	byProduct := map[string][]int{}
+	for i, row := range rows {
+		byProduct[row.ProductName] = append(byProduct[row.ProductName], i)
+	}
+	for productName, indexes := range byProduct {
+		group := make([]store.PackageRow, 0, len(indexes))
+		slice := make([]v1.Package, 0, len(indexes))
+		for _, i := range indexes {
+			group = append(group, rows[i])
+			slice = append(slice, out[i])
+		}
+		s.attachSecurity(ctx, productName, group, slice)
+		for n, i := range indexes {
+			out[i] = slice[n]
+		}
+	}
 }
 
 // attachSecurity fills in each listed release's stored vulnerability counts.
@@ -971,7 +1169,50 @@ func (s *Server) handleDiscoveryStatus(w http.ResponseWriter, r *http.Request) {
 	if !s.productExists(w, r, productName) {
 		return
 	}
+	WriteJSON(w, r, http.StatusOK, s.discoveryStatus(productName, nil))
+}
 
+// GET /api/v1/discovery.
+//
+// THE SAME ANSWER FOR THE WHOLE ESTATE, in one request.
+//
+// # Why this route exists
+//
+// The per-product route above is the right shape for a CLI watching one scan
+// and the wrong shape for the Overview, which shows discovery for the estate.
+// With no fleet-wide read the web interface asked once PER PRODUCT and did it
+// on a timer: a deployment with thirty products issued thirty requests every
+// fifteen seconds while nothing was happening at all, and thirty every two
+// seconds while a scan ran - each one re-authorized, re-logged, and answered
+// from the same in-memory snapshot the one before it read. The Coordinator saw
+// a poll storm; the operator saw "the discovery API is being called nonstop",
+// which is exactly what it was.
+//
+// One request answers all of it, because Progress("") already returns every
+// source of every product - the fan-out was never buying anything.
+//
+// # What it narrows to
+//
+// The products this caller may READ, from the same Identity.VisibleProducts
+// every other fleet-wide read uses. Empty means unrestricted, which is what a
+// tenant-wide role and an unauthenticated deployment both produce. That
+// narrowing is what makes the route safe to reach for a caller who holds
+// product.view on one product rather than tenant-wide - see
+// middleware.Requirement.AnyScope, which is set for this path and must be
+// changed with this filter or not at all.
+func (s *Server) handleFleetDiscoveryStatus(w http.ResponseWriter, r *http.Request) {
+	visible := middleware.IdentityFrom(r.Context()).VisibleProducts()
+	WriteJSON(w, r, http.StatusOK, s.discoveryStatus("", visible))
+}
+
+// discoveryStatus reads the loop's snapshot for one product, or for every
+// product when `productName` is empty.
+//
+// `visible` narrows the result to those product names; nil or empty means
+// unrestricted, the convention every scoped filter in this package uses.
+func (s *Server) discoveryStatus(
+	productName string, visible []string,
+) v1.DiscoveryStatusResponse {
 	resp := v1.DiscoveryStatusResponse{
 		Running: s.deps.Discovery != nil && s.deps.Discovery.Running(),
 		Sources: []v1.DiscoverySourceState{},
@@ -979,52 +1220,66 @@ func (s *Server) handleDiscoveryStatus(w http.ResponseWriter, r *http.Request) {
 	if !resp.Running {
 		// Not an error: discovery runs on the leader, and a follower answering
 		// "not here" is more useful than a 503.
-		WriteJSON(w, r, http.StatusOK, resp)
-		return
+		return resp
+	}
+
+	var allowed map[string]bool
+	if len(visible) > 0 {
+		allowed = make(map[string]bool, len(visible))
+		for _, name := range visible {
+			allowed[name] = true
+		}
 	}
 
 	for _, sp := range s.deps.Discovery.Progress(productName) {
-		state := v1.DiscoverySourceState{
-			Product:         sp.Product,
-			Source:          sp.Source,
-			IntervalSeconds: int(sp.Interval.Seconds()),
+		if allowed != nil && !allowed[sp.Product] {
+			continue
 		}
+		resp.Sources = append(resp.Sources, toAPIDiscoverySource(sp))
+	}
+	return resp
+}
 
-		if p := sp.Progress; p.Running() {
-			state.Scanning = true
-			state.Phase = string(p.Phase)
-			state.ElapsedMs = p.Elapsed().Milliseconds()
-			state.RepositoriesTotal = p.RepositoriesTotal
-			state.RepositoriesDone = p.RepositoriesDone
-			state.RepositoriesInFlight = p.RepositoriesInFlight
-			state.CurrentRepository = p.CurrentRepository
-			state.CurrentTag = p.CurrentTag
-			state.TagsTotal = p.TagsTotal
-			state.TagsResolved = p.TagsResolved
-			state.TagsChecked = p.TagsChecked
-			state.TagsToFetch = p.TagsToFetch
-			state.TagsFetched = p.TagsFetched
-			state.TagsInFlight = p.TagsInFlight
-			state.Progress = p.Overall
-			state.Artifacts = p.Artifacts
-			state.Packages = p.Packages
-			state.NewPackages = p.New
-			state.Errors = p.Errors
-		}
-
-		if !sp.LastRun.IsZero() {
-			state.LastRunAt = sp.LastRun.UTC().Format(time.RFC3339)
-			state.LastRepositories = sp.Last.Repositories
-			state.LastTagsListed = sp.Last.TagsListed
-			state.LastNewPackages = sp.Last.New
-			state.LastDurationMs = sp.Last.Duration.Milliseconds()
-		}
-		state.LastError = sp.LastErr
-
-		resp.Sources = append(resp.Sources, state)
+// toAPIDiscoverySource converts one source's live snapshot to the wire view.
+func toAPIDiscoverySource(sp discovery.SourceProgress) v1.DiscoverySourceState {
+	state := v1.DiscoverySourceState{
+		Product:         sp.Product,
+		Source:          sp.Source,
+		IntervalSeconds: int(sp.Interval.Seconds()),
 	}
 
-	WriteJSON(w, r, http.StatusOK, resp)
+	if p := sp.Progress; p.Running() {
+		state.Scanning = true
+		state.Phase = string(p.Phase)
+		state.ElapsedMs = p.Elapsed().Milliseconds()
+		state.RepositoriesTotal = p.RepositoriesTotal
+		state.RepositoriesDone = p.RepositoriesDone
+		state.RepositoriesInFlight = p.RepositoriesInFlight
+		state.CurrentRepository = p.CurrentRepository
+		state.CurrentTag = p.CurrentTag
+		state.TagsTotal = p.TagsTotal
+		state.TagsResolved = p.TagsResolved
+		state.TagsChecked = p.TagsChecked
+		state.TagsToFetch = p.TagsToFetch
+		state.TagsFetched = p.TagsFetched
+		state.TagsInFlight = p.TagsInFlight
+		state.Progress = p.Overall
+		state.Artifacts = p.Artifacts
+		state.Packages = p.Packages
+		state.NewPackages = p.New
+		state.Errors = p.Errors
+	}
+
+	if !sp.LastRun.IsZero() {
+		state.LastRunAt = sp.LastRun.UTC().Format(time.RFC3339)
+		state.LastRepositories = sp.Last.Repositories
+		state.LastTagsListed = sp.Last.TagsListed
+		state.LastNewPackages = sp.Last.New
+		state.LastDurationMs = sp.Last.Duration.Milliseconds()
+	}
+	state.LastError = sp.LastErr
+
+	return state
 }
 
 // resolvePackage finds one package, or explains why it cannot.

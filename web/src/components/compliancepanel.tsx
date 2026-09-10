@@ -999,7 +999,7 @@ function ChartCoverage({
         loading={loading}
         rowKey={(ch) => `${ch.name}@${ch.version}@${ch.digest}`}
         dataSource={rows}
-        pagination={rows.length > 50 ? { pageSize: 50, showSizeChanger: true, size: 'small' } : false}
+        pagination={rows.length > 50 ? { pageSize: 50, size: 'small' } : false}
         locale={{
           emptyText: (
             <Empty
@@ -1247,7 +1247,7 @@ function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, onSearchT
       rowKey={(g) => g.key}
       dataSource={groups}
       scroll={{ x: 'max-content' }}
-      pagination={groups.length > 25 ? { pageSize: 25, showSizeChanger: true, size: 'small' } : false}
+      pagination={groups.length > 25 ? { pageSize: 25, size: 'small' } : false}
       locale={{
         emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} />,
       }}
@@ -1257,7 +1257,7 @@ function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, onSearchT
             size="small"
             rowKey={(r) => `${r.seq}`}
             dataSource={g.rows}
-            pagination={g.rows.length > 10 ? { pageSize: 10, size: 'small', showSizeChanger: false } : false}
+            pagination={g.rows.length > 10 ? { pageSize: 10, size: 'small' } : false}
             onRow={(r) => ({ onClick: () => onOpenResult(r), style: { cursor: 'pointer' } })}
             /*
               FOUR NARROW FACTS, and not the message.
@@ -1577,7 +1577,7 @@ function CheckDrawer({ group, onClose, onOpenResult }: {
                 rowKey={(r) => `${r.seq}`}
                 dataSource={group.rows}
                 pagination={group.rows.length > 12
-                  ? { pageSize: 12, size: 'small', showSizeChanger: false }
+                  ? { pageSize: 12, size: 'small' }
                   : false}
                 onRow={(r) => ({ onClick: () => onOpenResult(r), style: { cursor: 'pointer' } })}
                 scroll={{ x: 'max-content' }}
@@ -1667,7 +1667,7 @@ function ResultsTable({ results, loading, onOpen, onSearchTerm, emptyText }: {
       locale={{
         emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} />,
       }}
-      pagination={{ pageSize: 50, showSizeChanger: true, size: 'small' }}
+      pagination={{ pageSize: 50, size: 'small' }}
       onRow={(r) => ({ onClick: () => onOpen(r), style: { cursor: 'pointer' } })}
     />
   )

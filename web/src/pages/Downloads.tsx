@@ -1,7 +1,7 @@
 import { Alert, Button, Card, Col, Row, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
-import { Table as DataTable } from '../tablekit'
+import { Table as DataTable, useTablePageSize } from '../tablekit'
 import {
   ArrowRightOutlined, BookOutlined, CloudDownloadOutlined, HistoryOutlined,
   RocketOutlined, ThunderboltOutlined,
@@ -282,6 +282,20 @@ export default function Downloads() {
   const [transferToken, setTransferToken] = useState<string>()
   const [promotionPage, setPromotionPage] = useState(1)
   const [promotionToken, setPromotionToken] = useState<string>()
+  /*
+    HOW MANY ROWS EACH LISTING FETCHES, chosen by the reader.
+
+    Two sizes, not three: Ongoing and Finished are two views of the SAME page
+    of transfers - the query is one request, split by state here - so they
+    share a size, and a selector on either moves both. Promotions are their own
+    request and their own size.
+
+    Server-paged, so the number is part of the request rather than a slice of
+    rows already in hand, which is why these tables had no size selector at
+    all until the value could be read before the fetch. See useTablePageSize.
+  */
+  const [transferPageSize, setTransferPageSize] = useTablePageSize('downloads-ongoing', 25)
+  const [promotionPageSize, setPromotionPageSize] = useTablePageSize('downloads-promotions', 25)
   // undefined means "nobody has chosen one", so the default below can follow
   // the data. It stops following it the moment somebody picks a tab.
   const [tab, setTab] = useState<string>()
@@ -299,8 +313,12 @@ export default function Downloads() {
   // A busy estate's hundred most recent transfers are all downloads, so a
   // client-side split would leave the promotions table empty on exactly the
   // deployments that promote the most.
-  const transfers = useTransfers({ pageSize: 25, operation: 'replicate', pageToken: transferToken })
-  const promotionsQuery = useTransfers({ pageSize: 25, operation: 'promote', pageToken: promotionToken })
+  const transfers = useTransfers({
+    pageSize: transferPageSize, operation: 'replicate', pageToken: transferToken,
+  })
+  const promotionsQuery = useTransfers({
+    pageSize: promotionPageSize, operation: 'promote', pageToken: promotionToken,
+  })
   const replicationPerProduct = useReplicationForAll(names)
 
   /*
@@ -536,9 +554,17 @@ export default function Downloads() {
                 size="small"
                 pagination={{
                   current: transferPage,
-                  pageSize: 25,
-                  total: transfers.data?.nextPageToken ? transferPage * 25 + 1 : transferPage * 25,
-                  showSizeChanger: false,
+                  pageSize: transferPageSize,
+                  total: transfers.data?.nextPageToken
+                    ? transferPage * transferPageSize + 1
+                    : transferPage * transferPageSize,
+                  // A new size invalidates the token, which addresses an
+                  // offset counted in pages of the old one.
+                  onShowSizeChange: (_current, size) => {
+                    setTransferPageSize(size)
+                    setTransferToken(undefined)
+                    setTransferPage(1)
+                  },
                   onChange: (page) => {
                     if (page > transferPage && transfers.data?.nextPageToken) {
                       setTransferToken(transfers.data.nextPageToken)
@@ -640,9 +666,17 @@ export default function Downloads() {
                 size="small"
                 pagination={{
                   current: transferPage,
-                  pageSize: 25,
-                  total: transfers.data?.nextPageToken ? transferPage * 25 + 1 : transferPage * 25,
-                  showSizeChanger: false,
+                  pageSize: transferPageSize,
+                  total: transfers.data?.nextPageToken
+                    ? transferPage * transferPageSize + 1
+                    : transferPage * transferPageSize,
+                  // A new size invalidates the token, which addresses an
+                  // offset counted in pages of the old one.
+                  onShowSizeChange: (_current, size) => {
+                    setTransferPageSize(size)
+                    setTransferToken(undefined)
+                    setTransferPage(1)
+                  },
                   onChange: (page) => {
                     if (page > transferPage && transfers.data?.nextPageToken) {
                       setTransferToken(transfers.data.nextPageToken)
@@ -728,9 +762,15 @@ export default function Downloads() {
                 size="small"
                 pagination={{
                   current: promotionPage,
-                  pageSize: 25,
-                  total: promotionsQuery.data?.nextPageToken ? promotionPage * 25 + 1 : promotionPage * 25,
-                  showSizeChanger: false,
+                  pageSize: promotionPageSize,
+                  total: promotionsQuery.data?.nextPageToken
+                    ? promotionPage * promotionPageSize + 1
+                    : promotionPage * promotionPageSize,
+                  onShowSizeChange: (_current, size) => {
+                    setPromotionPageSize(size)
+                    setPromotionToken(undefined)
+                    setPromotionPage(1)
+                  },
                   onChange: (page) => {
                     if (page > promotionPage && promotionsQuery.data?.nextPageToken) {
                       setPromotionToken(promotionsQuery.data.nextPageToken)

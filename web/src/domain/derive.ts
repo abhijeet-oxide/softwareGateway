@@ -67,6 +67,19 @@ export type SoftwareStatus =
    */
   | 'PROMOTION FAILED'
   | 'VERIFICATION FAILED'
+  /**
+   * The vendor withdrew it, and we never downloaded it.
+   *
+   * Not a failure and not a lifecycle step - what changed is the SOURCE, not
+   * the release. It reads AVAILABLE otherwise, which is the one word it must
+   * not read: available is an invitation to download something that no longer
+   * exists, and the request can only fail against a 404 at the registry.
+   *
+   * Only ever set on a release nothing landed for. One already in the internal
+   * registries is unaffected by the vendor taking it down upstream - we have
+   * it, and it can still be promoted and shipped.
+   */
+  | 'ARCHIVED'
 
 /** The three verification states, stated in words as well as colour. */
 export type VerificationState = 'SIGNED' | 'NOT_SIGNED' | 'VERIFICATION_FAILED' | 'UNKNOWN'
@@ -146,6 +159,12 @@ export function productionTargets(product: Product | undefined): Set<string> {
  */
 export function deriveStatus(pkg: Package, product?: Product): SoftwareStatus {
   if (verification(pkg) === 'VERIFICATION_FAILED') return 'VERIFICATION FAILED'
+
+  /* WITHDRAWN AT THE SOURCE, first, because every test below reads the
+   * transfers and this release has none that matter: the server only ever sets
+   * archivedAt on one nothing landed for. Left to the tests below it would
+   * read AVAILABLE - an invitation to download something that is gone. */
+  if (pkg.archivedAt) return 'ARCHIVED'
 
   const transfers = pkg.transfers ?? []
   // CANCELLING is live for POLLING - the page should keep refreshing until it

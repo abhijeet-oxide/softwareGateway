@@ -447,6 +447,15 @@ type Package struct {
 	// AnalysisError is why the last walk gave up. "It failed" that cannot say
 	// why is a dead end for whoever reads it a week later.
 	AnalysisError string `json:"analysisError,omitempty"`
+	// ArchivedAt is when discovery last found this release GONE from the
+	// repository it came from. Empty while the vendor still serves it.
+	//
+	// A withdrawn release that was never downloaded cannot be downloaded now,
+	// cannot be analysed, and cannot have compliance run against it: all three
+	// need bytes the source will not serve. Set only on a release nothing
+	// landed for - one already in the internal registries is unaffected by the
+	// vendor withdrawing it upstream, because we have it.
+	ArchivedAt string `json:"archivedAt,omitempty"`
 
 	// SignatureStatus is SIGNED, UNSIGNED or UNKNOWN.
 	//

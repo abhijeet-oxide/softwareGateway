@@ -37,6 +37,29 @@ pass `toolbarPlacement="outside"` to keep the export and column controls above
 the surface without reserving a blank toolbar row inside it. TableKit reserves
 the external control lane automatically. The default placement is `inside`.
 
+A table's own controls - a search over its rows, a filter - belong on the same
+line as the export, because they act on the same rows: what the reader narrowed
+to is what the exported file should contain. Pass them as `toolbarExtra` and
+they render at the start of the toolbar row, with the kit's own controls staying
+right. Supplying it turns the toolbar on by itself, so a table with a search and
+no export still gets one line rather than two.
+
+Three defaults are the kit's rather than each call site's, because a table that
+disagrees with the one beside it is the thing people notice first:
+
+- **The pager appears only when there is somewhere to go.** `hideOnSinglePage`
+  is on unless a call site overrides it, so a table of four rows with a pageSize
+  of twenty renders no control reading "1". `pagination={false}` still means no
+  pager at all.
+- **A table that fits does not scroll.** `scroll.x` stays `max-content` so a
+  resized column can still push past the container, but the overflow is clamped
+  while the measured content is within a rounding error of its box. Sub-pixel
+  column widths otherwise leave every table with a scrollbar and two pixels of
+  travel.
+- **Row density is the kit's**, set by `tableEnhancedDensity`. Do not reach for
+  antd's `size` to make one table shorter: that is how two tables on one screen
+  end up with different row heights.
+
 Preferences persist per table, keyed by `tableEnhancedKey`, in the browser's
 storage - so a person's own layout survives a reload without the server ever
 being told about it.

@@ -102,6 +102,10 @@ const STATUS_TONE: Record<SoftwareStatus, PillTone> = {
   'DOWNLOAD FAILED': 'danger',
   'PROMOTION FAILED': 'danger',
   'VERIFICATION FAILED': 'danger',
+  // Neutral on purpose. Nothing went wrong and nobody has to act - the vendor
+  // simply stopped publishing it. Danger here would send people looking for a
+  // fault that does not exist.
+  ARCHIVED: 'neutral',
 }
 
 /**
@@ -124,6 +128,7 @@ const STATUS_LABEL: Record<SoftwareStatus, string> = {
   'DOWNLOAD FAILED': 'Download failed',
   'PROMOTION FAILED': 'Promotion failed',
   'VERIFICATION FAILED': 'Verification failed',
+  ARCHIVED: 'Archived',
 }
 
 /**

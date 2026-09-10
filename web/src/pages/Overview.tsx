@@ -18,6 +18,7 @@ import {
 } from '../components/chips'
 import { AttentionBand, EmptyStateCard, ErrorState, type Attention } from '../components/layout'
 import { Guard } from '../components/access'
+import { useCan } from '../auth/permissions'
 import type { Package, Product, Transfer } from '../api/types'
 
 /**
@@ -157,6 +158,18 @@ export default function Overview() {
   }
 
   const loading = products.isLoading || packageLists.some((q) => q.isLoading)
+
+  /* Whether the right-hand column has anything to hold. Both panels below are
+   * estate-wide facts with no product tier on their policies, so a caller
+   * scoped to products is refused both - and an empty column is still a
+   * column. Read with the same permissions the Guards use. */
+  const maySeeFleet = useCan('worker.view')
+  const maySeeReports = useCan('report.view')
+  // Both asked BEFORE the or, never `useCan(a) || useCan(b)` - that is a
+  // CONDITIONAL HOOK CALL. `||` short-circuits, so the second useContext would
+  // be skipped whenever the first came back true, and React would see a
+  // different number of hooks between two renders of the same component.
+  const sidebar = maySeeFleet || maySeeReports
   const totals = reports.data?.totals
 
   return (
@@ -250,7 +263,7 @@ export default function Overview() {
       </Card>
 
       <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
-        <Col xs={24} xl={17}>
+        <Col xs={24} xl={sidebar ? 17 : 24}>
           <Card
             title="Packages published in the last 7 days"
             extra={<Link to="/packages">View all packages</Link>}
@@ -364,6 +377,20 @@ export default function Overview() {
           </Card>
         </Col>
 
+        {/*
+          NO COLUMN WHEN THERE IS NOTHING TO PUT IN IT.
+
+          Both panels here are ESTATE facts that cannot be narrowed to a
+          product, so a caller scoped to products is refused both and each
+          Guard renders nothing. The column stayed, though, reserving a
+          seven-twentyfourths strip of blank page beside a packages table
+          squeezed into the rest - a reader without these permissions got a
+          worse-laid-out page than one with them, which is backwards.
+
+          Asked with the same permissions the Guards use, so the two can never
+          disagree about whether anything is going to be drawn.
+        */}
+        {sidebar && (
         <Col xs={24} xl={7}>
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
             {/*
@@ -412,6 +439,7 @@ export default function Overview() {
             </Guard>
           </Space>
         </Col>
+        )}
       </Row>
               </>
             ),

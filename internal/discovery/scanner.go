@@ -431,6 +431,20 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 		}
 	}
 
+	// Releases the vendor has TAKEN DOWN, per repository.
+	//
+	// Only from a listing that succeeded. listOutcome.tags carries an entry
+	// only for a repository that listed without error (see listPhase), which
+	// is the whole safety property here: a registry outage produces no entry
+	// at all rather than an empty tag set, and an empty tag set is what would
+	// otherwise read as "the vendor withdrew everything".
+	//
+	// A release already downloaded is never touched - see ArchiveVanishedTags.
+	if archived, restored := s.archiveVanished(ctx, listed.tags); archived+restored > 0 {
+		s.log.InfoContext(ctx, "reconciled releases against the source registry",
+			"archived", archived, "restored", restored)
+	}
+
 	// Content the vendor would not serve is written down rather than reported
 	// and forgotten. On a catalogue spanning every customer this is dozens of
 	// orbs on every pass, forever, and the question "which ones are we not
@@ -519,6 +533,25 @@ func entitlementDetail(err error) string {
 // Failures are logged and swallowed. A display name is cosmetic, and failing a
 // scan over one - losing the packages that scan discovered - would be a bad
 // trade in every direction.
+// archiveVanished marks releases the source repository stopped serving, and
+// clears the mark from any that came back.
+func (s *Scanner) archiveVanished(ctx context.Context, tags map[int64]map[string]bool) (int64, int64) {
+	var archived, restored int64
+	for repoID, present := range tags {
+		a, r, err := s.packages.ArchiveVanishedTags(ctx, repoID, present)
+		if err != nil {
+			// One repository's bookkeeping must not fail a scan that otherwise
+			// worked - the packages themselves were found and recorded.
+			s.log.WarnContext(ctx, "could not reconcile releases against the source registry",
+				"repository_id", repoID, "error", err)
+			continue
+		}
+		archived += a
+		restored += r
+	}
+	return archived, restored
+}
+
 func (s *Scanner) reconcileDisplayNames(ctx context.Context, work []tagWork) int {
 	repos := make(map[int64]string, len(work))
 	for _, w := range work {

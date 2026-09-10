@@ -21,7 +21,7 @@ import {
   deriveStatus, downloadedAt, failureReason, isLive, matches, packageReference, promotableTargets,
   promotedAt, repositoryOf, repositoryUrl, titleCase, verification, version,
 } from '../domain/derive'
-import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
+import { bytes, formatAbsolute, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
 import { AnalyzeIcon, ARTIFACT_ICONS, DownloadIcon, Icon } from '../components/icons'
 import { WorkingBar } from '../components/progress'
@@ -1337,8 +1337,10 @@ export default function PackageDetail() {
                 scope={{ product: productName }}
                 type="primary"
                 icon={<Icon as={DownloadIcon} title="Download" />}
-                disabled={!p}
-                title="Downloads the whole release into the internal repositories and configures the mirror OpenShift pulls from."
+                disabled={!p || Boolean(p.archivedAt)}
+                title={p?.archivedAt
+                  ? `This release is no longer published in ${p.displayRepository || p.sourceRepository}, so there is nothing to download.`
+                  : 'Downloads the whole release into the internal repositories and configures the mirror OpenShift pulls from.'}
                 onClick={() => setConfirming(true)}
               >
                 Download
@@ -1347,6 +1349,32 @@ export default function PackageDetail() {
           </Space>
         }
       />
+
+      {/*
+        WITHDRAWN AT THE SOURCE, said plainly and at the top.
+
+        Everything below this - the contents, the security tab, the compliance
+        tab - describes a release we can no longer fetch, and the controls that
+        would fetch it are disabled. Without a sentence saying why, a page of
+        greyed-out buttons reads as a permissions problem or a broken
+        deployment. Naming the repository matters because that is what somebody
+        would go and check.
+      */}
+      {p?.archivedAt && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="No longer published by the vendor"
+          description={
+            `This release is no longer in ${p.displayRepository || p.sourceRepository}. `
+            + `It was last seen there on ${formatAbsolute(p.archivedAt) ?? p.archivedAt}, `
+            + 'and it was never downloaded here, so it cannot be downloaded, analysed, '
+            + 'scanned for vulnerabilities or checked for compliance now. '
+            + 'Anything already recorded against it stays readable below.'
+          }
+        />
+      )}
 
       <Row gutter={[16, 16]}>
         <Col span={24}>
@@ -1731,7 +1759,16 @@ export default function PackageDetail() {
                   </Space>
                 ),
                 children: productName && reference
-                  ? <ComplianceTab product={productName} reference={reference} repository={repository} />
+                  ? (
+                    <ComplianceTab
+                      product={productName}
+                      reference={reference}
+                      repository={repository}
+                      archivedIn={p?.archivedAt
+                        ? (p.displayRepository || p.sourceRepository)
+                        : undefined}
+                    />
+                  )
                   : null,
               },
               {

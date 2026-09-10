@@ -175,6 +175,9 @@ func (s *Server) handleRunCompliance(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.refuseIfArchived(w, r, pkg) {
+		return
+	}
 
 	progress, err := s.deps.ComplianceRunner.Start(r.Context(), compliance.Request{
 		RunID:     uuid.NewString(),

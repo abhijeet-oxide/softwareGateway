@@ -668,6 +668,9 @@ export default function Packages() {
               { value: 'PRODUCTION', label: 'In production' },
               { value: 'UNSIGNED', label: 'Unsigned' },
               { value: 'VERIFICATION FAILED', label: 'Verification failed' },
+              // Last, because it is the only one describing what the VENDOR
+              // did rather than what this system did.
+              { value: 'ARCHIVED', label: 'Archived at the source' },
             ]}
           />
         </Space>

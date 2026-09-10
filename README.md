@@ -44,6 +44,22 @@ authenticated, with no configuration. Open http://localhost:8000.
 **[Quick start](QUICKSTART.md)** covers every environment variable, how to add
 users, products and roles, and how to turn on Microsoft SSO.
 
+## Run it in a cluster
+
+```bash
+helm install swgw oci://artifactory.internal.example.com/swgw/software-gateway \
+  --version 1.4.3 --namespace swgw --create-namespace --values my-values.yaml
+```
+
+The same images, the same seeder and the same `config/` directory the two
+commands above read - as a Helm chart, reconciled by Flux from this repository.
+Adding a product or a person restarts nothing; only a code or `config.yaml`
+change rolls the fleet, and it does that without dropping a request.
+
+**[The chart](deploy/charts/software-gateway/README.md)** ·
+**[Bootstrapping a cluster](deploy/flux/README.md)** ·
+**[How a change reaches it](docs/design/30-continuous-delivery.md)**
+
 ## Documentation
 
 **Running it? [Read the Developer Guide →](docs/DEVELOPER-GUIDE.md)**

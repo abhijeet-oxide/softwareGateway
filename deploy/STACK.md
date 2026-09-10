@@ -410,6 +410,23 @@ a single build fails on its own), a smaller build context, and ignoring
 server as part of the context, so excluding it means the build cannot find its
 secret at all ([#25314](https://github.com/containers/podman/issues/25314)).
 
+## The same stack in a cluster
+
+Everything above is the compose path. The cluster path deploys the same images,
+the same `config/`, and the same seeder - as a Helm chart reconciled by Flux:
+
+```sh
+helm install swgw oci://artifactory.internal.example.com/swgw/software-gateway \
+  --version 1.4.3 --namespace swgw --create-namespace --values my-values.yaml
+```
+
+- [deploy/charts/software-gateway/README.md](charts/software-gateway/README.md) - the chart, and the values a real deployment states
+- [deploy/flux/README.md](flux/README.md) - bootstrapping a cluster
+- [docs/design/30 - Continuous delivery](../docs/design/30-continuous-delivery.md) - how a change reaches it, and what each kind costs
+
+The Entra registration above is the same either way; the redirect URI is
+`${externalUrls.identity}/idps/callback` rather than `${ZITADEL_PUBLIC_URL}`.
+
 See [docs/design/24 - Identity and Access](../docs/design/24-identity-and-access.md)
 for why it is built this way, including four environment behaviours that are
 easy to get wrong and cost real debugging time.

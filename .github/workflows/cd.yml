@@ -267,10 +267,12 @@ jobs:
           git config user.name  "software-gateway-release"
           git config user.email "noreply@github.com"
           git add "$file"
-          git commit -m "deploy(${ENVIRONMENT}): ${CHART_VERSION}
-
-          Published by CD from ${GITHUB_SHA}. Flux reconciles this pointer; no
-          cluster credential was used to produce it."
+          # Two -m flags rather than one multi-line string: a heredoc inside a
+          # YAML block scalar carries the block's indentation into the commit
+          # body, and every deployment record would be indented ten spaces.
+          git commit \
+            -m "deploy(${ENVIRONMENT}): ${CHART_VERSION}" \
+            -m "Published by CD from ${GITHUB_SHA}. Flux reconciles this pointer; no cluster credential was used to produce it."
           git push origin "HEAD:${GITHUB_REF_NAME}"
 
       # THE TAG IS LAST, and that ordering is the whole recovery story. It is

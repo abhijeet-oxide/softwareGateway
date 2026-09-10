@@ -1,6 +1,12 @@
 # Build output
 /bin/
 /dist/
+
+# `task chart:template` renders an environment's values to compare against the
+# chart. It is scratch, and it is written at the repository root because that is
+# where helm is invoked from.
+/.task-values.yaml
+
 # Compiled helpers, which have been committed by accident before. `fakeregistry`
 # is built from test/cmd/fakeregistry; `smoketmp` was a smoke-test binary.
 /fakeregistry

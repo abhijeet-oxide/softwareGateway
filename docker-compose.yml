@@ -1,5 +1,4 @@
-# =============================================================================
-# Software Gateway - complete stack, day 0.
+# ======================================================================# Software Gateway - complete stack, day 0.
 #
 #   curl -O   https://raw.githubusercontent.com/abhijeet-oxide/softwareGateway/main/deploy/docker-compose.yml
 #   curl -o .env https://raw.githubusercontent.com/abhijeet-oxide/softwareGateway/main/deploy/.env.example
@@ -80,8 +79,7 @@
 # deploy/STACK.md for what to do about that; it is podman's bug to fix, not
 # something this file can work around. Docker is unaffected: buildx streams
 # secrets over its session rather than through the context.
-# =============================================================================
-
+# ======================================================================
 name: software-gateway
 
 services:
@@ -212,6 +210,10 @@ services:
       # with a machine token rather than through the sign-in screen, so setting
       # this and re-running it puts the password box back.
       SSO_ALLOW_PASSWORD_LOGIN: ${SSO_ALLOW_PASSWORD_LOGIN:-false}
+      # A second factor is off by default: people here are provisioned and
+      # arrive through a directory, so a passkey enrolment step on the way in
+      # is a credential nobody asked for. true restores it.
+      LOGIN_REQUIRE_MFA: ${LOGIN_REQUIRE_MFA:-false}
       # HOW LONG A REMOVAL TAKES TO BITE. The Coordinator verifies tokens
       # offline and never asks whether one is still good, so a token already
       # issued works until it expires - whoever has been removed meanwhile.

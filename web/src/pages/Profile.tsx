@@ -133,7 +133,12 @@ export default function Profile() {
             </Section>
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 420px), 1fr))', gap: '0 36px' }}>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 420px), 1fr))',
+            gap: '0 36px',
+            alignItems: 'start',
+          }}>
             <div>
               <Section label="Sign-in" first>
                 <Field label="Method">{methodLabel(who?.method)}</Field>
@@ -226,13 +231,29 @@ export default function Profile() {
                 <PermissionSummary />
               </Section>
 
-              <Section label="Appearance">
-                <AppearanceSettings />
-              </Section>
-
             </div>
           </div>
         )}
+
+        {/*
+          APPEARANCE IS NOT PART OF THE ACCOUNT, so it does not sit in the
+          account's columns.
+
+          It was the last section of the right-hand column, which said two
+          wrong things at once: that changing the theme is the same KIND of
+          fact as which roles somebody holds, and - because it is the tallest
+          block on the page - it made that column run far past the left one,
+          leaving a tall empty run under Directory.
+
+          Full width, below everything, after a rule. This is a preference this
+          browser remembers; everything above it is what the tenant says about
+          this person.
+        */}
+        <div style={{ maxWidth: 960 }}>
+          <Section label="Appearance">
+            <AppearanceSettings />
+          </Section>
+        </div>
       </div>
     </SectionCard>
   )
@@ -407,8 +428,8 @@ function ProductAccessList({ products, compact }: { products: ProductAccess; com
     )
   }
   return (
-    <div style={{ display: 'grid', gap: compact ? 6 : 2 }}>
-      {products.map((p) => (
+    <div style={{ display: 'grid', gap: compact ? 6 : 0 }}>
+      {products.map((p, i) => (
         <div
           key={p.product}
           style={{
@@ -416,8 +437,16 @@ function ProductAccessList({ products, compact }: { products: ProductAccess; com
             gridTemplateColumns: 'minmax(0, 1fr) auto',
             gap: 12,
             alignItems: 'center',
-            padding: compact ? 0 : '5px 0',
-            borderBottom: compact ? undefined : `1px solid ${c.border}`,
+            // Room between a product and the next one. At 2px of gap and 5px
+            // of padding the rows sat on top of each other, so two products
+            // read as one wrapped line rather than as two grants.
+            padding: compact ? 0 : '8px 0',
+            // The rule SEPARATES rows, so the last one has nothing to separate
+            // from: a trailing border under the final product drew a line
+            // across the section that looked like the start of another.
+            borderBottom: compact || i === products.length - 1
+              ? undefined
+              : `1px solid ${c.border}`,
           }}
         >
           <Typography.Text
@@ -500,10 +529,6 @@ function PermissionSummary() {
           <div style={{ color: c.text }}>{verbs.map(verbLabel).join(', ')}</div>
         </div>
       ))}
-      <Note>
-        Held tenant-wide, or on the products listed above. Every request is checked again by the
-        Coordinator, so this describes what it will accept rather than what this screen offers.
-      </Note>
     </div>
   )
 }

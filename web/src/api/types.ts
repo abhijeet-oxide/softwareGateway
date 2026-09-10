@@ -240,6 +240,16 @@ export interface Package {
   analysisState?: 'analyzing' | 'failed'
   /** Why the last walk gave up. */
   analysisError?: string
+  /**
+   * When discovery last found this release GONE from the repository it came
+   * from. Absent while the vendor still serves it.
+   *
+   * Set only on a release that was never downloaded, and cleared the moment
+   * the tag is listed again. It is not a lifecycle state: what changed is the
+   * source, not the release - which is why `state` is untouched and this sits
+   * beside it. `deriveStatus` turns it into ARCHIVED.
+   */
+  archivedAt?: string
   signatureStatus?: SignatureStatus
   related?: RelatedArtifact[]
   /** Present on the single-package read only. Where transfer history lives. */

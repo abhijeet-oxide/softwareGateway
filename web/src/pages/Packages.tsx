@@ -12,17 +12,15 @@ import {
 import { useCan } from '../auth/permissions'
 import { ActionButton } from '../components/access'
 import {
-  deriveLocations, deriveStatus, downloadSeconds, failureReason, isLive, isPromotion, matches,
-  hasSecurityData, packageReference, promotableTargets, publishedAt, releaseHref, transferIndex,
-  verification, version, withTransfers,
+  deriveLocations, deriveStatus, failureReason, isLive, isPromotion,
+  hasSecurityData, packageReference, parseSearch, promotableTargets, publishedAt, releaseHref,
+  scoreRelease, transferIndex, verification, version, withTransfers,
 } from '../domain/derive'
 import type { Package, PackageTransfer, Product } from '../api/types'
-import { formatDuration } from '../domain/format'
-import { Value } from '../components/value'
 import {
   AnalysisTag, LocationChip, PackageName, StatusBadge, TimeAgo, VerificationBadge,
-  VersionChip,
 } from '../components/chips'
+import { CellStack } from '../components/cell'
 import { EmptyStateCard, ErrorState, SearchBar } from '../components/layout'
 import { CompareSelectionBar } from '../components/compareselect'
 import {
@@ -105,75 +103,13 @@ function ComparePick({ slot, blocked, onToggle }: {
  * download), and a menu for the rest. The menu is one button wide whatever it
  * contains, which is what stops the column growing every time a verb is added.
  */
-function RowActions({ product, pkg, config, autoProductFilter }: {
+function RowActions({ product, pkg, config }: {
   product: string
   pkg: Package
   /** The product's configuration, so the row knows where this could still go. */
   config?: Product
-  autoProductFilter: boolean
 }) {
-  const { message } = App.useApp()
-  const navigate = useNavigate()
-  const sync = useSyncPackageSecurity()
-  // Syncing reaches a third-party scanner and writes what it says, which the
-  // policies judge an INSPECTION rather than a read - the same call
-  // `:inspect` makes. It is not `software_download.request`: a reader who may
-  // not start a download may still be entitled to ask a scanner a question.
-  const mayInspect = useCan('package.inspect', { product })
-
-  // "Compare with another release" now PRE-SELECTS this one and stays here.
-  //
-  // It used to leave for a page whose first job was to ask which release the
-  // reader meant - which they had just told it by clicking this row - and whose
-  // second was to ask for the other one from a dropdown of two hundred. Both
-  // halves of that are this listing's job, and it is already open.
-  const compareHref = `/packages?compare=1`
-    + `&cmp=${encodeURIComponent(product)}`
-    + `&product=${encodeURIComponent(product)}`
-    + (autoProductFilter ? `&${COMPARISON_PRODUCT_FILTER}=1` : '')
-    // The REPOSITORY travels with the tag. One version tag exists in every
-    // repository a product watches, so a reference carrying only the tag does
-    // not name a package.
-    + `&a=${encodeURIComponent(packageReference(pkg))}`
-
-  const locationsHref = `/packages/compare?mode=locations`
-    + `&product=${encodeURIComponent(product)}`
-    + `&a=${encodeURIComponent(packageReference(pkg))}`
-
   const detail = releaseHref(product, pkg)
-  const securityHref = `${detail}${detail.includes('?') ? '&' : '?'}tab=security`
-  const security = pkg.security
-  // Not a sync whose Coordinator went away: see PackageSecuritySummary.stalled.
-  const syncing = security?.state === 'syncing' && !security.stalled
-
-  const startSync = () => sync.mutate(
-    { product, ref: packageReference(pkg), repository: pkg.sourceRepository },
-    {
-      onSuccess: (res) => {
-        message.info(res.started
-          ? `Syncing ${res.artifacts} artifacts of ${version(pkg)}.`
-          : 'A sync is already running for this release.')
-        // Straight to where the progress is. A background job somebody cannot
-        // watch is a background job they start twice.
-        navigate(securityHref)
-      },
-    },
-  )
-
-  const syncItem: MenuProps['items'] = syncing
-    ? [{ key: 'progress', label: <Link to={securityHref}>View sync progress</Link> }]
-    : security?.canSync
-      ? [{
-          key: 'sync',
-          label: security.state === '' ? 'Sync vulnerabilities' : 'Sync vulnerabilities again',
-          disabled: !mayInspect,
-          onClick: startSync,
-        }]
-      : [{
-          key: 'sync-off',
-          label: <Tooltip title={security?.reason}><span>Sync vulnerabilities</span></Tooltip>,
-          disabled: true,
-        }]
 
   // WHAT HAS HAPPENED TO THIS RELEASE, split by kind. Everything below reads
   // from this rather than from `pkg.transfers` directly: the button and the
@@ -181,13 +117,22 @@ function RowActions({ product, pkg, config, autoProductFilter }: {
   // recompute it separately.
   const history = releaseHistory(pkg)
 
+  /*
+    WHAT IS NOT ALREADY INSIDE THE RELEASE.
+
+    This menu had grown to six entries, and four of them led somewhere the
+    release's own page already offers: "View vulnerabilities" and the two sync
+    entries are the Security tab, and "Compare with another release" is the
+    Compare packages button at the top of this very table. A menu that mostly
+    restates the page it sits on is a menu a reader learns to ignore, and it
+    made the two entries that ARE only here - the transfers this release came
+    out of - the hardest to find.
+
+    "Compare across locations" is a real question this table cannot ask
+    (one release, several places, did it arrive intact) but it is not wanted
+    yet, so it is not offered yet.
+  */
   const items: MenuProps['items'] = [
-    // "View download" lives HERE now rather than in the row.
-    //
-    // Promote took its place, and that is the right trade: once a release has
-    // landed, promoting it is the thing somebody is about to do and looking at
-    // the download that brought it is the thing they might. A row has space
-    // for one of those.
     ...(history.download
       ? [{
           key: 'download',
@@ -200,19 +145,6 @@ function RowActions({ product, pkg, config, autoProductFilter }: {
           label: <Link to={`/downloads/${history.promotion.id}`}>View promotion</Link>,
         }]
       : []),
-    ...(history.download || history.promotion ? [{ type: 'divider' as const }] : []),
-    { key: 'security', label: <Link to={securityHref}>View vulnerabilities</Link> },
-    ...syncItem,
-    { type: 'divider' },
-    { key: 'compare', label: <Link to={compareHref}>Compare with another release</Link> },
-    // The OTHER comparison, and it is a different question: not "what changed
-    // between these two releases" but "did this one arrive intact". It is about
-    // ONE release, so it cannot be expressed by ticking two rows - it keeps a
-    // small form of its own, on a page that already knows which release.
-    {
-      key: 'compare-locations',
-      label: <Link to={locationsHref}>Compare across locations</Link>,
-    },
   ]
 
   return (
@@ -236,9 +168,16 @@ function RowActions({ product, pkg, config, autoProductFilter }: {
         history={history}
         promotable={promotableTargets(pkg, config).length > 0}
       />
-      <Dropdown menu={{ items }} trigger={['click']} placement="bottomRight">
-        <Button size="small" icon={<MoreOutlined />} aria-label="More actions" loading={sync.isPending} />
-      </Dropdown>
+      {/*
+        No entries, no button. A release nothing has happened to yet has
+        nothing behind the dots, and a control that opens an empty menu is a
+        control that has to be tried before it can be dismissed.
+      */}
+      {items.length > 0 && (
+        <Dropdown menu={{ items }} trigger={['click']} placement="bottomRight">
+          <Button size="small" icon={<MoreOutlined />} aria-label="More actions" />
+        </Dropdown>
+      )}
     </Space>
   )
 }
@@ -545,11 +484,36 @@ export default function Packages() {
     const relevant = forVulnerabilities ? byStatus.filter((r) => hasSecurityData(r.pkg)) : byStatus
 
     if (!search.trim()) return relevant
-    // The version as shown AND as the vendor spells it, plus the repository -
-    // a product publishes one version tag into every repository it watches, so
-    // the repository is frequently the only thing telling two rows apart.
-    return relevant.filter((r) => matches(
-      search, version(r.pkg), r.pkg.tag, r.pkg.displayRepository, r.pkg.sourceRepository))
+
+    /*
+      RANKED, not just filtered.
+
+      A release is written down three ways - `chart:1.4.2`, `chart@1.4.2` and
+      `chart 1.4.2` - and a substring test answered "nothing found" for a query
+      pasted out of the very thing being searched for. parseSearch reads all
+      three (domain/derive.ts), and the score puts the release actually NAMED
+      by the query above one that merely contains the same letters, which is
+      the difference between a search box a reader trusts and one they give up
+      on and start scrolling past.
+
+      The name is the repository - a product publishes one version tag into
+      every repository it watches, so the repository is frequently the only
+      thing telling two rows apart - and the product is searchable too, since
+      an unscoped listing spans all of them.
+    */
+    const q = parseSearch(search)
+    return relevant
+      .map((r) => ({
+        r,
+        score: scoreRelease(q, {
+          name: r.pkg.displayRepository || r.pkg.sourceRepository,
+          version: version(r.pkg),
+          others: [r.pkg.tag, r.product.displayName, r.product.productId],
+        }),
+      }))
+      .filter((x) => x.score >= 0)
+      .sort((a, b) => b.score - a.score)
+      .map((x) => x.r)
   }, [allRows, status, search, forVulnerabilities])
 
   const update = (key: string, value?: string) => {
@@ -662,7 +626,7 @@ export default function Packages() {
           <SearchBar
             value={search}
             onChange={setSearch}
-            placeholder="Search by version or repository"
+            placeholder="Search name, name:version, name@version"
             matched={rows.length}
             total={selected
               ? (packages.data?.packages?.length ?? 0)
@@ -704,6 +668,9 @@ export default function Packages() {
               { value: 'PRODUCTION', label: 'In production' },
               { value: 'UNSIGNED', label: 'Unsigned' },
               { value: 'VERIFICATION FAILED', label: 'Verification failed' },
+              // Last, because it is the only one describing what the VENDOR
+              // did rather than what this system did.
+              { value: 'ARCHIVED', label: 'Archived at the source' },
             ]}
           />
         </Space>
@@ -772,7 +739,7 @@ export default function Packages() {
           title={search.trim() || status ? 'Nothing matches this filter' : 'No packages discovered yet'}
           explanation={
             search.trim()
-              ? 'No release on this page matches what you typed. The search covers the version and the repository it came from.'
+              ? 'No release on this page matches what you typed. The search covers the package, its version and the product - written as name:version, name@version or name version.'
               : status
                 ? `No release currently has this status. Clear the filter to see everything discovered${selected ? ' for this product' : ''}.`
                 : 'Discovery polls the vendor registries on a schedule. Run it from the Overview to look immediately.'
@@ -869,138 +836,89 @@ export default function Packages() {
                   )
                 },
               }] : []),
-              /*
-                THE PRODUCT COLUMN EXISTS ONLY WHEN IT VARIES.
-
-                Unscoped, this listing spans every product and the column is
-                the only thing telling two identically-versioned rows apart.
-                Scoped by the select above it, every row carries the same
-                value - and that costs 235px of a table already wider than the
-                window, which is paid for by the pinned Actions column
-                covering whatever falls off the right-hand end. A column that
-                cannot distinguish two rows is not worth a reader losing one
-                that can.
-              */
-              ...(selected ? [] : [{
-                title: 'Product',
-                width: 190,
-                render: (_: unknown, r: (typeof rows)[number]) => (
-                  <span
-                    style={{
-                      display: 'block', whiteSpace: 'nowrap',
-                      overflow: 'hidden', textOverflow: 'ellipsis',
-                    }}
-                    title={r.product.displayName || r.product.productId}
-                  >
-                    {r.product.displayName || r.product.productId}
-                  </span>
-                ),
-              }]),
               {
                 /*
-                  The package's own name, in its own column. It used to sit
-                  under the version as a subtitle, which read as a footnote -
-                  and it is not one: a product publishes one version tag into
-                  every repository it watches, so this is frequently the only
-                  thing telling two rows apart.
+                  ONE COLUMN CARRIES THE IDENTITY: what it is, whose it is,
+                  which release.
 
-                  Pinned, and first, because a column called Product used to be.
-                  That column drew the same chip on every row: the listing is
-                  scoped to exactly ONE product by the select above it, so the
-                  chip could not tell two rows apart and cost 130px of a table
-                  that was already 400px wider than the window - which is what
-                  pushed the pinned Actions column on top of its neighbour.
+                  These were three columns - Product, Name, Version - and
+                  between them they took over half the width of a table already
+                  wider than a laptop window. The cost was paid by the columns
+                  a reader is actually deciding on: Status, Vulnerabilities and
+                  Location fell off the right-hand end, under the pinned
+                  Actions column, and answering "is this one safe to ship"
+                  meant scrolling a table sideways.
 
-                  No hard width here: the tablekit owns the width and resize
-                  behaviour, and the label should widen or narrow with the column
-                  instead of staying locked to a pixel value.
+                  Stacked, the same three facts cost one column. The name leads
+                  because it is what tells two rows apart - a product publishes
+                  one version tag into every repository it watches - and the
+                  product and version sit under it in the smaller type
+                  CellStack gives every stacked cell in the product, so this
+                  table's rows are the same height as the Policies table's.
+
+                  The product line appears only when the listing spans more
+                  than one, for the reason the Product COLUMN used to appear
+                  only then: a value identical on every row tells nobody
+                  anything.
                 */
-                title: 'Name',
+                title: 'Release',
                 fixed: 'left',
                 render: (_, r) => (
                   <Link
                     to={releaseHref(r.product.productId, r.pkg)}
-                    style={{
-                      display: 'block',
-                      width: '100%',
-                      minWidth: 0,
-                      maxWidth: '100%',
-                    }}
+                    style={{ display: 'block', width: '100%', minWidth: 0, maxWidth: '100%' }}
                   >
-                    <PackageName pkg={r.pkg} />
+                    <CellStack
+                      title={<PackageName pkg={r.pkg} />}
+                      lines={[
+                        selected ? null : (r.product.displayName || r.product.productId),
+                        version(r.pkg),
+                      ]}
+                    />
                   </Link>
                 ),
               },
-              {
-                title: 'Version',
-                width: 160,
-                render: (_, r) => (
-                  <VersionChip
-                    product={r.product.productId}
-                    version={version(r.pkg)}
-                    pkg={r.pkg}
-                    showRepository={false}
-                  />
-                ),
-              },
-              /*
-                THE COLUMN THE DECISION IS BEING MADE ON COMES SECOND.
-
-                Column order is a priority order here - the table is wider than
-                a laptop window and whatever sits last is what the pinned
-                Actions column covers. Somebody choosing two releases to compare
-                VULNERABILITIES is reading the counts, and leaving them where
-                they are for the contents intent put the deciding column half
-                behind another one.
-              */
-              ...(forVulnerabilities ? [{
-                title: 'Vulnerabilities',
-                width: 240,
-                render: (_: unknown, r: (typeof rows)[number]) => (
-                  <RowVulnerability
-                    product={r.product.productId}
-                    pkg={r.pkg}
-                    onSync={() => syncNotSynced(r.product.productId, r.pkg)}
-                  />
-                ),
-              }] : []),
               {
                 title: 'Published',
                 width: 118,
                 render: (_, r) => <TimeAgo at={r.pkg.publishedAt || r.pkg.discoveredAt} />,
               },
-              { title: 'Signed', width: 120, render: (_, r) => <VerificationBadge state={verification(r.pkg)} /> },
               {
+                /*
+                  EVERY STATE THIS RELEASE IS IN, together.
+
+                  Signed was its own 120px column, which spent a full column of
+                  a too-wide table on one tag - and put a release's signature
+                  somewhere other than the rest of what is true about it. Where
+                  it is in its life, whether it has been analysed and whether
+                  it is signed are three answers to one question, so they are
+                  three tags in one place.
+                */
                 title: 'Status',
-                width: 130,
+                width: 210,
                 render: (_, r) => (
                   <Space size={4} wrap>
                     <StatusBadge status={r.status} reason={failureReason(r.pkg)} />
                     <AnalysisTag pkg={r.pkg} />
+                    <VerificationBadge state={verification(r.pkg)} />
                   </Space>
                 ),
               },
               {
                 /*
-                  Always on, and ahead of Location and Download time.
+                  Always on.
 
-                  The table is wider than a laptop window, so column order is a
-                  priority order: whatever sits last is what the pinned Actions
-                  column covers. This one was last but one, which made the
-                  column this whole feature exists for the one nobody could
-                  see.
-
-                  It costs nothing to keep.
                   The counts come from the listing response itself, written by
                   a sync rather than fetched per row - which is what made this
                   a toggle before, and a toggle is a design apologising for
-                  itself.
+                  itself. It used to be hoisted ahead of the other columns
+                  while choosing two releases to compare on vulnerabilities,
+                  because whatever sat last was covered by the pinned Actions
+                  column; folding three identity columns into one left room for
+                  every column at once, so there is nothing left to hoist.
                 */
                 title: 'Vulnerabilities',
                 width: 240,
-                // Moved to second while choosing on vulnerabilities, so it is
-                // rendered once either way.
-                hidden: forVulnerabilities,
                 render: (_, r) => (
                   <RowVulnerability
                     product={r.product.productId}
@@ -1020,16 +938,6 @@ export default function Packages() {
                 ),
               },
               {
-                title: 'Download Time',
-                width: 140,
-                render: (_, r) => {
-                  const s = downloadSeconds(r.pkg)
-                  return s === undefined
-                    ? <Value reason="This release has not been downloaded.">{null}</Value>
-                    : <Value>{formatDuration(s)}</Value>
-                },
-              },
-              {
                 title: 'Actions',
                 fixed: 'right',
                 width: 190,
@@ -1038,7 +946,6 @@ export default function Packages() {
                     product={r.product.productId}
                     pkg={r.pkg}
                     config={r.product}
-                    autoProductFilter={!selected}
                   />
                 ),
               },

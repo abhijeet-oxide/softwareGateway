@@ -935,6 +935,9 @@ func toAPIPackage(productName string, row store.PackageRow) v1.Package {
 	}
 	p.AnalysisState = row.AnalysisState
 	p.AnalysisError = row.AnalysisError
+	if row.ArchivedAt != nil {
+		p.ArchivedAt = *row.ArchivedAt
+	}
 	if row.ExpandedAt != nil {
 		p.ExpandedAt = *row.ExpandedAt
 	}
@@ -1434,6 +1437,25 @@ func compareSideDTO(item *compare.Item) *v1.CompareSide {
 //
 // Idempotent: the tree under a digest cannot change, so a second call fetches
 // nothing and says so.
+// refuseIfArchived answers, and reports true, when the release was withdrawn
+// by the vendor and never downloaded here.
+//
+// Analysis, a vulnerability sync and a compliance run all need the release's
+// own bytes from the SOURCE registry - the one that no longer serves them.
+// Each would otherwise start, reach the registry, and fail on a 404 that reads
+// as an outage. The three share this so they cannot drift into three
+// different explanations of one fact.
+func (s *Server) refuseIfArchived(w http.ResponseWriter, r *http.Request, pkg store.PackageRow) bool {
+	if pkg.ArchivedAt == nil {
+		return false
+	}
+	Error(w, r, v1.CodeFailedPrecondition,
+		"This release is no longer published in "+pkg.SourceRepository+
+			", and was never downloaded here, so there is nothing to read. "+
+			"It was last seen there on "+*pkg.ArchivedAt+".")
+	return true
+}
+
 func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 	productName := chi.URLParam(r, "product")
 	if !s.productExists(w, r, productName) {
@@ -1443,6 +1465,9 @@ func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 
 	pkg, ok := s.resolvePackage(w, r, productName, ref)
 	if !ok {
+		return
+	}
+	if s.refuseIfArchived(w, r, pkg) {
 		return
 	}
 

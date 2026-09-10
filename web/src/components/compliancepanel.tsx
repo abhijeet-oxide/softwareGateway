@@ -175,10 +175,16 @@ const SUMMARY_FOR_VIEW: Partial<Record<ResultView, SummaryKey>> = {
 /** How the rows on screen are ordered. */
 type ResultSort = 'severity' | 'chart' | 'check' | 'resource'
 
-export function ComplianceTab({ product, reference, repository }: {
+export function ComplianceTab({ product, reference, repository, archivedIn }: {
   product: string
   reference: string
   repository?: string
+  /**
+   * The source repository this release was withdrawn from, when it was - so
+   * the empty state can say why a run cannot be started rather than offering
+   * one that will be refused.
+   */
+  archivedIn?: string
 }) {
   /*
    * WHAT IS ON SCREEN, and how much of it the server has to answer for.
@@ -376,6 +382,30 @@ export function ComplianceTab({ product, reference, repository }: {
    * not to have worked.
    */
   if (data && !data.run && !data.progress) {
+    /*
+     * A WITHDRAWN release cannot be checked, so it is not offered.
+     *
+     * A run renders every chart, which means fetching them from the source
+     * registry - the one that no longer serves this release. The button would
+     * be accepted, claim the release, reach the registry and fail on a 404.
+     * The reason belongs where the button was, not in a toast afterwards.
+     */
+    if (archivedIn) {
+      return (
+        <EmptyStateCard
+          title="This release cannot be checked"
+          explanation={
+            `It is no longer published in ${archivedIn} and was never downloaded here, `
+            + 'so there are no charts to render. Compliance cannot be run against it.'
+          }
+          action={
+            <Link to="/policies" style={{ fontSize: 12, color: c.brand }}>
+              See what would be checked
+            </Link>
+          }
+        />
+      )
+    }
     return (
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <HelmMissingNotice helm={data.helm} />

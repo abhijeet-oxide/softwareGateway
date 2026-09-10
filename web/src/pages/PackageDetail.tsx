@@ -6,7 +6,7 @@ import { Alert, App, Button, Card, Col, Descriptions, Divider, Modal, Row, Space
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
 import {
-  DatabaseOutlined, FolderOutlined, LoadingOutlined, PackageOutlined,
+  CompareOutlined, DatabaseOutlined, FolderOutlined, LoadingOutlined, PackageOutlined,
   SafetyCertificateOutlined, ScaleOutlined,
 } from '../icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -21,7 +21,7 @@ import {
   deriveStatus, downloadedAt, failureReason, isLive, matches, packageReference, promotableTargets,
   promotedAt, repositoryOf, repositoryUrl, titleCase, verification, version,
 } from '../domain/derive'
-import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
+import { bytes, formatAbsolute, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
 import { AnalyzeIcon, ARTIFACT_ICONS, DownloadIcon, Icon } from '../components/icons'
 import { WorkingBar } from '../components/progress'
@@ -36,7 +36,7 @@ import { PromoteButton } from '../components/promote'
 import { ComplianceTab } from '../components/compliancepanel'
 import { SecurityTab } from '../components/securitypanel'
 import { COMPARISON_PRODUCT_FILTER } from '../domain/compare'
-import { EmptyState, c, mono } from '../uikit'
+import { EmptyArt, EmptyState, c, mono } from '../uikit'
 import type {
   Artifact, CancelAnalysisResponse, InspectPackageResponse, Package, PackageFile, PackageTransfer,
   Product, RelatedArtifact,
@@ -596,18 +596,29 @@ function ComponentTable({ artifacts, kind }: { artifacts: Artifact[]; kind: stri
 
   return (
     <Space direction="vertical" size={8} style={{ width: '100%' }}>
-      <SearchBar
-        value={search}
-        onChange={setSearch}
-        placeholder={`Search ${kind.toLowerCase()} by name, tag or digest`}
-        matched={rows.length}
-        total={artifacts.length}
-        width={320}
-      />
-
       <DataTable<Artifact>
         tableEnhancedKey="release-artifacts"
         allow_export
+        /*
+          The search sits IN the toolbar, beside the export.
+
+          Both act on the same rows - what the reader has narrowed to is what
+          the file should contain - and they were on two lines, the search
+          above the table and the kit's toolbar below it holding one button.
+          One row, and the export offers CSV, Excel and JSON of exactly the
+          contents on screen.
+        */
+        toolbarExtra={
+          <SearchBar
+            value={search}
+            onChange={setSearch}
+            placeholder={`Search ${kind.toLowerCase()} by name, tag or digest`}
+            matched={rows.length}
+            total={artifacts.length}
+            width={320}
+            style={{ marginBottom: 0 }}
+          />
+        }
         size="small"
         dataSource={rows}
         rowKey={(a) => a.artifactId}
@@ -713,7 +724,30 @@ function FileTree({
       />
 
       {shown.length === 0 ? (
-        <EmptyState title="No file matches that" />
+        /*
+          TWO DIFFERENT NOTHINGS, and they need different answers.
+
+          "No file matches that" was shown for both, so a release that simply
+          carries no files read as a failed search over files that were there
+          - and offered no way out, because there was nothing to clear. The
+          shared empty state carries the platform's own illustration, the way
+          every other absence in this product does.
+        */
+        search.trim() ? (
+          <EmptyState
+            art={<EmptyArt size={110} />}
+            title="No files match that search"
+            hint={`Nothing in this release's ${files.length.toLocaleString()} file${files.length === 1 ? '' : 's'} matches what you typed.`}
+            actionLabel="Clear search"
+            onAction={() => setSearch('')}
+          />
+        ) : (
+          <EmptyState
+            art={<EmptyArt size={110} />}
+            title="This release carries no files"
+            hint="Its components are images rather than file bundles. The Images tab lists what it does carry."
+          />
+        )
       ) : (
         <Tree
           treeData={tree}
@@ -1241,7 +1275,14 @@ export default function PackageDetail() {
             <Link to={p
               ? `/packages?compare=1&cmp=${encodeURIComponent(productName!)}&product=${encodeURIComponent(productName!)}&${COMPARISON_PRODUCT_FILTER}=1&a=${encodeURIComponent(packageReference(p))}`
               : '/packages'}>
-              <Button>Compare</Button>
+              {/*
+                An icon, because the two buttons beside it have one. A row of
+                three actions where one is bare reads as an accident rather
+                than as a difference, and it is the same glyph the listing's
+                own Compare packages button uses - the same picture meaning the
+                same thing.
+              */}
+              <Button icon={<CompareOutlined />}>Compare</Button>
             </Link>
             {/*
               PROMOTE sits beside Download rather than under a menu, and it is
@@ -1263,7 +1304,18 @@ export default function PackageDetail() {
               disabled control that never says why is how people conclude a
               feature is broken.
             */}
-            {p && promotableTargets(p, prod).length > 0 && (
+            {/*
+              AND it has actually landed. Promotion copies a release from the
+              internal repositories to a production one, so a release that was
+              never downloaded has nothing to copy: the button could only fail,
+              and it failed late, after a dialog and a confirmation.
+
+              This is a different absence from the one below. Nowhere left to
+              send it means the work is DONE; not downloaded means it has not
+              started, and the Download button beside this one is the thing to
+              press.
+            */}
+            {p && downloadedAt(p) && promotableTargets(p, prod).length > 0 && (
               // The permission is the button's own now - promotion is
               // `software_download.promote`, which is an owner's and an
               // administrator's, and is a narrower thing than being allowed to
@@ -1285,8 +1337,10 @@ export default function PackageDetail() {
                 scope={{ product: productName }}
                 type="primary"
                 icon={<Icon as={DownloadIcon} title="Download" />}
-                disabled={!p}
-                title="Downloads the whole release into the internal repositories and configures the mirror OpenShift pulls from."
+                disabled={!p || Boolean(p.archivedAt)}
+                title={p?.archivedAt
+                  ? `This release is no longer published in ${p.displayRepository || p.sourceRepository}, so there is nothing to download.`
+                  : 'Downloads the whole release into the internal repositories and configures the mirror OpenShift pulls from.'}
                 onClick={() => setConfirming(true)}
               >
                 Download
@@ -1295,6 +1349,32 @@ export default function PackageDetail() {
           </Space>
         }
       />
+
+      {/*
+        WITHDRAWN AT THE SOURCE, said plainly and at the top.
+
+        Everything below this - the contents, the security tab, the compliance
+        tab - describes a release we can no longer fetch, and the controls that
+        would fetch it are disabled. Without a sentence saying why, a page of
+        greyed-out buttons reads as a permissions problem or a broken
+        deployment. Naming the repository matters because that is what somebody
+        would go and check.
+      */}
+      {p?.archivedAt && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="No longer published by the vendor"
+          description={
+            `This release is no longer in ${p.displayRepository || p.sourceRepository}. `
+            + `It was last seen there on ${formatAbsolute(p.archivedAt) ?? p.archivedAt}, `
+            + 'and it was never downloaded here, so it cannot be downloaded, analysed, '
+            + 'scanned for vulnerabilities or checked for compliance now. '
+            + 'Anything already recorded against it stays readable below.'
+          }
+        />
+      )}
 
       <Row gutter={[16, 16]}>
         <Col span={24}>
@@ -1679,7 +1759,16 @@ export default function PackageDetail() {
                   </Space>
                 ),
                 children: productName && reference
-                  ? <ComplianceTab product={productName} reference={reference} repository={repository} />
+                  ? (
+                    <ComplianceTab
+                      product={productName}
+                      reference={reference}
+                      repository={repository}
+                      archivedIn={p?.archivedAt
+                        ? (p.displayRepository || p.sourceRepository)
+                        : undefined}
+                    />
+                  )
                   : null,
               },
               {

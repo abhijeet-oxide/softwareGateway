@@ -14,6 +14,22 @@
 ARG GO_IMAGE=golang:1.25.14
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 
+# Helm, fetched in its own stage and copied into the runtime image.
+#
+# The Coordinator renders charts by running `helm template` as a subprocess -
+# see internal/compliance/render/helm.go for why it is a subprocess and not the
+# Helm Go SDK. Without the binary on PATH every check that needs a rendered
+# manifest reports `error` and the run is inconclusive, which is correct
+# behaviour and useless in a deployment.
+#
+# 3.21.3 rather than the newest minor: helm's template engine is what turns a
+# chart into the objects a compliance finding is written against, so the
+# most-patched line is worth more here than the newest one. Overridable, and
+# the checksum must be overridden with it.
+ARG HELM_VERSION=3.21.3
+ARG HELM_SHA256_amd64=15e041a93a590dce8100f39385cd98c84a765c9e36aeeb9e2dc6ff9e4769e2e0
+ARG HELM_SHA256_arm64=67f58155079ff9ffab98ba5c88daff0ed9b542f3a4732f5dd426dde7dd0f5244
+
 FROM ${GO_IMAGE} AS build
 WORKDIR /src
 
@@ -62,11 +78,52 @@ RUN CGO_ENABLED=0 go build -trimpath \
         -X github.com/abhijeet-oxide/softwareGateway/internal/platform/version.Date=${BUILD_DATE}" \
       -o /out/coordinator ./cmd/coordinator
 
+# --- helm ---------------------------------------------------------------------
+#
+# A separate stage so the download is cached independently of the Go build, and
+# so nothing but the verified binary reaches the runtime image.
+#
+# The checksum is PINNED here rather than read from the .sha256sum file beside
+# the tarball: fetching both from the same host means whoever controls the host
+# controls both, and the verification proves nothing. TARGETARCH is supplied by
+# buildkit, so one Dockerfile builds a correct image for either architecture.
+FROM ${GO_IMAGE} AS helm
+ARG HELM_VERSION
+ARG HELM_SHA256_amd64
+ARG HELM_SHA256_arm64
+ARG TARGETARCH
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=
+ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} NO_PROXY=${NO_PROXY} \
+    http_proxy=${HTTP_PROXY} https_proxy=${HTTPS_PROXY} no_proxy=${NO_PROXY}
+COPY deploy/certs/ /usr/local/share/ca-certificates/extra/
+RUN if ls /usr/local/share/ca-certificates/extra/*.crt >/dev/null 2>&1; then \
+      update-ca-certificates; \
+    fi
+RUN set -eu; \
+    arch="${TARGETARCH:-amd64}"; \
+    case "$arch" in \
+      amd64) want="$HELM_SHA256_amd64" ;; \
+      arm64) want="$HELM_SHA256_arm64" ;; \
+      *) echo "no pinned helm checksum for architecture $arch" >&2; exit 1 ;; \
+    esac; \
+    tarball="helm-v${HELM_VERSION}-linux-${arch}.tar.gz"; \
+    curl -fsSL -o "/tmp/$tarball" "https://get.helm.sh/$tarball"; \
+    echo "$want  /tmp/$tarball" | sha256sum -c -; \
+    tar -xzf "/tmp/$tarball" -C /tmp; \
+    install -m 0755 "/tmp/linux-${arch}/helm" /out-helm; \
+    /out-helm version --short
+
 # Overridable for an internal registry or pull-through proxy. Pinned by digest
 # would be stronger still; :nonroot is what upstream documents and what the
 # published deployment manifests use.
 FROM ${RUNTIME_IMAGE}
 COPY --from=build /out/coordinator /coordinator
+# helm is a static Go binary, which is why it runs in a distroless STATIC
+# image at all. It goes on PATH under its own name because that is what
+# render.Helm looks for when no binary is configured.
+COPY --from=helm /out-helm /usr/local/bin/helm
 USER nonroot:nonroot
 EXPOSE 8080
 ENTRYPOINT ["/coordinator"]

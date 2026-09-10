@@ -94,6 +94,25 @@ func (s *Server) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	/* A RELEASE THE VENDOR HAS TAKEN DOWN cannot be fetched, so it is refused
+	 * here rather than by the registry.
+	 *
+	 * Without this the request is accepted, a transfer is created, workers
+	 * lease it, and it fails against a 404 - which reads as an outage rather
+	 * than as the plain fact that the bytes are gone. Refusing at the door
+	 * says the true thing at the moment somebody can still act on it.
+	 *
+	 * Only a release nothing landed for is ever archived (see
+	 * Packages.ArchiveVanishedTags), so this can never block a promotion of a
+	 * copy we already hold. */
+	if pkg.ArchivedAt != nil {
+		Error(w, r, v1.CodeFailedPrecondition,
+			"This release is no longer published in "+pkg.SourceRepository+
+				", so it cannot be downloaded. It was last seen there on "+
+				*pkg.ArchivedAt+", and was never downloaded here.")
+		return
+	}
+
 	create := transfer.CreateRequest{
 		Product:       req.Product,
 		Package:       req.Package,

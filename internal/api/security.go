@@ -557,6 +557,9 @@ func (s *Server) handleSyncPackageSecurity(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	if s.refuseIfArchived(w, r, pkg) {
+		return
+	}
 
 	target := s.securityTargetFor(r.Context(), productName, pkg)
 	if !target.Available {

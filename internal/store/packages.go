@@ -95,6 +95,20 @@ type PackageRow struct {
 	AnalysisState string
 	AnalysisError string
 
+	// ArchivedAt is when discovery last found this release GONE from the
+	// repository it came from, or nil while the vendor still serves it.
+	//
+	// Set only on a release that was never downloaded, and cleared the moment
+	// the tag is listed again - see Packages.ArchiveVanishedTags. It is not a
+	// state on the package's lifecycle: what changed is the SOURCE, not the
+	// release, which is why it sits beside `state` rather than in it.
+	//
+	// *string, not *time.Time, for the reason every other timestamp on this
+	// row is: SQLite stores these as TEXT, and scanning TEXT into a
+	// *time.Time fails at run time on the first NON-NULL value - which no
+	// test with an empty column ever reaches.
+	ArchivedAt *string
+
 	// ExpandedAt is when this package's manifest tree was last fully walked,
 	// or nil if it never has been.
 	//
@@ -607,6 +621,79 @@ func (p *Packages) EnsureRepository(
 // Only rows this source discovered are eligible: `managed_by = 'discovery'`
 // protects a human's declaration from being switched off because a catalog
 // call failed or a filter changed.
+// ArchiveVanishedTags records which releases the source repository no longer
+// serves, and un-records the ones it serves again.
+//
+// `present` is every tag the repository actually has, as this scan listed it.
+// The CALLER must only pass a set from a listing that SUCCEEDED: a repository
+// whose listing failed has an empty set, and an empty set here means "the
+// vendor withdrew everything". internal/discovery/scanner.go never puts a
+// failed repository into listOutcome.tags, which is what makes that safe.
+//
+// Only a release that was never downloaded is marked. One already in the
+// internal registries is unaffected by the vendor withdrawing it upstream: we
+// have it, it can still be promoted, and calling it archived would be a lie
+// about our own copy. 'discovered' and 'failed' are exactly the states in
+// which nothing landed - queued and transferring are in flight and are left
+// alone, because a transfer that is about to fail should fail as a transfer
+// and say so, rather than have its package quietly relabelled underneath it.
+//
+// Returns how many were archived and how many were restored.
+func (p *Packages) ArchiveVanishedTags(
+	ctx context.Context, repoID int64, present map[string]bool,
+) (archived int64, restored int64, err error) {
+	tags := make([]any, 0, len(present)+1)
+	tags = append(tags, repoID)
+	placeholders := make([]byte, 0, len(present)*2)
+	for tag := range present {
+		if len(placeholders) > 0 {
+			placeholders = append(placeholders, ',')
+		}
+		placeholders = append(placeholders, '?')
+		tags = append(tags, tag)
+	}
+
+	// --- gone: mark it ---
+	mark := `
+		UPDATE packages
+		   SET archived_at = ` + p.dialect.Now() + `, updated_at = ` + p.dialect.Now() + `
+		 WHERE source_repo_id = ?
+		   AND archived_at IS NULL
+		   AND state IN ('discovered','failed')`
+	if len(present) > 0 {
+		mark += " AND tag NOT IN (" + string(placeholders) + ")"
+	}
+	res, err := p.db.ExecContext(ctx, p.dialect.Rewrite(mark), tags...)
+	if err != nil {
+		return 0, 0, fmt.Errorf("archive vanished releases in repository %d: %w", repoID, err)
+	}
+	if n, rErr := res.RowsAffected(); rErr == nil {
+		archived = n
+	}
+
+	// --- back again: clear it ---
+	//
+	// A vendor can restore a tag, and a registry can lie by omission for one
+	// scan - a proxy serving a truncated catalogue, a paging bug. Clearing on
+	// the way back means neither needs anybody's attention.
+	if len(present) > 0 {
+		clear := `
+			UPDATE packages
+			   SET archived_at = NULL, updated_at = ` + p.dialect.Now() + `
+			 WHERE source_repo_id = ?
+			   AND archived_at IS NOT NULL
+			   AND tag IN (` + string(placeholders) + `)`
+		res, err := p.db.ExecContext(ctx, p.dialect.Rewrite(clear), tags...)
+		if err != nil {
+			return archived, 0, fmt.Errorf("restore returned releases in repository %d: %w", repoID, err)
+		}
+		if n, rErr := res.RowsAffected(); rErr == nil {
+			restored = n
+		}
+	}
+	return archived, restored, nil
+}
+
 func (p *Packages) DeactivateDiscoveredRepositories(
 	ctx context.Context, productID int64, registryHost string, keep []string,
 ) (int64, error) {
@@ -698,6 +785,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
 		       COALESCE(pk.display_tag,''), pk.expanded_at, pk.accessory_of,
 		       COALESCE(pk.analysis_state,''), COALESCE(pk.analysis_error,''),
+		       pk.archived_at,
 		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
@@ -774,6 +862,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 			&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
 			&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
 			&r.ExpandedAt, &r.AccessoryOf, &r.AnalysisState, &r.AnalysisError,
+			&r.ArchivedAt,
 			&r.SourceRepository, &r.DisplayRepository,
 		); err != nil {
 			return nil, fmt.Errorf("scan package row: %w", err)
@@ -909,6 +998,7 @@ func (p *Packages) matchPackages(ctx context.Context, productName string, ref Pa
 		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
 		       COALESCE(pk.display_tag,''), pk.expanded_at, pk.accessory_of,
 		       COALESCE(pk.analysis_state,''), COALESCE(pk.analysis_error,''),
+		       pk.archived_at,
 		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
@@ -963,6 +1053,7 @@ func (p *Packages) matchPackages(ctx context.Context, productName string, ref Pa
 			&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
 			&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
 			&r.ExpandedAt, &r.AccessoryOf, &r.AnalysisState, &r.AnalysisError,
+			&r.ArchivedAt,
 			&r.SourceRepository, &r.DisplayRepository,
 		); err != nil {
 			return nil, fmt.Errorf("scan package row: %w", err)
@@ -1220,6 +1311,7 @@ func (p *Packages) GetPackageByID(ctx context.Context, id int64) (PackageRow, er
 		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
 		       COALESCE(pk.display_tag,''), pk.expanded_at, pk.accessory_of,
 		       COALESCE(pk.analysis_state,''), COALESCE(pk.analysis_error,''),
+		       pk.archived_at,
 		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, '')
 		  FROM packages pk
 		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
@@ -1232,6 +1324,7 @@ func (p *Packages) GetPackageByID(ctx context.Context, id int64) (PackageRow, er
 		&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
 		&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
 		&r.ExpandedAt, &r.AccessoryOf, &r.AnalysisState, &r.AnalysisError,
+		&r.ArchivedAt,
 		&r.SourceRepository, &r.DisplayRepository)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PackageRow{}, ErrNotFound

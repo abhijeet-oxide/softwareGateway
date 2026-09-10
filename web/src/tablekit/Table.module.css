@@ -529,3 +529,37 @@
     animation: none;
   }
 }
+
+/* A table whose content fits its box must not offer to scroll.
+ *
+ * The table LAYOUT is untouched - `scroll.x: max-content` still lets a resized
+ * column push the table wider than its container, which is the whole point of
+ * resizable columns. Only the overflow is clamped, and only while the measured
+ * content is within a rounding error of the box (see the ResizeObserver in
+ * Table.tsx). Clamping paint rather than layout is what keeps this from
+ * oscillating: removing `max-content` would relayout the table, which could
+ * stop it overflowing, which would put `max-content` back.
+ *
+ * scrollbar-width covers Firefox, which reserves a gutter and would otherwise
+ * leave a dead grey strip under a table that has nothing to scroll. */
+.fitsX :global(.ant-table-content),
+.fitsX :global(.ant-table-body) {
+  overflow-x: hidden !important;
+  scrollbar-width: none;
+}
+
+.fitsX :global(.ant-table-content)::-webkit-scrollbar:horizontal,
+.fitsX :global(.ant-table-body)::-webkit-scrollbar:horizontal {
+  display: none;
+}
+
+/* The caller's own controls, at the start of the toolbar row.
+   margin-right: auto keeps them left while the kit's export and column
+   controls stay pinned to the right, whatever either side contains. */
+.toolbarExtra {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-right: auto;
+  min-width: 0;
+}

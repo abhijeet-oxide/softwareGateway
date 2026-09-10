@@ -69,6 +69,7 @@ type StyleName =
   | "densityCompact"
   | "densityMiddle"
   | "dragButton"
+  | "fitsX"
   | "headerDragOverLeft"
   | "headerDragOverRight"
   | "headerHover"
@@ -83,6 +84,7 @@ type StyleName =
   | "titleRoot"
   | "titleText"
   | "toolbar"
+  | "toolbarExtra"
   | "toolbarButton"
   | "toolbarDropdown"
   | "toolbarExternal"
@@ -140,6 +142,15 @@ export type TableEnhancedProps<RecordType extends AnyRecord = AnyRecord> =
     defaultColumnWidth?: number;
     showColumnControls?: "always" | "hover" | "off";
     toolbarPlacement?: "inside" | "outside";
+    /**
+     * The caller's own controls, rendered at the start of the toolbar row.
+     *
+     * A table's search acts on the same rows its export does, so the two
+     * belong on one line. Without this the call site had to put its search
+     * above the table and the kit's toolbar sat under it as a second, emptier
+     * row. Supplying it also turns the toolbar on by itself.
+     */
+    toolbarExtra?: React.ReactNode;
     tableEnhancedDensity?: "comfortable" | "middle" | "compact";
     tableEnhancedBorderedHeader?: boolean;
     storage?: Storage;
@@ -2098,6 +2109,8 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
     scroll,
     className,
     dataSource,
+    pagination,
+    toolbarExtra,
     onTableEnhancedColumnResize,
     onTableEnhancedColumnReorder,
     onTableEnhancedColumnPin,
@@ -2946,6 +2959,63 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
     };
   }, [scroll]);
 
+  /* A table that FITS must not offer to scroll.
+   *
+   * `scroll.x: max-content` is what makes a resized column able to push the
+   * table wider than its container, so it cannot simply be dropped. But it
+   * also makes Ant Design wrap the table in an `overflow: auto` box
+   * unconditionally, and a box like that is scrollable whenever its content is
+   * one sub-pixel wider than it is - which, with borders and a fractional
+   * column width, it very often is. The result was a scrollbar under tables
+   * with room to spare, and a couple of pixels of travel that felt like a bug
+   * because it was one.
+   *
+   * So the LAYOUT is left alone and only the overflow is clamped: measure the
+   * real scroller, and when the content is within a rounding error of its box,
+   * a class turns overflow-x off. Toggling a paint property rather than the
+   * table layout is what stops this oscillating - removing `x` would relayout
+   * the table, which could stop it overflowing, which would put `x` back. */
+  const [overflowsX, setOverflowsX] = React.useState(true);
+
+  React.useEffect(() => {
+    const root = wrapperRef.current;
+    if (!root || typeof ResizeObserver === "undefined") return;
+
+    // Ant Design puts the scroller on .ant-table-body when the header is
+    // fixed (scroll.y) and on .ant-table-content when it is not.
+    const scrollerOf = () =>
+      root.querySelector<HTMLElement>(
+        ".ant-table-body, .ant-table-content",
+      );
+
+    // SLACK, not zero. Sub-pixel column widths and a 1px border routinely
+    // leave scrollWidth a hair over clientWidth on a table that visibly fits.
+    const SLACK = 2;
+
+    const measure = () => {
+      const el = scrollerOf();
+      if (!el) return;
+      setOverflowsX(el.scrollWidth - el.clientWidth > SLACK);
+    };
+
+    measure();
+
+    const ro = new ResizeObserver(measure);
+    ro.observe(root);
+    const el = scrollerOf();
+    if (el) ro.observe(el);
+
+    // Rows arriving, a column being hidden or a density change all alter the
+    // content width without resizing the wrapper.
+    const mo = new MutationObserver(measure);
+    mo.observe(root, { childList: true, subtree: true, attributes: true });
+
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, [finalColumns, dataSource, tableEnhancedDensity]);
+
   const toolbarColumns = React.useMemo<ToolbarColumnItem[]>(() => {
     const hiddenSet = new Set(persisted.hidden ?? []);
 
@@ -3137,9 +3207,36 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
     showColumnControls === "always" && s.controlsAlways,
     tableEnhancedBorderedHeader && s.borderedHeader,
     toolbarPlacement === "outside" && s.toolbarOutside,
+    !overflowsX && s.fitsX,
   );
 
-  const showToolbar = allow_export || show_column_visibility;
+  /* Pagination appears when there is something to page THROUGH.
+   *
+   * Ant Design shows the pager whenever pagination is configured, so a table
+   * with four rows and a pageSize of twenty rendered a control reading "1" -
+   * a widget offering to take the reader somewhere there is nothing to go.
+   * Call sites had each worked around it separately (`rows.length > 25 ? {...}
+   * : false`, with a different threshold per table) and several had not, so
+   * two tables on the same screen disagreed about whether a single page counts
+   * as pagination.
+   *
+   * The default belongs here, once: hideOnSinglePage unless a call site says
+   * otherwise. `pagination={false}` still means no pager at all, and any table
+   * that genuinely wants to show a lone page can still pass false explicitly.
+   *
+   * size defaults with it. The pager is chrome under a table, not a second
+   * subject, and two tables on one screen wearing different pager heights is
+   * the same inconsistency in a different channel. */
+  const finalPagination = React.useMemo(() => {
+    if (pagination === false || pagination == null) return pagination;
+    return {
+      hideOnSinglePage: true,
+      size: "small" as const,
+      ...pagination,
+    };
+  }, [pagination]);
+
+  const showToolbar = allow_export || show_column_visibility || Boolean(toolbarExtra);
 
   return (
     <div
@@ -3179,6 +3276,14 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
             toolbarPlacement === "outside" && s.toolbarExternal,
           )}
         >
+          {/* The caller's own controls, in the same row as the kit's.
+              A table's search belongs beside its export - they act on the
+              same rows - and without a slot the call site had to put its
+              search in a line of its own above the table, leaving the kit's
+              toolbar as a second, emptier line saying nothing. */}
+          {toolbarExtra ? (
+            <div className={s.toolbarExtra}>{toolbarExtra}</div>
+          ) : null}
           <Space size={8}>
             {allow_export ? (
               <Dropdown
@@ -3257,6 +3362,7 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
         columns={finalColumns}
         components={mergedComponents}
         tableLayout={tableLayout ?? "fixed"}
+        pagination={finalPagination}
         scroll={finalScroll}
       />
     </div>

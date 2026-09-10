@@ -281,3 +281,53 @@ func readYAML(t *testing.T, path string, into any) {
 		t.Fatalf("%s is not valid YAML: %v", path, err)
 	}
 }
+
+// TestCoordinatorImageShipsHelm guards the binary compliance cannot work
+// without, and whose absence is not an error anybody sees.
+//
+// The Coordinator renders charts by running `helm template` as a subprocess
+// (internal/compliance/render/helm.go says why it is a subprocess and not the
+// Helm Go SDK). When the binary is missing, chart-structure checks still run
+// and everything needing a rendered manifest reports `error` - deliberately,
+// because a release whose charts were never rendered has not been shown to
+// comply with anything and reporting it green would be the worst thing that
+// package could do. The consequence is that a coordinator image built without
+// helm produces inconclusive runs FOREVER and never once says why.
+//
+// So this asserts the three things that make it work, each of which has been
+// wrong at least once in some project: the binary is fetched and verified
+// against a PINNED checksum rather than one downloaded from the same host as
+// the tarball, it is copied into the runtime stage, and it lands on PATH under
+// the name render.Helm looks for.
+func TestCoordinatorImageShipsHelm(t *testing.T) {
+	b, err := os.ReadFile("build/Dockerfile.coordinator")
+	if err != nil {
+		t.Fatalf("read coordinator Dockerfile: %v", err)
+	}
+	df := string(b)
+
+	for _, want := range []struct{ needle, why string }{
+		{"ARG HELM_VERSION=", "the helm version must be pinned, not latest"},
+		{"ARG HELM_SHA256_amd64=", "the amd64 checksum must be pinned in the Dockerfile"},
+		{"ARG HELM_SHA256_arm64=", "the arm64 checksum must be pinned in the Dockerfile"},
+		{"sha256sum -c -", "the download must be verified before it is installed"},
+		{"COPY --from=helm /out-helm /usr/local/bin/helm", "the verified binary must reach the runtime image on PATH"},
+	} {
+		if !strings.Contains(df, want.needle) {
+			t.Errorf("Dockerfile.coordinator is missing %q: %s", want.needle, want.why)
+		}
+	}
+
+	// The checksum must not be read from the tarball's own host. Fetching both
+	// from get.helm.sh means whoever controls that host controls both, and the
+	// verification proves nothing at all. Comments may discuss the .sha256sum
+	// file - that is how this rule gets explained - so only INSTRUCTIONS count.
+	for i, line := range strings.Split(df, "\n") {
+		code, _, _ := strings.Cut(line, "#")
+		if strings.Contains(code, ".sha256sum") {
+			t.Errorf("line %d fetches the helm checksum rather than pinning it - "+
+				"a checksum from the same host as the tarball verifies nothing: %s",
+				i+1, strings.TrimSpace(line))
+		}
+	}
+}

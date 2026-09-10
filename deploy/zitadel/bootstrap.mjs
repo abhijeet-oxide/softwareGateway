@@ -953,6 +953,25 @@ for (const p of products) {
   const allowPassword = ssoOn
     ? String(process.env.SSO_ALLOW_PASSWORD_LOGIN ?? 'false') === 'true'
     : true;
+  /* A second factor is OFF unless the operator asks for one.
+   *
+   * ZITADEL ships an organization with passwordlessType ALLOWED, and what that
+   * produces is not an option - it is a step. A person arriving at the sign-in
+   * screen is shown "Select the method you would like to authenticate" with
+   * Passkey and Password side by side, and is expected to ENROL something
+   * before they can get in. On a gateway whose people are provisioned by this
+   * seeder and arrive through a corporate directory, that is a second
+   * credential nobody asked for, on a screen that was supposed to be a
+   * formality.
+   *
+   * So all three are named explicitly and all three are off. Named rather than
+   * inherited (`p.forceMfa ?? false`), because inheriting means the behaviour
+   * of this deployment depends on what the instance policy happened to say,
+   * which is exactly the kind of thing that is fine on a laptop and a surprise
+   * in a cluster.
+   *
+   * LOGIN_REQUIRE_MFA=true puts all of it back for an estate that wants it. */
+  const mfaOn = String(process.env.LOGIN_REQUIRE_MFA ?? 'false') === 'true';
   const policy = {
     allowUsernamePassword: allowPassword,
     // Never. Everyone who may use this gateway is provisioned, by the seeder
@@ -960,9 +979,11 @@ for (const p of products) {
     // of a software distribution system offers something nobody should take.
     allowRegister: false,
     allowExternalIdp: true,
-    forceMfa: p.forceMfa ?? false,
-    forceMfaLocalOnly: p.forceMfaLocalOnly ?? false,
-    passwordlessType: p.passwordlessType || 'PASSWORDLESS_TYPE_ALLOWED',
+    forceMfa: mfaOn,
+    forceMfaLocalOnly: false,
+    passwordlessType: mfaOn
+      ? (p.passwordlessType || 'PASSWORDLESS_TYPE_ALLOWED')
+      : 'PASSWORDLESS_TYPE_NOT_ALLOWED',
     hidePasswordReset: ssoOn ? true : (p.hidePasswordReset ?? false),
     ignoreUnknownUsernames: p.ignoreUnknownUsernames ?? false,
     allowDomainDiscovery: p.allowDomainDiscovery ?? true,
@@ -976,9 +997,26 @@ for (const p of products) {
     console.error('FATAL: could not set the sign-in policy:', JSON.stringify(wrote));
     process.exit(1);
   }
+  /* Setting the policy is not on its own enough: a second factor that was
+   * already added to this organization stays on the list and stays demanded,
+   * whatever forceMfa now says. The list is emptied here for the same reason
+   * the fields above are named rather than inherited. */
+  let cleared = 0;
+  if (!mfaOn) {
+    const listed = await api('POST', '/management/v1/policies/login/second_factors/_search', {});
+    for (const type of listed.result || []) {
+      const gone = await api('DELETE', `/management/v1/policies/login/second_factors/${type}`);
+      if (gone.__status === undefined || unchanged(gone)) cleared++;
+    }
+  }
+
   head('Sign-in policy');
   item('self-registration', 'off');
   item('password sign-in', allowPassword ? 'on' : 'off');
+  item('second factor', mfaOn
+    ? 'required (LOGIN_REQUIRE_MFA=true)'
+    : 'not required; no passkey enrolment step');
+  if (cleared) sub('cleared', `${cleared} second factor${cleared === 1 ? '' : 's'} this organization had inherited`);
   if (ssoOn && !allowPassword) {
     note("'zitadel-admin' cannot sign in with a password either. Restore the");
     note('password box with SSO_ALLOW_PASSWORD_LOGIN=true and re-run this');

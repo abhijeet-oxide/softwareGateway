@@ -212,6 +212,10 @@ services:
       # with a machine token rather than through the sign-in screen, so setting
       # this and re-running it puts the password box back.
       SSO_ALLOW_PASSWORD_LOGIN: ${SSO_ALLOW_PASSWORD_LOGIN:-false}
+      # A second factor is off by default: people here are provisioned and
+      # arrive through a directory, so a passkey enrolment step on the way in
+      # is a credential nobody asked for. true restores it.
+      LOGIN_REQUIRE_MFA: ${LOGIN_REQUIRE_MFA:-false}
       BRANDING_PRIMARY_COLOR: ${BRANDING_PRIMARY_COLOR:-}
       BRANDING_PRIMARY_COLOR_DARK: ${BRANDING_PRIMARY_COLOR_DARK:-}
       BRANDING_LOGO_FILE: ${BRANDING_LOGO_FILE:-}

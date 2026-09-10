@@ -9,6 +9,9 @@ import {
   ScaleOutlined, SafetyOutlined, SettingOutlined,
   BookOutlined,
   NetworkOutlined,
+  LocationOutlined,
+  PodDisruptionOutlined,
+  LabelOutlined,
 } from '../icons'
 import { usePolicies } from '../api/queries'
 import type { PolicyPack } from '../api/types'
@@ -22,13 +25,14 @@ import type { PolicyCatalogueResponse, PolicyCheck } from '../api/types'
 const categoryInfo: Record<string, { meaning: string; Icon: typeof ScaleOutlined }> = {
   'Configuration & Secrets': { meaning: 'Configuration and secret handling', Icon: SettingOutlined },
   'Identity & Access': { meaning: 'Identity and access control', Icon: SafetyOutlined },
-  'Metadata': { meaning: 'Labels and annotations', Icon: PackageOutlined },
+  'Metadata': { meaning: 'Labels and annotations', Icon: LabelOutlined },
   'Networking': { meaning: 'Network reachability and exposure', Icon: NetworkOutlined },
   'Observability': { meaning: 'Monitoring and failure visibility', Icon: BarChartOutlined },
   'Probes': { meaning: 'Health checks and lifecycle', Icon: SafetyOutlined },
   'RBAC': { meaning: 'Role-based access control', Icon: SafetyOutlined },
   'Resources': { meaning: 'Resource requests and limits', Icon: ClusterOutlined },
-  'Scheduling & Placement': { meaning: 'Scheduling and workload placement', Icon: CompareOutlined },
+  'Scheduling & Placement': { meaning: 'Scheduling and workload placement', Icon: LocationOutlined },
+  'Disruption & Availability': { meaning: 'Pod disruption and availability', Icon: PodDisruptionOutlined },
   'Security': { meaning: 'Workload security posture', Icon: SafetyOutlined },
   'Storage': { meaning: 'Persistent storage and data', Icon: HddOutlined },
   'Supply Chain': { meaning: 'Artifact provenance and integrity', Icon: PackageOutlined },
@@ -51,7 +55,7 @@ function CategoryLabel({ category }: { category?: string }) {
 
 const prefixCategories: Record<string, string> = {
   CFG: 'Configuration & Secrets', MTA: 'Metadata', NET: 'Networking', OBS: 'Observability',
-  PRB: 'Probes', RBAC: 'RBAC', RES: 'Resources', SCH: 'Scheduling & Placement',
+  PRB: 'Probes', RBAC: 'RBAC', RES: 'Resources', SCH: 'Scheduling & Placement', PDB: 'Disruption & Availability',
   SEC: 'Security', STO: 'Storage', SUP: 'Supply Chain', UPG: 'Upgrade',
 }
 

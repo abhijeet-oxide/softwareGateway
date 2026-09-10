@@ -8,12 +8,24 @@ importers:
 
   .:
     dependencies:
+      '@iconify-react/ant-design':
+        specifier: ^1.0.6
+        version: 1.0.6(react@19.2.8)
       '@iconify-react/bxs':
         specifier: ^1.0.2
         version: 1.0.2(react@19.2.8)
       '@iconify-react/carbon':
         specifier: ^1.0.9
         version: 1.0.9(react@19.2.8)
+      '@iconify-react/duo-icons':
+        specifier: ^1.0.2
+        version: 1.0.2(react@19.2.8)
+      '@iconify-react/fluent-emoji-high-contrast':
+        specifier: ^1.0.3
+        version: 1.0.3(react@19.2.8)
+      '@iconify-react/iconmind':
+        specifier: ^1.0.1
+        version: 1.0.1(react@19.2.8)
       '@tanstack/react-query':
         specifier: ^5.62.0
         version: 5.101.4(react@19.2.8)
@@ -373,11 +385,23 @@ packages:
   '@iconify-json/simple-icons@1.2.93':
     resolution: {integrity: sha512-/XhANjfGYOuqvSR3TmUnkQkINvQ4GVjVuukvymRbxtVFBvIq/yiXJqCDycKcQPT401OYT9H2vIY6ihAlz1QIAw==}
 
+  '@iconify-react/ant-design@1.0.6':
+    resolution: {integrity: sha512-Qc67N2zTmQpmH/nF/OJQi/gnVdrnXMWRQdBxJHY6D8f2now/B35X6cVyaGQ4CFsqHJxVTv/Bv/mKkQKIvKaEag==}
+
   '@iconify-react/bxs@1.0.2':
     resolution: {integrity: sha512-L/VNWTawgkdLAqQHTxf4DdrkvHLQTlqrWkB6WqiadkJmPM0cngEevtS3wzvbdQq9NR9jOfI85e37Ol8fH/LQhQ==}
 
   '@iconify-react/carbon@1.0.9':
     resolution: {integrity: sha512-ht6LwOypVWkIVGdIoBloA26ATDwFFpqeBEMo0udkj31V4ylggxCYa3aFzPFA24FLTyT6gwpqZ1H1Sk20Q231xA==}
+
+  '@iconify-react/duo-icons@1.0.2':
+    resolution: {integrity: sha512-m0A/4vgWmM9bgDOSsP9PfAbGvxtx8UFhjZW33ACrT2brwBQHDk5ZpqV8p/1dcY2uAxIzSf6/oJTLRuhV6ERNiA==}
+
+  '@iconify-react/fluent-emoji-high-contrast@1.0.3':
+    resolution: {integrity: sha512-zKfe+Fp81gcatXZP5s9wCiCNDi4MdbQf59Rux5rGl55bFa3pQF85Cxs1DI+0J3eqDeUAH37md8ihPhw35HaohQ==}
+
+  '@iconify-react/iconmind@1.0.1':
+    resolution: {integrity: sha512-XASe+ClgFMZmiQhAw1VXCS7InYrljFzTAS1FXDvCE/HLwfYlFvkse8dYIGY2rImPqyxas6wA/2pia4bgqc1EFg==}
 
   '@iconify/css-react@1.0.2':
     resolution: {integrity: sha512-k33FKG4jGgd8odos+1HdSwCKZOQ5F1heQxwl/zDrA53tLg5IseDPMqsmQbcCEZ6E0Zgcrmfo4ceFSBmbuEvGtw==}
@@ -1620,6 +1644,12 @@ snapshots:
     dependencies:
       '@iconify/types': 2.0.0
 
+  '@iconify-react/ant-design@1.0.6(react@19.2.8)':
+    dependencies:
+      '@iconify/css-react': 1.0.2(react@19.2.8)
+    transitivePeerDependencies:
+      - react
+
   '@iconify-react/bxs@1.0.2(react@19.2.8)':
     dependencies:
       '@iconify/css-react': 1.0.2(react@19.2.8)
@@ -1627,6 +1657,24 @@ snapshots:
       - react
 
   '@iconify-react/carbon@1.0.9(react@19.2.8)':
+    dependencies:
+      '@iconify/css-react': 1.0.2(react@19.2.8)
+    transitivePeerDependencies:
+      - react
+
+  '@iconify-react/duo-icons@1.0.2(react@19.2.8)':
+    dependencies:
+      '@iconify/css-react': 1.0.2(react@19.2.8)
+    transitivePeerDependencies:
+      - react
+
+  '@iconify-react/fluent-emoji-high-contrast@1.0.3(react@19.2.8)':
+    dependencies:
+      '@iconify/css-react': 1.0.2(react@19.2.8)
+    transitivePeerDependencies:
+      - react
+
+  '@iconify-react/iconmind@1.0.1(react@19.2.8)':
     dependencies:
       '@iconify/css-react': 1.0.2(react@19.2.8)
     transitivePeerDependencies:

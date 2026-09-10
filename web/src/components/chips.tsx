@@ -3,6 +3,7 @@ import { Badge, Space, Tag, Tooltip, Typography } from 'antd'
 import {
   CheckCircleOutlined, ExportOutlined, ExclamationCircleOutlined,
   CloseCircleOutlined, GithubOutlined, LoadingOutlined, QuestionCircleOutlined,
+  CheckMarkFilled,
 } from '../icons'
 import { Icon, locationIcon, repositoryIcon, type IconComponent } from './icons'
 import { Link } from 'react-router-dom'
@@ -312,7 +313,7 @@ const VERIFICATION: Record<VerificationState, { label: string; tone: PillTone; i
   SIGNED: {
     label: 'Signed',
     tone: 'ok',
-    icon: <CheckCircleOutlined />,
+    icon: <CheckMarkFilled />,
     help: 'The vendor signed this release and the signature was found.',
   },
   NOT_SIGNED: {

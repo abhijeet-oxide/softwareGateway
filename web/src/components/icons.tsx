@@ -13,6 +13,7 @@ import ServerIcon from '~icons/ph/hard-drives'
 import StoreIcon from '~icons/ph/storefront'
 import DatabaseIcon from '~icons/ph/database'
 import PackageIcon from '~icons/ph/package'
+import ProductOutlinedIcon from '@iconify-react/ant-design/product-outlined';
 import HelmIcon from '~icons/simple-icons/helm'
 import FileIcon from '~icons/ph/file-text'
 import AnalyzeIcon from '~icons/ph/tree-structure'
@@ -236,7 +237,7 @@ export function ScannerMark({ provider, size = 14, style, className }: {
   )
 }
 
-export { AnalyzeIcon, DownloadIcon, IndexEditIcon, LayersIcon, SignatureIcon, PackageIcon, NokiaNAsset, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon, AnchorIcon }
+export { AnalyzeIcon, DownloadIcon, IndexEditIcon, LayersIcon, SignatureIcon, PackageIcon, NokiaNAsset, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, ProductOutlinedIcon, OciIcon, DockerIcon, HelmIcon, AnchorIcon }
 
 /**
  * Renders one of the above at text size.

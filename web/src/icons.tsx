@@ -39,10 +39,15 @@
 import type { CSSProperties, ElementType, MouseEventHandler } from 'react'
 
 import PhFileCsv from '~icons/ph/file-csv'
+import PodDisruptionBudgetOutlineThinIcon from '@iconify-react/iconmind/pod-disruption-budget-outline-thin';
+import ApprovedIcon from '@iconify-react/duo-icons/approved';
+import ProductOutlinedIcon from '@iconify-react/ant-design/product-outlined';
 import PhFileCode from '~icons/ph/file-code'
 import PhArrowClockwise from '~icons/ph/arrow-clockwise'
 import PhArrowLeft from '~icons/ph/arrow-left'
 import PhArrowRight from '~icons/ph/arrow-right'
+import LocationIcon from '~icons/boxicons/location';
+import FlowConnectionIcon from '@iconify-react/carbon/flow-connection';
 import PhArrowSquareOut from '~icons/ph/arrow-square-out'
 import PhArrowUp from '~icons/ph/arrow-up'
 import PhArrowsClockwise from '~icons/ph/arrows-clockwise'
@@ -65,7 +70,6 @@ import KubernetesPodIcon from '@iconify-react/carbon/kubernetes-pod'
 import PhClockCounterClockwise from '~icons/ph/clock-counter-clockwise'
 import PhCloudArrowDown from '~icons/ph/cloud-arrow-down'
 import PhCopy from '~icons/ph/copy'
-import PhCube from '~icons/ph/cube'
 import PhDatabase from '~icons/ph/database'
 import PhScales from '~icons/ph/scales'
 import PhDotsSixVertical from '~icons/ph/dots-six-vertical'
@@ -92,6 +96,7 @@ import PhQuestion from '~icons/ph/question'
 import PhRocketLaunch from '~icons/ph/rocket-launch'
 import PhSealCheck from '~icons/ph/seal-check'
 import PhGear from '~icons/ph/gear'
+import LabelIcon from '@iconify-react/fluent-emoji-high-contrast/label';
 import PhGithubLogo from '~icons/ph/github-logo'
 import PhLockSimple from '~icons/ph/lock-simple'
 import PhShieldCheck from '~icons/ph/shield-check'
@@ -152,7 +157,6 @@ function make(slug: string, Drawing: Glyph, spinDefault = false) {
 // --- navigation and structure ----------------------------------------------
 export const AppstoreOutlined = make('appstore', PhSquaresFour)
 export const DashboardOutlined = make('dashboard', PhSquaresFour)
-export const ProductOutlined = make('product', PhCube)
 export const PackageOutlined = make('package', PhPackage)
 export const InboxOutlined = make('inbox', PhTrayArrowDown)
 export const DatabaseOutlined = make('database', PhDatabase)
@@ -161,7 +165,9 @@ export const BarChartOutlined = make('bar-chart', PhChartBar)
 export const HistoryOutlined = make('history', PhClockCounterClockwise)
 export const SettingOutlined = make('setting', PhGear)
 export const BellOutlined = make('bell', PhBell)
+export const LabelOutlined = make('label', LabelIcon)
 export const ShopOutlined = make('shop', PhStorefront)
+export const CheckMarkFilled = make('check-mark-filled', ApprovedIcon)
 export const NetworkOutlined = make('network-chart', BoxiconsNetworkChart)
 export const ApiOutlined = make('api', PhPlugsConnected)
 export const PartitionOutlined = make('partition', PhTreeStructure)
@@ -169,6 +175,7 @@ export const ClusterOutlined = make('cluster', PhStack)
 export const KubernetesPodOutlined = make('kubernetes-pod', KubernetesPodIcon)
 export const ReportOutlined = make('report', ReportIcon)
 export const UnorderedListOutlined = make('list', PhListBullets)
+export const ProductOutlined = make('product', ProductOutlinedIcon)
 export const BookOpenOutlined = make('book', PhBookOpen)
 // Discovery: a sweep going out and listening for what comes back, which is
 // what polling a vendor registry on a schedule actually is.
@@ -183,6 +190,8 @@ export const BookOutlined = make('book', BookIcon)
 // --- arrows and movement ----------------------------------------------------
 export const ArrowLeftOutlined = make('arrow-left', PhArrowLeft)
 export const ArrowRightOutlined = make('arrow-right', PhArrowRight)
+export const PodDisruptionOutlined = make('pod-disruption-budget', PodDisruptionBudgetOutlineThinIcon)
+export const LocationOutlined  = make('location', LocationIcon )
 export const ArrowUpOutlined = make('arrow-up', PhArrowUp)
 export const DownOutlined = make('down', PhCaretDown)
 export const RightOutlined = make('right', PhCaretRight)
@@ -211,6 +220,7 @@ export const ClockCircleOutlined = make('clock-circle', PhClock)
 export const MinusCircleOutlined = make('minus-circle', PhMinusCircle)
 export const MinusOutlined = make('minus', PhMinus)
 export const StopOutlined = make('stop', PhProhibit)
+export const FlowConnection= make('flow-connection', FlowConnectionIcon)
 // Half of something: a transfer where some components were already in place
 // and the rest are still moving. A half-filled disc says "partly" in one
 // shape, which a word in a tag cannot do at ten pixels.

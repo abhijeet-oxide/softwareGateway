@@ -3,7 +3,7 @@ import { Button, Card, Space, Table, Tag, Tooltip, Typography } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
-import { ApiOutlined, CheckCircleFilled, CloseCircleFilled, SafetyOutlined } from '../icons'
+import { FlowConnection, CheckCircleFilled, CloseCircleFilled, SafetyOutlined } from '../icons'
 import { useConnectivity, useProducts } from '../api/queries'
 import { ActionButton } from '../components/access'
 import { RepoLink } from '../components/chips'
@@ -53,7 +53,7 @@ export default function Repositories() {
             anyScope
             action="Check connectivity"
             type="primary"
-            icon={<ApiOutlined />}
+            icon={<FlowConnection />}
             busy={connectivity.isFetching}
             title="Makes a real connection to every registry this account may probe and reports what happened at each step."
             onClick={async () => {

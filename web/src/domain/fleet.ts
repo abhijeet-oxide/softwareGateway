@@ -124,8 +124,7 @@ export function holdOn(transfer: Transfer, fleet: Fleet): Hold | null {
     return {
       kind: 'planning',
       label: 'Planning',
-      detail: 'The Coordinator is reading this release to work out what has to move. '
-        + 'Downloading starts when that finishes; no worker is needed for this part.',
+      detail: 'Fetching the release details.',
       actionable: false,
     }
   }

@@ -109,7 +109,11 @@ func (h Helm) Version(ctx context.Context) (string, error) {
 	cmd.Env = sandboxEnv()
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrHelmUnavailable, err)
+		// The BINARY NAME, in the error. This message reaches an operator on
+		// the compliance tab, where "helm is not available" is true of a
+		// Coordinator that has no helm and of one configured to look for it
+		// under a name that is not there - and those have different remedies.
+		return "", fmt.Errorf("%w: running %q: %w", ErrHelmUnavailable, h.Binary, err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }

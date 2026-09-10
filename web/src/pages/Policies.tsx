@@ -11,6 +11,8 @@ import {
   NetworkOutlined,
 } from '../icons'
 import { usePolicies } from '../api/queries'
+import type { PolicyPack } from '../api/types'
+import { ExportMenu, rowExportChoices } from '../components/exportmenu'
 import { ErrorState, PageHeader } from '../components/layout'
 import { CheckSeverityTag } from '../components/compliance'
 import { c, mono } from '../uikit'
@@ -210,6 +212,8 @@ export default function Policies() {
           category={category}
           draft={draft}
           activeTab={activeTab}
+          exportChecks={sortedFiltered}
+          exportPacks={filteredPacks}
           onCategoryChange={setCategory}
           onDraftChange={setDraft}
           onSeverityChange={setSeverity}
@@ -261,6 +265,8 @@ export default function Policies() {
     category,
     draft,
     activeTab,
+    exportChecks,
+    exportPacks,
     severity,
     onCategoryChange,
     onDraftChange,
@@ -270,6 +276,9 @@ export default function Policies() {
     category: string | undefined
     draft: string
     activeTab: string
+    /** What the filters above have narrowed to, per tab, for the export. */
+    exportChecks: PolicyCheck[]
+    exportPacks: PolicyPack[]
     severity: string | undefined
     onCategoryChange: (value: string | undefined) => void
     onDraftChange: (value: string) => void
@@ -313,6 +322,53 @@ export default function Policies() {
             { label: 'Info', value: 'inform' },
           ]}
         />
+
+        {/*
+          THE EXPORT, at the far end of the filter row.
+
+          Same control as Security and Compliance - same button, same menu,
+          same three formats - because a reader who has learned to take a file
+          away from one tab should not have to learn a second way here. It
+          exports what the filters above have narrowed to, per tab: the
+          rulebook on Policies, the packs on Sources.
+        */}
+        <span style={{ marginLeft: 'auto' }}>
+          {activeTab === 'policies' ? (
+            <ExportMenu
+              disabled={exportChecks.length === 0}
+              choices={rowExportChoices(
+                exportChecks,
+                [
+                  { title: 'ID', value: (check) => check.id },
+                  { title: 'Severity', value: (check) => check.severity ?? '' },
+                  { title: 'Category', value: (check) => check.category ?? '' },
+                  { title: 'Section', value: (check) => check.subcategory ?? '' },
+                  { title: 'What it requires', value: (check) => check.title },
+                  { title: 'Applies to', value: (check) => check.appliesTo ?? '' },
+                  { title: 'Source', value: (check) => check.pack ?? '' },
+                ],
+                'policy-catalogue',
+                `The ${exportChecks.length.toLocaleString()} checks listed here`,
+              )}
+            />
+          ) : (
+            <ExportMenu
+              disabled={exportPacks.length === 0}
+              choices={rowExportChoices(
+                exportPacks,
+                [
+                  { title: 'Source', value: (pack) => pack.name },
+                  { title: 'Version', value: (pack) => pack.version ?? '' },
+                  { title: 'Maintainer', value: (pack) => pack.maintainer ?? '' },
+                  { title: 'Description', value: (pack) => pack.description ?? '' },
+                  { title: 'Prefixes', value: (pack) => (pack.prefixes ?? []).join(' ') },
+                ],
+                'policy-sources',
+                `The ${exportPacks.length.toLocaleString()} sources listed here`,
+              )}
+            />
+          )}
+        </span>
       </Space>
     )
   }

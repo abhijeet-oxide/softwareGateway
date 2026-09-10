@@ -37,6 +37,7 @@ import { ComplianceTab } from '../components/compliancepanel'
 import { SecurityTab } from '../components/securitypanel'
 import { COMPARISON_PRODUCT_FILTER } from '../domain/compare'
 import { EmptyArt, EmptyState, c, mono } from '../uikit'
+import { ExportMenu, rowExportChoices } from '../components/exportmenu'
 import type {
   Artifact, CancelAnalysisResponse, InspectPackageResponse, Package, PackageFile, PackageTransfer,
   Product, RelatedArtifact,
@@ -596,29 +597,48 @@ function ComponentTable({ artifacts, kind }: { artifacts: Artifact[]; kind: stri
 
   return (
     <Space direction="vertical" size={8} style={{ width: '100%' }}>
+      {/*
+        THE SEARCH AND THE EXPORT, on one line, and the export is the SAME
+        control as every other export in this product.
+
+        The table component has an export of its own, and using it here made
+        this the one place where taking a file away looked and behaved
+        differently from the Security and Compliance tabs a click either side.
+        Same button, same menu, same three formats, same spoken failure - and
+        it exports what the search has narrowed to, because that is what is on
+        screen.
+      */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          placeholder={`Search ${kind.toLowerCase()} by name, tag or digest`}
+          matched={rows.length}
+          total={artifacts.length}
+          width={320}
+          style={{ marginBottom: 0 }}
+        />
+        <span style={{ marginLeft: 'auto' }}>
+          <ExportMenu
+            disabled={rows.length === 0}
+            choices={rowExportChoices(
+              rows,
+              [
+                { title: 'Name', value: (a) => splitRef(artifactName(a)).name ?? '' },
+                { title: 'Tag', value: (a) => splitRef(artifactName(a)).tag ?? '' },
+                { title: 'Digest', value: (a) => a.digest },
+                { title: 'Media type', value: (a) => a.mediaType ?? '' },
+                { title: 'Size (bytes)', value: (a) => a.sizeBytes ?? '' },
+              ],
+              `${kind.toLowerCase()}`,
+              `The ${rows.length.toLocaleString()} ${kind.toLowerCase()} listed here`,
+            )}
+          />
+        </span>
+      </div>
+
       <DataTable<Artifact>
         tableEnhancedKey="release-artifacts"
-        allow_export
-        /*
-          The search sits IN the toolbar, beside the export.
-
-          Both act on the same rows - what the reader has narrowed to is what
-          the file should contain - and they were on two lines, the search
-          above the table and the kit's toolbar below it holding one button.
-          One row, and the export offers CSV, Excel and JSON of exactly the
-          contents on screen.
-        */
-        toolbarExtra={
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder={`Search ${kind.toLowerCase()} by name, tag or digest`}
-            matched={rows.length}
-            total={artifacts.length}
-            width={320}
-            style={{ marginBottom: 0 }}
-          />
-        }
         size="small"
         dataSource={rows}
         rowKey={(a) => a.artifactId}

@@ -218,6 +218,29 @@ func (s *Server) listPackages(
 		rows = rows[:pageSize]
 		resp.NextPageToken = strconv.Itoa(offset + pageSize)
 	}
+
+	/*
+	 * HOW MANY THERE ARE, so a pager can be drawn rather than guessed at.
+	 *
+	 * Asked only when there is more than this page, which is the one case a
+	 * caller needs it for - a listing that fits on one page already knows its
+	 * own size, and a count would be a second query to learn what len() says.
+	 * The extra row read above is what tells us which case we are in.
+	 *
+	 * Not fatal. The count is what draws the page numbers; the rows are the
+	 * answer. A failed aggregate leaves totalSize absent and the caller falls
+	 * back to walking the tokens, which is worse than a pager and much better
+	 * than an error over a listing that was fetched perfectly well.
+	 */
+	if resp.NextPageToken != "" || offset > 0 {
+		if total, err := s.deps.Packages.CountPackages(r.Context(), filter); err == nil {
+			resp.TotalSize = total
+		} else {
+			s.deps.Logger.Warn("could not count packages for listing", "error", err)
+		}
+	} else {
+		resp.TotalSize = len(rows)
+	}
 	for _, row := range rows {
 		resp.Packages = append(resp.Packages, toAPIPackage(row.ProductName, row))
 	}

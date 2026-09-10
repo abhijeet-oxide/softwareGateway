@@ -538,6 +538,21 @@ type RelatedArtifact struct {
 type ListPackagesResponse struct {
 	Packages      []Package `json:"packages"`
 	NextPageToken string    `json:"nextPageToken,omitempty"`
+	/*
+	 * TotalSize is how many packages the filter matches, ignoring the page.
+	 *
+	 * AIP-158's `total_size`, and it exists because a page token cannot draw a
+	 * pager. The token answers "is there another page", which is enough for a
+	 * Next button and nothing more - so an interface that drew page NUMBERS
+	 * from it could only ever show one page beyond wherever the reader was, and
+	 * grew another every time they moved. Ten per page read as "twenty
+	 * packages, at most"; fifty per page still read as two pages.
+	 *
+	 * Omitted when zero so the field costs nothing on an empty listing, which
+	 * means a client reading it has to treat absent and zero alike - and they
+	 * do mean the same thing here.
+	 */
+	TotalSize int `json:"totalSize,omitempty"`
 }
 
 // Artifact is one manifest in a package's tree.
@@ -1972,6 +1987,9 @@ type TransferControlResponse struct {
 type ListTransfersResponse struct {
 	Transfers     []Transfer `json:"transfers"`
 	NextPageToken string     `json:"nextPageToken,omitempty"`
+	// TotalSize is how many transfers the filter matches, ignoring the page.
+	// See ListPackagesResponse.TotalSize for what a pager cannot do without it.
+	TotalSize int `json:"totalSize,omitempty"`
 }
 
 // Job is layer-level progress.

@@ -163,3 +163,66 @@ func TestSearchTerms(t *testing.T) {
 		}
 	}
 }
+
+// The count and the listing read the SAME filter, which is the property the
+// shared clause builder exists to guarantee.
+//
+// A pager drawn from a count that matches a different set of rows than the
+// listing does is worse than no pager: it offers four pages over three, and the
+// fourth comes back empty with nothing to say why.
+func TestCountPackagesAgreesWithTheListing(t *testing.T) {
+	h := newCacheHarness(t)
+	h.seed("orb_23.8.1076", strings.Repeat("1", 64), 1, 10)
+	h.seed("orb_23.8.1077", strings.Repeat("2", 64), 1, 10)
+	h.seed("orb_24.1.0001", strings.Repeat("3", 64), 1, 10)
+
+	filters := []ListPackagesFilter{
+		{ProductName: "vendor-a"},
+		{ProductName: "vendor-a", Search: "23.8"},
+		{ProductName: "vendor-a", Search: "cfx-5000-k8s:24.1.0001"},
+		{ProductName: "vendor-a", Tag: "23.8.1076"},
+		{ProductName: "vendor-a", Search: "nothing-like-this"},
+		{Products: []string{"vendor-a"}},
+		{Products: []string{"vendor-a", "vendor-absent"}, Search: "orb"},
+	}
+
+	for _, f := range filters {
+		// The listing is asked WITHOUT a page, so its length is the whole set
+		// and the count has something to be compared against.
+		f.Limit = 1000
+		rows, err := h.packages.ListPackages(t.Context(), f)
+		if err != nil {
+			t.Fatalf("list %+v: %v", f, err)
+		}
+		total, err := h.packages.CountPackages(t.Context(), f)
+		if err != nil {
+			t.Fatalf("count %+v: %v", f, err)
+		}
+		if total != len(rows) {
+			t.Errorf("count %d, listed %d, for %+v", total, len(rows), f)
+		}
+	}
+
+	// THE COUNT IGNORES THE PAGE, which is the whole reason a pager can use it.
+	paged := ListPackagesFilter{ProductName: "vendor-a", Limit: 1, Offset: 1}
+	rows, err := h.packages.ListPackages(t.Context(), paged)
+	if err != nil {
+		t.Fatalf("list a page: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("page of 1 returned %d row(s)", len(rows))
+	}
+	total, err := h.packages.CountPackages(t.Context(), paged)
+	if err != nil {
+		t.Fatalf("count a page: %v", err)
+	}
+	if total != 3 {
+		t.Errorf("count = %d over a page of 1, want 3 - the page must not narrow it", total)
+	}
+
+	// And a filter naming no scope refuses, exactly as the listing does: a
+	// narrowing that came back empty must not count the whole database.
+	if _, err := h.packages.CountPackages(t.Context(), ListPackagesFilter{}); err == nil {
+		t.Error("a filter naming no product counted something; it must refuse instead")
+	}
+}

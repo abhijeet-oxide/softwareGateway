@@ -1746,12 +1746,14 @@ type ListTransfersFilter struct {
 	WithoutJobCounts bool
 }
 
-// ListTransfers returns transfers, newest first.
-func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]TransferSummary, error) {
-	query := p.transferSelect(!f.WithoutJobCounts)
-	var args []any
-
+// transferWhere builds the clause both the listing and its COUNT use.
+//
+// ONE BUILDER, for the reason packageWhere is one: the two queries have to
+// agree about what matching means, and a filter added to only one of them is
+// not a compile error - it is a pager that offers four pages over three.
+func transferWhere(f ListTransfersFilter) (string, []any) {
 	where := " WHERE 1=1"
+	var args []any
 	if f.ProductName != "" {
 		where += " AND pr.name = ?"
 		args = append(args, f.ProductName)
@@ -1774,6 +1776,44 @@ func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]
 		where += " AND rq.operation = ?"
 		args = append(args, f.Operation)
 	}
+	return where, args
+}
+
+// CountTransfers is how many transfers a filter matches, ignoring its page.
+//
+// # Why a listing needs it
+//
+// Because the page token cannot draw a pager - it answers only "is there
+// another page". An interface that drew page NUMBERS from it showed exactly one
+// page beyond wherever the reader was, and grew another every time they moved,
+// which reads as a listing that keeps discovering it is longer than it said.
+//
+// # Why this is cheap and the listing is not
+//
+// The expense of a transfer listing is its PROJECTION: a dozen correlated
+// aggregates over `jobs` per row, to say how far each one has got. A count has
+// no projection at all - it walks the rows the filter matches and adds up. The
+// joins are the two the filter itself needs and no more.
+func (p *Packages) CountTransfers(ctx context.Context, f ListTransfersFilter) (int, error) {
+	where, args := transferWhere(f)
+	query := `
+	SELECT count(*)
+	  FROM transfers t
+	  JOIN transfer_requests rq ON rq.id = t.request_id
+	  JOIN packages pk ON pk.id = t.package_id
+	  JOIN products pr ON pr.id = pk.product_id` + where
+
+	var total int
+	if err := p.db.QueryRowContext(ctx, p.dialect.Rewrite(query), args...).Scan(&total); err != nil {
+		return 0, fmt.Errorf("count transfers: %w", err)
+	}
+	return total, nil
+}
+
+// ListTransfers returns transfers, newest first.
+func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]TransferSummary, error) {
+	query := p.transferSelect(!f.WithoutJobCounts)
+	where, args := transferWhere(f)
 
 	limit := f.Limit
 	if limit <= 0 {

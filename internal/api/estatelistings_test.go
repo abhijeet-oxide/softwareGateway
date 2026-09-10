@@ -198,3 +198,92 @@ func TestPackageListingCarriesTransferHistory(t *testing.T) {
 		}
 	}
 }
+
+// A PAGER NEEDS A COUNT, and the page token is not one.
+//
+// The token says only "there is at least one more page". An interface that drew
+// page NUMBERS from it showed exactly one page beyond wherever the reader was
+// and grew another every time they moved: ten per page read as "twenty
+// releases, at most", and switching to fifty per page still read as two pages,
+// because the arithmetic had nothing to do with how many releases exist.
+func TestPackageListingReportsHowManyThereAre(t *testing.T) {
+	h := newAPIHarness(t)
+	h.seedPackage("v1.0.0", digestA)
+	h.seedPackage("v1.1.0", digestB)
+	h.seedPackage("v1.2.0", "sha256:"+strings.Repeat("3", 64))
+
+	cases := []struct{ name, path string }{
+		{"estate", "/api/v1/packages"},
+		{"one product", "/api/v1/products/vendor-a/packages"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// A page that does not hold everything still says how much there is,
+			// which is the whole point: three releases, one at a time.
+			var first v1.ListPackagesResponse
+			if code := h.get(tc.path+"?pageSize=1", &first); code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", code)
+			}
+			if first.TotalSize != 3 {
+				t.Errorf("totalSize = %d on a page of 1, want 3", first.TotalSize)
+			}
+
+			// And it does not change as the reader walks. A total that grew per
+			// page is the defect this replaced.
+			var second v1.ListPackagesResponse
+			if code := h.get(tc.path+"?pageSize=1&pageToken="+first.NextPageToken, &second); code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", code)
+			}
+			if second.TotalSize != 3 {
+				t.Errorf("totalSize = %d on page two, want 3 - it must not depend on the page", second.TotalSize)
+			}
+
+			// A page that holds everything answers from what it already has,
+			// without a second query to learn what len() says.
+			var whole v1.ListPackagesResponse
+			if code := h.get(tc.path, &whole); code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", code)
+			}
+			if whole.TotalSize != 3 {
+				t.Errorf("totalSize = %d on a single page, want 3", whole.TotalSize)
+			}
+			if whole.NextPageToken != "" {
+				t.Errorf("next page token %q offered over a listing that fits", whole.NextPageToken)
+			}
+		})
+	}
+
+	// THE COUNT IS OF WHAT THE FILTER MATCHES, not of the table. A search that
+	// matches one release says one, however many there are.
+	var searched v1.ListPackagesResponse
+	if code := h.get("/api/v1/packages?q=v1.2&pageSize=1", &searched); code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if searched.TotalSize != 1 {
+		t.Errorf("totalSize = %d for a search matching one release, want 1", searched.TotalSize)
+	}
+}
+
+// The transfer listing carries the same count, for the same reason.
+func TestTransferListingReportsHowManyThereAre(t *testing.T) {
+	h := newAPIHarness(t)
+	h.seedTransfer("aaaa1111-0000-0000-0000-000000000001")
+	h.seedTransfer("bbbb2222-0000-0000-0000-000000000002")
+
+	var first v1.ListTransfersResponse
+	if code := h.get("/api/v1/transfers?pageSize=1&view=summary", &first); code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if first.TotalSize != 2 {
+		t.Errorf("totalSize = %d on a page of 1, want 2", first.TotalSize)
+	}
+
+	var second v1.ListTransfersResponse
+	if code := h.get("/api/v1/transfers?pageSize=1&view=summary&pageToken="+first.NextPageToken,
+		&second); code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if second.TotalSize != 2 {
+		t.Errorf("totalSize = %d on page two, want 2 - it must not depend on the page", second.TotalSize)
+	}
+}

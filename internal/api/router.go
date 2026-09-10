@@ -463,6 +463,13 @@ func (s *Server) routes() chi.Router {
 		// deployment without persistence returns an honest 404 rather than a
 		// route that always fails.
 		if s.deps.Packages != nil {
+			// EVERY PRODUCT'S RELEASES, in one paged request. Registered
+			// before the product-scoped listing because that is the order they
+			// read in, not because chi needs it - the two patterns cannot
+			// collide. See handleListAllPackages for what the estate listing
+			// replaced: one request per product, merged and searched in the
+			// browser.
+			r.Get("/packages", s.handleListAllPackages)
 			r.Get("/products/{product}/packages", s.handleListPackages)
 			r.Get("/products/{product}/packages/{package}", s.handleGetPackage)
 			r.Get("/products/{product}/packages/{package}/artifacts", s.handleListArtifacts)
@@ -594,6 +601,15 @@ func (s *Server) routes() chi.Router {
 				// polling progress while a scan runs must not be blocked by
 				// whatever gates the write path.
 				r.Get("/products/{product}/discovery", s.handleDiscoveryStatus)
+				// THE SAME READ FOR THE WHOLE ESTATE, in one request.
+				//
+				// Discovery status is the only thing on the Overview that
+				// changes while nobody presses anything, so it is polled - and
+				// with the per-product route as the only way to read it, a
+				// deployment with thirty products was polled thirty times over
+				// for one answer the loop holds in memory as a single snapshot.
+				// See handleFleetDiscoveryStatus for what it narrows to.
+				r.Get("/discovery", s.handleFleetDiscoveryStatus)
 
 				// AIP-136 custom method: expanding a package has side effects - it
 				// writes artifacts, blobs and a measured size - so it is a POST verb

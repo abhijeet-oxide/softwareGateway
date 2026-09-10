@@ -31,6 +31,10 @@ var routePolicies = []struct {
 	{"GET", "/api/v1/policies", "policy_catalogue", "view"},
 	{"GET", "/api/v1/policies/PRB-01", "policy_catalogue", "view"},
 	{"GET", "/api/v1/system:healthCheck", "system", "view"},
+	// The two fleet-wide reads that replaced a per-product fan-out. Both ask
+	// what their per-product siblings ask, and both narrow by VisibleProducts.
+	{"GET", "/api/v1/discovery", "product", "view"},
+	{"GET", "/api/v1/packages", "package", "view"},
 
 	// Downloads.
 	{"GET", "/api/v1/transfers", "software_download", "view"},

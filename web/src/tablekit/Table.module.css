@@ -32,6 +32,26 @@
   overflow: hidden;
 }
 
+/* THE PAGER, off the edge of the page.
+ *
+ * Ant Design pushes it to the right with no horizontal padding, and every
+ * table in this product sits in a Card whose body padding is zero - so the
+ * page-size selector, the last control on the row, ended flush against the
+ * card's border with nothing between them. The page numbers on the pages that
+ * draw their own had the same problem for the same reason.
+ *
+ * Set here rather than per table, because it is the pager's own spacing and a
+ * table should not have to remember to ask for it. `padding-inline` so it is
+ * still the right side in a right-to-left locale, and 16px because that is the
+ * body padding every Card that DOES have one uses - the pager lines up with
+ * the content above it instead of hanging past it. */
+.wrapper :global(.ant-table-pagination.ant-pagination) {
+  padding-inline: 16px;
+  /* Ant's own vertical margin, restated: setting `padding` shorthand above
+     would zero it, and a pager touching the last row reads as part of it. */
+  margin-block: 16px;
+}
+
 /* Keep a wide table inside the Ant Card that owns it. The table's own content
    wrapper still scrolls horizontally; only the card boundary clips overflow. */
 :global(.ant-card:has(.ant-table-wrapper)) {

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Button, Card, DatePicker, Descriptions, Drawer, Select, Space, Tag, Typography } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
-import { Table as DataTable } from '../tablekit'
+import { Table as DataTable, useTablePageSize } from '../tablekit'
 import { DownloadOutlined } from '../icons'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuditEvents, useProducts } from '../api/queries'
@@ -46,6 +46,16 @@ export default function Activity() {
   const [open, setOpen] = useState<AuditEvent>()
   const [page, setPage] = useState(1)
   const [token, setToken] = useState<string>()
+  /*
+    HOW MANY EVENTS A PAGE HOLDS, and the reader chooses it.
+
+    Server-paged, so the size is part of the REQUEST rather than a slice of
+    rows already in hand - which is why this table shipped with no size
+    selector at all while the tables that page themselves had one. The hook
+    reads the same remembered value the tablekit keeps for those, before the
+    first fetch. See useTablePageSize.
+  */
+  const [pageSize, setPageSize] = useTablePageSize('activity', 25)
 
   const filters = {
     product: params.get('product') ?? undefined,
@@ -54,7 +64,7 @@ export default function Activity() {
     actor: params.get('actor') ?? undefined,
     since: params.get('since') ?? undefined,
     until: params.get('until') ?? undefined,
-    pageSize: 25,
+    pageSize,
     pageToken: token,
   }
 
@@ -171,9 +181,18 @@ export default function Activity() {
             onRow={(e) => ({ onClick: () => setOpen(e), style: { cursor: 'pointer' } })}
             pagination={{
               current: page,
-              pageSize: 25,
-              total: events.data?.nextPageToken ? page * 25 + 1 : rows.length + (page - 1) * 25,
-              showSizeChanger: false,
+              pageSize,
+              total: events.data?.nextPageToken
+                ? page * pageSize + 1
+                : rows.length + (page - 1) * pageSize,
+              // A new page SIZE invalidates the token, which addresses an
+              // offset counted in pages of the old one. Back to the first
+              // page, the one position that means the same thing at both sizes.
+              onShowSizeChange: (_current, size) => {
+                setPageSize(size)
+                setToken(undefined)
+                setPage(1)
+              },
               onChange: (next) => {
                 // Server-side paging: the API hands back the token for the next
                 // page rather than a count, so forward paging follows it and

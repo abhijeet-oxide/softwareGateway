@@ -57,15 +57,21 @@ export {
   ChevronLeftIcon,
   ChevronRightIcon,
   ErrorCircleIcon,
+  EyeIcon,
   InfoIcon,
+  LockIcon,
   MoonIcon,
   RefreshIcon,
+  ShieldCheckIcon,
+  ShieldIcon,
   SignalIcon,
   SignalOffIcon,
   SpinnerIcon,
   SunIcon,
   SystemIcon,
+  UserIcon,
   WarningIcon,
+  WrenchIcon,
 } from "./icons";
 export type { IconProps } from "./icons";
 

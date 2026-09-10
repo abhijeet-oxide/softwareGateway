@@ -5,11 +5,11 @@ import { Button, Card, Space, Tag, Tooltip, Typography } from 'antd'
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
 import { useParams } from 'react-router-dom'
-import { usePackages, useProducts, useTransfers } from '../api/queries'
+import { usePackages, useProducts } from '../api/queries'
 import { RunDiscoveryButton } from '../components/discovery'
 import {
   deriveLifecycle, deriveLocations, deriveStatus, downloadSeconds, failureReason, matches,
-  transferIndex, verification, version, withTransfers,
+  verification, version,
 } from '../domain/derive'
 import { formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
@@ -41,16 +41,16 @@ import { AccessRoute, useSupportContact } from '../auth/contact'
 const label = (p?: Product) => p?.displayName || p?.productId || 'A product'
 
 function VersionHistory({ product }: { product: Product }) {
+  // ONE REQUEST. The listing carries each release's own transfer history now,
+  // so the two-hundred-transfer fetch that used to sit beside it - to derive a
+  // status a listing could not state on its own - is gone. See attachTransfers.
   const packages = usePackages(product.productId, { pageSize: 25 })
-  const transfers = useTransfers({ product: product.productId, pageSize: 200, view: 'summary' })
 
   if (packages.isError) {
     return <ErrorState error={packages.error} retry={() => void packages.refetch()} />
   }
 
-  // The transfer listing supplies the history a package listing omits.
-  const index = transferIndex(transfers.data?.transfers ?? [])
-  const rows = (packages.data?.packages ?? []).map((listed) => withTransfers(listed, index))
+  const rows = packages.data?.packages ?? []
   if (!packages.isLoading && rows.length === 0) {
     return (
       <EmptyStateCard

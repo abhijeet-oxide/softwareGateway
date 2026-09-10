@@ -188,7 +188,7 @@ export default function Security() {
               rowKey={(h, i) => `${h.cve ?? h.issueId}-${h.component.id}-${h.artifact.digest}-${i}`}
               dataSource={hits}
               scroll={{ x: 'max-content' }}
-              pagination={{ pageSize: 25, showSizeChanger: true, size: 'small' }}
+              pagination={{ pageSize: 25, size: 'small' }}
               locale={{
                 emptyText: (
                   <EmptyState

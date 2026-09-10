@@ -1,20 +1,20 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { App, Button, Card, Dropdown, Segmented, Select, Space, Tooltip, Typography } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
-import { Table as DataTable } from '../tablekit'
+import { Table as DataTable, useTablePageSize } from '../tablekit'
 import type { MenuProps } from 'antd'
 import { ClusterOutlined, CompareOutlined, MoreOutlined, SafetyCertificateOutlined } from '../icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  usePackages, usePackagesByProducts, useProducts, useRunDownload, useSyncPackageSecurity, useTransfers,
+  usePackageListing, useProducts, useRunDownload, useSyncPackageSecurity,
 } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import { ActionButton } from '../components/access'
 import {
   deriveLocations, deriveStatus, failureReason, isLive, isPromotion,
-  hasSecurityData, packageReference, parseSearch, promotableTargets, publishedAt, releaseHref,
-  scoreRelease, transferIndex, verification, version, withTransfers,
+  hasSecurityData, packageReference, promotableTargets, releaseHref,
+  verification, version,
 } from '../domain/derive'
 import type { Package, PackageTransfer, Product } from '../api/types'
 import {
@@ -395,6 +395,18 @@ export default function Packages() {
   const syncSecurity = useSyncPackageSecurity()
 
   const [params, setParams] = useSearchParams()
+  /*
+    TWO PIECES OF SEARCH STATE, and the second is not redundant.
+
+    `draft` is what the box shows and `search` is what the SERVER is asked.
+    The search used to be neither: the page fetched a hundred rows per product
+    and ran a substring test over them here, which searches what happened to
+    be loaded rather than what exists - so a release on the second page came
+    back as "nothing matches", confidently. Now the database answers it, and
+    the debounce below is what makes typing still feel like typing rather than
+    like a request per key.
+  */
+  const [draft, setDraft] = useState('')
   const [search, setSearch] = useState('')
   const products = useProducts()
   const productList = products.data?.products ?? []
@@ -403,16 +415,19 @@ export default function Packages() {
   const status = params.get('status')
   const tag = params.get('tag') ?? undefined
 
-  const product = productList.find((p) => p.productId === selected)
-  const packages = usePackages(selected, { pageSize: 100, tag })
-  const packagesByProducts = usePackagesByProducts(
-    selected ? [] : productList.map((p) => p.productId),
-    { pageSize: 100, tag },
-  )
-  // EVERY kind of transfer, because this index is what gives a listed release
-  // its history: a listing that fetched only downloads would report a promoted
-  // release as one nothing had happened to since it landed.
-  const transfers = useTransfers({ product: selected, pageSize: 200, view: 'summary' })
+  /*
+    WHICH PAGE, AND HOW BIG, both server-side.
+
+    The page size is the table's own selector - the same remembered value every
+    other paginated table in the product uses - and it is part of the REQUEST
+    here rather than a slice of rows already in hand. That is the whole point:
+    a listing of two hundred rows costs a page of them, not all of them.
+
+    `pageToken` for this API is an offset, so any page can be asked for
+    directly rather than walked to. See parseOffset.
+  */
+  const [pageSize, setPageSize] = useTablePageSize('packages', 25)
+  const [page, setPage] = useState(1)
 
   /*
    * Choosing two releases to compare, IN this listing.
@@ -430,7 +445,69 @@ export default function Packages() {
   const forVulnerabilities = comparing && selection.intent === 'vulnerabilities'
 
   /*
-   * Every release this page has loaded, BEFORE the search and status filters.
+    THE STATUS FILTER IS DERIVED, and it is the one filter the server cannot
+    answer.
+
+    A release's status comes from what has been ATTEMPTED with it, against the
+    product's own idea of which target is production - so it is computed from
+    the row and its transfer history rather than stored anywhere to filter on.
+    That means it narrows the rows that were fetched, and a page of twenty-five
+    is a thin thing to narrow. The same is true of the vulnerabilities intent,
+    which hides a release no scanner has answered for.
+
+    So either of them WIDENS the fetch. The table still shows `pageSize` rows
+    at a time; what changes is how many releases the filter got to look at, and
+    the line under the toolbar says what that was. An unfiltered listing - the
+    ordinary case - still fetches exactly one page.
+
+    Two hundred rather than the five hundred the server will serve, because
+    each of those rows carries its transfer history and that history is read
+    under one shared bound: a wider page spreads the same allowance thinner,
+    until a release's own attempts start falling off the end and its status
+    reads as though nothing had been tried. See attachTransfers.
+  */
+  const filtering = Boolean(status) || forVulnerabilities
+  const fetchSize = filtering ? 200 : pageSize
+  const fetchPage = filtering ? 1 : page
+
+  // Debounced, so the server sees one query per pause rather than one per key.
+  // 300ms: long enough that a typed word is one request, short enough that the
+  // table has moved before the finger leaves the key.
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(draft), 300)
+    return () => clearTimeout(t)
+  }, [draft])
+
+  // Any change to WHAT is being listed starts again at the first page. A page
+  // four that survived a new search term would be a page four of a different
+  // listing, which is how a filtered table comes back empty for no visible
+  // reason.
+  useEffect(() => {
+    setPage(1)
+  }, [search, selected, status, tag, pageSize])
+
+  const product = productList.find((p) => p.productId === selected)
+  const packages = usePackageListing(selected, {
+    pageSize: fetchSize,
+    pageToken: fetchPage > 1 ? String((fetchPage - 1) * fetchSize) : undefined,
+    q: search.trim() || undefined,
+    tag,
+  })
+  const listed = packages.data?.packages ?? []
+  /*
+    THE FIRST LOAD, or a page the reader is waiting for.
+
+    Not `isFetching`, which is also true of the five-second poll a release
+    being analysed sets off - that would spin the table at somebody reading it.
+    `isPlaceholderData` is true only while the rows on screen belong to the
+    PREVIOUS query key, which is exactly the search, the page turn and the
+    filter change. The delay keeps a fast answer from flashing a spinner.
+  */
+  const loading = packages.isLoading
+  const waiting = { spinning: loading || (packages.isPlaceholderData && packages.isFetching), delay: 250 }
+
+  /*
+   * Every release this page has loaded, BEFORE the status filter.
    *
    * Split out from `rows` for one reason, and it is the reason the whole
    * selection lives in the URL: a comparison in progress has to be able to
@@ -438,35 +515,41 @@ export default function Packages() {
    * them against the filtered rows meant that typing in the search box emptied
    * the bar back to "select the first package" - the selection was intact, and
    * the page said it was gone, which is worse than losing it.
+   *
+   * No transfer join any more. A listing row carries its own history now, so
+   * the two-hundred-transfer fetch this page used to make to derive a status -
+   * and which was wrong for any page but the first, because page four's
+   * releases were downloaded long before the two-hundredth most recent
+   * transfer - is gone. See attachTransfers.
    */
-  const allRows = useMemo(() => {
-    // Joined from the transfer listing: a package listing carries no transfer
-    // history, so deriving from the package alone would report every release
-    // as NEW.
-    const index = transferIndex(transfers.data?.transfers ?? [])
-    const all = selected
-      ? (() => {
-        if (!product) return []
-        return (packages.data?.packages ?? []).map((listed) => {
-          const pkg = withTransfers(listed, index)
-          return { pkg, product, status: deriveStatus(pkg, product) }
-        })
-      })()
-      : productList.flatMap((p, i) => {
-        const listedPackages = packagesByProducts[i]?.data?.packages ?? []
-        return listedPackages.map((listed) => {
-        const pkg = withTransfers(listed, index)
-        return { pkg, product: p, status: deriveStatus(pkg, p) }
-      })
-      })
-    return [...all].sort((a, b) => {
-      const left = Date.parse(publishedAt(a.pkg) || '') || 0
-      const right = Date.parse(publishedAt(b.pkg) || '') || 0
-      return right - left
-    })
-  }, [selected, product, productList, packages.data, packagesByProducts, transfers.data])
+  const allRows = useMemo(
+    () => listed.map((pkg) => {
+      const config = selected
+        ? product
+        : productList.find((p) => p.productId === pkg.product)
+      return {
+        pkg,
+        // A release whose product is not in the configuration listing still has
+        // to render: the row is real, and dropping it would report the estate as
+        // smaller than it is. The id is what a product chip has to show then.
+        product: config ?? { productId: pkg.product } as Product,
+        status: deriveStatus(pkg, config),
+      }
+    }),
+    [listed, selected, product, productList],
+  )
 
   const rows = useMemo(() => {
+    /*
+      THE TWO FILTERS THE SERVER CANNOT ANSWER, and nothing else.
+
+      The search left this function entirely - the database does it now, over
+      every release rather than over the page that happened to be loaded. What
+      remains is derived from the row: a status computed from its transfer
+      history against the product's targets, and whether a scanner has ever
+      answered for it. Both are applied over the widened fetch a filter asks
+      for; the line under the toolbar says how wide that was.
+    */
     const byStatus = !status
       ? allRows
       : status === 'UNSIGNED'
@@ -481,40 +564,8 @@ export default function Packages() {
       not offered. The count line above the table says how many that is, which
       is the whole explanation this filter needs.
     */
-    const relevant = forVulnerabilities ? byStatus.filter((r) => hasSecurityData(r.pkg)) : byStatus
-
-    if (!search.trim()) return relevant
-
-    /*
-      RANKED, not just filtered.
-
-      A release is written down three ways - `chart:1.4.2`, `chart@1.4.2` and
-      `chart 1.4.2` - and a substring test answered "nothing found" for a query
-      pasted out of the very thing being searched for. parseSearch reads all
-      three (domain/derive.ts), and the score puts the release actually NAMED
-      by the query above one that merely contains the same letters, which is
-      the difference between a search box a reader trusts and one they give up
-      on and start scrolling past.
-
-      The name is the repository - a product publishes one version tag into
-      every repository it watches, so the repository is frequently the only
-      thing telling two rows apart - and the product is searchable too, since
-      an unscoped listing spans all of them.
-    */
-    const q = parseSearch(search)
-    return relevant
-      .map((r) => ({
-        r,
-        score: scoreRelease(q, {
-          name: r.pkg.displayRepository || r.pkg.sourceRepository,
-          version: version(r.pkg),
-          others: [r.pkg.tag, r.product.displayName, r.product.productId],
-        }),
-      }))
-      .filter((x) => x.score >= 0)
-      .sort((a, b) => b.score - a.score)
-      .map((x) => x.r)
-  }, [allRows, status, search, forVulnerabilities])
+    return forVulnerabilities ? byStatus.filter((r) => hasSecurityData(r.pkg)) : byStatus
+  }, [allRows, status, forVulnerabilities])
 
   const update = (key: string, value?: string) => {
     const next = new URLSearchParams(params)
@@ -623,14 +674,20 @@ export default function Packages() {
         }}
       >
         <Space size={12} align="center" wrap>
+          {/*
+            THE BOX SHOWS `draft`; THE SERVER IS ASKED `search`.
+
+            No matched/total counts on it any more, and their absence is the
+            honest change: they used to say "12 of 300 shown", which was a
+            statement about the rows this page had loaded rather than about the
+            estate. The database answers the search now, so what a match count
+            would have to say is "12 of however many there are", and the pager
+            below says exactly that.
+          */}
           <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search name, name:version, name@version"
-            matched={rows.length}
-            total={selected
-              ? (packages.data?.packages?.length ?? 0)
-              : packagesByProducts.reduce((n, q) => n + (q.data?.packages?.length ?? 0), 0)}
+            value={draft}
+            onChange={setDraft}
+            placeholder="Search by package or version"
             width={280}
             style={{ marginBottom: 0 }}
           />
@@ -734,19 +791,40 @@ export default function Packages() {
         />
       )}
 
-      {!packages.isLoading && !packagesByProducts.some((q) => q.isLoading) && rows.length === 0 ? (
+      {/*
+        WHAT THE STATUS FILTER GOT TO LOOK AT.
+
+        Only when one is on, and it is the one thing a derived filter has to
+        say about itself: it is computed from each row's transfer history
+        rather than asked of the database, so it can only narrow releases that
+        were fetched. The fetch is widened for it - see `fetchSize` - and this
+        line states the size of that window instead of leaving the reader to
+        assume the filter covered everything.
+      */}
+      {filtering && !loading && (
+        <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+          {rows.length.toLocaleString()} of the{' '}
+          {allRows.length.toLocaleString()} most recent release
+          {allRows.length === 1 ? '' : 's'}
+          {packages.data?.nextPageToken
+            ? '. Older releases are not included in this filter - narrow by product or search for one by name.'
+            : selected ? ' of this product.' : ' in the estate.'}
+        </Typography.Text>
+      )}
+
+      {!loading && rows.length === 0 ? (
         <EmptyStateCard
           title={search.trim() || status ? 'Nothing matches this filter' : 'No packages discovered yet'}
           explanation={
             search.trim()
-              ? 'No release on this page matches what you typed. The search covers the package, its version and the product - written as name:version, name@version or name version.'
+              ? 'No release matches what you typed. The search covers the package name and the version, in either the vendor\'s spelling or the shortened one.'
               : status
-                ? `No release currently has this status. Clear the filter to see everything discovered${selected ? ' for this product' : ''}.`
+                ? `No release among the most recent has this status. Clear the filter to see everything discovered${selected ? ' for this product' : ''}.`
                 : 'Discovery polls the vendor registries on a schedule. Run it from the Overview to look immediately.'
           }
           action={
             search.trim()
-              ? <Button onClick={() => setSearch('')}>Clear search</Button>
+              ? <Button onClick={() => setDraft('')}>Clear search</Button>
               : status
                 ? <Button onClick={() => update('status', undefined)}>Clear filter</Button>
                 : <Link to="/"><Button type="primary">Go to Overview</Button></Link>
@@ -759,7 +837,7 @@ export default function Packages() {
             // allow_export
             // show_column_visibility
             // toolbarPlacement="outside"
-            loading={packages.isLoading || packagesByProducts.some((q) => q.isLoading)}
+            loading={waiting}
             dataSource={rows}
             rowKey={(r) => `${r.product.productId}-${r.pkg.packageId}`}
             /*
@@ -790,7 +868,33 @@ export default function Packages() {
                   : ''
               }
               : undefined}
-            pagination={{ pageSize: 20, showSizeChanger: false }}
+            /*
+              SERVER-SIDE PAGING, so the page holds what is on screen and
+              nothing else.
+
+              `total` is the honest shape of a token-paged API: it does not
+              return a count, and inventing one would put a page number on the
+              pager that leads nowhere. A next-page token means "there is at
+              least one more", which is one row past the end of this page; no
+              token means this page is the last, so the total is where it ends.
+              The pager draws the right number of steps either way.
+
+              With a status filter on, the fetch is one wide page and the table
+              pages through it here - the derived filter has to see the rows to
+              narrow them, so there is nothing left for the server to page.
+            */
+            pagination={filtering ? {
+              pageSize,
+              onShowSizeChange: (_current, size) => setPageSize(size),
+            } : {
+              current: page,
+              pageSize,
+              total: packages.data?.nextPageToken
+                ? page * pageSize + 1
+                : (page - 1) * pageSize + rows.length,
+              onShowSizeChange: (_current, size) => setPageSize(size),
+              onChange: (next) => setPage(next),
+            }}
             /*
               `max-content` rather than a number.
               A hardcoded width has to be kept in step with the sum of the

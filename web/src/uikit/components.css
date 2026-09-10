@@ -934,6 +934,16 @@
 .ui-nav-profile.is-active:hover {
   background: var(--nav-bg-active);
 }
+/* The avatar and the badge that sits on it, as one box.
+ *
+ * A wrapper rather than positioning the badge against the whole profile card:
+ * the card is a row whose width depends on the name, so anchoring to it would
+ * put the badge somewhere different for every account. */
+.ui-nav-avatar-slot {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
 .ui-nav-avatar {
   width: 28px;
   height: 28px;
@@ -943,6 +953,39 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+/* WHAT KIND of account this is, on the corner of the avatar.
+ *
+ * Bottom-right, which is where a platform badge goes and, more practically,
+ * the corner the initials do not reach: they are centred, and a 14px disc over
+ * the top-left would clip the first letter on a two-letter pair.
+ *
+ * It carries the rail's own background as its ring rather than a border
+ * colour, so the badge reads as sitting ON the avatar rather than as a second
+ * shape beside it - and it stays correct when the rail's background changes
+ * with the theme. */
+.ui-nav-avatar-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--nav-bg);
+  box-shadow: 0 0 0 1.5px var(--nav-bg);
+  color: var(--nav-fg-strong);
+  /* The glyphs draw at 1em, so this is their size. Nine pixels is small, and
+     that is the point: at this size only the SHAPE survives - a shield, a
+     spanner, an eye - which is what makes them tellable apart at a glance. The
+     word underneath is still the statement. */
+  font-size: 9px;
+  line-height: 1;
+}
+.ui-nav-avatar-badge .ui-icon {
+  display: inline-flex;
 }
 .ui-nav-avatar.is-initials {
   background: var(--brand);
@@ -1656,6 +1699,51 @@
   border-radius: 50%;
   background: currentColor;
 }
+/* ONE RING PER COMPLETED CHECK.
+ *
+ * The dot is permanently on screen and, when everything is fine, permanently
+ * green - which is correct and also indistinguishable from a graphic somebody
+ * painted into the bar. This is the difference: every time the connection is
+ * actually checked, a ring leaves the dot and fades. Nothing to read, nothing
+ * to dismiss, and it says the one thing a static dot cannot - that the answer
+ * on screen is being re-asked.
+ *
+ * It is a single 900ms play rather than an infinite pulse, so between checks
+ * there is nothing animating at all. See the halo below for the case that IS
+ * infinite, and why.
+ *
+ * `currentColor` so the ring is whatever the dot is: green while healthy, red
+ * on the check that is failing, without a second colour to keep in step.
+ * Fired by remounting the element - see useCheckPulse. */
+.ui-conn-ripple {
+  position: absolute;
+  /* Centred on the dot by insetting to its own box and letting the transform
+     grow it outwards, so the ring stays concentric at every scale. */
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  pointer-events: none;
+  animation: ui-conn-ripple 900ms var(--ease-out) 1 both;
+}
+@keyframes ui-conn-ripple {
+  from {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(3.2);
+  }
+}
+/* A person who has asked for less motion gets none of it. The dot's colour
+   already carries the state; the ring is emphasis, and emphasis is the first
+   thing to drop. */
+@media (prefers-reduced-motion: reduce) {
+  .ui-conn-ripple {
+    animation: none;
+  }
+}
+
 /* The halo only ever appears on a state that is UNRESOLVED. A healthy dot that
    pulsed would be an animation running on every screen forever, which is both
    a battery cost and the visual equivalent of a smoke alarm chirping. */

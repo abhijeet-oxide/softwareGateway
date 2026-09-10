@@ -38,6 +38,23 @@ export interface NavProfile {
   avatarUrl?: string;
   /** shown when there is no avatar image; the initials are derived if omitted */
   initials?: string;
+  /**
+   * WHAT KIND of account this is, as a glyph on the corner of the avatar.
+   *
+   * The second line already names it in words, and words in 10.5px grey type
+   * are the least glanceable thing in a rail: "Admin", "Operator", "Security",
+   * "Reader" and "User" occupy the same position and differ by a few letters,
+   * for the one fact that decides whether every control on screen is available
+   * to you.
+   *
+   * A badge rather than a replacement for the initials, which are who you are
+   * rather than what you are - and it survives the collapsed rail, where the
+   * words do not. The app supplies the glyph because the KINDS are the app's
+   * (this kit knows nothing about tenant roles); `badgeLabel` is what the
+   * badge means, for the tooltip and for a screen reader.
+   */
+  badge?: ReactNode;
+  badgeLabel?: string;
   active?: boolean;
   onClick?: () => void;
   tooltip?: string;
@@ -205,11 +222,23 @@ function ProfileCard({ profile, collapsed }: { profile: NavProfile; collapsed: b
         }
       }}
     >
-      {profile.avatarUrl ? (
-        <img className="ui-nav-avatar" src={profile.avatarUrl} alt="" />
-      ) : (
-        <span className="ui-nav-avatar is-initials">{initials}</span>
-      )}
+      <span className="ui-nav-avatar-slot">
+        {profile.avatarUrl ? (
+          <img className="ui-nav-avatar" src={profile.avatarUrl} alt="" />
+        ) : (
+          <span className="ui-nav-avatar is-initials">{initials}</span>
+        )}
+        {profile.badge && (
+          <span
+            className="ui-nav-avatar-badge"
+            role={profile.badgeLabel ? "img" : undefined}
+            aria-label={profile.badgeLabel}
+            aria-hidden={profile.badgeLabel ? undefined : true}
+          >
+            {profile.badge}
+          </span>
+        )}
+      </span>
       {!collapsed && (
         <div className="ui-nav-profile-text">
           <div className="ui-nav-profile-name">{profile.name}</div>
@@ -220,7 +249,16 @@ function ProfileCard({ profile, collapsed }: { profile: NavProfile; collapsed: b
   );
   return (
     <Tooltip
-      title={collapsed ? profile.name : (profile.tooltip ?? "Profile and settings")}
+      title={
+        collapsed
+          ? // COLLAPSED, the two lines of text are gone and the badge is the
+            // only thing left saying what this account is - so the hover has to
+            // carry both facts rather than only the name.
+            profile.badgeLabel
+            ? `${profile.name} - ${profile.badgeLabel}`
+            : profile.name
+          : (profile.tooltip ?? "Profile and settings")
+      }
       placement="right"
     >
       {inner}

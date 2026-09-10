@@ -64,6 +64,21 @@ func PolicyFor(r *http.Request) PolicyResource {
 		res.Kind, res.Action = "worker", "view"
 	case strings.HasPrefix(p, "/api/v1/policies"):
 		res.Kind, res.Action = "policy_catalogue", "view"
+	// Discovery for the whole estate. `product`/`view` rather than a kind of
+	// its own, because that is what the per-product route already asks and the
+	// two return the same rows: a caller who may read a product's discovery
+	// status may read it in a listing as well. Named here rather than left to
+	// the fallback, which would judge it a tenant-wide `system` read and refuse
+	// every product owner the Overview.
+	case strings.HasPrefix(p, "/api/v1/discovery"):
+		res.Kind, res.Action = "product", "view"
+	// Releases across every product, which is what the Packages listing shows.
+	// The same `package`/`view` the per-product route asks, for the same rows;
+	// the handler narrows them to VisibleProducts, which is what makes the
+	// wider door safe. Before this route existed the listing asked once per
+	// product and joined the answers in the browser.
+	case strings.HasPrefix(p, "/api/v1/packages"):
+		res.Kind, res.Action = "package", "view"
 	case strings.HasPrefix(p, "/api/v1/system"):
 		res.Kind, res.Action = "system", "view"
 

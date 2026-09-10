@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,8 +21,16 @@ import (
 
 // PackageRow is a row in `packages`.
 type PackageRow struct {
-	ID             int64
-	ProductID      int64
+	ID        int64
+	ProductID int64
+	// ProductName is the product this release belongs to, joined on read.
+	//
+	// Filled by ListPackages and left empty by the readers that were handed a
+	// product name to begin with. It exists for the estate-wide listing, whose
+	// rows span products: without it, a caller merging thirty products' rows
+	// has an id where the name should be and no way to render the product
+	// column it is showing.
+	ProductName    string
 	SourceRepoID   int64
 	Tag            string
 	ManifestDigest string
@@ -768,8 +777,88 @@ type ListPackagesFilter struct {
 	// and cannot be seen is worse - somebody eventually has to find out where a
 	// signature went.
 	IncludeAccessories bool
-	Limit              int
-	Offset             int
+	// Products lists several products at once, for the estate-wide listing.
+	//
+	// It exists because there was no way to ask the question the Packages page
+	// asks - "the newest releases across everything I can see" - so the browser
+	// asked once per product and merged the answers itself. That is one request
+	// per product on every keystroke-free page load, and it cannot page: each
+	// product's page is its own, so a page of twenty-five rows out of the merge
+	// needs a hundred rows fetched from each of thirty products first.
+	//
+	// Empty means "whatever ProductName says", which is every existing caller.
+	// Both set is not a thing any caller needs and ProductName wins, so a
+	// scoped listing can never be widened by a stray slice.
+	Products []string
+	// Search matches the repository path, the display path, the tag or the
+	// display tag, case-insensitively, on a substring.
+	//
+	// SERVER-SIDE, because the alternative is what this replaces: fetch a
+	// hundred rows per product and filter them in the browser, which searches
+	// what happened to be loaded rather than what exists, and answers "nothing
+	// found" for a release on page two. Both spellings of both fields are
+	// matched for the same reason Tag filters on both - a listing renders the
+	// shortened form, and a search that only knew the long one would reject the
+	// text the reader copied off their own screen.
+	Search string
+	Limit  int
+	Offset int
+}
+
+// versionish opens like a version: a digit, or a v in front of one.
+var versionish = regexp.MustCompile(`^v?[0-9]`)
+
+// SearchTerms splits what somebody typed into the terms a row must match.
+//
+// # Why this is not just the string
+//
+// Because people write a release down the way they SAY it, and they say it
+// three ways: `chart:1.4.2`, `chart@1.4.2` and `chart 1.4.2`. No single column
+// contains the separator - the path is one field and the tag is another - so a
+// single LIKE over the whole query answers "nothing found" for a reference
+// pasted straight out of the thing being searched for. That was reported
+// against the browser-side search this replaced, and fixing it there and not
+// here would move the defect rather than remove it.
+//
+// So a query becomes TERMS, each of which must match some field. Whitespace
+// splits, and so does a colon or an at-sign BETWEEN A NAME AND SOMETHING THAT
+// OPENS LIKE A VERSION - the last one, because a repository path may carry a
+// separator of its own and the version is what follows the final one.
+//
+// The version test is what keeps a digest whole: `sha256:ccbd…` is not split,
+// because `ccbd…` does not open like a version, so it is matched as typed
+// rather than turned into two terms that match nothing.
+//
+// Exported because both the search and anything that has to explain it - a CLI
+// help string, a placeholder - should read from one definition of what a term
+// is.
+func SearchTerms(raw string) []string {
+	q := strings.ToLower(strings.TrimSpace(raw))
+	if q == "" {
+		return nil
+	}
+
+	fields := strings.Fields(q)
+	// The punctuated form is one word, so it is only ever considered when the
+	// query IS one word: `nokia/cmm 24.Q3` is already two terms and splitting
+	// its path on a colon it does not have would be inventing a third.
+	if len(fields) == 1 {
+		if i := strings.LastIndexAny(q, ":@"); i > 0 && i < len(q)-1 {
+			name, version := q[:i], q[i+1:]
+			if versionish.MatchString(version) {
+				return []string{name, version}
+			}
+		}
+	}
+	return fields
+}
+
+// scope names what a filter asked for, for an error message.
+func (f ListPackagesFilter) scope() string {
+	if f.ProductName != "" {
+		return f.ProductName
+	}
+	return strings.Join(f.Products, ",")
 }
 
 // ListPackages backs the packages list API and CLI.
@@ -786,12 +875,29 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 		       COALESCE(pk.display_tag,''), pk.expanded_at, pk.accessory_of,
 		       COALESCE(pk.analysis_state,''), COALESCE(pk.analysis_error,''),
 		       pk.archived_at,
-		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, '')
+		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, ''),
+		       pr.name
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
 		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
-		 WHERE pr.name = ?`
-	args := []any{f.ProductName}
+		 WHERE 1=1`
+	var args []any
+
+	// ONE PRODUCT, or a named set of them. Never "all products" by omission:
+	// every caller states its scope, so a filter built without one lists
+	// nothing rather than everything.
+	switch {
+	case f.ProductName != "":
+		query += " AND pr.name = ?"
+		args = append(args, f.ProductName)
+	case len(f.Products) > 0:
+		query += " AND pr.name IN (" + placeholders(len(f.Products)) + ")"
+		for _, name := range f.Products {
+			args = append(args, name)
+		}
+	default:
+		return nil, errors.New("list packages: a product or a set of products is required")
+	}
 
 	// BOTH SPELLINGS FILTER, for the same reason both spellings resolve in
 	// GetPackageRef: a listing renders the shortened form, and a filter that
@@ -813,6 +919,27 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 	if f.State != "" {
 		query += " AND pk.state = ?"
 		args = append(args, f.State)
+	}
+	// THE SEARCH: every term has to match somewhere, and "somewhere" is four
+	// fields.
+	//
+	// LOWER on both sides rather than a collation, because the two dialects
+	// disagree about what LIKE does with case: SQLite folds ASCII case for
+	// LIKE by default and PostgreSQL does not, so an unlowered `LIKE` would
+	// match `Orb_23` in development and miss it in production - the worst
+	// available shape for a bug.
+	//
+	// A leading wildcard cannot use an index, and that is accepted here: the
+	// query is already bounded by the product set and by LIMIT, and the
+	// alternative on offer - filtering a hundred rows per product in the
+	// browser - is not a faster search, it is a wrong one.
+	for _, term := range SearchTerms(f.Search) {
+		pattern := "%" + escapeLike(term) + "%"
+		query += ` AND (LOWER(COALESCE(sr.repository_path,'')) LIKE ? ESCAPE '\'
+		            OR LOWER(COALESCE(sr.display_path,'')) LIKE ? ESCAPE '\'
+		            OR LOWER(pk.tag) LIKE ? ESCAPE '\'
+		            OR LOWER(COALESCE(pk.display_tag,'')) LIKE ? ESCAPE '\')`
+		args = append(args, pattern, pattern, pattern, pattern)
 	}
 	if !f.IncludeAccessories {
 		query += " AND pk.accessory_of IS NULL"
@@ -849,7 +976,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(query), args...)
 	if err != nil {
-		return nil, fmt.Errorf("list packages for product %q: %w", f.ProductName, err)
+		return nil, fmt.Errorf("list packages for product %q: %w", f.scope(), err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -864,6 +991,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 			&r.ExpandedAt, &r.AccessoryOf, &r.AnalysisState, &r.AnalysisError,
 			&r.ArchivedAt,
 			&r.SourceRepository, &r.DisplayRepository,
+			&r.ProductName,
 		); err != nil {
 			return nil, fmt.Errorf("scan package row: %w", err)
 		}

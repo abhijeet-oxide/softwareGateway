@@ -1,0 +1,41 @@
+-- The index a listing needs to carry each release's transfer history.
+--
+-- # What it is for
+--
+-- A package listing has to state a release's STATUS - new, downloading,
+-- downloaded, ready for production, failed - and that is derived from what has
+-- been attempted with it. So the listing reads its rows' transfers, in one
+-- batched query per page: `WHERE package_id IN (...) ORDER BY created_at DESC`.
+--
+-- # Why it did not exist before
+--
+-- Because until now nothing asked this question of more than one release at a
+-- time. The single-release read has always filtered on `package_id` with no
+-- index behind it, and got away with it: one equality over a table of a few
+-- hundred rows, once, on a page somebody opened deliberately.
+--
+-- A LISTING is a different shape. Twenty-five package ids at a time, on a page
+-- that is polled while anything is being analysed, and the alternative the
+-- interface used instead - fetch the two hundred most recent transfers of the
+-- whole estate and join them in the browser - was both wasteful and WRONG:
+-- page four's releases were downloaded long before the two-hundredth most
+-- recent transfer, so every row on it reported as never downloaded.
+--
+-- # The column order
+--
+-- `package_id` first because that is the equality, `created_at DESC` second so
+-- the newest-first ordering the query asks for comes out of the index rather
+-- than out of a sort. That makes the batched read an ordered walk of the
+-- matching rows, and it makes the existing single-release read an index seek
+-- instead of a scan.
+--
+-- DESC spelled out to match the query exactly. Postgres can walk an ASC index
+-- backwards; the SQLite planner is fussier about it, and the two dialects are
+-- better kept identical than subtly different - the same argument
+-- 00030_transfer_listing_order makes.
+
+-- +goose Up
+CREATE INDEX transfers_by_package_idx ON transfers (package_id, created_at DESC);
+
+-- +goose Down
+DROP INDEX transfers_by_package_idx;

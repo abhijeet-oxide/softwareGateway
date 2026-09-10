@@ -387,7 +387,7 @@ function PolicyTable({
         rowKey="id"
         dataSource={filtered}
         scroll={{ x: '100%' }}
-        pagination={{ pageSize: 50, showSizeChanger: true, size: 'small' }}
+        pagination={{ pageSize: 50, size: 'small' }}
         expandable={{ expandedRowRender: (check) => <CheckDetail check={check} onSourceClick={onSourceClick} /> }}
         columns={[
           {

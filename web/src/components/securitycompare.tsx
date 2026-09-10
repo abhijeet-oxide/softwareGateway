@@ -938,7 +938,7 @@ function ArtifactDeltaCard({ report, onSync, syncing }: {
         rowKey="key"
         dataSource={rows}
         scroll={{ x: 'max-content' }}
-        pagination={{ pageSize: 10, size: 'small', showSizeChanger: true }}
+        pagination={{ pageSize: 10, size: 'small' }}
         columns={[
           {
             title: 'Artifact',
@@ -1162,7 +1162,7 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
         rowKey={(r) => `${r.type}-${r.cve ?? r.id}-${r.component.id}-${r.artifact.name}`}
         dataSource={rows}
         scroll={{ x: 'max-content' }}
-        pagination={{ pageSize: 25, showSizeChanger: true, size: 'small' }}
+        pagination={{ pageSize: 25, size: 'small' }}
         columns={[
           {
             title: 'CVE',

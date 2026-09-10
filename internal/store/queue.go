@@ -1722,8 +1722,19 @@ type ListTransfersFilter struct {
 	// is what every caller wanting "everything that has happened to this
 	// release" asks for.
 	Operation string
-	Limit     int
-	Offset    int
+	// PackageIDs narrows to a SET of packages, for a listing that needs each
+	// row's history.
+	//
+	// One query for the page rather than one per row, which is the same rule
+	// attachSecurity follows and the reason a package listing can carry its own
+	// state at all. Before it existed a listing had two choices: fetch each
+	// release individually (fifty queries for one column) or fetch the hundred
+	// most recent transfers of the whole estate and join them in the browser -
+	// which is wrong as soon as the listing is paged, because page four's
+	// releases were downloaded long before the hundredth most recent transfer.
+	PackageIDs []int64
+	Limit      int
+	Offset     int
 	// WithoutJobCounts drops the per-transfer aggregates over `jobs`, leaving
 	// them zero.
 	//
@@ -1752,6 +1763,12 @@ func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]
 	if f.PackageID > 0 {
 		where += " AND t.package_id = ?"
 		args = append(args, f.PackageID)
+	}
+	if len(f.PackageIDs) > 0 {
+		where += " AND t.package_id IN (" + placeholders(len(f.PackageIDs)) + ")"
+		for _, id := range f.PackageIDs {
+			args = append(args, id)
+		}
 	}
 	if f.Operation != "" {
 		where += " AND rq.operation = ?"

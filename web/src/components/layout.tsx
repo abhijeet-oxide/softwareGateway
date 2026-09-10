@@ -16,7 +16,8 @@ import { ARTIFACT_ICONS, DownloadIcon, Icon, PackageIcon, RocketIcon } from './i
 import type { IconComponent } from './icons'
 import { usePresentComponents } from '../api/queries'
 import { describeFailure } from '../api/errors'
-import { c, EmptyArt, EmptyState, mono } from '../uikit'
+import brand from '../brand'
+import { c, ConnectionNotice, EmptyArt, EmptyState, mono } from '../uikit'
 import { NA } from './value'
 
 /**
@@ -201,6 +202,27 @@ export function EmptyStateCard({
  */
 export function ErrorState({ error, retry }: { error: unknown; retry?: () => void }) {
   const failure = describeFailure(error)
+
+  /*
+    AN OUTAGE IS NOT A FAILED REQUEST, and this band used to say it was.
+
+    A service that is not there fails the page's first read, and what the
+    reader met was a red alert saying the Coordinator could not be reached and
+    that they should check it is running and reachable from this host - three
+    instructions to somebody with no host, no shell and no idea what a
+    Coordinator is - beside a Try again button that had to be pressed by hand,
+    repeatedly, to find out whether it was over.
+
+    Nothing about that is this page's business. The connection is watched
+    centrally, checked on a schedule, and stated in one voice; this hands the
+    band over to it. The block below counts down to the next check and the page
+    fills itself in when the service answers, so there is nothing left to press
+    and nothing to keep pressing.
+  */
+  if (failure.kind === 'unreachable' || failure.code === 'UNAVAILABLE') {
+    return <ConnectionNotice service={brand.appName} />
+  }
+
   return (
     <Alert
       // A refusal is not a fault. Amber says "this is deliberate and it is

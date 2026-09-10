@@ -67,7 +67,10 @@ const TITLES: Record<ErrorCode, string> = {
   ABORTED: 'Interrupted',
   RESOURCE_EXHAUSTED: 'Too many requests',
   UNAVAILABLE: 'Temporarily unavailable',
-  INTERNAL: 'The Coordinator failed',
+  // "The Coordinator failed" was the process's own name in front of somebody
+  // who has never been told it has one. The fault is the same fault; what
+  // changes is that the heading now names the thing they were using.
+  INTERNAL: 'The service failed',
 }
 
 const KINDS: Record<ErrorCode, FailureKind> = {
@@ -111,7 +114,13 @@ export function describeFailure(error: unknown): Failure {
   if (error instanceof UnreachableError) {
     return {
       kind: 'unreachable',
-      title: 'The Coordinator could not be reached',
+      // Named as the CONDITION rather than as the diagnosis. "The Coordinator
+      // could not be reached" is three words of internal vocabulary and one
+      // instruction, aimed at whoever runs the deployment, shown to whoever
+      // was using it. What the connection is doing about it is said by the
+      // connection surfaces; what this has to say is which of the four kinds
+      // of bad news this is.
+      title: 'Connection lost',
       detail: error.message,
       retryable: true,
     }

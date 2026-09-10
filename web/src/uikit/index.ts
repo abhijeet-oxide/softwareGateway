@@ -53,11 +53,15 @@ export type { Severity, Verdict } from "./color";
 export {
   CheckCircleIcon,
   CheckIcon,
+  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ErrorCircleIcon,
   InfoIcon,
   MoonIcon,
+  RefreshIcon,
+  SignalIcon,
+  SignalOffIcon,
   SpinnerIcon,
   SunIcon,
   SystemIcon,
@@ -87,6 +91,38 @@ export { default as Kbd } from "./primitives/Kbd";
 export { default as Mono } from "./primitives/Mono";
 export { FadeIn, Stagger, StaggerItem } from "./primitives/motion";
 export { BrandMark, BrandLockup } from "./primitives/BrandLockup";
+
+// --- is the service there? -------------------------------------------------
+// One monitor, one answer, and three surfaces that never take the screen away
+// from the person using it. Every tool has an outage; every tool that handles
+// one by improvising a toast per failed request handles it the same wrong way.
+export {
+  connection,
+  createConnectionMonitor,
+  useConnection,
+  useOnRestore,
+  useHeldWork,
+  useCountdown,
+  RESTORED_MS,
+} from "./connection";
+export type {
+  ConnectionMonitor,
+  ConnectionOptions,
+  ConnectionPhase,
+  ConnectionReport,
+  ConnectionSnapshot,
+  Probe,
+  ProbeResult,
+  ProbeVerdict,
+} from "./connection";
+export {
+  ConnectionPill,
+  ConnectionAlert,
+  ConnectionNotice,
+  ConnectionDetail,
+  describeConnection,
+} from "./primitives/ConnectionStatus";
+export type { ConnectionCopy } from "./primitives/ConnectionStatus";
 
 // --- the application chrome, shared whole --------------------------------
 export { AppShell, SideNav, TopBar, NavEntry } from "./primitives/AppShell";

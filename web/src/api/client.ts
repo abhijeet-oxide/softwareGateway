@@ -1,5 +1,6 @@
 import type { Problem, ErrorCode } from './types'
 import { authorization, renewSession, requireSignIn } from '../auth/session'
+import { connection } from '../uikit'
 
 /**
  * The HTTP client, mirroring pkg/apis/softwaregateway/v1/client.go.
@@ -30,13 +31,73 @@ export class ApiError extends Error {
   }
 }
 
-/** The Coordinator could not be reached at all, which calls for a different fix. */
+/**
+ * Nothing answered, which calls for a different fix from anything the service
+ * could have said.
+ *
+ * The message is written for the person who will see it, and that is a change
+ * from what it used to say. "The Coordinator could not be reached. Check that
+ * it is running and reachable from this host" is three instructions to an
+ * operator, shown to a release manager who has never heard the word
+ * Coordinator, has no host to check anything from, and is being told to
+ * diagnose a deployment because a browser missed one request. The technical
+ * sentence still exists - the connection surfaces keep it behind a disclosure,
+ * where the person who can act on it will look for it.
+ */
 export class UnreachableError extends Error {
   constructor(cause: unknown) {
-    super('The Coordinator could not be reached. Check that it is running and reachable from this host.')
+    super('The connection to the service was lost. The connection is being checked automatically.')
     this.name = 'UnreachableError'
     this.cause = cause
   }
+}
+
+/**
+ * WHAT EVERY REQUEST TELLS THE CONNECTION MONITOR.
+ *
+ * The application makes hundreds of requests and every one of them is evidence
+ * about whether the service is there - which is why nothing here polls to find
+ * out. A screen doing work never needs a health check; the health check exists
+ * for the screen doing nothing, and for the seconds after ordinary traffic has
+ * started failing.
+ *
+ * Read from the STATUS rather than from the body, and only the two statuses
+ * that are statements about reachability rather than about a request:
+ *
+ *   502 / 504  the web tier answered because the service did not
+ *   503        the service answered that it is standing down
+ *
+ * Everything else - 401, 403, 404, 409, 500 - is the service working. A
+ * refusal is not an outage, and reporting one as an outage would put an
+ * "unavailable" card on screen every time somebody opened a page they are not
+ * allowed to see.
+ */
+function noteAnswered(status: number): void {
+  if (status === 502 || status === 504) {
+    connection.reportUnreachable({
+      verdict: 'unreachable',
+      status,
+      detail: `The web tier answered ${status}: it could not reach the service.`,
+    })
+    return
+  }
+  if (status === 503) {
+    connection.reportUnreachable({
+      verdict: 'unavailable',
+      status,
+      detail: 'The service answered 503: it is not accepting requests.',
+    })
+    return
+  }
+  connection.reportReachable()
+}
+
+/** Nothing answered at all: DNS, a refused connection, a dead proxy, a laptop lid. */
+function noteSilence(cause: unknown): void {
+  connection.reportUnreachable({
+    verdict: 'unreachable',
+    detail: cause instanceof Error ? cause.message : String(cause),
+  })
 }
 
 const BASE = '/api/v1'
@@ -118,6 +179,7 @@ async function request<T>(path: string, init?: RequestInit, renewed = false): Pr
       },
     })
   } catch (cause) {
+    noteSilence(cause)
     throw new UnreachableError(cause)
   } finally {
     // The slot is held for the HEADERS, not for the body. Everything this
@@ -126,6 +188,8 @@ async function request<T>(path: string, init?: RequestInit, renewed = false): Pr
     // using any more.
     release()
   }
+
+  noteAnswered(response.status)
 
   if (response.status === 401 && !renewed && (await renewSession())) {
     return request<T>(path, init, true)
@@ -203,10 +267,12 @@ export async function fetchText(url: string): Promise<string> {
   try {
     response = await fetch(url, { headers: { Accept: '*/*', ...(await authorization()) } })
   } catch (cause) {
+    noteSilence(cause)
     throw new UnreachableError(cause)
   } finally {
     release()
   }
+  noteAnswered(response.status)
   if (!response.ok) {
     throw await problemFrom(response)
   }
@@ -238,10 +304,12 @@ export async function download(url: string): Promise<void> {
   try {
     response = await fetch(url, { headers: { Accept: '*/*', ...(await authorization()) } })
   } catch (cause) {
+    noteSilence(cause)
     throw new UnreachableError(cause)
   } finally {
     release()
   }
+  noteAnswered(response.status)
   if (!response.ok) {
     throw await problemFrom(response)
   }

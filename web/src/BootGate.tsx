@@ -8,6 +8,7 @@ import brand from './brand'
 import {
   AccessDeniedArt,
   BootSplash,
+  c,
   ErrorArt,
   MaintenancePage,
   ServiceDownArt,
@@ -217,9 +218,17 @@ function UnexpectedAnswer({
         </span>
       }
     >
-      The version endpoint answered {status} rather than a version. This
-      address may not be in front of a Coordinator: check what /api/v1 is
-      proxied to. {detail}
+      <>
+        <div>
+          This address answered, and did not answer as {brand.appName}. Waiting
+          will not resolve it, and the deployment needs somebody to look at it.
+        </div>
+        <div style={{ marginTop: 12, fontSize: 12, color: c.text3, lineHeight: 1.5 }}>
+          The version endpoint answered {status} rather than a version. This
+          address may not be in front of a Coordinator: check what /api/v1 is
+          proxied to. {detail}
+        </div>
+      </>
     </StatusScreen>
   )
 }
@@ -253,7 +262,7 @@ function UnderMaintenance({ onRetry, retrying }: { onRetry: () => void; retrying
         </span>
       }
     >
-      The Coordinator is up and has been placed in maintenance. Downloads
+      {brand.appName} is up and has been placed in maintenance. Downloads
       already in progress are unaffected; this screen clears itself as soon as
       the window ends.
     </MaintenancePage>
@@ -307,10 +316,10 @@ function ServiceUnavailable({
     <StatusScreen
       brand={brand}
       art={<ServiceDownArt size={140} />}
-      title="Service unavailable"
+      title={`${brand.appName} is not responding`}
       actions={[
         {
-          label: 'Try again now',
+          label: 'Check again now',
           primary: true,
           icon: <ReloadOutlined />,
           loading: retrying,
@@ -323,13 +332,39 @@ function ServiceUnavailable({
         </span>
       }
     >
-      {!answered
-        ? 'The Coordinator did not respond. It may be starting up, restarting, or unreachable from this host.'
-        : answered === 500
-          ? 'The Coordinator answered 500. It received the request and failed on it.'
-          : `The web tier answered ${answered}: it could not reach the Coordinator. The Coordinator may be starting up, restarting, or unreachable from the web tier.`}{' '}
-      Nothing is affected by this - no download was cancelled and no
-      configuration was changed.
+      {/*
+        TWO SENTENCES FOR TWO READERS, in that order and not the other way
+        round.
+
+        This screen used to open with "The Coordinator did not respond. It may
+        be starting up, restarting, or unreachable from this host" - which is
+        an accurate report written for the person who runs the deployment, and
+        which arrives in front of the release manager who simply opened a
+        bookmark. They do not know what a Coordinator is, have no host to be
+        reachable from, and cannot act on any of it; what it tells them is that
+        the product is broken and speaking a language they do not have.
+
+        So the first line says the thing anybody can act on: it is not
+        answering, nothing was lost, and the page is already checking. The
+        diagnosis stays - this screen is also the one an operator gets a
+        screenshot of - and moves below it, quieter, where somebody looking for
+        it will find it and nobody else has to read it.
+      */}
+      <>
+        <div>
+          The service did not answer, so nothing can be loaded yet. This page
+          keeps checking on its own and continues as soon as it does. Nothing is
+          affected in the meantime - no download was cancelled and no
+          configuration was changed.
+        </div>
+        <div style={{ marginTop: 12, fontSize: 12, color: c.text3, lineHeight: 1.5 }}>
+          {!answered
+            ? 'The Coordinator did not respond: it may be starting up, restarting, or unreachable from this host.'
+            : answered === 500
+              ? 'The Coordinator answered 500: it received the request and failed on it.'
+              : `The web tier answered ${answered}: it could not reach the Coordinator.`}
+        </div>
+      </>
     </StatusScreen>
   )
 }

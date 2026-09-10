@@ -35,9 +35,27 @@ import { c, mono } from '../uikit'
  * in its own body, which has room for the detail and a Try again, and a toast
  * on top of it would say the same thing twice.
  *
- * Sign-in is the one exclusion. A 401 has already sent the browser to the
- * identity provider (see api/client), and a toast about it would land on a page
- * that is being replaced.
+ * Sign-in is one exclusion. A 401 has already sent the browser to the identity
+ * provider (see api/client), and a toast about it would land on a page that is
+ * being replaced.
+ *
+ * AN OUTAGE IS THE OTHER, and it is the reason this file was revisited.
+ *
+ * A service that is not there fails every read on the page, and each failure
+ * arrived here as its own toast: twelve identical cards stacking up the right
+ * edge of the window, all about one cause, none of them saying whether the
+ * thing was still down. Deduplication helped and did not fix it, because the
+ * defect is not repetition - it is that a toast is the wrong instrument. A
+ * toast reports an EVENT and goes away; an outage is a CONDITION that persists
+ * and then ends, and the reader's real questions are how old the screen is and
+ * whether it is coming back. Those are answered in one place now, by the
+ * connection surfaces from the shared kit, which say it once and keep saying it
+ * for as long as it is true.
+ *
+ * So a failed READ during an outage is silent here. A failed ACTION is not: a
+ * person who pressed Save is owed an answer to that press, whatever else is
+ * happening, and "nothing was changed" is exactly the fact they need before
+ * they press it again.
  */
 
 /**
@@ -79,6 +97,12 @@ export function reportFailure(error: unknown, action?: string): void {
   // Already being handled by a redirect to the identity provider.
   if (failure.kind === 'unauthenticated') return
 
+  // The connection owns this one. `code` rather than `kind` because a 429 is
+  // also filed as unavailable and is not an outage: it is the service, present
+  // and answering, saying to slow down - which nothing else on screen reports.
+  const outage = failure.kind === 'unreachable' || failure.code === 'UNAVAILABLE'
+  if (outage && !action) return
+
   const key = `${failure.code ?? failure.kind}|${failure.detail}|${action ?? ''}`
   const now = Date.now()
   const last = recent.get(key)
@@ -90,7 +114,18 @@ export function reportFailure(error: unknown, action?: string): void {
     if (now - at > DEDUPE_MS) recent.delete(k)
   }
 
-  const reported = action ? { ...failure, title: `${action} failed` } : failure
+  const reported = action
+    ? {
+        ...failure,
+        title: `${action} failed`,
+        // The outage is being described in full elsewhere. What belongs HERE is
+        // the consequence for the thing that was pressed, which is the one
+        // thing the corner card cannot know: whether it happened.
+        detail: outage
+          ? 'The service did not answer, so nothing was changed. This can be repeated once the connection is back.'
+          : failure.detail,
+      }
+    : failure
   if (!notify) {
     if (pending.length < MAX_PENDING) pending.push(reported)
     return

@@ -6,7 +6,8 @@ import {
   ScaleOutlined, SettingOutlined,
 } from './icons'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { initialsOf, useIdentity } from './auth/permissions'
+import { initialsOf, useIdentity, type Permission } from './auth/permissions'
+import { accountLabel } from './auth/roles'
 import { identityClaims } from './auth/session'
 import { useTransferActivity, useVersion, useWorkers } from './api/queries'
 import { describeFleet, summariseFleet } from './domain/fleet'
@@ -43,12 +44,50 @@ function loadCollapsed(): boolean {
  * the shared design system, byte-identical to what the sibling tool mounts.
  * What is this application's is only WHICH entries there are and what belongs
  * in its bar.
+ *
+ * # A navigation is a promise
+ *
+ * Every entry here says "there is something behind this for you", and for a
+ * product owner four of them were lying: Activity, Reports, Repositories and
+ * Settings all opened a page whose reads answered 403, and the pages showed
+ * empty tables rather than saying so. An empty table is worse than a missing
+ * entry - it is a confident statement that nothing has happened in a system
+ * they simply cannot see.
+ *
+ * So each entry names the permission its page needs and is DROPPED for a caller
+ * who does not hold it, and the pages behind them refuse themselves as well
+ * (`RequirePermission`) so a bookmark or a typed address meets the same answer.
+ * The two are separate on purpose: hiding the door is a courtesy, refusing at
+ * the door is the behaviour, and neither is the security control - that is the
+ * server, on every request.
  */
-const NAV = [
+const NAV: {
+  key: string
+  icon: ReactNode
+  label: string
+  /** What the page behind it needs. Absent means every signed-in caller. */
+  permission?: Permission
+  /**
+   * Ask whether the permission is held ANYWHERE rather than tenant-wide.
+   *
+   * True for a page whose contents the server narrows per product - a product
+   * owner sees their own products' releases, downloads and audit events. False
+   * for the estate pages, which have no product tier at all and so cannot be
+   * narrowed to anything: showing a product owner the Reports entry offers them
+   * a page that can only refuse.
+   */
+  anyScope?: boolean
+}[] = [
   { key: '/', icon: <DashboardOutlined />, label: 'Overview' },
-  { key: '/products', icon: <ProductOutlined />, label: 'Products' },
-  { key: '/packages', icon: <PackageOutlined />, label: 'Packages' },
-  { key: '/downloads', icon: <InboxOutlined />, label: 'Downloads' },
+  { key: '/products', icon: <ProductOutlined />, label: 'Products', permission: 'product.view', anyScope: true },
+  { key: '/packages', icon: <PackageOutlined />, label: 'Packages', permission: 'package.view', anyScope: true },
+  {
+    key: '/downloads',
+    icon: <InboxOutlined />,
+    label: 'Downloads',
+    permission: 'software_download.view',
+    anyScope: true,
+  },
   // Hidden for now. Re-enabling it is this block plus `SafetyOutlined` back in
   // the import above - the icon is in the registry, it is just not imported
   // while nothing renders it (the build refuses an unused import).
@@ -65,11 +104,22 @@ const NAV = [
   // person most likely to want it is a vendor who has not shipped yet. It was
   // reachable only from a link inside one release's Compliance tab, which is a
   // page nobody finds if they have not already found a finding.
-  { key: '/policies', icon: <ScaleOutlined />, label: 'Policies' },
-  { key: '/repositories', icon: <DatabaseOutlined />, label: 'Repositories' },
-  { key: '/activity', icon: <HistoryOutlined />, label: 'Activity' },
-  { key: '/reports', icon: <BarChartOutlined />, label: 'Reports' },
-  { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
+  { key: '/policies', icon: <ScaleOutlined />, label: 'Policies', permission: 'policy_catalogue.view' },
+  {
+    key: '/repositories',
+    icon: <DatabaseOutlined />,
+    label: 'Repositories',
+    permission: 'product.view',
+    anyScope: true,
+  },
+  // The audit trail is the one estate resource with a product tier: the server
+  // narrows it, so a product reader sees their own products' events.
+  { key: '/activity', icon: <HistoryOutlined />, label: 'Activity', permission: 'audit_event.view', anyScope: true },
+  { key: '/reports', icon: <BarChartOutlined />, label: 'Reports', permission: 'report.view' },
+  // The deployment itself: its version, its dependencies, its worker fleet.
+  // An estate page and an administrator's, so it is not offered to anybody
+  // whose access is a product.
+  { key: '/settings', icon: <SettingOutlined />, label: 'Settings', permission: 'system.view' },
 ]
 
 /**
@@ -142,7 +192,7 @@ function ActivityPill({ moving, held, failing, hint }: {
 export function Shell({ children }: { children: ReactNode }) {
   const location = useLocation()
   const navigate = useNavigate()
-  const { who, can } = useIdentity()
+  const { who, can, canAny } = useIdentity()
 
   const [collapsed, setCollapsed] = useState(loadCollapsed)
   const version = useVersion()
@@ -201,7 +251,25 @@ export function Shell({ children }: { children: ReactNode }) {
       .sort((a, b) => b[0].length - a[0].length)[0]?.[1]
     ?? brand.appName
 
-  const items: NavItem[] = NAV.map((n) => ({
+  /*
+    ONLY WHAT THIS ACCOUNT CAN OPEN.
+
+    Filtered rather than disabled: a navigation is a list of places, and a
+    place you may not go is not a place. The page behind each of these refuses
+    itself as well - see `RequirePermission` - so this is the courtesy and that
+    is the behaviour.
+
+    UNTIL THE ANSWER ARRIVES, everything. Filtering on an identity we have not
+    got yet empties the rail on every load and fills it a moment later, which
+    reads as an application that has just noticed who you are; and if /whoami
+    failed outright it would leave one entry on screen for somebody who holds
+    every permission in the system. Not knowing is not a refusal.
+  */
+  const visible = who
+    ? NAV.filter((n) => !n.permission || (n.anyScope ? canAny(n.permission) : can(n.permission)))
+    : NAV
+
+  const items: NavItem[] = visible.map((n) => ({
     key: n.key,
     label: n.label,
     icon: n.icon,
@@ -222,8 +290,6 @@ export function Shell({ children }: { children: ReactNode }) {
     tiers: somebody whose access is entirely per-product holds no tenant role
     at all, and this card used to invent "Product Owner" for them.
   */
-  const productRoles = Object.values(who?.productRoles ?? {}).flat()
-  const heldRoles = [...(who?.roles ?? []), ...productRoles]
   // The Coordinator's answer first, because it is the one that was verified.
   // It only has a name when the ACCESS token carried one, which ZITADEL's does
   // not - so in practice this falls through to the ID token, which is where
@@ -237,9 +303,20 @@ export function Shell({ children }: { children: ReactNode }) {
     // first two characters of the name: that reads "Platform Administrator"
     // as PL while the profile page says PA, and one account looks like two.
     initials: initialsOf(navName),
-    sub: who?.authenticated
-      ? heldRoles.join(', ') || 'No roles'
-      : 'Not signed in',
+    /*
+      ONE WORD, not twelve.
+
+      This joined every role the account holds with commas: an administrator
+      with ten products read as `org-admin, org-member, software-01:
+      product-owner, software-02: product-owner, ...`, wrapped into a paragraph
+      of raw role identifiers in a two-hundred-pixel rail, under the one line
+      on screen whose job is to say who you are.
+
+      Twelve strings is not twelve facts. It is one fact - what this person is
+      here - and a list of products, and the list belongs on the profile page
+      where there is room to arrange it. See auth/roles.
+    */
+    sub: accountLabel(who),
     active: location.pathname.startsWith('/profile'),
     onClick: () => navigate('/profile'),
   }
@@ -290,7 +367,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 "Downloads completed": a confident claim about work they cannot
                 see, on every page, made from no data at all.
               */}
-              {can('read') && (
+              {canAny('software_download.view') && (
                 <ActivityPill
                   moving={moving}
                   held={held}

@@ -91,6 +91,7 @@ import PhRocketLaunch from '~icons/ph/rocket-launch'
 import PhSealCheck from '~icons/ph/seal-check'
 import PhGear from '~icons/ph/gear'
 import PhGithubLogo from '~icons/ph/github-logo'
+import PhLockSimple from '~icons/ph/lock-simple'
 import PhShieldCheck from '~icons/ph/shield-check'
 import PhSpinner from '~icons/ph/spinner'
 import PhSquaresFour from '~icons/ph/squares-four'
@@ -220,6 +221,11 @@ export const CompareOutlined = make('compare', BoxiconsCompare)
 // section, the posture), a sealed check is a CLAIM about one artifact (this
 // thing is signed and the signature verifies).
 export const SafetyOutlined = make('safety', PhShieldCheck)
+// A control that is present and refused. The padlock says the refusal is
+// DELIBERATE, which a greyed-out control on its own cannot: greyed out reads
+// as "not right now", locked reads as "not for you", and only one of those
+// sends somebody to ask for a role.
+export const LockOutlined = make('lock', PhLockSimple)
 export const SafetyCertificateOutlined = make('safety-certificate', PhSealCheck)
 export const SignatureOutlined = make('signature', PhCertificate)
 

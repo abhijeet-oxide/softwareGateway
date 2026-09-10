@@ -56,3 +56,6 @@ test/mockEntra/certs/
 # committed and holds references; this holds values and never is.
 config/secrets/local/*
 !config/secrets/local/.gitkeep
+
+# Local product config files for testing
+config/products/*-dev.yaml

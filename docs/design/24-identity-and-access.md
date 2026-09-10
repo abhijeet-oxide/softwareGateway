@@ -387,6 +387,129 @@ different address, so one human ends up with two accounts.
 > the reports above matter more than they would in a stack that started empty
 > each time.
 
+### 5.1d One person's name, two domains
+
+Two people can hold the same local part in different domains -
+`test@domain1.com` and `test@domain2.com` - and be two different people. A
+ZITADEL **username is unique across the whole instance**, so only one of them
+can be `test`. The obvious workaround is to invent `test2` for the second, and
+it produces a login name that person has never been told and would never guess.
+
+The addresses, meanwhile, were unique from the start.
+
+> **Decision - `username` is optional in `config/users/users.yaml`, and defaults
+> to the address.**
+>
+> An address is unique, it is the one identifier the person definitely knows,
+> and it is already the identity everywhere else in this design: it is what the
+> directory asserts, what auto-linking keys on, and what a re-run matches an
+> existing account by (5.1b). Two people in two domains then hold two distinct
+> usernames without anybody inventing anything, and the name on the account, the
+> name in the seeder's output and the name the person types are one string
+> instead of three.
+
+**Typing the address already worked, and that is worth being precise about,**
+because it is the reason this is a tidying rather than a fix. ZITADEL's Login V2
+resolves what somebody types in two steps: as a **login name** first, and - when
+that matches nobody - as an **e-mail address** (`searchUsers`,
+`apps/login/src/lib/zitadel.ts`, which then refuses anything matching more than
+one account). So `test2` could always sign in by typing `test@domain2.com`. What
+the default removes is the second string, and the need for anyone to know that
+the fallback exists.
+
+> **Decision - the e-mail fallback is asserted on every run, not inherited.**
+>
+> `disableLoginWithEmail` is one field on the organization's login policy, and
+> turning it off does not read as a decision about sign-in - it reads as
+> tightening something. Every account this system provisions before the default
+> existed, and every account the identity provider named itself, gets in by the
+> address rather than by its login name. The seeder now writes `false` rather
+> than preserving what it finds, and prints it beside the password-sign-in line.
+
+> **Decision - two entries may not share an address, and no two accounts may
+> share a login name. Both refuse the run.**
+>
+> An address identifies an account, so two entries carrying one address are one
+> account: the second is not created, it is matched to the first, and its roles
+> are granted to that person. Two entries carrying one login name are the
+> opposite failure - people and machine accounts share one namespace, so the
+> second is refused at creation and never provisioned. Both are invisible while
+> reading the file and both surface at apply time as somebody missing or
+> somebody holding a grant nobody gave them. They are refused where they are a
+> typo in a pull request; `go test ./deploy/...` makes the same two checks on
+> the change itself.
+
+> **Decision - an existing account is renamed to what the file says, and the
+> cost is printed.**
+>
+> The deployment this came from already carries `test` and `test2`. Without
+> reconciliation those accounts keep the invented names forever: the file is
+> corrected, the seeder prints one name, the console shows another, and the fix
+> never reaches the stack. The rename happens only on a difference, so an
+> unchanged file renames nothing, and ZITADEL invalidates that person's tokens
+> and sessions when it happens - which is why it is driven by an edit somebody
+> made rather than by a heuristic, and why the seeder says so on the line where
+> it does it. A refusal (usually: the name is taken) is reported against that
+> account and does not abandon the run.
+
+> **`userLoginMustBeDomain` is reported, not changed.** With it on, every login
+> name carries the organization's domain, and a username that is an address
+> reads as `alex@corp.com@default.localhost`. The address still gets that person
+> in through the fallback above. It is an organization-wide setting that
+> rewrites the login name of every account that already exists, which is not a
+> thing to do as a side effect of adding somebody to a file, so the seeder warns
+> and names the console setting instead.
+
+### 5.1e Membership is its own tier, and it grants nothing
+
+Signing in proves the identity provider recognised somebody. With a corporate
+directory federated that is **every employee**, which is exactly the hole §8.2
+was written to close - and closing it left a second question unanswered:
+
+> An account nobody provisioned and an account provisioned this morning, before
+> anybody decided which products it should reach, held the same thing: no roles
+> at all.
+
+One is a stranger. The other is a colleague waiting on an administrator. Told
+apart by nothing, both met the same full-screen refusal saying their account was
+not enabled, and the second one is a support ticket - the person was added to
+`config/users/users.yaml`, the file plainly says so, and the product says they
+do not exist.
+
+> **Decision - a baseline role, granted to every provisioned person, carrying
+> no permission at all.**
+>
+> `tenant.baselineRole` in `config/access/roles.yaml`, `org-member` as shipped.
+> The seeder grants it to everybody it provisions, on top of whatever else they
+> hold, so holding it means *somebody put them in that file* and holding
+> nothing means an account the identity provider let in and nobody has claimed.
+>
+> It is a third tier rather than a weak version of the first. `org-reader` is
+> "may read everything"; `org-member` is "is one of us", which is not a
+> permission and must never quietly become one - it is held by everybody who
+> can sign in, so a permission added to it is a permission granted to the whole
+> directory. `go test ./deploy/...` fails if the baseline role's name appears
+> anywhere in `config/access/policies`.
+
+> **Decision - membership is holding ANY role, not holding that one.**
+>
+> `Identity.IsMember` is true for any role of either tier. Pinning the string
+> `org-member` into Go would make renaming the baseline in configuration a
+> lockout in the binary, and anybody holding a real role is a member by having
+> it. The baseline is the *mechanism* that gives a product-less person their
+> one role - not the definition.
+
+What each of the three tiers answers, in the order they are asked:
+
+| Question | Answered by | Grants |
+|---|---|---|
+| Is this a valid token from this tenant? | signature, issuer, audience, `Config.Tenant` (§8.6) | nothing |
+| Has anybody provisioned this account? | the baseline role → `member` | nothing |
+| May they do X to Y? | org-tier and product-tier roles, via Cerbos | everything else |
+
+A member with no product access gets the application, an empty product list
+that says so, and the support contact - not a door.
+
 ### 5.2 The four personas
 
 | Persona | How it is expressed | Scope |
@@ -486,18 +609,64 @@ is what [09](09-api.md) §10.1 was holding the seam open for.
 
 ### 8.1 Where product grants come from
 
-The token carries identity, tenant and **global** roles only. Per-product grants
-are read from ZITADEL's API and cached for 60 seconds.
+**The token carries all of them, and this section used to say otherwise.** It
+described per-product grants as read from ZITADEL's API and cached for sixty
+seconds, with a measured cost for the lookup. No such lookup was ever built: no
+Go service in this repository holds a ZITADEL credential or makes a single call
+to it. `pkg/authz` reads role claims and nothing else, which is a good design -
+and it was documented as something else, which is how the gap below survived a
+review.
 
-> **Decision - product grants are resolved and cached, not carried in the token.**
+Roles arrive in claims named `urn:zitadel:iam:org:project:<projectID>:roles`,
+one per project, plus a flattened `urn:zitadel:iam:org:project:roles` for the
+requesting one. `readRoles` decodes every claim of that shape and dedupes;
+`splitProductRole` reads the product off the key.
+
+> **Decision - every grant is written on the `platform` project.**
 >
-> *Alternative considered:* request every product's audience at login so the token carries all grants.
+> ZITADEL asserts roles only for the projects in a token's **role audience**,
+> and the audience of a token issued to the web application is that
+> application's own project - `platform` - unless the sign-in also asks for
+> `urn:zitadel:iam:org:project:id:<id>:aud` naming another. This is not
+> claim-shaping at the end: the grants are never loaded.
+> `internal/query/userinfo_by_id.sql` reads `and project_id = any($3)`, with
+> `$3` built by `prepareRoles` in `internal/api/oidc/userinfo.go`.
 >
-> *Rejected because* it requires the login scope string to enumerate every product ID - 2,160 characters at forty products. A product created on Tuesday is invisible to everyone until the OIDC client configuration is changed and redeployed, and the symptom is a permissions bug rather than a missing config. The cached lookup has no such coupling: a grant made at 10:00 works at 10:01.
+> Product roles were granted on each product's own project, so **the token
+> could not carry them**. Somebody granted `product-owner` on one product and
+> nothing else signed in perfectly and arrived holding no roles at all: every
+> screen refused, `/whoami` describing an account with nothing on it,
+> indistinguishable from never having been provisioned - while the ZITADEL
+> console showed the grant sitting there. Adding any `org-` role appeared to
+> fix it, because those were always granted on `platform` where the token could
+> see them, and it "fixed" it by making that person able to read every product.
 >
-> *Cost, measured:* the ZITADEL read is an index scan on a precomputed projection - `Execution Time: 0.063 ms`, two shared-buffer hits, no disk. ZITADEL is event-sourced, so this read never touches the event store. At 1,000 active users and a 60-second cache that is 63 ms of database time per minute.
+> The role keys are namespaced `<product>:<role>` already (§5, and
+> `splitProductRole`), which is what makes one project able to hold them all:
+> forty products at three roles is a hundred and twenty keys that cannot
+> collide.
+
+> **Alternative considered - name every product project in the sign-in scope.**
 >
-> *Failure behaviour:* on a ZITADEL error, serve the stale cache entry. Refuse only when there is no cached entry at all. **Never fail open.**
+> `urn:zitadel:iam:org:project:id:<id>:aud` per product, plus
+> `urn:zitadel:iam:org:projects:roles`, which is what a worker's client
+> credentials request already does for the one project it needs
+> (`scopeFor`, pkg/authz/workload.go).
+>
+> *Rejected because* the scope string then grows with the estate - 2,160
+> characters at forty products - and a product created on Tuesday is invisible
+> to everybody until the client configuration is regenerated AND every session
+> has signed in again, with a permissions bug as the symptom. One grant on one
+> project has no such coupling: a grant made at 10:00 is in the next token.
+
+> **The seeder repairs what it wrote.** A grant found on a product's own
+> project is rewritten onto `platform` and then removed - after the replacement
+> is written, so nobody is briefly refused - and each move is named in the
+> summary. What is removed cannot be load bearing: no token carries it and
+> nothing else reads it. Left in place it reads in the console as access, which
+> is precisely the appearance that made this take as long as it did. A grant
+> made by hand on a product project, which this file did not write and does not
+> touch, is reported instead: **GRANTS THAT NO TOKEN CAN CARRY**.
 
 ### 8.2 Authorization is enforced, and where
 
@@ -657,6 +826,321 @@ A FULL SCREEN, with no navigation, saying one thing.
 > as a link, because an address somebody has to retype is an address somebody
 > mistypes. Unset, the sentence still completes and names no route: a refusal
 > that invents one sends people to a mailbox nobody reads.
+
+> **Decision - the closed door is shown to a NON-MEMBER, and `/whoami` reports
+> permissions PER SCOPE.**
+>
+> The interface used to show this screen when `permissions` came back empty,
+> and `permissionsFor` answered the tenant-wide question - which a
+> product-scoped caller correctly cannot. So somebody granted `product-owner`
+> on one product, the only grant they need and the whole reason the product
+> tier exists, was shown a locked door with their own address on it. Adding any
+> `org-` role appeared to fix it, and fixed it by making them tenant-wide over
+> everything.
+>
+> Empty tenant-wide permissions is the RIGHT answer for that person. What was
+> wrong was reading it as "this account does not exist here". Those are two
+> questions and they are now asked separately:
+>
+> - **`member`** says the account was provisioned in this tenant (§5.1e). That
+>   is what this screen is for, and a non-member is the only caller who sees
+>   it.
+> - **`permissions`** is what the caller may do TENANT-WIDE, `*` meaning
+>   unrestricted, and **`productPermissions`** is what they may do on each
+>   product they hold. A client answers "may I do X to product P" the way
+>   `Scope.covers` does: yes when X is tenant-wide, or when it is in that
+>   product's list.
+>
+> **A flat union across scopes was the wrong shape, and it was the first fix
+> attempted.** Somebody who reads product A and owns product B holds four verbs
+> and two products; unioned into one verb list beside one product list they
+> read as four verbs on BOTH, and every control on A lights up. The server
+> refuses them - Cerbos compares the resource's product against the caller's
+> own - so the result is an interface offering what the API denies, which is a
+> permission model the screen and the server disagree about. Guarded by
+> `TestWhoAmIDoesNotFlattenVerbsAcrossProducts`.
+>
+> The whole class stayed invisible because product grants never reached a token
+> at all (§8.1): this code had never once been given a caller who held only
+> product roles.
+
+> **The same error, in `VisibleProducts`.** It asked `Can(read, Scope{})` -
+> estate-wide - to decide "is this caller unrestricted", and an `org-` role
+> produces a grant scoped to the TENANT, which deliberately cannot answer that.
+> A person holding org-reader *and* a role on one product therefore came back
+> narrowed to that one product, with the product tier cancelling the tier whose
+> entire purpose is to name no product. Every scoped store filter takes that
+> list. Also invisible until product grants started arriving, and guarded now
+> by `TestAnOrgRoleIsNotNarrowedByAProductRole`.
+
+> **The refusal itself names which of three situations this is.** "Nobody has
+> provisioned you", "you are provisioned and hold no product yet" and "you hold
+> the wrong roles for this" have different answers, and the first two are the
+> ones the person can act on. An empty product listing is the same distinction
+> on a page rather than in a refusal: the listing is filtered server-side, so a
+> member with no products sees what a deployment with no products configured
+> would show, and only the interface can tell those apart.
+
+### 8.4a The interface renders from the permissions the server enforces
+
+The screens do not decide what a caller may do. They ask, and the answer comes
+from the same authority that decides every request.
+
+> **Decision - there is a PERMISSION CATALOGUE, and it is the enforcement
+> points themselves.**
+>
+> `internal/api/middleware/permissions.go` names every distinct thing a caller
+> may be permitted, as `<resource>.<action>` - `product.discover`,
+> `audit_event.view`, `software_download.promote`. Each entry is a
+> `(kind, action)` pair `PolicyFor` already produces for some route and a rule
+> that already exists in `config/access/policies`. Both directions are tested:
+> a route whose question no permission names fails the build, and a permission
+> no route asks for fails it too.
+>
+> The alternatives were both tried and both drifted. The interface deciding
+> from ROLES is this model reimplemented in TypeScript, in a file nobody
+> reviews against the policies. The interface deciding from the four coarse
+> verbs - read, operate, apply, admin - cannot express the estate boundary at
+> all: "run a scan on my product" and "run a scan across the fleet" are the
+> same word to it.
+
+> **Decision - `/whoami` reports the RESOLVED set, and the policy engine
+> resolves it.**
+>
+> `access.global` is what the caller holds tenant-wide; `access.byProduct` is
+> what they hold on each product, with the tenant-wide answers subtracted. The
+> split is `Scope.covers`, for the reason §8.4 gives: flattened, they read as
+> every verb on every product.
+>
+> Cerbos answers it in ONE batched `CheckResources` call per scope rather than
+> one per permission (`authz.CheckMany`), so describing a caller's whole
+> permission set costs two round trips rather than forty.
+>
+> `access.unavailable` is its own field because an unreachable PDP resolves to
+> nothing and REFUSES everything, and an interface that could not tell that
+> from "you hold nothing" showed an administrator a screen saying their account
+> had no access. The application shows a screen about the policy engine
+> instead.
+
+> **It is not a security control, and nothing about it is withheld.** It
+> describes the caller's own permissions to the caller, and every request is
+> authorized again on arrival by the same catalogue. A person who edits it in
+> their browser gets a screen full of controls that all answer 403.
+
+> **Decision - hidden, disabled, or refused, decided once.**
+>
+> A control the caller cannot use is HIDDEN: a Run Discovery button somebody
+> can never press is furniture that reads as the page refusing them
+> personally. A control in a row or a table cell is DISABLED instead, because a
+> cell that appears on some rows and not others reads as a rendering fault; the
+> reason is on the hover and it names the permission. A whole page is REFUSED
+> with a screen that says so - an empty table is a confident statement that
+> nothing has happened in a system the reader simply cannot see.
+>
+> The navigation drops what an account cannot open AND every page refuses
+> itself at the door, so a bookmark or a link in a ticket meets the same answer
+> as the rail.
+
+> **Decision - a fleet-wide verb is NARROWED, not refused.**
+>
+> `products:discover` and `products:checkConnectivity` name no product, so the
+> tenant-wide question refuses every product owner - and refusing them the one
+> control this product exists to offer is the wrong answer, not a safe one.
+> They are `AnyScope` routes: the authorization decision already asks the
+> engine product by product, so it passes THAT LIST to the handler
+> (`middleware.PermittedProducts`) and the handler acts on exactly those. A
+> product owner asking for a fleet-wide scan scans their fleet.
+>
+> The narrowing comes from the middleware rather than being derived in each
+> handler on purpose. A handler deriving it from the identity is a SECOND
+> authorization decision, written where nobody reviews it against the policies,
+> and the two can disagree - which is how the fleet-wide scan came to be
+> refused to the owners of every product in the fleet.
+
+> **Decision - a refusal names the permission.**
+>
+> `Access denied: this account does not have the product.calibrate permission
+> on product "software-02".` A subject, a permission, a resource - the form an
+> operator already knows from every other system they administer, and the
+> permission named is the string they grep `config/access/policies` for. It
+> replaced "This account may not operate this", which named neither what was
+> needed nor how to get it.
+
+> **Decision - failures are reported in ONE place.**
+>
+> Pressing Run health check without `system.view` did nothing at all: no
+> spinner, no error, no message. The request went, the Coordinator answered 403
+> with a sentence naming exactly what was missing, and no code anywhere read
+> it. That was not a missing `catch` - it was the absence of a place to put
+> one, so every page had to remember to render every failure it could produce
+> and the ones nobody remembered were silent.
+>
+> The query client's caches now report every mutation, every read somebody
+> pressed a button for, and every background refresh of data already on screen,
+> with the Coordinator's own sentence, the RFC 9457 code and the request id.
+> `ActionButton` owns its pending state from the promise its handler returns,
+> so a control cannot be written without one.
+
+### 8.5 Taking access away, and how long that takes
+
+The Coordinator verifies a JWT **offline**, against the issuer's published keys.
+No introspection, no callback, no ZITADEL credential in any service - which is
+what §8.1 gets right and is worth keeping: the API decides for itself and keeps
+deciding while ZITADEL restarts.
+
+The cost of that is exact, and it is the answer to *"I deleted them and they
+can still use the tool"*:
+
+> **A token already issued is valid until it expires. Nothing asks whether it
+> still should be.** Removing an account, disabling it, or withdrawing every
+> role it holds changes nothing the bearer of a live token can notice.
+
+What removal stops immediately is the **renewal**: ZITADEL refuses to refresh a
+token for an account that is gone or inactive, and the SPA renews within a
+minute of expiry or on the first 401. So the access token's lifetime *is* the
+window - the browser renews, is refused, and the person is signed out.
+
+> **Decision - the access token lives 15 minutes, not ZITADEL's default 12
+> hours.**
+>
+> Twelve hours means somebody removed at 09:00 keeps every permission they held
+> until the end of the working day, on a system whose entire subject is who may
+> take delivery of software. Fifteen minutes costs one token request per active
+> session per quarter hour, which is not a cost. `ACCESS_TOKEN_LIFETIME` sets
+> it; the seeder warns when it is set above an hour, and states the number
+> under **Token lifetimes** on every run, next to what it means.
+>
+> Written through `PUT /admin/v1/settings/oidc` rather than
+> `ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_*`. First-instance settings are ignored
+> by an instance that already exists - the same trap as the login client in
+> §25 - so the environment variable would fix a fresh stack and leave every
+> stack that needs it unchanged.
+
+> **This is not revocation, and no value of that setting makes it so.** The
+> floor is however long the current token has left. Immediate cut-off needs
+> opaque access tokens and an introspection call on every request: ZITADEL
+> supports it (`OIDC_TOKEN_TYPE_BEARER` plus `/oauth/v2/introspect`), and it
+> buys immediacy by giving the Coordinator a credential, a network dependency
+> on the identity provider in the request path, and a decision about what to do
+> when that call fails. Not taken. When it is needed the trade is the whole
+> design of §8.1 and belongs in its own document, not in a default.
+
+> **When somebody must be out NOW**, the lifetime is not the tool. Deactivate
+> or delete the account so no renewal succeeds, then either wait out the
+> remaining minutes or rotate the instance's signing key, which invalidates
+> every token the instance has issued - everybody signs in again. The blunt one
+> is blunt on purpose: there is no per-token revocation to reach for.
+
+**Machine accounts have no refresh token** and re-request with the client
+credentials grant, so the same lifetime bounds them. `TokenSource` holds one
+until a minute before expiry and clamps that to half the lifetime, so a short
+token shortens the hold rather than breaking the data plane
+(`pkg/authz/workload.go`).
+
+### 8.5a Granting access, and how long THAT takes
+
+The mirror of §8.5, and the question every administrator asks second.
+
+**Nothing restarts.** Not the Coordinator, not ZITADEL, not the browser.
+
+| What changed | Where it lives | What has to happen | How long |
+|---|---|---|---|
+| A **role granted to a person** (`config/users/users.yaml`, or the ZITADEL console) | The access token's claims | The token is re-minted | Within the access token's lifetime - 15 minutes by default (`ACCESS_TOKEN_LIFETIME`). Sign out and in for immediately. |
+| A **permission added to a role** (`config/access/policies/*.yaml`) | Cerbos | Cerbos reloads the file | Seconds. `watchForChanges: true` in `deploy/cerbos/config.yaml`; no restart, and the same token keeps working. |
+| A **new product** | Git, reconciled into the registry | Nothing, for an org-tier role | Immediately. That is what §5.1 buys: an org role names no product, so it covers one created after the token was issued. A PRODUCT-tier grant on it is a new role, so it takes the first row. |
+| A **new route or permission** | This repository | A deploy | A release. |
+
+> **Decision - the interface re-reads its permissions on a token renewal.**
+>
+> The browser renews in the background (`auth/session`), so a grant reaches the
+> API within the token's lifetime with nobody doing anything. The screen has to
+> notice that or it renders the permissions the session STARTED with for as
+> long as the tab is open - the administrator grants discovery, the API begins
+> accepting it a quarter of an hour later, and the button stays hidden until
+> somebody thinks to reload. "Sign out and in again" was the workaround for
+> that, and it was written into three screens.
+>
+> `store()` in `auth/session` announces every new token; `IdentityProvider`
+> invalidates `/whoami` on it, and also re-asks on window focus with a
+> five-minute floor - which is when somebody who has just been granted
+> something comes back to look for it. One small request against an
+> always-allowed route.
+>
+> **Cerbos is not cached anywhere.** The Coordinator asks it per request and
+> per `/whoami`, so a policy edit needs no invalidation at all: the next
+> request decides against the new rule.
+
+> **Why a role change cannot be faster than the token, and why that is the
+> right trade.** §8.5 is the whole answer: the Coordinator verifies JWTs
+> offline, with no credential for the identity provider and no call to it in
+> the request path. The price of that is that a token says what it said when it
+> was minted, in both directions - a withdrawn role keeps working until expiry,
+> and a granted one does not work until renewal. Shortening the lifetime
+> shortens both. Removing the delay entirely means opaque tokens and
+> introspection on every request, which is the trade §8.5 declines and for the
+> same reasons.
+
+**So the operator's answer is: grant it, and wait a quarter of an hour, or tell
+them to sign out and in.** Nothing is restarted, and a permission added to a
+role is live in seconds without even that.
+
+### 8.6 One tenant, and the boundary around it
+
+An identity provider hosting more than one organization signs **all** of their
+tokens with the same keys. A signature therefore says who minted a token and
+nothing whatever about who it was minted for, and until this section existed
+that was the only thing being checked:
+
+- **No audience.** `SWGW_AUTH_AUDIENCE` was unset, so `SkipClientIDCheck` was
+  on and a token minted for any other application at the same issuer was
+  accepted.
+- **No tenant.** A token from another organization verified, and its roles were
+  read as if they had been granted here. `org-admin` in somebody else's
+  organization is spelled exactly like `org-admin` in this one.
+- **A tenancy condition that could not fail.** Every derived role in
+  `config/access/policies` compares `R.attr.tenant == P.attr.tenant`, and the
+  resource was labelled with the *principal's* tenant - so the comparison
+  compared a value with itself. Eleven rules, written carefully, enforcing
+  nothing.
+
+> **Decision - the deployment is told its tenant, and refuses every other.**
+>
+> `SWGW_AUTH_TENANT` (compose passes `GATEWAY_TENANT`, which is also the name
+> the seeder gives the ZITADEL organization). `authz.Config.Tenant` refuses a
+> mismatched token in the verifier, before it becomes an identity - a caller
+> from another tenant is not a person with no permissions here, they are a
+> caller this deployment has no relationship with, and the two want different
+> answers and different log lines.
+>
+> **A token asserting no tenant is refused by the same rule.** "Cannot tell" is
+> not "belongs here". That is why both sign-in flows now request
+> `urn:zitadel:iam:user:resourceowner`: without it the tenant had to be guessed
+> from the first label of an organization's primary domain, which is a
+> domain-naming coincidence rather than a fact about the account.
+>
+> **The Cerbos resource carries the DEPLOYMENT's tenant**, so the condition in
+> every policy can now actually disagree. Guarded by
+> `TestResourceCarriesTheDeploymentsTenant`.
+
+> **Rollout, stated because it bites in one direction.** The scope is requested
+> by the SPA and by `pkg/authz/workload.go`; a browser holding a token minted
+> before this is refused and signs in again, which is what should happen. Deploy
+> the web tier and the Coordinator together - compose does.
+
+> **Unset is still allowed, and says so.** An existing deployment that has not
+> been told its tenant keeps working and the Coordinator logs a warning at
+> startup naming the remedy; the same for an unset audience. Neither gap is
+> visible from inside a request - every token verifies, every screen loads -
+> so a boundary that is off has to announce itself somewhere, and startup is
+> the only place anybody is looking.
+
+**The audience check is still not on by default,** and that is the one thing
+here left undone. It wants the OIDC client or project id, which ZITADEL
+generates, so it cannot be a static value in `.env` the way the tenant can - it
+would have to be published by the seeder the way the web client id already is.
+The tenant boundary is the one that matters for cross-organization access; the
+audience boundary narrows it further, to tokens minted for *this application*.
+Recorded here rather than half-built.
 
 ## 9. Policy lives in this repository
 

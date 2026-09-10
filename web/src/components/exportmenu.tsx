@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import { App, Button, Dropdown, Space, Typography } from 'antd'
+import { Button, Dropdown, Space, Typography } from 'antd'
 import { download } from '../api/client'
 import { DownloadOutlined, LoadingOutlined } from '../icons'
+import { reportFailure } from './feedback'
 
 /**
  * The control that turns a screen into a file.
@@ -48,7 +49,6 @@ export function ExportMenu({ choices, label = 'Export', disabled, icon }: {
   icon?: ReactNode
 }) {
   const [running, setRunning] = useState<string | null>(null)
-  const { message } = App.useApp()
 
   const start = async (choice: ExportChoice) => {
     if (running) return
@@ -56,11 +56,10 @@ export function ExportMenu({ choices, label = 'Export', disabled, icon }: {
     try {
       await download(choice.href)
     } catch (err) {
-      message.error(
-        err instanceof Error
-          ? `${choice.noun} could not be exported: ${err.message}`
-          : `${choice.noun} could not be exported`,
-      )
+      // Through the one reporting path, so an export refused for want of
+      // `security_report.export` reads as a refusal naming the permission
+      // rather than as "could not be exported".
+      reportFailure(err, `Export ${choice.noun.toLowerCase()}`)
     } finally {
       setRunning(null)
     }

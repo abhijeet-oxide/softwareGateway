@@ -25,6 +25,9 @@ type Verifier struct {
 	// anything else is org tier.
 	orgRolePrefix string
 
+	// tenant is the deployment's own. See Config.Tenant.
+	tenant string
+
 	// How the key set is actually fetched, kept so Health can ask the same
 	// question Verify silently depends on. Verify only notices an unreachable
 	// issuer once the cached keys age out and a token arrives that needs new
@@ -41,6 +44,21 @@ type Config struct {
 	// Audience is the client or project id the token must be issued for.
 	// Empty skips the check, which is only correct behind a trusted gateway.
 	Audience string
+	// Tenant is the ONE tenant this deployment serves. A token asserting any
+	// other is refused, whatever roles it carries.
+	//
+	// This is a boundary, not a preference. An issuer that hosts more than one
+	// organization signs tokens for all of them with the same keys, so
+	// signature, issuer and expiry - everything else checked here - are
+	// satisfied by a token from a tenant this deployment has nothing to do
+	// with. Without this the only thing standing between that token and the
+	// data is whether its bearer happens to hold a role of the same NAME,
+	// which is a coincidence rather than a control: `org-admin` granted in
+	// somebody else's organization is spelled exactly like `org-admin` here.
+	//
+	// Empty disables the check and is only correct where the issuer serves
+	// exactly one tenant and always will.
+	Tenant string
 	// OrgRolePrefix marks tenant-wide roles. Default "org-".
 	OrgRolePrefix string
 	// HTTPClient reaches the issuer. Supply one with your CA pool when the
@@ -143,6 +161,7 @@ func NewVerifier(ctx context.Context, cfg Config) (*Verifier, error) {
 			SkipIssuerCheck:   cfg.SkipIssuerCheck,
 		}),
 		orgRolePrefix: prefix,
+		tenant:        cfg.Tenant,
 		keysURL:       keysURL,
 		client:        client,
 	}, nil
@@ -232,7 +251,44 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Identity, error) {
 	}
 
 	readRoles(all, &id)
+
+	/* THE TENANT BOUNDARY, checked once, here, before any of this reaches a
+	 * permission model that would compare role NAMES across organizations.
+	 *
+	 * Refused rather than downgraded to an identity holding nothing: a caller
+	 * from another tenant is not a person with no permissions here, they are a
+	 * caller this deployment has no relationship with, and the two want
+	 * different answers and different log lines.
+	 *
+	 * A token that asserts NO tenant is refused by the same rule. It is the
+	 * shape a caller has when the sign-in did not ask for the claim that
+	 * carries it (`urn:zitadel:iam:user:resourceowner`), and "cannot tell" is
+	 * not "belongs here" - a boundary that waves through what it cannot read
+	 * is not one. */
+	if err := wrongTenant(id.Tenant, v.tenant); err != nil {
+		return Identity{}, err
+	}
 	return id, nil
+}
+
+// wrongTenant reports a token that belongs to another tenant, or to none.
+//
+// Its own function so it can be tested without minting a signed token, and
+// because the empty cases are the whole of it: an unset deployment tenant
+// disables the boundary, and an unasserted token tenant must never be read as
+// agreement.
+func wrongTenant(have, want string) error {
+	if want == "" {
+		return nil
+	}
+	if strings.EqualFold(have, want) {
+		return nil
+	}
+	if have == "" {
+		return fmt.Errorf("authz: token asserts no tenant and this deployment serves %q "+
+			"(the sign-in must request the urn:zitadel:iam:user:resourceowner scope)", want)
+	}
+	return fmt.Errorf("authz: token is for tenant %q, this deployment serves %q", have, want)
 }
 
 // readRoles decodes every role claim in the token onto the identity.

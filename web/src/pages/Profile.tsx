@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
-import { Alert, Button, Space, Tag, Typography } from 'antd'
+import { Alert, Popover, Space, Tag, Tooltip, Typography } from 'antd'
 import { initialsOf, useIdentity } from '../auth/permissions'
+import { accountLabel, productAccess, roleLabel, roleMeaning } from '../auth/roles'
 import { identityClaims, identityProviderName, isSignedIn, signOut } from '../auth/session'
 import { formatAbsolute } from '../domain/format'
+import { ActionButton } from '../components/access'
 import { AppearanceSettings, c, mono, SectionCard } from '../uikit'
 
 /**
@@ -36,8 +38,9 @@ export default function Profile() {
   const email = who?.email || claims.email
   const username = claims.preferredUsername
   const anonymous = Boolean(who && !who.authenticated)
-  const productRoles = Object.entries(who?.productRoles ?? {})
+  const products = productAccess(who)
   const tenantRoles = who?.roles ?? []
+  const standing = accountLabel(who)
   /* The login name is shown only when it ADDS something.
    *
    * An identity provider is free to make the preferred username the address,
@@ -54,7 +57,7 @@ export default function Profile() {
        at one edge and its value at the other. Flush, because the identity band
        runs to the card's own edges - a tinted strip inset by the body padding
        is a rectangle inside a rectangle. */
-    <SectionCard padded={false} style={{ maxWidth: 880 }}>
+    <SectionCard padded={false} style={{ width: '100%' }}>
       <div
         style={{
           display: 'flex',
@@ -76,15 +79,29 @@ export default function Profile() {
                 up. */}
             {anonymous ? 'No identity was verified' : subtitle || 'No address on record'}
           </div>
-          {!anonymous && tenantRoles.length + productRoles.length > 0 && (
-            <div style={{ marginTop: 9 }}>
-              <Space size={4} wrap>
-                {tenantRoles.map((r) => <Tag key={r} style={{ marginInlineEnd: 0 }}>{r}</Tag>)}
-                {productRoles.flatMap(([product, roles]) =>
-                  roles.map((r) => (
-                    <Tag key={`${product}:${r}`} style={{ marginInlineEnd: 0 }}>{`${product}: ${r}`}</Tag>
-                  )),
-                )}
+          {/*
+            WHAT THIS PERSON IS, then WHERE.
+
+            This line used to print every role identifier the account holds,
+            comma separated: `org-admin`, `org-member` and a
+            `product: role` pair per product, which for an administrator of ten
+            products is twelve slugs wrapping onto three lines under their own
+            name. It read as a debug dump, and the one thing somebody actually
+            wants from it - am I an administrator here, and which products are
+            mine - was the hardest part of it to find.
+
+            So the standing is one chip, in the brand colour because it is the
+            answer, and the products are named after it with the rest counted.
+            The full list is a click away and laid out below, where a list
+            belongs.
+          */}
+          {!anonymous && (
+            <div style={{ marginTop: 10 }}>
+              <Space size={6} wrap>
+                <Tag color="processing" style={{ marginInlineEnd: 0, fontWeight: 600 }}>
+                  {standing}
+                </Tag>
+                <ProductChips products={products} />
               </Space>
             </div>
           )}
@@ -92,151 +109,130 @@ export default function Profile() {
         {isSignedIn() && (
           // The one control here that ENDS something, so it is the one thing
           // said in the danger colour and the only button on the surface.
-          <Button danger onClick={() => void signOut()}>
+          <ActionButton danger action="Sign out" onClick={signOut}>
             Sign out
-          </Button>
+          </ActionButton>
         )}
       </div>
 
       <div style={{ padding: '4px 28px 24px' }}>
         {anonymous ? (
-          <Section label="Authentication" first>
-            <Alert
-              type="info"
-              showIcon
-              message="Authentication is not enabled"
-              description={
-                <Space direction="vertical" size={4}>
-                  <Typography.Text>
-                    This Coordinator accepts every caller as{' '}
-                    <Typography.Text code>{who?.subject}</Typography.Text> with full
-                    permissions. The only control protecting it is network isolation.
-                  </Typography.Text>
-                  <Typography.Text type="secondary">
-                    Everything this interface shows and does is already asked through a
-                    permission check, so switching authentication on changes what people can
-                    do without changing any page.
-                  </Typography.Text>
-                </Space>
-              }
-            />
-          </Section>
-        ) : (
-          <>
-            <Section label="Sign-in" first>
-              <Field label="Method">{methodLabel(who?.method)}</Field>
-              <Field label="Tenant">{who?.tenant || 'All tenants'}</Field>
-              <Field label="Account id">
-                {/* Named for what it is. It was the only thing this page showed,
-                    under the label "Signed in as", which made a person's own
-                    screen introduce them as a number. */}
-                <Typography.Text
-                  type="secondary"
-                  copyable={Boolean(who?.subject)}
-                  style={{ fontFamily: mono, fontSize: 12.5 }}
-                >
-                  {who?.subject}
-                </Typography.Text>
-              </Field>
+          <div style={{ maxWidth: 960 }}>
+            <Section label="Authentication" first>
+              <Alert
+                type="error"
+                showIcon
+                message={
+                  <Space direction="vertical" size={4}>
+                    <Typography.Text>
+                      Authentication is not enabled.
+                    </Typography.Text>
+                  </Space>
+                }
+              />
             </Section>
-
-            {who?.method === 'oidc' && (
-              <Section label="Directory">
-                {/* WHERE THE DETAILS CAME FROM, and which of them arrived.
-                    A profile that shows a name and an address from nowhere
-                    cannot answer the question it provokes - why is that all
-                    there is? - and the answer is never this product's: it is
-                    what the directory asserted. So the fields are listed, the
-                    ones that did not arrive are named as not arriving, and the
-                    source is stated. */}
-                <Field label="Source">{provider || 'This system'}</Field>
-                <Field label="Full name">
-                  <Asserted value={claims.name} provider={provider} />
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 420px), 1fr))', gap: '0 36px' }}>
+            <div>
+              <Section label="Sign-in" first>
+                <Field label="Method">{methodLabel(who?.method)}</Field>
+                <Field label="Tenant">{who?.tenant || 'All tenants'}</Field>
+                <Field label="Account id">
+                  <Typography.Text
+                    type="secondary"
+                    copyable={Boolean(who?.subject)}
+                    style={{ fontFamily: mono, fontSize: 12.5 }}
+                  >
+                    {who?.subject}
+                  </Typography.Text>
                 </Field>
-                {/* The halves are shown only when they SAY something the full
-                    name does not. Where an account was provisioned under a
-                    login id, both halves carry that id - ZITADEL requires two
-                    and there is only one - and three rows then repeat one
-                    word. Two names that are identical is that case and no
-                    other. */}
-                {claims.givenName !== claims.familyName && (
-                  <>
-                    <Field label="Given name">
-                      <Asserted value={claims.givenName} provider={provider} />
-                    </Field>
-                    <Field label="Family name">
-                      <Asserted value={claims.familyName} provider={provider} />
-                    </Field>
-                  </>
-                )}
-                <Field label="Language">
-                  <Asserted value={claims.locale} provider={provider} />
-                </Field>
-                <Field label="Details updated">
-                  <Asserted
-                    value={claims.updatedAt
-                      ? formatAbsolute(new Date(claims.updatedAt * 1000).toISOString()) ?? undefined
-                      : undefined}
-                    provider={provider}
-                  />
-                </Field>
-                {provider ? (
-                  <Note>
-                    Read from {provider} at each sign-in. A field {provider} does not hold is
-                    not held here. The first sign-in links the account only; details recorded
-                    at provisioning are replaced from the second.
-                  </Note>
-                ) : (
-                  <Note>
-                    These details are held on the account in this system, and are changed
-                    where accounts are provisioned.
-                  </Note>
-                )}
               </Section>
-            )}
 
-            <Section label="Access">
-              <Field label="Tenant roles">
+              {who?.method === 'oidc' && (
+                <Section label="Directory">
+                  <Field label="Source">{provider || 'This system'}</Field>
+                  <Field label="Full name">
+                    <Asserted value={claims.name} provider={provider} />
+                  </Field>
+                  {claims.givenName !== claims.familyName && (
+                    <>
+                      <Field label="Given name">
+                        <Asserted value={claims.givenName} provider={provider} />
+                      </Field>
+                      <Field label="Family name">
+                        <Asserted value={claims.familyName} provider={provider} />
+                      </Field>
+                    </>
+                  )}
+                  <Field label="Language">
+                    <Asserted value={claims.locale} provider={provider} />
+                  </Field>
+                  <Field label="Details updated">
+                    <Asserted
+                      value={claims.updatedAt
+                        ? formatAbsolute(new Date(claims.updatedAt * 1000).toISOString()) ?? undefined
+                        : undefined}
+                      provider={provider}
+                    />
+                  </Field>
+                  {provider ? (
+                    <Note>
+                      Details fetched from {provider}
+                    </Note>
+                  ) : (
+                    <Note>
+                      These details are held on the account in this system, and are changed
+                      where accounts are provisioned.
+                    </Note>
+                  )}
+                </Section>
+              )}
+            </div>
+
+            <div>
+              <Section label="Access" first>
                 {/* The two tiers are shown apart because they mean different
                     things: a tenant role covers products that do not exist yet,
                     a product role names one. */}
-                <Chips values={tenantRoles} />
-              </Field>
-              <Field label="Product roles">
-                {productRoles.length ? (
-                  <Space direction="vertical" size={4}>
-                    {productRoles.map(([product, roles]) => (
-                      <span key={product}>
-                        <Typography.Text strong style={{ fontSize: 13 }}>{product}</Typography.Text>
-                        <span style={{ marginLeft: 8 }}>
-                          <Chips values={roles} />
-                        </span>
-                      </span>
-                    ))}
-                  </Space>
-                ) : (
-                  <Muted>None</Muted>
-                )}
-              </Field>
-              <Field label="Permissions">
-                <Chips
-                  values={(who?.permissions ?? []).map((p) => (p === '*' ? 'everything' : p))}
-                />
-              </Field>
-              <Field label="Visible products">
-                {who?.products?.length ? who.products.join(', ') : 'All products'}
-              </Field>
-              <Note>
-                Roles are granted in the identity provider and arrive in the sign-in token.
-                Changing one takes effect at the next sign-in.
-              </Note>
-            </Section>
-          </>
-        )}
+                <Field label="Across the tenant">
+                  {tenantRoles.length ? (
+                    <Space size={4} wrap>
+                      {tenantRoles.map((r) => <RoleTag key={r} role={r} />)}
+                    </Space>
+                  ) : (
+                    <Muted>None - this account's access is per product</Muted>
+                  )}
+                </Field>
+              </Section>
 
-        <Section label="Appearance">
-          <AppearanceSettings />
-        </Section>
+              {/*
+                ONE ROW PER PRODUCT, not one chip per grant.
+
+                This was a vertical stack of `product` in bold with its roles
+                jammed against it, and with ten products it was ten ragged lines
+                whose names started at ten different places. A person scanning
+                for one product name was scanning a shape that moved.
+
+                Two columns on a grid: the name on the left, aligned, and what
+                is held on it on the right. It reads as a table because it is
+                one, and it stays readable at ten products and at one.
+              */}
+              <Section label={`Products${products.length ? ` (${products.length})` : ''}`}>
+                <ProductAccessList products={products} />
+              </Section>
+
+              <Section label="What that allows">
+                <PermissionSummary />
+              </Section>
+
+              <Section label="Appearance">
+                <AppearanceSettings />
+              </Section>
+
+            </div>
+          </div>
+        )}
       </div>
     </SectionCard>
   )
@@ -323,13 +319,237 @@ function Note({ children }: { children: ReactNode }) {
   )
 }
 
-function Chips({ values }: { values: string[] }) {
-  if (!values.length) return <Muted>None</Muted>
+/**
+ * One role, named as a person would say it, explaining itself on hover.
+ *
+ * The raw identifier is kept in the tooltip rather than thrown away: it is what
+ * an administrator types into `config/users/users.yaml` and greps
+ * `config/access/policies` for, so the page that shows somebody their access
+ * should not be the one place that identifier is unavailable.
+ */
+function RoleTag({ role }: { role: string }) {
+  const meaning = roleMeaning(role)
   return (
-    <Space size={4} wrap>
-      {values.map((v) => <Tag key={v} style={{ marginInlineEnd: 0 }}>{v}</Tag>)}
-    </Space>
+    <Tooltip
+      title={
+        <span>
+          {meaning}
+          <span style={{ display: 'block', marginTop: 4, fontFamily: mono, opacity: 0.75 }}>
+            {role}
+          </span>
+        </span>
+      }
+    >
+      <Tag style={{ marginInlineEnd: 0, cursor: 'default' }}>{roleLabel(role)}</Tag>
+    </Tooltip>
   )
+}
+
+type ProductAccess = ReturnType<typeof productAccess>
+
+/**
+ * The products, on the identity band, with the rest COUNTED rather than
+ * printed.
+ *
+ * Three is the cut, and it is not arbitrary: three chips and a count fit on one
+ * line beside a standing chip at the narrowest width this page is designed for,
+ * and a fourth wraps. The overflow is not hidden - it is one click, and the
+ * full list is laid out in full further down the same page.
+ */
+function ProductChips({ products }: { products: ProductAccess }) {
+  if (products.length === 0) return null
+  const shown = products.slice(0, 3)
+  const rest = products.slice(3)
+
+  return (
+    <>
+      {shown.map((p) => (
+        <Tooltip key={p.product} title={`${roleLabel(p.roles[0] ?? '')} of ${p.product}`}>
+          <Tag style={{ marginInlineEnd: 0, cursor: 'default' }}>{p.product}</Tag>
+        </Tooltip>
+      ))}
+      {rest.length > 0 && (
+        <Popover
+          placement="bottomLeft"
+          title={`${rest.length} more product${rest.length === 1 ? '' : 's'}`}
+          content={
+            <div style={{ maxHeight: 260, overflow: 'auto', minWidth: 200 }}>
+              <ProductAccessList products={rest} compact />
+            </div>
+          }
+        >
+          <Tag
+            style={{ marginInlineEnd: 0, cursor: 'pointer', borderStyle: 'dashed' }}
+          >
+            +{rest.length} more
+          </Tag>
+        </Popover>
+      )}
+    </>
+  )
+}
+
+/**
+ * Every product and what is held on it, as a two-column list.
+ *
+ * The name column is a fixed minimum so every name starts at the same x: a
+ * reader scanning ten products for one of them is scanning a straight edge
+ * rather than a ragged one, which is the whole difference between a list that
+ * can be read at a glance and one that has to be read line by line.
+ */
+function ProductAccessList({ products, compact }: { products: ProductAccess; compact?: boolean }) {
+  if (products.length === 0) {
+    return (
+      <Muted>
+        No product access. Ask an administrator for the products you need; a grant reaches this
+        screen within about fifteen minutes, when this session&rsquo;s token is next renewed.
+      </Muted>
+    )
+  }
+  return (
+    <div style={{ display: 'grid', gap: compact ? 6 : 2 }}>
+      {products.map((p) => (
+        <div
+          key={p.product}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1fr) auto',
+            gap: 12,
+            alignItems: 'center',
+            padding: compact ? 0 : '5px 0',
+            borderBottom: compact ? undefined : `1px solid ${c.border}`,
+          }}
+        >
+          <Typography.Text
+            style={{ fontSize: 13.5, minWidth: 0 }}
+            ellipsis={{ tooltip: p.product }}
+          >
+            {p.product}
+          </Typography.Text>
+          <Space size={4} wrap>
+            {p.roles.map((r) => <RoleTag key={r} role={r} />)}
+          </Space>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * WHAT THE ROLES ACTUALLY ALLOW, from the server rather than from a table
+ * written here.
+ *
+ * A person looking at "Owner" cannot tell whether that includes promoting a
+ * release, and the answer is not guessable from the word - it is a rule in
+ * `config/access/policies`. So the permissions the Coordinator resolved are
+ * shown, grouped by the thing they act on, which is how they are named:
+ * `software_download.promote` is `promote` under Software download.
+ *
+ * Grouped rather than listed flat because a flat list is thirty slugs and
+ * nobody reads thirty slugs; grouped it is eight subjects with two or three
+ * verbs each, which is a shape somebody can scan for the verb they came for.
+ */
+function PermissionSummary() {
+  const { who, accessUnavailable } = useIdentity()
+
+  if (accessUnavailable) {
+    return (
+      <Alert
+        type="warning"
+        showIcon
+        message="Permissions could not be resolved"
+        description={
+          'The policy engine did not answer, so this account\u2019s permissions are unknown - not empty. '
+          + 'Requests are being refused while that is true. This is a deployment fault rather than '
+          + 'anything about this account.'
+        }
+      />
+    )
+  }
+
+  const global = who?.access?.global ?? []
+  const byProduct = who?.access?.byProduct ?? {}
+  // The union of everything held anywhere, because this section answers "what
+  // can I do", and the per-product breakdown is the list above it.
+  const all = new Set<string>([...global, ...Object.values(byProduct).flat()])
+  if (all.size === 0) {
+    return <Muted>None yet. Access is granted by an administrator.</Muted>
+  }
+
+  const groups = new Map<string, string[]>()
+  for (const permission of [...all].sort()) {
+    const [subject, verb] = splitPermission(permission)
+    groups.set(subject, [...(groups.get(subject) ?? []), verb])
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 2 }}>
+      {[...groups].map(([subject, verbs]) => (
+        <div
+          key={subject}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(120px, 156px) 1fr',
+            gap: 12,
+            alignItems: 'baseline',
+            padding: '5px 0',
+            fontSize: 13.5,
+          }}
+        >
+          <div style={{ color: c.text2 }}>{subjectLabel(subject)}</div>
+          <div style={{ color: c.text }}>{verbs.map(verbLabel).join(', ')}</div>
+        </div>
+      ))}
+      <Note>
+        Held tenant-wide, or on the products listed above. Every request is checked again by the
+        Coordinator, so this describes what it will accept rather than what this screen offers.
+      </Note>
+    </div>
+  )
+}
+
+/** `software_download.promote` -> `['software_download', 'promote']`. */
+function splitPermission(permission: string): [string, string] {
+  const dot = permission.indexOf('.')
+  if (dot === -1) return [permission, permission]
+  return [permission.slice(0, dot), permission.slice(dot + 1)]
+}
+
+/** The resource, as this product's own screens name it. */
+function subjectLabel(subject: string): string {
+  switch (subject) {
+    case 'product':
+      return 'Products'
+    case 'package':
+      return 'Releases'
+    case 'software_download':
+      return 'Downloads'
+    case 'download_rule':
+      return 'Download rules'
+    case 'replication':
+      return 'Mirrors'
+    case 'security_report':
+      return 'Security'
+    case 'compliance_report':
+      return 'Compliance'
+    case 'audit_event':
+      return 'Audit trail'
+    case 'report':
+      return 'Reports'
+    case 'worker':
+      return 'Workers'
+    case 'policy_catalogue':
+      return 'Policy catalogue'
+    case 'system':
+      return 'Deployment'
+    default:
+      return subject
+  }
+}
+
+/** `check_connectivity` -> `check connectivity`. */
+function verbLabel(verb: string): string {
+  return verb.replace(/_/g, ' ')
 }
 
 function Muted({ children }: { children: ReactNode }) {

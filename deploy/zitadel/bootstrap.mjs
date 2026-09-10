@@ -98,7 +98,29 @@ const uninitialised = [];
  * found threw a ReferenceError instead of reporting itself - a crash in the
  * one code path written to explain a confusing situation. */
 const duplicates = [];
+
+/* Grants found on a product's own project and rewritten onto `platform`,
+ * collected as they are repaired and reported together at the end. Declared up
+ * here for the same hoisting reason as the two above. */
+const superseded = [];
 const list = (v, d) => (v ?? d).split(',').map(s => s.trim()).filter(Boolean);
+
+/* A duration from .env, as the seconds string protobuf wants ("900s").
+ *
+ * Refused rather than guessed at. A misread lifetime is not a visible failure
+ * - the stack comes up, everybody signs in - and the effect only shows up as
+ * somebody keeping access for longer than intended, which is the one class of
+ * mistake nobody notices until it matters. */
+function duration(value, fallback, name) {
+  const raw = String(value ?? '').trim() || fallback;
+  const m = /^(\d+)\s*([smh])$/.exec(raw);
+  if (!m) {
+    dataError(`FATAL: ${name}=${raw} is not a duration.`,
+      '  Write it as a whole number and one of s, m or h - 30s, 15m, 12h.');
+  }
+  const scale = { s: 1, m: 60, h: 3600 }[m[2]];
+  return { text: raw, seconds: Number(m[1]) * scale, proto: `${Number(m[1]) * scale}s` };
+}
 
 /* A credential, shown well enough to recognise and not well enough to use. */
 function mask(v) {
@@ -478,6 +500,26 @@ try {
 const orgRoles = roles.tenant?.roles || [];
 const productRoles = roles.product?.roles || [];
 const ownerRole = roles.product?.ownerRole || '';
+/* MEMBERSHIP. Granted to every person this file provisions, on top of whatever
+ * else they hold, and it grants nothing.
+ *
+ * It is what tells a provisioned person apart from a stranger. With a
+ * corporate directory federated, every employee can authenticate; only the
+ * people in users.yaml have been provisioned, and until this existed both
+ * arrived at the Coordinator holding exactly the same thing - no roles - so
+ * both got the same closed door. A person who has been added here and not yet
+ * given a product is not a stranger, and telling them so is a support ticket.
+ *
+ * Blank in roles.yaml means no baseline, and the two become indistinguishable
+ * again. That is a configuration this file allows and does not recommend. */
+const baselineRole = roles.tenant?.baselineRole || '';
+if (baselineRole && !orgRoles.includes(baselineRole)) {
+  dataError(`FATAL: ${ROLES_FILE} names '${baselineRole}' as tenant.baselineRole,`,
+    '  but does not list it under tenant.roles.',
+    '',
+    '  The role has to exist before it can be granted: every person provisioned',
+    '  here is given it, so a missing one fails every grant rather than one.');
+}
 if (!orgRoles.length || !productRoles.length) {
   dataError(`FATAL: ${ROLES_FILE} declares no roles.`,
     '  Both tenant.roles and product.roles are required: the first covers',
@@ -532,11 +574,98 @@ if (ownerRole) {
   }
 }
 
+/* WHAT EACH PERSON TYPES AT THE SIGN-IN SCREEN, decided here rather than by
+ * whoever edited the file last.
+ *
+ * ONE PERSON'S NAME, TWO DOMAINS. `test@domain1.com` and `test@domain2.com`
+ * are two different people who happen to share a local part, and a ZITADEL
+ * username is unique across the whole instance - so the second of them cannot
+ * also be `test`. The obvious workaround is to invent `test2`, and it produces
+ * a login name that person has never been told and would never guess.
+ *
+ * So USERNAME IS OPTIONAL AND DEFAULTS TO THE ADDRESS. An address is already
+ * unique, it is the one identifier the person definitely knows, and it is what
+ * this system treats as the identity everywhere else - it is what the identity
+ * provider asserts, what auto-linking keys on, and what `findUserId` matches a
+ * re-run against. Two people in two domains then hold two distinct usernames
+ * without anybody inventing anything.
+ *
+ * Typing the address works EITHER WAY, and that is worth knowing before
+ * changing anything here: Login V2 looks the typed value up as a login name,
+ * and when that finds nobody it looks it up again as an e-mail address
+ * (`searchUsers`, apps/login/src/lib/zitadel.ts). The address is a way in for
+ * `test2` as much as for `test@domain2.com`. What the default buys is that the
+ * name on the account, the name in the seeder's output and the name the person
+ * types are one string instead of three - and that nothing depends on the
+ * fallback still being enabled, which is a login policy setting somebody can
+ * turn off (see `disableLoginWithEmail` in section 9).
+ *
+ * TWO ENTRIES MAY NOT SHARE AN ADDRESS. The address is how a re-run finds an
+ * account, so two entries carrying one address are one account: the second is
+ * not created, it is matched, and it silently adds its roles to the first
+ * person. Refused here, where it is a typo in a pull request, rather than
+ * discovered later as somebody holding a grant nobody gave them. */
+{
+  const seenEmail = new Map(), seenName = new Map(), anonymous = [];
+  for (const u of (doc.users || [])) {
+    u.email = String(u.email ?? '').trim();
+    u.username = String(u.username ?? '').trim() || u.email;
+    if (!u.username) { anonymous.push(u); continue; }
+
+    const key = u.email.toLowerCase();
+    if (key) {
+      if (seenEmail.has(key)) {
+        const first = seenEmail.get(key);
+        dataError(`FATAL: ${USERS_FILE} gives two people the same address.`,
+          '',
+          `    ${String(first.username).padEnd(30)}${first.email}`.trimEnd(),
+          `    ${String(u.username).padEnd(30)}${u.email}`.trimEnd(),
+          '',
+          '  An address identifies an account, so these two entries are one',
+          '  account. The second would not be created; it would be matched to',
+          '  the first, and its roles granted to that person.',
+          '',
+          '  Give each person their own address. Two people who share a local',
+          '  part in different domains already have one.');
+      }
+      seenEmail.set(key, u);
+    }
+  }
+  for (const u of [...(doc.users || []), ...(doc.apiUsers || [])]) {
+    const name = String(u.username ?? '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seenName.has(key)) {
+      dataError(`FATAL: ${USERS_FILE} gives two accounts the login name '${name}'.`,
+        '',
+        `    ${String(seenName.get(key).username).padEnd(30)}${seenName.get(key).email || ''}`.trimEnd(),
+        `    ${String(name).padEnd(30)}${u.email || ''}`.trimEnd(),
+        '',
+        '  A username is unique across the whole ZITADEL instance - people and',
+        '  machine accounts share one namespace - so the second of these is',
+        '  refused at creation and that person is never provisioned.',
+        '',
+        '  Omit `username` for people: it then defaults to their address, which',
+        '  is unique even when two people share a local part in two domains.');
+    }
+    seenName.set(key, u);
+  }
+  if (anonymous.length) {
+    dataError(`FATAL: ${anonymous.length} ${anonymous.length === 1 ? 'entry' : 'entries'} in ${USERS_FILE} ${anonymous.length === 1 ? 'has' : 'have'} neither a username nor an address.`,
+      '',
+      '  A person is provisioned under one or the other. `email` is the one to',
+      '  give: it is what a sign-in matches on, and `username` defaults to it.');
+  }
+}
+
 head('Configuration');
 item('source', CONFIG_DIR);
 item('tenant roles', orgRoles.join(', '));
 item('product roles', productRoles.join(', '));
 item('owner role', ownerRole || 'not required');
+item('baseline role', baselineRole
+  ? `${baselineRole}, granted to everybody provisioned here`
+  : 'none: a provisioned person with no product looks like a stranger');
 item('products', String(products.length));
 item('people', `${(doc.users || []).length} human, ${(doc.apiUsers || []).length} machine`);
 
@@ -639,6 +768,53 @@ for (const p of products) {
   item(p, created.has(p) ? 'created' : 'exists');
   sub('roles', productRoles.join(', '));
   if (added.length && !created.has(p)) sub('roles added this run', added.join(', '));
+}
+
+/* --- 5a. and the SAME KEYS on `platform`, which is where they are GRANTED --
+ *
+ * THE ONE THING THAT DECIDES WHETHER A PRODUCT ROLE REACHES A TOKEN.
+ *
+ * A token does not carry everything a person is granted. ZITADEL asserts roles
+ * only for the projects in that token's ROLE AUDIENCE, and the audience of a
+ * token issued to the web application is that application's OWN project -
+ * `platform` - unless the sign-in additionally asks for
+ * `urn:zitadel:iam:org:project:id:<id>:aud` naming another one. The filtering
+ * is not subtle and it is not a claim-shaping step at the end: the grants are
+ * never loaded. `internal/query/userinfo_by_id.sql` reads
+ *
+ *     and project_id = any($3)
+ *
+ * with `$3` built by `prepareRoles` in `internal/api/oidc/userinfo.go`.
+ *
+ * So a grant written on a PRODUCT's own project is invisible to the token that
+ * asks about it. This seeder used to write them exactly there, and the effect
+ * was that somebody granted `product-owner` on one product - and nothing else -
+ * signed in perfectly and arrived holding NO ROLES AT ALL: every screen
+ * refused, /whoami reporting an account with nothing on it, indistinguishable
+ * from never having been provisioned. Adding any `org-` role appeared to fix
+ * it, because those were always granted here, on `platform`, where the token
+ * could see them - and it fixed it by making that person able to read every
+ * product.
+ *
+ * The keys are namespaced `<product>:<role>` already, and section 5 above says
+ * why: a claim is keyed by an opaque PROJECT ID, so the role key has to carry
+ * the product for a token to be self-describing. That namespacing is also what
+ * makes this safe - a hundred and twenty product role keys on one project
+ * cannot collide - and `splitProductRole` in pkg/authz/identity.go is the
+ * reader that has always expected them to arrive together.
+ *
+ * The alternative is to name every product project in the sign-in scope. It is
+ * rejected in docs/design/24 section 8.1 and the reasons hold: the scope string
+ * grows with the estate, and a product added on Tuesday is invisible to
+ * everybody until the client configuration is changed and every session has
+ * signed in again.
+ */
+{
+  const keys = products.flatMap(p => productRoles.map(r => `${p}:${r}`));
+  const added = await ensureRoles(PLATFORM, keys);
+  item('platform', `also holds ${keys.length} product role keys`);
+  sub('why', 'a token carries roles for its own project only; grants live here');
+  if (added.length) sub('added this run', String(added.length));
 }
 
 /* --- 6. the web application (OIDC client) ---------------------------------
@@ -987,7 +1163,20 @@ for (const p of products) {
     hidePasswordReset: ssoOn ? true : (p.hidePasswordReset ?? false),
     ignoreUnknownUsernames: p.ignoreUnknownUsernames ?? false,
     allowDomainDiscovery: p.allowDomainDiscovery ?? true,
-    disableLoginWithEmail: p.disableLoginWithEmail ?? false,
+    /* THE ADDRESS IS A WAY IN. Asserted every run, not inherited.
+     *
+     * Login V2 resolves what somebody types as a LOGIN NAME first, and only
+     * when that matches nobody does it look the same string up as an E-MAIL
+     * ADDRESS (`searchUsers`, apps/login/src/lib/zitadel.ts). That fallback is
+     * what lets a person whose username is not their address - anyone
+     * provisioned before `username` defaulted to it, and every account the
+     * identity provider named itself - sign in with the address they know.
+     *
+     * This one setting turns it off, and turning it off is not visibly a
+     * decision about sign-in: it reads as tightening something. Everything
+     * this deployment does with identity is keyed on the address, so the
+     * fallback is part of the contract rather than a default to inherit. */
+    disableLoginWithEmail: false,
     disableLoginWithPhone: p.disableLoginWithPhone ?? false,
   };
   const wrote = current.isDefault
@@ -1017,6 +1206,31 @@ for (const p of products) {
     ? 'required (LOGIN_REQUIRE_MFA=true)'
     : 'not required; no passkey enrolment step');
   if (cleared) sub('cleared', `${cleared} second factor${cleared === 1 ? '' : 's'} this organization had inherited`);
+  item('sign-in with an address', 'on; an address works wherever a username does');
+
+  /* WHAT A LOGIN NAME LOOKS LIKE, which is not this policy's decision.
+   *
+   * With `userLoginMustBeDomain` on, every login name carries the
+   * organization's domain - `alex@default.localhost` - and an account whose
+   * username is an address ends up as `alex@corp.com@default.localhost`. The
+   * address still gets that person in, through the fallback above, but the
+   * name this seeder prints is not the name the console shows and nobody can
+   * tell which one to type.
+   *
+   * Reported rather than changed. It is an organization-wide setting that
+   * rewrites the login name of every account that already exists, which is not
+   * a thing to do as a side effect of adding somebody to a file. */
+  {
+    const dp = await api('GET', '/management/v1/policies/domain');
+    if (dp.policy?.userLoginMustBeDomain) {
+      warn('login names carry the org domain as a suffix, so a username that is');
+      warn('an address reads as alex@corp.com@<org domain>. People sign in with');
+      warn('their address either way. Settings, Domain, "must be domain" turns');
+      warn('the suffix off - it renames every existing login name.');
+    } else if (!dp.__status) {
+      item('login name', 'the username as written, with no org-domain suffix');
+    }
+  }
   if (ssoOn && !allowPassword) {
     note("'zitadel-admin' cannot sign in with a password either. Restore the");
     note('password box with SSO_ALLOW_PASSWORD_LOGIN=true and re-run this');
@@ -1263,6 +1477,82 @@ for (const p of products) {
   }
 }
 
+/* --- 9a. how long a token lives, which is how long a REMOVAL TAKES --------
+ *
+ * THE ANSWER TO "I DELETED THEM AND THEY CAN STILL USE IT".
+ *
+ * Nothing in this stack asks ZITADEL whether a token is still good. The
+ * Coordinator verifies a JWT offline against the issuer's public keys - no
+ * introspection, no callback, deliberately, because that is what lets it
+ * decide without holding a credential of its own and keeps it answering while
+ * ZITADEL restarts. The cost of that choice is exact: a token already issued
+ * stays valid until it expires, whatever happens to the account behind it.
+ *
+ * ZITADEL's own default is TWELVE HOURS, and this stack used to inherit it. So
+ * removing somebody, disabling them, or withdrawing every role they hold did
+ * nothing they could notice for the rest of the working day.
+ *
+ * What removal DOES take effect on immediately is the refresh: ZITADEL refuses
+ * to renew a token for an account that is gone or inactive. So the access
+ * token's lifetime IS the window - the person's browser renews, is refused,
+ * and is signed out. Fifteen minutes rather than twelve hours is the whole of
+ * the fix, and it costs one token request per active session per quarter hour.
+ *
+ * It is not zero, and no setting here makes it zero. That needs opaque tokens
+ * and an introspection call on every request, which is a different design with
+ * a different failure mode - see docs/design/24 section 8.5.
+ *
+ * WRITTEN THROUGH THE ADMIN API, not `ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_*`.
+ * Those are first-instance settings: ignored by an instance that already
+ * exists, which is every stack that would be picking this up. That trap is the
+ * same one documented for the login client in docs/design/25.
+ */
+{
+  const access  = duration(process.env.ACCESS_TOKEN_LIFETIME, '15m', 'ACCESS_TOKEN_LIFETIME');
+  /* The other three are ZITADEL's own defaults, stated rather than omitted:
+   * this request replaces all four, so a field left out is a field set to
+   * zero. The ID token is the client's own and carries no authority here; the
+   * refresh window is what decides how long somebody may be away and still
+   * come back without signing in. */
+  const idToken = duration(process.env.ID_TOKEN_LIFETIME, '12h', 'ID_TOKEN_LIFETIME');
+  const idle    = duration(process.env.REFRESH_TOKEN_IDLE, '720h', 'REFRESH_TOKEN_IDLE');
+  const absolute = duration(process.env.REFRESH_TOKEN_MAX, '2160h', 'REFRESH_TOKEN_MAX');
+
+  const body = {
+    accessTokenLifetime: access.proto,
+    idTokenLifetime: idToken.proto,
+    refreshTokenIdleExpiration: idle.proto,
+    refreshTokenExpiration: absolute.proto,
+  };
+  const current = await api('GET', '/admin/v1/settings/oidc');
+  // No settings stored yet answers an error rather than an empty document, and
+  // Update refuses when there is nothing to update while Add refuses when
+  // there is. So which call to make is decided by what is there.
+  const r = current.settings
+    ? await api('PUT', '/admin/v1/settings/oidc', body)
+    : await api('POST', '/admin/v1/settings/oidc', body);
+
+  head('Token lifetimes');
+  if (r.__status >= 400 && !unchanged(r)) {
+    warn(`the token lifetimes were not applied: ${(r.message || JSON.stringify(r)).slice(0, 140)}`);
+    warn(`Tokens keep whatever lifetime this instance already has - ZITADEL's own`);
+    warn('default is 12h, and a removed account keeps working for that long.');
+  } else {
+    item('access token', `${access.text} - this is how long a removal takes to bite`);
+    item('id token', idToken.text);
+    item('refresh token', `${idle.text} idle, ${absolute.text} at most`);
+    if (access.seconds > 3600) {
+      warn(`ACCESS_TOKEN_LIFETIME is ${access.text}: somebody removed from`);
+      warn('config/users/users.yaml keeps every permission they hold for that long.');
+    }
+    note();
+    note('A token already issued is valid until it expires: nothing in this stack');
+    note('asks the identity provider whether it still should be. Removing or');
+    note('disabling an account stops the RENEWAL, so the lifetime above is the');
+    note('longest anybody keeps access after you take it away.');
+  }
+}
+
 /* --- 10. no connector, anywhere, may create users -------------------------
  *
  * Section 9 configures the connector this file MANAGES, which is the one whose
@@ -1442,7 +1732,10 @@ for (const p of products) {
      * screen works, holds no permissions, and says "No roles" under their own
      * name. Granting is idempotent, so doing it unconditionally costs one
      * search on a run that changes nothing. */
-    await grantRoles(id, PLATFORM, ['org-admin']);
+    // The baseline goes on the administrator too. Holding org-admin already
+    // makes them a member - membership is holding any role at all - but a
+    // console that shows who is provisioned here should show all of them.
+    await grantRoles(id, PLATFORM, baselineRole ? [baselineRole, 'org-admin'] : ['org-admin']);
     await api('POST', '/management/v1/orgs/me/members', { userId: id, roles: ['ORG_OWNER'] });
     if (pw) warn('BOOTSTRAP_ADMIN_PASSWORD is still set. Unset it once a real administrator exists.');
   }
@@ -1521,8 +1814,46 @@ async function findUserId(username, email) {
     duplicates.push({ username, email, keep: byEmail.id, leftover: byName.id });
   }
   const hit = byEmail || byName;
-  if (!hit) return { id: '', by: '', state: '' };
-  return { id: hit.id, by: byEmail ? 'email' : 'username', state: hit.state || '' };
+  if (!hit) return { id: '', by: '', state: '', userName: '' };
+  // The name the account CARRIES, which is not necessarily the name that was
+  // searched for: an account matched on its address may have been created by
+  // the identity provider, or by an earlier version of the file it is being
+  // reconciled against. `reconcileUsername` is what closes that gap.
+  return { id: hit.id, by: byEmail ? 'email' : 'username', state: hit.state || '', userName: hit.userName || '' };
+}
+
+/* THE LOGIN NAME AN EXISTING ACCOUNT CARRIES, brought back to what the file
+ * says it should be.
+ *
+ * The case this exists for: a deployment provisioned when two people sharing a
+ * local part needed hand-invented usernames - `test` and `test2` for
+ * test@domain1.com and test@domain2.com - where the file has since been
+ * changed to let both default to their address. Without this the accounts keep
+ * the invented names forever, the seeder prints one name and the console shows
+ * another, and the fix that was applied to the file never reaches the stack.
+ *
+ * Only ever on a difference, so an unchanged file renames nothing. ZITADEL
+ * invalidates that person's active tokens and sessions on a rename, which is
+ * why this is driven by an edit somebody made rather than by a heuristic, and
+ * why it is printed on the line where it happens.
+ *
+ * Not fatal when refused. The usual refusal is that the name is already taken
+ * by another account, and that is a thing to report next to the account it
+ * concerns rather than a reason to abandon a run that has already granted
+ * roles to everybody above.
+ */
+async function reconcileUsername(id, from, to) {
+  if (!id || !from || !to || from.toLowerCase() === to.toLowerCase()) return { changed: false, error: '' };
+  // v2 UpdateUser. Older cores answer 404 for it and carry the v1 endpoint,
+  // which does the same thing under a different name for the same field.
+  const r = await api('PATCH', `/v2/users/${id}`, { username: to });
+  if (r.__status >= 400 && !unchanged(r)) {
+    const v1 = await api('PUT', `/management/v1/users/${id}/username`, { userName: to });
+    if (v1.__status >= 400 && !unchanged(v1)) {
+      return { changed: false, error: (v1.message || JSON.stringify(v1)).slice(0, 160) };
+    }
+  }
+  return { changed: true, error: '' };
 }
 
 /* An account that was never initialised is not an account.
@@ -1621,6 +1952,37 @@ function nameFor({ username, email, firstName, lastName }) {
   return { givenName: username, familyName: username, displayName: username };
 }
 
+/* A grant on a product's OWN project, moved to where a token can see it.
+ *
+ * Only ever called AFTER the same roles have been written on `platform`, so
+ * nobody loses access for a moment even if this fails. What it removes cannot
+ * be load bearing: no token can carry it (section 5a), and nothing in this
+ * stack reads a grant any other way - pkg/authz reads claims and nothing in
+ * the Go services holds a ZITADEL credential at all.
+ *
+ * It is REMOVED rather than left, and that is the opposite of what this file
+ * does with duplicate accounts, deliberately. A leftover account cannot sign
+ * in, so it is confusing; a leftover grant reads in the console as the access
+ * somebody has - `product-owner on software-01`, sitting there, doing nothing.
+ * The whole cost of this bug was a screen that said the grant existed while
+ * the token it produced was empty, and leaving these behind reproduces exactly
+ * that on the next person who goes looking.
+ */
+async function supersedeProductGrant(userId, projectId, label) {
+  const existing = await api('POST', '/management/v1/users/grants/_search',
+    { queries: [{ userIdQuery: { userId } }] });
+  const dead = (existing.result || []).find(g => g.projectId === projectId);
+  if (!dead) return;
+  const r = await api('DELETE', `/management/v1/users/${userId}/grants/${dead.id}`);
+  if (r.__status >= 400 && !unchanged(r)) {
+    warn(`${label}: the superseded grant on the product's own project could not be `
+      + `removed: ${(r.message || JSON.stringify(r)).slice(0, 120)}`);
+    warn('It grants nothing - no token can carry it - but the console shows it as access.');
+    return;
+  }
+  superseded.push(label);
+}
+
 async function grantRoles(userId, projectId, roleKeys) {
   if (!roleKeys.length) return;
   const existing = await api('POST', '/management/v1/users/grants/_search',
@@ -1659,16 +2021,37 @@ async function grantRoles(userId, projectId, roleKeys) {
       // Which identifier matched, because it is the difference between "the
       // account this file made" and "the account Microsoft made for them".
       item(u.username, `exists, matched on ${found.by}`);
+      const renamed = await reconcileUsername(uid, found.userName, u.username);
+      if (renamed.error) {
+        warn(`${found.userName} could not be renamed to ${u.username}: ${renamed.error}`);
+        warn(`${u.email || 'their address'} still signs them in either way.`);
+      } else if (renamed.changed) {
+        sub('login name', `${found.userName} -> ${u.username}`);
+        sub('sessions', 'ended by the rename; they sign in again under the new name');
+      }
     }
 
+    /* MEMBERSHIP FIRST, and unconditionally. It is the grant that says this
+     * person was provisioned rather than merely able to sign in, so it must
+     * not depend on their having been given anything else. */
+    if (baselineRole) await grantRoles(uid, PLATFORM, [baselineRole]);
     if (u.orgRoles?.length) {
       await grantRoles(uid, PLATFORM, u.orgRoles);
       sub('tenant-wide', u.orgRoles.join(', '));
     }
+    if (!u.orgRoles?.length && !Object.keys(u.products || {}).length) {
+      sub('access', baselineRole
+        ? `${baselineRole} only: signs in, sees no products`
+        : 'none, and no baseline role: this account cannot sign in usefully');
+    }
     for (const [product, roles] of Object.entries(u.products || {})) {
       const pid = projectOf.get(product);
       if (!pid) { warn(`${u.username}: no product named '${product}' in ${PRODUCTS_DIR}`); continue; }
-      await grantRoles(uid, pid, roles.map(r => `${product}:${r}`));
+      // On `platform`, not on `pid`. Section 5a: a token carries roles for its
+      // own project's audience only, so a grant on the product's own project
+      // is filtered out of the token and the person arrives holding nothing.
+      await grantRoles(uid, PLATFORM, roles.map(r => `${product}:${r}`));
+      await supersedeProductGrant(uid, pid, `${u.username} on ${product}`);
       sub(product, roles.join(', '));
     }
   }
@@ -1712,7 +2095,12 @@ for (const a of (doc?.apiUsers || [])) {
   if (a.orgRoles?.length) await grantRoles(uid, PLATFORM, a.orgRoles);
   for (const [product, roles] of Object.entries(a.products || {})) {
     const pid = projectOf.get(product);
-    if (pid) await grantRoles(uid, pid, roles.map(r => `${product}:${r}`));
+    if (!pid) continue;
+    // `platform`, for the reason in section 5a. A machine account asks for its
+    // token with the client credentials grant and the same audience rule
+    // applies to it: scopeFor in pkg/authz/workload.go names one project.
+    await grantRoles(uid, PLATFORM, roles.map(r => `${product}:${r}`));
+    await supersedeProductGrant(uid, pid, `${a.username} on ${product}`);
   }
 }
 
@@ -1737,8 +2125,15 @@ for (const a of (doc?.apiUsers || [])) {
   const all = await api('POST', '/management/v1/users/_search', { query: { limit: 500 } });
   const humans = (all.result || []).filter(u => u.human);
   const granted = new Set();
+  // Grants ON `platform` are the only ones a token carries (section 5a), so
+  // they are counted apart: holding a grant and holding a usable one are two
+  // different facts, and the difference between them is this whole check.
+  const onPlatform = new Set();
   const gr = await api('POST', '/management/v1/users/grants/_search', { query: { limit: 1000 } });
-  for (const g of (gr.result || [])) granted.add(g.userId);
+  for (const g of (gr.result || [])) {
+    granted.add(g.userId);
+    if (g.projectId === PLATFORM) onPlatform.add(g.userId);
+  }
 
   /* Somebody who administers the DIRECTORY is not a person who can sign in
    * and do nothing - they can do rather a lot. ZITADEL's own break-glass
@@ -1746,9 +2141,39 @@ for (const a of (doc?.apiUsers || [])) {
    * without this the banner opens by reporting the one account that is
    * supposed to look like that, every single run. A warning that is wrong on
    * its first line is a warning people learn to skip. */
+  const members = new Set();
   for (const path of ['/management/v1/orgs/me/members/_search', '/admin/v1/members/_search']) {
     const m = await api('POST', path, { query: { limit: 500 } });
-    for (const x of (m.result || [])) granted.add(x.userId);
+    for (const x of (m.result || [])) { granted.add(x.userId); members.add(x.userId); }
+  }
+
+  /* A GRANT THAT CANNOT REACH A TOKEN, which reads in every console as access.
+   *
+   * The check that names the fault section 5a describes, rather than leaving
+   * it to be inferred from a person who is provisioned, visibly granted, and
+   * refused by everything. Anybody here holds roles only on a product's own
+   * project: this file no longer writes those and moves the ones it finds, so
+   * what is left was made by hand in the console, on the project whose name
+   * matches the product - which is the obvious place and the wrong one. */
+  const dead = humans.filter(u =>
+    granted.has(u.id) && !onPlatform.has(u.id) && !members.has(u.id));
+  if (dead.length) {
+    const lines = [];
+    for (const u of dead.slice(0, 20)) {
+      lines.push(`  ${String(u.userName).padEnd(30)}${u.human?.email?.email || '(no address)'}`.trimEnd());
+    }
+    if (dead.length > 20) lines.push(`  ... and ${dead.length - 20} more`);
+    lines.push('');
+    lines.push('Their roles sit on a product\'s own project. A token carries roles for');
+    lines.push('the project the application belongs to - `platform` - and ZITADEL never');
+    lines.push('even loads the others, so these people sign in holding nothing and every');
+    lines.push('screen refuses them.');
+    lines.push('');
+    lines.push('Remedy: add them to config/users/users.yaml under `products:` and re-run');
+    lines.push('this container, which writes the grant on `platform` and removes the one');
+    lines.push('that does nothing. By hand in the console: grant the role on the');
+    lines.push('`platform` project, whose keys are named <product>:<role>.');
+    panel('GRANTS THAT NO TOKEN CAN CARRY', lines);
   }
 
   const ungranted = humans.filter(u => !granted.has(u.id));
@@ -2035,4 +2460,15 @@ item('application', process.env.WEB_PUBLIC_URL || 'http://localhost:8000');
 if (uninitialised.length) {
   item('accounts replaced', String(uninitialised.length));
   for (const label of uninitialised) sub(label, 'was never initialised and could not sign in');
+}
+/* Reported because it changes what somebody sees in the console tomorrow, and
+ * because it is the repair for a stack where product roles granted nothing. */
+if (superseded.length) {
+  item('product grants moved', String(superseded.length));
+  for (const label of superseded.slice(0, 20)) sub(label, 'rewritten onto platform, where a token carries it');
+  if (superseded.length > 20) sub(`... and ${superseded.length - 20} more`);
+  note();
+  note('These were granted on the product\'s own project, which no token this');
+  note('stack issues carries roles for - so they granted nothing. Anybody who');
+  note('holds one is signed in again to pick them up.');
 }

@@ -1222,10 +1222,10 @@ export default function Compare() {
           progressToken,
         },
       })
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'The comparison could not be run.')
+    } catch {
+      // Reported centrally - see components/feedback.
     }
-  }, [product, leftRef, rightRef, leftPkg, mode, versionEnd, fromEndpoint, toEndpoint, compare, message])
+  }, [product, leftRef, rightRef, leftPkg, mode, versionEnd, fromEndpoint, toEndpoint, compare])
 
   /*
    * Runs itself on arrival, and runs only what was ASKED for.
@@ -1303,7 +1303,6 @@ export default function Compare() {
           ? `Fetching the missing results for ${target.tag}. The comparison re-runs on its own.`
           : `A sync is already running for ${target.tag}. The comparison re-runs when it finishes.`)
       },
-      onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be started.'),
     })
   }
 

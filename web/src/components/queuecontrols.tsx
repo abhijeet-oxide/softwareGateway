@@ -5,6 +5,7 @@ import {
 } from '../icons'
 import { useTransferControl, useTransferPriority } from '../api/queries'
 import { useCan } from '../auth/permissions'
+import { ActionButton } from './access'
 import type { Transfer } from '../api/types'
 
 /**
@@ -45,54 +46,70 @@ export function QueueControls({
   hasFailures?: boolean
 }) {
   const { message } = App.useApp()
-  const mayOperate = useCan('operate', { product: transfer.product })
+  // Pause, resume, stop and retry are all `cancel` in the policies: they stop
+  // or re-drive work somebody asked for. See config/access/policies/download.yaml.
+  const mayOperate = useCan('software_download.cancel', { product: transfer.product })
   const control = useTransferControl(transfer.id)
 
   const state = transfer.state
   const live = LIVE.includes(state)
   const settled = SETTLED.includes(state)
 
+  // No catch. The failure travels up to the query client, which reports it with
+  // the Coordinator's own sentence, its code and its request id - all of which
+  // `message.error(e.message)` threw away. See components/feedback.
   const act = async (verb: 'retry' | 'pause' | 'resume' | 'stop' | 'delete') => {
-    try {
-      const res = await control.mutateAsync(verb)
-      message.success(said(verb, res.jobs, res.inFlight ?? 0))
-      if (verb === 'delete') onDeleted?.()
-      if (verb === 'retry') onRetried?.()
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : `The download could not ${verb}.`)
-    }
+    const res = await control.mutateAsync(verb)
+    message.success(said(verb, res.jobs, res.inFlight ?? 0))
+    if (verb === 'delete') onDeleted?.()
+    if (verb === 'retry') onRetried?.()
   }
 
   return (
     <Space size={4}>
       {(state === 'FAILED' || (hasFailures && !SETTLED.includes(state))) && (
-        <Tooltip title="Resumes from where it stopped. Artifacts already transferred are not moved again.">
-          <Button
-            size={size}
-            icon={<ReloadOutlined />}
-            disabled={!mayOperate}
-            loading={control.isPending}
-            onClick={() => void act('retry')}
-          >
-            Retry
-          </Button>
-        </Tooltip>
+        <ActionButton
+          permission="software_download.retry"
+          scope={{ product: transfer.product }}
+          whenDenied="disable"
+          action="Retry"
+          size={size}
+          icon={<ReloadOutlined />}
+          title="Resumes from where it stopped. Artifacts already transferred are not moved again."
+          onClick={() => act('retry')}
+        >
+          Retry
+        </ActionButton>
       )}
 
       {live && (
-        <Tooltip title="Nothing new starts. Work already in flight finishes - abandoning a large blob most of the way through would be a worse trade than waiting.">
-          <Button size={size} icon={<PauseOutlined />} disabled={!mayOperate} onClick={() => void act('pause')}>
-            Pause
-          </Button>
-        </Tooltip>
+        <ActionButton
+          permission="software_download.cancel"
+          scope={{ product: transfer.product }}
+          whenDenied="disable"
+          action="Pause"
+          size={size}
+          icon={<PauseOutlined />}
+          title="Nothing new starts. Work already in flight finishes - abandoning a large blob most of the way through would be a worse trade than waiting."
+          onClick={() => act('pause')}
+        >
+          Pause
+        </ActionButton>
       )}
 
       {state === 'PAUSED' && (
-        <Tooltip title="Picks up exactly where the pause left off.">
-          <Button size={size} icon={<PlayCircleOutlined />} disabled={!mayOperate} onClick={() => void act('resume')}>
-            Resume
-          </Button>
-        </Tooltip>
+        <ActionButton
+          permission="software_download.cancel"
+          scope={{ product: transfer.product }}
+          whenDenied="disable"
+          action="Resume"
+          size={size}
+          icon={<PlayCircleOutlined />}
+          title="Picks up exactly where the pause left off."
+          onClick={() => act('resume')}
+        >
+          Resume
+        </ActionButton>
       )}
 
       {(live || state === 'PAUSED') && (
@@ -111,8 +128,8 @@ export function QueueControls({
             </div>
           }
           okText="Stop it"
-          okButtonProps={{ danger: true }}
-          onConfirm={() => void act('stop')}
+          okButtonProps={{ danger: true, loading: control.isPending }}
+          onConfirm={() => act('stop')}
         >
           <Button size={size} danger icon={<StopOutlined />} disabled={!mayOperate}>
             Stop
@@ -132,8 +149,11 @@ export function QueueControls({
             </div>
           }
           okText="Remove the record"
-          okButtonProps={{ danger: true }}
-          onConfirm={() => void act('delete')}
+          okButtonProps={{ danger: true, loading: control.isPending }}
+          // Returning the promise is what makes Ant hold the dialog open with a
+          // spinner until the request settles, rather than closing over work
+          // that has not happened yet.
+          onConfirm={() => act('delete')}
         >
           <Button size={size} danger icon={<DeleteOutlined />} disabled={!mayOperate}>
             Delete
@@ -185,7 +205,7 @@ export function PriorityControl({
   transfer: Pick<Transfer, 'id' | 'state' | 'priority' | 'product'>
 }) {
   const { message } = App.useApp()
-  const mayOperate = useCan('operate', { product: transfer.product })
+  const mayOperate = useCan('software_download.cancel', { product: transfer.product })
   const setPriority = useTransferPriority(transfer.id)
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState<number | null>(transfer.priority)
@@ -203,8 +223,8 @@ export function PriorityControl({
           : `Priority ${value}. Nothing was waiting to reorder.`,
       )
       setEditing(false)
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'The priority could not be changed.')
+    } catch {
+      // Reported centrally; the field stays open so the value is not lost.
     }
   }
 

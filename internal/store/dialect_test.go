@@ -32,6 +32,15 @@ func TestDialectNowAndBool(t *testing.T) {
 	}
 }
 
+func TestDialectJSONText(t *testing.T) {
+	if got := DialectFor(DriverPostgres).JSONText("a.detail"); got != "COALESCE((a.detail)::text, '')" {
+		t.Fatalf("postgres JSON text expression = %q", got)
+	}
+	if got := DialectFor(DriverSQLite).JSONText("a.detail"); got != "COALESCE(a.detail, '')" {
+		t.Fatalf("sqlite JSON text expression = %q", got)
+	}
+}
+
 // The bug this exists for.
 //
 // The queries in this package are commented in prose, and English prose has

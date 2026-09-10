@@ -87,6 +87,9 @@ type Dialect interface {
 	// FOR PREFIX MATCHING ONLY. It defeats the primary key index, so an exact
 	// lookup must compare the column itself.
 	IDText(col string) string
+	// JSONText renders a possibly-NULL JSON expression as its stored JSON text,
+	// or the empty string when there is no value.
+	JSONText(expr string) string
 	// Name identifies the dialect.
 	Name() Driver
 }
@@ -224,6 +227,8 @@ func (postgresDialect) TimestampText(expr string) string {
 
 func (postgresDialect) IDText(col string) string { return "(" + col + ")::text" }
 
+func (postgresDialect) JSONText(expr string) string { return "COALESCE((" + expr + ")::text, '')" }
+
 func (postgresDialect) Bool(b bool) string { return map[bool]string{true: "TRUE", false: "FALSE"}[b] }
 func (postgresDialect) Name() Driver       { return DriverPostgres }
 
@@ -260,6 +265,9 @@ func (sqliteDialect) TimestampText(expr string) string {
 
 // IDText is the column itself: SQLite already stores it as text.
 func (sqliteDialect) IDText(col string) string { return col }
+
+// JSONText is the plain COALESCE: SQLite stores these payloads as text.
+func (sqliteDialect) JSONText(expr string) string { return "COALESCE(" + expr + ", '')" }
 
 func (sqliteDialect) Bool(b bool) string { return map[bool]string{true: "1", false: "0"}[b] }
 func (sqliteDialect) Name() Driver       { return DriverSQLite }

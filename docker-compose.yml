@@ -1,5 +1,4 @@
-# =============================================================================
-# Software Gateway - complete stack, day 0.
+# ======================================================================# Software Gateway - complete stack, day 0.
 #
 #   curl -O   https://raw.githubusercontent.com/abhijeet-oxide/softwareGateway/main/deploy/docker-compose.yml
 #   curl -o .env https://raw.githubusercontent.com/abhijeet-oxide/softwareGateway/main/deploy/.env.example
@@ -80,8 +79,7 @@
 # deploy/STACK.md for what to do about that; it is podman's bug to fix, not
 # something this file can work around. Docker is unaffected: buildx streams
 # secrets over its session rather than through the context.
-# =============================================================================
-
+# ======================================================================
 name: software-gateway
 
 services:
@@ -216,6 +214,16 @@ services:
       # arrive through a directory, so a passkey enrolment step on the way in
       # is a credential nobody asked for. true restores it.
       LOGIN_REQUIRE_MFA: ${LOGIN_REQUIRE_MFA:-false}
+      # HOW LONG A REMOVAL TAKES TO BITE. The Coordinator verifies tokens
+      # offline and never asks whether one is still good, so a token already
+      # issued works until it expires - whoever has been removed meanwhile.
+      # A removal does stop the RENEWAL, so this is the window. ZITADEL's own
+      # default is 12h; the seeder writes these through the admin API, which is
+      # the only path that reaches an instance that already exists.
+      ACCESS_TOKEN_LIFETIME: ${ACCESS_TOKEN_LIFETIME:-15m}
+      ID_TOKEN_LIFETIME: ${ID_TOKEN_LIFETIME:-12h}
+      REFRESH_TOKEN_IDLE: ${REFRESH_TOKEN_IDLE:-720h}
+      REFRESH_TOKEN_MAX: ${REFRESH_TOKEN_MAX:-2160h}
       BRANDING_PRIMARY_COLOR: ${BRANDING_PRIMARY_COLOR:-}
       BRANDING_PRIMARY_COLOR_DARK: ${BRANDING_PRIMARY_COLOR_DARK:-}
       BRANDING_LOGO_FILE: ${BRANDING_LOGO_FILE:-}
@@ -436,6 +444,18 @@ services:
       # ZITADEL picks its instance from Host and 404s on one it does not know.
       SWGW_AUTH_HOSTHEADER: ${ZITADEL_EXTERNAL_DOMAIN:-localhost}:${ZITADEL_PORT:-8090}
       SWGW_AUTH_CERBOSADDR: http://cerbos:3592
+      # THE TENANT THIS DEPLOYMENT SERVES, and the boundary around it.
+      #
+      # ZITADEL signs every organization's tokens with the same keys, so a
+      # signature says who minted a token and nothing about who it was minted
+      # for. Without this, a token from another organization at the same issuer
+      # verifies perfectly and its roles are read as if they had been granted
+      # here - `org-admin` over there is spelled exactly like `org-admin` here.
+      #
+      # It is the ZITADEL organization NAME, which is this same variable: the
+      # seeder creates the org with it and the sign-in asserts it in the
+      # token's resourceowner claim.
+      SWGW_AUTH_TENANT: ${GATEWAY_TENANT:-default}
     # No published port on purpose. The API is reached through the web tier at
     # http://localhost:${WEB_PORT:-8000}/api/v1, which is same-origin (the
     # controller ships no CORS middleware) AND lets this service scale: a fixed

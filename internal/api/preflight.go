@@ -38,7 +38,20 @@ func (s *Server) handleCheckConnectivity(w http.ResponseWriter, r *http.Request)
 		}
 		targets = []*product.Product{p}
 	} else {
-		targets = s.deps.Products.List()
+		// The fleet, narrowed to what this caller was authorized for. See
+		// permitted() and middleware.PermittedProducts: a product owner probing
+		// "every registry" probes their own, and an org operator probes all of
+		// them because an empty narrowing means unrestricted.
+		allowed := permitted(r, productNames(s.deps.Products.List()))
+		keep := make(map[string]bool, len(allowed))
+		for _, name := range allowed {
+			keep[name] = true
+		}
+		for _, p := range s.deps.Products.List() {
+			if keep[p.Metadata.Name] {
+				targets = append(targets, p)
+			}
+		}
 	}
 
 	resp := v1.CheckConnectivityResponse{Status: v1.CheckOK, Products: []v1.ProductCheck{}}
@@ -89,6 +102,15 @@ func toAPIProductCheck(res preflight.ProductResult) v1.ProductCheck {
 			})
 		}
 		out.Repositories = append(out.Repositories, rc)
+	}
+	return out
+}
+
+// productNames is the loaded products by name, for the scope filter.
+func productNames(products []*product.Product) []string {
+	out := make([]string, 0, len(products))
+	for _, p := range products {
+		out = append(out, p.Metadata.Name)
 	}
 	return out
 }

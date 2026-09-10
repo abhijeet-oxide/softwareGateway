@@ -5,6 +5,7 @@ import {
 import { Shell } from './Shell'
 import brand from './brand'
 import { useIdentity } from './auth/permissions'
+import { RequirePermission } from './components/access'
 import { AccessRoute, useSupportContact } from './auth/contact'
 import { identityClaims, signOut } from './auth/session'
 import { c, mono, NotFoundPage, PageTransition, StatusScreen } from './uikit'
@@ -162,19 +163,59 @@ function NoAccess() {
   )
 }
 
+/**
+ * The policy engine did not answer, so nothing could be resolved.
+ *
+ * # Why this is a screen and not an empty interface
+ *
+ * Because the two look identical and mean opposite things. A Cerbos that cannot
+ * be reached refuses every request (deliberately - see middleware.Authorize,
+ * "cannot know is not yes"), and resolves every permission to nothing. Without
+ * this, an administrator with every permission in the system sees a navigation
+ * with one entry and pages that refuse them, and concludes their account was
+ * changed.
+ *
+ * It says the true thing: this is the deployment, not the account, and nobody
+ * is being granted or refused anything until the engine answers again.
+ */
+function PolicyEngineDown() {
+  return (
+    <StatusScreen
+      brand={brand}
+      title="Permissions cannot be checked"
+      actions={[{ label: 'Try again', primary: true, onClick: () => window.location.reload() }]}
+    >
+      The Coordinator could not reach its policy engine, so it cannot establish what any
+      account may do - and refuses every request while that is true. This is a fault in the
+      deployment rather than anything about this account: no roles have changed. An
+      administrator checks that Cerbos is running and that SWGW_CERBOS_ADDR points at it.
+    </StatusScreen>
+  )
+}
+
 export function App() {
   const { pathname } = useLocation()
-  const { who } = useIdentity()
+  const { who, accessUnavailable } = useIdentity()
   usePreloadRoutes(ROUTES)
 
   /*
-    Gated on AUTHENTICATED, not on the permission list alone. A deployment with
-    authentication switched off reports `authenticated: false` and permissions
-    of `["*"]`, and one that is still fetching reports nothing at all; neither
-    is a person who has been granted nothing, and showing this page to either
-    would be the application inventing a problem.
+    Gated on MEMBERSHIP, not on the permission list.
+
+    Two different questions, and reading one as the other is what put this
+    screen in front of the wrong people. `permissions` is what the caller may
+    do TENANT-WIDE, and holding nothing there is the CORRECT answer for
+    somebody whose access is one product - which is the whole point of the
+    product tier - so a colleague provisioned as product-owner met a door
+    telling them their account was not enabled. `member` answers the question
+    this screen actually asks: has anybody provisioned this account here at
+    all. With a corporate directory federated, being able to sign in does not.
+
+    Still gated on AUTHENTICATED as well. A deployment with authentication off
+    reports `authenticated: false`, and one still fetching reports nothing;
+    neither is a stranger, and showing this to either would be the application
+    inventing a problem.
   */
-  const noAccess = Boolean(who?.authenticated && (who.permissions ?? []).length === 0)
+  const noAccess = Boolean(who?.authenticated && !who.member)
 
   /*
     ONE KEY, doing two jobs.
@@ -214,17 +255,67 @@ export function App() {
     return <NoAccess />
   }
 
+  // Before the no-access door and after it: an empty permission set that could
+  // not be RESOLVED is a different fact from one that is empty, and the two
+  // screens say different things to different people.
+  if (accessUnavailable) {
+    return <PolicyEngineDown />
+  }
+
   return (
     <Shell>
       <RouteErrorBoundary resetKey={page}>
         <Suspense key={page} fallback={<PageLoading />}>
           <PageTransition routeKey={page}>
+            {/*
+              EVERY PAGE ASKS FOR ITSELF.
+
+              The navigation already drops the entries an account cannot open,
+              and that is not enough on its own: a bookmark, a link in a ticket
+              and a typed address all reach a page the rail is not offering.
+              Without this they reached it and rendered its furniture over reads
+              that answered 403 - filters, headers and an empty table, which
+              reads as "nothing has happened" rather than "not for you".
+
+              `anyScope` on the listings, because the SERVER narrows them: a
+              product owner's Packages page is their products' releases. The
+              estate pages - Reports, Policies, Settings - ask the tenant-wide
+              question, because there is nothing to narrow them to.
+            */}
             <Routes>
               <Route path="/" element={<Overview.Component />} />
-              <Route path="/products" element={<Products.Component />} />
-              <Route path="/products/:product" element={<Products.Component />} />
-              <Route path="/packages" element={<Packages.Component />} />
-              <Route path="/packages/:product/:reference" element={<PackageDetail.Component />} />
+              <Route
+                path="/products"
+                element={
+                  <RequirePermission permission="product.view" what="products">
+                    <Products.Component />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/products/:product"
+                element={
+                  <RequirePermission permission="product.view" what="products">
+                    <Products.Component />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/packages"
+                element={
+                  <RequirePermission permission="package.view" what="releases">
+                    <Packages.Component />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/packages/:product/:reference"
+                element={
+                  <RequirePermission permission="package.view" what="releases">
+                    <PackageDetail.Component />
+                  </RequirePermission>
+                }
+              />
               {/*
                 The old spelling. Links to it exist in chat threads and tickets, so
                 it redirects rather than 404ing - and it redirects to the same path
@@ -232,23 +323,94 @@ export function App() {
               */}
               <Route path="/software" element={<Navigate to="/packages" replace />} />
               <Route path="/software/:product/:reference" element={<LegacyPackageRedirect />} />
-              <Route path="/downloads" element={<Downloads.Component />} />
-              <Route path="/downloads/:transferId" element={<DownloadDetail.Component />} />
-              <Route path="/packages/compare" element={<Compare.Component />} />
+              <Route
+                path="/downloads"
+                element={
+                  <RequirePermission permission="software_download.view" what="downloads">
+                    <Downloads.Component />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/downloads/:transferId"
+                element={
+                  <RequirePermission permission="software_download.view" what="downloads">
+                    <DownloadDetail.Component />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/packages/compare"
+                element={
+                  <RequirePermission permission="package.view" what="releases">
+                    <Compare.Component />
+                  </RequirePermission>
+                }
+              />
               {/* The old path - links to it exist already, so it redirects rather than 404s. */}
               <Route path="/compare" element={<LegacyCompareRedirect />} />
-              <Route path="/security" element={<Security.Component />} />
+              <Route
+                path="/security"
+                element={
+                  <RequirePermission permission="security_report.view" what="security findings">
+                    <Security.Component />
+                  </RequirePermission>
+                }
+              />
               {/*
                 The rulebook. Reachable from a release's Compliance tab and by
                 link, deliberately NOT a tenth nav entry: the shell's nine are
                 the nine, and this is a reference somebody opens from a finding
                 rather than a place they go.
               */}
-              <Route path="/policies" element={<Policies.Component />} />
-              <Route path="/repositories" element={<Repositories.Component />} />
-              <Route path="/activity" element={<Activity.Component />} />
-              <Route path="/reports" element={<Reports.Component />} />
-              <Route path="/settings" element={<Settings.Component />} />
+              <Route
+                path="/policies"
+                element={
+                  <RequirePermission
+                    permission="policy_catalogue.view"
+                    what="the policy catalogue"
+                    anyScope={false}
+                  >
+                    <Policies.Component />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/repositories"
+                element={
+                  <RequirePermission permission="product.view" what="repositories">
+                    <Repositories.Component />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/activity"
+                element={
+                  <RequirePermission permission="audit_event.view" what="the audit trail">
+                    <Activity.Component />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/reports"
+                element={
+                  <RequirePermission permission="report.view" what="reports" anyScope={false}>
+                    <Reports.Component />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/settings"
+                element={
+                  <RequirePermission
+                    permission="system.view"
+                    what="deployment settings"
+                    anyScope={false}
+                  >
+                    <Settings.Component />
+                  </RequirePermission>
+                }
+              />
               <Route path="/profile" element={<Profile.Component />} />
               {/*
                 Everything else. A redirect here would hide the mistake; see

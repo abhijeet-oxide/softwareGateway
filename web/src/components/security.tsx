@@ -18,6 +18,7 @@ import { RunPanel, runEventsFromLog } from './runpanel'
 import { ScannerMark } from './icons'
 import { kevColour, KevTag } from './securitykev'
 import type { RunTile } from './runtiles'
+import { ActionButton } from './access'
 import { SEVERITIES } from '../api/types'
 import type {
   PackageSecuritySummary, ScanStatus, SecurityCounts, SecurityCoverage,
@@ -596,15 +597,6 @@ export function SecurityStateNotice({ state, message, onRefresh, onShowProblems,
       description={
         <Space direction="vertical" size={4}>
           <span>{message}</span>
-          {/* Said plainly, because it is the single most common misreading. */}
-          <Typography.Text type="secondary">
-            An image with no scan result is not the same as an image with no vulnerabilities.
-          </Typography.Text>
-          {/*
-            The way OUT of the banner. It named a number and then offered a
-            button that ran the whole thing again, which is a page telling
-            somebody their sync went wrong and refusing to say which images.
-          */}
           {onShowProblems && (problemCount ?? 0) > 0 && (
             <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={onShowProblems}>
               View details
@@ -612,7 +604,11 @@ export function SecurityStateNotice({ state, message, onRefresh, onShowProblems,
           )}
         </Space>
       }
-      action={onRefresh && <Button size="small" onClick={onRefresh}>Sync again</Button>}
+      action={onRefresh && (
+        <ActionButton size="small" action="Sync vulnerabilities" onClick={onRefresh}>
+          Sync again
+        </ActionButton>
+      )}
     />
   )
 }

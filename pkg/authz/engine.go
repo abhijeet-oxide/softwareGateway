@@ -35,7 +35,21 @@ type Engine interface {
 type Cerbos struct {
 	// Addr is the PDP base URL, e.g. http://cerbos:3592.
 	Addr string
-	HTTP *http.Client
+	// Tenant is the tenant this deployment serves, and it is what the resource
+	// is labelled with.
+	//
+	// EVERY derived role in config/access/policies compares
+	// `R.attr.tenant == P.attr.tenant`. Labelling the resource with the
+	// PRINCIPAL's tenant made that comparison compare a value with itself:
+	// always true, in every rule, for every caller - a tenancy condition
+	// written eleven times and enforced nowhere. The resource belongs to this
+	// deployment, so it is this deployment that says which tenant it is in.
+	//
+	// Empty keeps the old behaviour and the old tautology, for a deployment
+	// that has not been told its tenant yet; the Coordinator says so at
+	// startup rather than leaving it to be discovered.
+	Tenant string
+	HTTP   *http.Client
 }
 
 // NewCerbos builds a client with sane timeouts.
@@ -116,22 +130,9 @@ type cerbosResp struct {
 // Check asks the PDP. A caller with no roles is refused without a call: an
 // unauthenticated request is not a policy question.
 func (c *Cerbos) Check(ctx context.Context, id Identity, res Resource, actions ...string) (map[string]bool, error) {
-	out := map[string]bool{}
 	roles := id.AllRoles()
 	if len(roles) == 0 || len(actions) == 0 {
-		for _, a := range actions {
-			out[a] = false
-		}
-		return out, nil
-	}
-
-	attr := map[string]any{}
-	for k, v := range res.Attr {
-		attr[k] = v
-	}
-	attr["tenant"] = id.Tenant
-	if res.Product != "" {
-		attr["product"] = res.Product
+		return refuseAll(actions), nil
 	}
 
 	body, err := json.Marshal(cerbosReq{
@@ -145,7 +146,7 @@ func (c *Cerbos) Check(ctx context.Context, id Identity, res Resource, actions .
 			},
 		},
 		Resources: []cerbosResEnt{{
-			Resource: cerbosRes{Kind: res.Kind, ID: orStar(res.ID), Attr: attr},
+			Resource: cerbosRes{Kind: res.Kind, ID: orStar(res.ID), Attr: c.resourceAttr(id, res)},
 			Actions:  actions,
 		}},
 	})
@@ -153,35 +154,14 @@ func (c *Cerbos) Check(ctx context.Context, id Identity, res Resource, actions .
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.Addr+"/api/check/resources", bytes.NewReader(body))
+	decoded, err := c.post(ctx, body)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http().Do(req)
-	if err != nil {
-		// NEVER fail open. An unreachable policy engine means we cannot know
-		// whether this is allowed, and "cannot know" is not "yes".
-		return nil, fmt.Errorf("authz: policy engine unreachable: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("authz: policy engine returned %s", resp.Status)
-	}
-	var decoded cerbosResp
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return nil, fmt.Errorf("authz: decode policy response: %w", err)
-	}
 	if len(decoded.Results) == 0 {
-		for _, a := range actions {
-			out[a] = false
-		}
-		return out, nil
+		return refuseAll(actions), nil
 	}
+	out := map[string]bool{}
 	for _, a := range actions {
 		out[a] = decoded.Results[0].Actions[a] == "EFFECT_ALLOW"
 	}
@@ -221,6 +201,194 @@ func (AllowAll) Check(_ context.Context, _ Identity, _ Resource, actions ...stri
 	out := map[string]bool{}
 	for _, a := range actions {
 		out[a] = true
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Asking about many resources at once
+// ---------------------------------------------------------------------------
+
+// Query is one resource and the actions to ask about it.
+type Query struct {
+	Resource Resource
+	Actions  []string
+}
+
+// BatchEngine is an Engine that can answer several questions in one exchange.
+//
+// Optional, and asserted for rather than folded into Engine, for the same
+// reason Prober is: a table of answers in a test has nothing to batch, and an
+// interface method every implementation must carry in order for one of them to
+// be faster is a tax on the ones that are not.
+type BatchEngine interface {
+	CheckMany(ctx context.Context, id Identity, queries []Query) ([]map[string]bool, error)
+}
+
+// CheckMany answers every query, in the order they were asked.
+//
+// # Why this exists
+//
+// Describing what a caller may do - the whole permission set an interface
+// renders itself from - is forty questions, not one. Asked one at a time
+// against a PDP that is a network hop away, that is forty round trips on the
+// first read of every session. Cerbos takes a batch natively, so it is one.
+//
+// An engine with no batch of its own is asked in sequence, which is correct
+// and slow rather than wrong.
+func CheckMany(ctx context.Context, e Engine, id Identity, queries []Query) ([]map[string]bool, error) {
+	if b, ok := e.(BatchEngine); ok {
+		return b.CheckMany(ctx, id, queries)
+	}
+	out := make([]map[string]bool, 0, len(queries))
+	for _, q := range queries {
+		got, err := e.Check(ctx, id, q.Resource, q.Actions...)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, got)
+	}
+	return out, nil
+}
+
+// CheckMany asks the PDP about every resource in ONE call.
+//
+// Cerbos' CheckResources takes a list, decides each against the same
+// principal, and answers in the same order - which is the whole reason the
+// permission set can be resolved without making a session's first read
+// quadratic in the size of the catalogue.
+func (c *Cerbos) CheckMany(ctx context.Context, id Identity, queries []Query) ([]map[string]bool, error) {
+	out := make([]map[string]bool, len(queries))
+	roles := id.AllRoles()
+	if len(roles) == 0 {
+		for i, q := range queries {
+			out[i] = refuseAll(q.Actions)
+		}
+		return out, nil
+	}
+
+	// Entries with no actions are answered here rather than sent: Cerbos
+	// rejects a resource entry with an empty action list, which would fail the
+	// whole batch over a question nobody asked.
+	entries := make([]cerbosResEnt, 0, len(queries))
+	index := make([]int, 0, len(queries))
+	for i, q := range queries {
+		if len(q.Actions) == 0 {
+			out[i] = map[string]bool{}
+			continue
+		}
+		entries = append(entries, cerbosResEnt{
+			Resource: cerbosRes{
+				Kind: q.Resource.Kind,
+				ID:   orStar(q.Resource.ID),
+				Attr: c.resourceAttr(id, q.Resource),
+			},
+			Actions: q.Actions,
+		})
+		index = append(index, i)
+	}
+	if len(entries) == 0 {
+		return out, nil
+	}
+
+	body, err := json.Marshal(cerbosReq{
+		RequestID: "swgw",
+		Principal: cerbosPrincipal{
+			ID:    id.Subject,
+			Roles: roles,
+			Attr: map[string]any{
+				"tenant":   id.Tenant,
+				"products": id.ProductNames(),
+			},
+		},
+		Resources: entries,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	decoded, err := c.post(ctx, body)
+	if err != nil {
+		return nil, err
+	}
+	for n, i := range index {
+		if n >= len(decoded.Results) {
+			// A PDP that answered about fewer resources than it was asked
+			// about has not permitted the rest of them.
+			out[i] = refuseAll(queries[i].Actions)
+			continue
+		}
+		got := map[string]bool{}
+		for _, a := range queries[i].Actions {
+			got[a] = decoded.Results[n].Actions[a] == "EFFECT_ALLOW"
+		}
+		out[i] = got
+	}
+	return out, nil
+}
+
+// resourceAttr labels a resource for the policies. See Cerbos.Tenant: the
+// tenant is the DEPLOYMENT's, never the caller's.
+func (c *Cerbos) resourceAttr(id Identity, res Resource) map[string]any {
+	attr := map[string]any{}
+	for k, v := range res.Attr {
+		attr[k] = v
+	}
+	attr["tenant"] = c.Tenant
+	if c.Tenant == "" {
+		attr["tenant"] = id.Tenant
+	}
+	if res.Product != "" {
+		attr["product"] = res.Product
+	}
+	return attr
+}
+
+// post sends one prepared request to the PDP and decodes its answer.
+func (c *Cerbos) post(ctx context.Context, body []byte) (cerbosResp, error) {
+	var decoded cerbosResp
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.Addr+"/api/check/resources", bytes.NewReader(body))
+	if err != nil {
+		return decoded, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http().Do(req)
+	if err != nil {
+		// NEVER fail open. An unreachable policy engine means we cannot know
+		// whether this is allowed, and "cannot know" is not "yes".
+		return decoded, fmt.Errorf("authz: policy engine unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return decoded, fmt.Errorf("authz: policy engine returned %s", resp.Status)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return decoded, fmt.Errorf("authz: decode policy response: %w", err)
+	}
+	return decoded, nil
+}
+
+func refuseAll(actions []string) map[string]bool {
+	out := map[string]bool{}
+	for _, a := range actions {
+		out[a] = false
+	}
+	return out
+}
+
+// CheckMany permits everything, in the shape the caller asked for.
+func (AllowAll) CheckMany(_ context.Context, _ Identity, queries []Query) ([]map[string]bool, error) {
+	out := make([]map[string]bool, len(queries))
+	for i, q := range queries {
+		got := map[string]bool{}
+		for _, a := range q.Actions {
+			got[a] = true
+		}
+		out[i] = got
 	}
 	return out, nil
 }

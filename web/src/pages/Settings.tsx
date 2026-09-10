@@ -1,13 +1,23 @@
 import { useState } from 'react'
-import { Alert, Button, Card, Col, Descriptions, Row, Space, Table, Tag, Tooltip, Typography } from 'antd'
+import { Alert, Card, Col, Descriptions, Row, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import { ThunderboltOutlined } from '../icons'
 import { useDeepHealth, useProducts, useVersion, useWorkers } from '../api/queries'
 import { formatCount, formatRelative } from '../domain/format'
 import { Value } from '../components/value'
 import { ManagedInGit, TimeAgo } from '../components/chips'
 import { ErrorState, PageHeader } from '../components/layout'
+import { ActionButton } from '../components/access'
 import { SpeedTest } from '../components/speedtest'
 import { c, mono, StatusPill } from '../uikit'
+
+const HEALTH_STATUS: Record<string, { tone: 'ok' | 'danger' | 'neutral'; message: string }> = {
+  ok: { tone: 'ok', message: 'Healthy' },
+  healthy: { tone: 'ok', message: 'Healthy' },
+}
+
+function healthStatus(status: string) {
+  return HEALTH_STATUS[status.toLowerCase()] ?? { tone: 'danger' as const, message: 'Unhealthy' }
+}
 
 /**
  * Page 10 - Settings.
@@ -31,6 +41,27 @@ export default function Settings() {
   const [probing, setProbing] = useState(false)
   const health = useDeepHealth(probing)
 
+  /*
+    RUN HEALTH CHECK IS WHAT THIS PAGE WAS REPORTED FOR.
+
+    Pressed without the permission for it, nothing happened at all: no spinner,
+    no error, no toast. The request went, the Coordinator answered 403 with a
+    sentence naming exactly what was missing, TanStack stored the error on the
+    query, and nothing read it. Three separate things had to be true for that,
+    and all three are fixed rather than papered over:
+
+      - the button had no pending state, so a request in flight and a request
+        that never happened looked identical. `ActionButton` owns one, and
+        cannot be written without one.
+      - the failure had nowhere to surface. It does now, centrally - the query
+        carries `meta.action`, so the query cache reports it as "Run health
+        check failed" over the Coordinator's own sentence. See api/queries and
+        components/feedback.
+      - the control was offered to somebody who could never use it. The whole
+        page needs `system.view` and now says so at the door (App.tsx), so this
+        is belt and braces rather than the only gate.
+  */
+
   if (version.isError) {
     return (
       <>
@@ -45,18 +76,24 @@ export default function Settings() {
     <>
       <PageHeader
         extra={
-          <Button
+          <ActionButton
+            permission="system.view"
+            action="Run health check"
             icon={<ThunderboltOutlined />}
-            loading={health.isFetching}
-            onClick={() => { setProbing(true); void health.refetch() }}
+            busy={health.isFetching}
+            title="Ask the Coordinator to test every dependency it holds - the database, the queue, the policy engine - and report each one."
+            onClick={async () => {
+              setProbing(true)
+              await health.refetch()
+            }}
           >
             Run health check
-          </Button>
+          </ActionButton>
         }
       />
 
       <Row gutter={[16, 16]}>
-        <Col xs={24} xl={12}>
+        <Col span={24}>
           <Card title="System health" loading={version.isLoading}>
             <Descriptions column={2} size="small">
               <Descriptions.Item label="Version">
@@ -68,6 +105,18 @@ export default function Settings() {
               </Descriptions.Item>
               <Descriptions.Item label="Built"><Value>{version.data?.buildDate}</Value></Descriptions.Item>
             </Descriptions>
+
+            {/*
+              The probe's own failure, in the page rather than only in a toast.
+              A toast is gone in six seconds and this is the answer somebody
+              pressed a button for: it belongs beside the table it would have
+              filled.
+            */}
+            {health.isError && (
+              <div style={{ marginTop: 12 }}>
+                <ErrorState error={health.error} retry={() => void health.refetch()} />
+              </div>
+            )}
 
             {health.data ? (
               <Table
@@ -81,24 +130,23 @@ export default function Settings() {
                   {
                     title: 'Result',
                     width: 110,
-                    render: (_, c) =>
-                      c.status === 'ok' || c.status === 'OK'
-                        ? <StatusPill tone="ok">OK</StatusPill>
-                        : <StatusPill tone="danger">{c.status}</StatusPill>,
+                    render: (_, c) => {
+                      const result = healthStatus(c.status)
+                      return <StatusPill tone={result.tone} title={c.status}>{result.message}</StatusPill>
+                    },
                   },
                   { title: 'Detail', render: (_, c) => <Value>{c.detail}</Value> },
                 ]}
               />
-            ) : (
+            ) : health.isError ? null : (
               <Typography.Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
-                Dependencies have not been probed. A health check makes real outbound calls, so it
-                runs when asked for rather than on a timer.
+                Run health check to test every dependency and see what each one said.
               </Typography.Text>
             )}
           </Card>
         </Col>
 
-        <Col xs={24} xl={12}>
+        <Col span={24}>
           <Card title="Discovery and verification" extra={<ManagedInGit />} loading={products.isLoading}>
             <Table
               size="small"
@@ -158,7 +206,7 @@ export default function Settings() {
           <SpeedTest />
         </Col>
 
-        <Col xs={24} xl={12}>
+        <Col span={24}>
           <Card title="Background workers" loading={workers.isLoading}>
             {(workers.data?.workers ?? []).length === 0 ? (
               <Typography.Text type="secondary">

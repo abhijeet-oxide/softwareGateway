@@ -2773,20 +2773,107 @@ type WhoAmIResponse struct {
 	// tenant-wide role covers products that do not exist yet, a product role
 	// names one. A screen that merged them could not say which was which.
 	ProductRoles map[string][]string `json:"productRoles,omitempty"`
-	// Permissions are the actions this caller may perform. `["*"]` means
-	// everything, which is what an unauthenticated deployment reports.
+	// Member says this account has been PROVISIONED in this tenant, which is a
+	// different fact from having been let in by the identity provider.
+	//
+	// With a corporate directory federated, everybody in the company can
+	// authenticate; only the people somebody put in config/users/users.yaml
+	// are members, and they are marked by holding the baseline role
+	// (`tenant.baselineRole` in config/access/roles.yaml) whether or not they
+	// have been given anything else.
+	//
+	// A client shows a closed door to a non-member and the application to a
+	// member who holds no product yet: the first is a stranger, the second is
+	// a colleague waiting on an administrator, and telling the second they are
+	// the first is a support ticket.
+	Member bool `json:"member"`
+
+	// Permissions are the actions this caller may perform TENANT-WIDE - over
+	// every product, including ones that do not exist yet. `["*"]` means
+	// unrestricted.
+	//
+	// It is not a summary of everything the caller may do anywhere. A flat
+	// union across scopes cannot be narrowed back down by a client: somebody
+	// who reads product A and owns product B would union to "read, operate,
+	// apply, admin" over "A, B", and every control on A would light up. The
+	// server refuses those, so it renders as an interface that offers what the
+	// API then denies. Per-product verbs are in ProductPermissions.
 	Permissions []string `json:"permissions"`
+
+	// ProductPermissions are the actions this caller may perform ON ONE
+	// PRODUCT, keyed by product name.
+	//
+	// Tenant-wide permissions above are NOT repeated into it - they already
+	// cover every product, and copying them in would make a caller's rights
+	// depend on which products happened to exist when they signed in. A client
+	// asking "may I do X to product P" answers yes when X is in Permissions or
+	// in ProductPermissions[P], which is the same rule the server applies in
+	// Scope.covers.
+	ProductPermissions map[string][]string `json:"productPermissions,omitempty"`
 
 	// Products limits what this caller may see. Empty means every product -
 	// the same convention the server-side scope filters use, so a client
 	// reading this never has to special-case the unscoped deployment.
 	Products []string `json:"products,omitempty"`
 
+	// Access is the caller's EFFECTIVE PERMISSION SET, in the same vocabulary
+	// the policies are written in: `product.discover`, `audit_event.view`.
+	//
+	// # Why this exists beside Permissions
+	//
+	// Permissions above is four coarse verbs - read, operate, apply, admin -
+	// and a client cannot render itself from four verbs. "May I run discovery
+	// on this product" and "may I read the audit trail" are both `read`/
+	// `operate` to it, so an interface driven by it either offers controls the
+	// API refuses or hides ones it would allow. Both were happening.
+	//
+	// This is the same set of questions the server ENFORCES, answered by the
+	// same authority - the policy engine when one is configured - so a control
+	// the interface offers is a request the API accepts, by construction
+	// rather than by two teams keeping a table in step.
+	//
+	// It is not a security boundary and nothing about it is secret: it
+	// describes the caller's own permissions to the caller, and every request
+	// is authorized again on arrival. A client that lied to itself about this
+	// would get a screen full of buttons that answer 403.
+	Access AccessSet `json:"access"`
+
 	// Features are deployment-wide switches unrelated to who is asking - a
 	// separate section from Permissions, which is about what THIS caller may
 	// do. A client reads this once to decide which controls exist at all,
 	// rather than growing a new top-level boolean each time one is added.
 	Features Features `json:"features"`
+}
+
+// AccessSet is a caller's permissions, split by the scope they are held over.
+//
+// TWO LISTS, NOT ONE, and the split is the same one the server applies when it
+// decides: a tenant-wide permission covers every product including ones created
+// tomorrow, a product permission covers the product it names. Flattened into
+// one list they read as every verb on every product, which is how an interface
+// comes to offer a promotion on a product somebody may only read.
+//
+// A client asks "may I do X to product P" as `Global contains X` OR
+// `ByProduct[P] contains X`, and "may I do X anywhere" as either of those over
+// any product. Nothing else is a correct reading of it.
+type AccessSet struct {
+	// Global is held tenant-wide - over every product, and over the estate
+	// resources that belong to no product.
+	Global []string `json:"global"`
+	// ByProduct is held on ONE product, keyed by product name. Global
+	// permissions are deliberately not repeated into it: they already cover
+	// every product, and copying them in would make a caller's rights depend
+	// on which products happened to exist when they signed in.
+	ByProduct map[string][]string `json:"byProduct,omitempty"`
+	// Unavailable says the policy engine could not be reached, so both lists
+	// are empty because nothing could be RESOLVED rather than because nothing
+	// is held.
+	//
+	// Stated rather than left to be inferred: a client that cannot tell those
+	// apart shows an administrator a screen saying they have no access, and
+	// the sentence that situation needs is about the policy engine, not about
+	// their account.
+	Unavailable bool `json:"unavailable,omitempty"`
 }
 
 // Features are deployment-wide toggles, off a config file rather than a role.

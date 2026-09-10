@@ -193,3 +193,191 @@ func attempt(id Identity, method, path string) (bool, string) {
 	h.ServeHTTP(httptest.NewRecorder(), r)
 	return reached, denied
 }
+
+// TestAProductOnlyAccountHoldsSomething states the situation that produced a
+// locked door, so the next person reading these tests can see it.
+//
+// Somebody granted `product-owner` on one product and nothing else is
+// correctly provisioned: that is the only grant they need, and the two-tier
+// model exists so it can be the only one. They hold every action ON THAT
+// PRODUCT and none of them tenant-wide, and both halves matter - the first is
+// what the interface must enable, the second is what stops it enabling the
+// estate.
+func TestAProductOnlyAccountHoldsSomething(t *testing.T) {
+	only := identity("default", nil, map[string][]string{"software-01": {"product-owner"}})
+
+	for _, a := range []Action{ActionRead, ActionOperate, ActionApply, ActionAdmin} {
+		if !only.Can(a, Scope{Tenant: "default", Product: "software-01"}) {
+			t.Errorf("a product-owner may not %s their own product", a)
+		}
+		if !only.CanAny(a) {
+			t.Errorf("CanAny(%s) is false for a product-owner who may %s their product", a, a)
+		}
+		if only.Can(a, Scope{Tenant: "default"}) {
+			t.Errorf("a product-owner answers the tenant-wide question for %s", a)
+		}
+	}
+	if got := only.VisibleProducts(); len(got) != 1 || got[0] != "software-01" {
+		t.Errorf("VisibleProducts = %v, want [software-01]", got)
+	}
+}
+
+// TestAnOrgRoleIsNotNarrowedByAProductRole guards the tier boundary in the one
+// direction that fails quietly.
+//
+// An `org-` role names no product on purpose: it covers products that do not
+// exist yet. Holding one AND a product role must not shrink what the org role
+// covers - but VisibleProducts asked the estate-wide question, which a
+// tenant-scoped grant deliberately cannot answer, so it fell through to the
+// product list and returned that one product. Every scoped store filter takes
+// this list, so an org-reader who also owned one product would have been shown
+// only that product's data.
+//
+// It could not be seen until product roles reached a token at all, which is
+// why it is being written now rather than then.
+func TestAnOrgRoleIsNotNarrowedByAProductRole(t *testing.T) {
+	both := identity("default", []string{"org-reader"},
+		map[string][]string{"software-01": {"product-owner"}})
+	if got := both.VisibleProducts(); got != nil {
+		t.Errorf("VisibleProducts = %v for an org-reader, want nil meaning unrestricted", got)
+	}
+
+	orgOnly := identity("default", []string{"org-reader"}, nil)
+	if got := orgOnly.VisibleProducts(); got != nil {
+		t.Errorf("VisibleProducts = %v for a plain org-reader, want nil", got)
+	}
+}
+
+// TestMembershipIsNotPermission states what the baseline role is for, and what
+// it must never become.
+//
+// Being able to sign in proves the identity provider recognised somebody, and
+// with a corporate directory federated that is every employee. Membership is
+// the separate fact that somebody PROVISIONED this account here. The two were
+// the same fact - no roles at all - so a colleague waiting on an administrator
+// and a stranger got the same closed door.
+func TestMembershipIsNotPermission(t *testing.T) {
+	stranger := identity("default", nil, nil)
+	if stranger.IsMember() {
+		t.Error("an account holding no roles is reported as provisioned in this tenant")
+	}
+
+	member := identity("default", []string{"org-member"}, nil)
+	if !member.IsMember() {
+		t.Error("an account holding the baseline role is not reported as a member")
+	}
+	// And it carries no permission whatsoever. A baseline role that acquires
+	// one acquires it for everybody who can sign in.
+	if len(member.Grants) != 0 {
+		t.Errorf("the baseline role produced grants: %v", member.Grants)
+	}
+	for _, a := range []Action{ActionRead, ActionOperate, ActionApply, ActionAdmin, ActionWork} {
+		if member.CanAny(a) {
+			t.Errorf("the baseline role permits %s somewhere", a)
+		}
+		if member.Can(a, Scope{Tenant: "default"}) {
+			t.Errorf("the baseline role permits %s tenant-wide", a)
+		}
+		if member.Can(a, Scope{Tenant: "default", Product: "software-01"}) {
+			t.Errorf("the baseline role permits %s on a product", a)
+		}
+	}
+
+	// Somebody holding a real role is a member by holding it: membership is
+	// never "has the role named org-member", so renaming the baseline in
+	// config/access/roles.yaml cannot lock anybody out.
+	owner := identity("default", nil, map[string][]string{"software-01": {"product-owner"}})
+	if !owner.IsMember() {
+		t.Error("a product-owner is not reported as a member of the tenant")
+	}
+}
+
+// The three refusals are three different situations, and only the first two
+// have an answer the person can act on.
+func TestRefusalNamesTheSituation(t *testing.T) {
+	req := Requirement{Action: ActionRead, Product: "software-01"}
+
+	stranger := Refusal(identity("default", nil, nil), req)
+	if !strings.Contains(stranger, "no roles") {
+		t.Errorf("a stranger is not told their account holds nothing: %q", stranger)
+	}
+
+	waiting := Refusal(identity("default", []string{"org-member"}, nil), req)
+	if !strings.Contains(waiting, "provisioned") || !strings.Contains(waiting, "any product") {
+		t.Errorf("a provisioned member with no product access is not told so: %q", waiting)
+	}
+
+	wrongOne := Refusal(identity("default", nil,
+		map[string][]string{"software-02": {"product-reader"}}), req)
+	if !strings.Contains(wrongOne, "software-01") {
+		t.Errorf("a caller with the wrong product is not told which one: %q", wrongOne)
+	}
+}
+
+// oneProduct is an engine that allows a resource only when it names the
+// product it was built with. It is the shape of a product-tier grant, without
+// needing a PDP to express it.
+type oneProduct struct{ product string }
+
+func (e oneProduct) Check(_ context.Context, _ authz.Identity, res authz.Resource, actions ...string) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, a := range actions {
+		out[a] = res.Product == e.product
+	}
+	return out, nil
+}
+
+// A route that acts across products hands the handler the products it was
+// authorized for, and the handler is what narrows.
+//
+// This is the pair that makes AnyScope safe. Widening the door without it is
+// how a caller scoped to one product reaches all of them, so the two are
+// tested together rather than separately.
+func TestAnAnyScopeRouteTellsTheHandlerWhatItMayTouch(t *testing.T) {
+	id := fromAuthz(authz.Identity{
+		Subject: "u1", Tenant: "default",
+		OrgRoles: []string{"org-member"},
+		Products: map[string][]string{"software-01": {"product-owner"}, "software-02": {"product-reader"}},
+	})
+
+	var permitted []string
+	h := Authorize(oneProduct{product: "software-01"},
+		func(w http.ResponseWriter, _ *http.Request, _ string) {
+			w.WriteHeader(http.StatusForbidden)
+		})(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		permitted = PermittedProducts(r.Context())
+	}))
+
+	r := httptest.NewRequest("POST", "/api/v1/products:discover", nil)
+	r = r.WithContext(context.WithValue(r.Context(), ctxKeyIdentity{}, id))
+	h.ServeHTTP(httptest.NewRecorder(), r)
+
+	if len(permitted) != 1 || permitted[0] != "software-01" {
+		t.Fatalf("the handler was told it may touch %v, want only software-01", permitted)
+	}
+}
+
+// A caller who passes the TENANT-WIDE question is told nothing, because empty
+// means unrestricted - and a handler reading an empty list as "no products"
+// would show an org administrator an empty estate.
+func TestATenantWideCallerIsNotNarrowed(t *testing.T) {
+	id := fromAuthz(authz.Identity{
+		Subject: "u2", Tenant: "default", OrgRoles: []string{"org-admin"},
+	})
+
+	narrowed := true
+	h := Authorize(authz.AllowAll{},
+		func(w http.ResponseWriter, _ *http.Request, _ string) {
+			w.WriteHeader(http.StatusForbidden)
+		})(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		narrowed = PermittedProducts(r.Context()) != nil
+	}))
+
+	r := httptest.NewRequest("POST", "/api/v1/products:discover", nil)
+	r = r.WithContext(context.WithValue(r.Context(), ctxKeyIdentity{}, id))
+	h.ServeHTTP(httptest.NewRecorder(), r)
+
+	if narrowed {
+		t.Fatal("a tenant-wide caller was narrowed to today's products")
+	}
+}

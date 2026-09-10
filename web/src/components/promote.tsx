@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { App, Button, Checkbox, Modal, Select, Skeleton, Space, Tag, Typography } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import { usePromote, usePromotionOptions } from '../api/queries'
+import { ActionButton } from './access'
 import { Icon, RocketIcon, environmentIcon } from './icons'
 import { c, envHex, InlineNotice, isProductionEnv, mono, StatusPill } from '../uikit'
 import type { PromotionDestination, PromotionOptionsResponse } from '../api/types'
@@ -69,7 +70,20 @@ export function PromoteButton({
         Outlined rather than solid: the page's primary button is already spoken
         for, and two solid buttons side by side compete for the same glance.
       */}
-      <Button
+      {/*
+        GATED ON `software_download.promote`, which the policies grant to an
+        owner and an administrator and to nobody else - see
+        config/access/policies/download.yaml. It was ungated, so an operator and
+        a reader were both offered the one action in this product that changes
+        what production pulls, and found out it was not theirs by pressing it.
+
+        Hidden rather than disabled: a promotion nobody in that role can ever
+        perform is not a control that is unavailable right now, it is a control
+        that does not exist for them.
+      */}
+      <ActionButton
+        permission="software_download.promote"
+        scope={{ product }}
         size={size}
         color="orange"
         variant="outlined"
@@ -79,7 +93,7 @@ export function PromoteButton({
         onClick={() => setOpen(true)}
       >
         Promote
-      </Button>
+      </ActionButton>
       {/*
         MOUNTED ONLY WHILE OPEN, which is what keeps the options query from
         firing on every release page somebody merely looks at. The answer needs
@@ -156,8 +170,10 @@ function PromoteModal({
       // single page to go to, and choosing one of them arbitrarily would hide
       // the other two behind a back button.
       navigate(ids.length === 1 ? `/downloads/${ids[0]}` : '/downloads')
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'The promotion could not be started.')
+    } catch {
+      // Reported centrally, with the Coordinator's own sentence and its request
+      // id - see components/feedback. Caught only so the dialog stays open on a
+      // promotion that did not start.
     }
   }
 
@@ -178,7 +194,9 @@ function PromoteModal({
 
       {options.isError && (
         <InlineNotice tone="danger" action={
-          <Button size="small" onClick={() => void options.refetch()}>Try again</Button>
+          <Button size="small" loading={options.isFetching} onClick={() => void options.refetch()}>
+            Try again
+          </Button>
         }>
           Where this release can go could not be read.
         </InlineNotice>

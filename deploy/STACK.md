@@ -153,15 +153,25 @@ The seeder configures the screen as well as the connector:
 ### Adding a person from the ZITADEL console
 
 `config/users/users.yaml` is the reviewable way, and the console is the quick
-one. Both work; the console has one trap.
+one. Both work; the console has three traps, in steps 2 and 4.
 
 1. Users, New. Fill in the address, the username and the name.
 2. **Tick "Email Verified".** It is off by default, and it is the whole thing.
 3. Choose "Setup authentication later for this User". They have no password
    here and do not need one.
-4. Create, then grant them a role: their project grant under Role Assignments,
-   or add them to `users.json` and re-run the seeder, which is the same grant
-   in a file somebody can review.
+4. Create, then grant them roles **on the `platform` project** - its keys are
+   named `<product>:<role>` for product roles. Two traps here:
+   - **Grant `org-member` as well as whatever else they get.** It carries no
+     permission; it is what says this account was provisioned rather than
+     merely able to sign in, and without it they meet a closed door telling
+     them their account is not enabled.
+   - **Do not grant on the product's own project.** It is the obvious place and
+     the wrong one: no token carries roles for those projects, so the console
+     shows the grant and the person signs in holding nothing.
+
+   Or add them to `config/users/users.yaml` and re-run the seeder, which is the
+   same grant in a file somebody can review - and which gets the baseline role
+   right on its own.
 
 **There is nothing to assign under a user's "Identity Providers" tab, and the
 "No external IdP found" it shows is not a fault.** That table lists external

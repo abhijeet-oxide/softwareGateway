@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import {
-  Alert, Button, Card, Descriptions, Select, Space, Table, Tag, Tooltip, Typography,
+  Alert, Card, Descriptions, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd'
 import { ThunderboltOutlined } from '../icons'
 import { useCalibrate, useProducts } from '../api/queries'
+import { useProductsWith } from '../auth/permissions'
+import { ActionButton } from './access'
 import { formatBytes, formatCount, formatDuration, formatSpeed } from '../domain/format'
 import { NA, Value } from '../components/value'
 import { c, mono, StatusPill } from '../uikit'
@@ -62,7 +64,14 @@ export function SpeedTest({ product: fixedProduct }: {
   product?: string
 }) {
   const products = useProducts()
-  const enabled = (products.data?.products ?? []).filter((p) => p.enabled)
+  // The products this caller may actually measure. `undefined` is every one of
+  // them - a tenant-wide grant covers products added later - and a list means
+  // exactly those. Offering a product the request would be refused for is the
+  // same defect as offering the button, one level up.
+  const measurable = useProductsWith('product.calibrate')
+  const enabled = (products.data?.products ?? [])
+    .filter((p) => p.enabled)
+    .filter((p) => !measurable || measurable.includes(p.productId))
   const [chosen, setChosen] = useState<string | undefined>(fixedProduct)
   const product = fixedProduct ?? chosen ?? enabled[0]?.productId
   const [budget, setBudget] = useState(12)
@@ -107,24 +116,25 @@ export function SpeedTest({ product: fixedProduct }: {
               ]}
             />
           </Tooltip>
-          <Button
+          <ActionButton
+            permission="product.calibrate"
+            scope={{ product }}
+            action="Measure this path"
             type="primary"
             icon={<ThunderboltOutlined />}
-            loading={calibrate.isPending}
+            busy={calibrate.isPending}
             disabled={!product}
             onClick={() => calibrate.mutate({ budgetSeconds: budget, write })}
           >
             {calibrate.isPending ? 'Measuring…' : 'Measure this path'}
-          </Button>
+          </ActionButton>
         </Space>
       }
     >
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Typography.Text type="secondary">
-          Sweeps how many streams at once each registry will actually carry, and reports the
-          point past which more streams stop helping. It moves real data in both directions -
-          nothing is committed anywhere - and it takes minutes, so it runs when asked and never
-          on its own.
+          Select and run a speed test for the chosen path. This checks how many streams at once each registry can actually carry, and reports the
+          max thoughput. this moves real data in both directions however nothing is committed anywhere. This test may take few minutes.
         </Typography.Text>
 
         {calibrate.isPending && (

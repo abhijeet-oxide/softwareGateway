@@ -17,6 +17,7 @@ import {
   LocationChip, ProductChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
 } from '../components/chips'
 import { AttentionBand, EmptyStateCard, ErrorState, type Attention } from '../components/layout'
+import { Guard } from '../components/access'
 import type { Package, Product, Transfer } from '../api/types'
 
 /**
@@ -365,8 +366,24 @@ export default function Overview() {
 
         <Col xs={24} xl={7}>
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <SystemPanel />
+            {/*
+              THE FLEET AND THE ROLLUPS ARE ESTATE FACTS, and this column showed
+              them to everybody.
 
+              Neither can be narrowed to a product - there is no product tier on
+              either policy - so a caller scoped to products is refused both, and
+              the panels rendered their refusals as answers: "no worker has
+              reported in" over a fleet that is running, and a download-speed
+              card of dashes. A confident statement about an estate somebody
+              cannot see is worse than no statement, so they are not offered at
+              all. See the Reports and Settings pages, which the navigation
+              drops for the same reason.
+            */}
+            <Guard permission="worker.view">
+              <SystemPanel />
+            </Guard>
+
+            <Guard permission="report.view">
             <Card title="Download Performance" extra={<Link to="/reports">View report</Link>}>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 Last 7 days
@@ -392,6 +409,7 @@ export default function Overview() {
                 </Col>
               </Row>
             </Card>
+            </Guard>
           </Space>
         </Col>
       </Row>

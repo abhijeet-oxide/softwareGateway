@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"sort"
 )
 
 // Authentication is NOT IMPLEMENTED in v1.
@@ -70,6 +71,43 @@ type Identity struct {
 	// Grants are scoped permissions, consulted by Can before Roles. Empty
 	// today: the anonymous identity holds admin and needs none.
 	Grants []Grant
+}
+
+// IsMember reports whether this account has been PROVISIONED in this tenant,
+// which is not the same question as whether it may do anything.
+//
+// Being able to sign in proves only that the identity provider recognised
+// somebody. With a corporate directory federated that is every employee, and
+// it was the whole of the hole this package's authorization was written to
+// close: an account nobody had provisioned arrived holding no roles, and so
+// did a colleague who had been provisioned and not yet given a product. One is
+// a stranger and one is waiting on an administrator; treating them alike means
+// telling the second that their account does not exist.
+//
+// Membership is holding ANY role, of either tier. That is deliberately not "a
+// role named org-member": the baseline role in config/access/roles.yaml is the
+// MECHANISM that gives a product-less person their one role, and pinning its
+// name in Go would make a rename here a lockout there. Anybody holding a real
+// role is a member by having it.
+//
+// It grants nothing. Every permission question is still Can, against a scope.
+func (i Identity) IsMember() bool {
+	return len(i.Roles) > 0 || len(i.ProductRoles) > 0
+}
+
+// ProductNames lists the products this caller holds any role on.
+//
+// The keys of ProductRoles rather than a walk over Grants: this is "which
+// products is this caller scoped to", which is a fact about their roles, and
+// deriving it from grants would answer "which products did some action land a
+// grant for" - the same list today and not the same question.
+func (i Identity) ProductNames() []string {
+	out := make([]string, 0, len(i.ProductRoles))
+	for product := range i.ProductRoles {
+		out = append(out, product)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // HasRole reports whether the identity holds a role. Admin implies operator

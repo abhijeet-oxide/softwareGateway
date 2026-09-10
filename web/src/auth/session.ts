@@ -149,6 +149,31 @@ export function signInStatus(): SignInStatus {
   return status
 }
 
+/**
+ * WHEN THIS TAB'S TOKEN IS REPLACED.
+ *
+ * # Why anything listens
+ *
+ * Roles travel IN the access token. Granting somebody a product changes nothing
+ * a live token can express, and the token this tab holds lives fifteen minutes
+ * (docs/design/24 §8.5) - so the grant reaches the Coordinator at the next
+ * renewal, silently, with no sign-out and no reload.
+ *
+ * The interface has to notice that, or it renders the permissions the session
+ * STARTED with for as long as the tab stays open: an administrator grants a
+ * product owner discovery, the API starts accepting it within the quarter hour,
+ * and the button stays hidden until somebody thinks to press F5. Telling them
+ * to sign in again is the workaround for this, not the design.
+ *
+ * So a renewal is an event, and `auth/permissions` re-reads /whoami on it.
+ */
+const renewalListeners = new Set<() => void>()
+
+export function subscribeTokenRenewal(listener: () => void): () => void {
+  renewalListeners.add(listener)
+  return () => renewalListeners.delete(listener)
+}
+
 // --- storage ----------------------------------------------------------------
 
 /**
@@ -381,7 +406,13 @@ export async function beginSignIn(): Promise<void> {
     response_type: 'code',
     // offline_access is what earns a refresh token, and a refresh token is
     // what keeps an eight-hour shift from being interrupted by a redirect.
-    scope: 'openid profile email offline_access',
+    //
+    // The resourceowner scope carries WHICH TENANT this person belongs to.
+    // The Coordinator refuses a token that does not say, because an issuer
+    // hosting more than one organization signs all of their tokens with the
+    // same keys - so without it, "valid token" and "belongs to this
+    // deployment" are two different facts and only the first was checked.
+    scope: 'openid profile email offline_access urn:zitadel:iam:user:resourceowner',
     state: pending.state,
     code_challenge: await challengeFor(verifier),
     code_challenge_method: 'S256',
@@ -504,6 +535,10 @@ function store(body: TokenResponse): void {
     expiresAt: Date.now() + (body.expires_in ?? 300) * 1000,
   })
   write(OBTAINED_KEY, String(Date.now()))
+  // A NEW TOKEN MAY CARRY NEW ROLES. See subscribeTokenRenewal: this is the
+  // only moment in a session when what the caller may do can change, and
+  // nothing else in the application can observe it.
+  for (const l of renewalListeners) l()
 }
 
 // --- using the session ------------------------------------------------------

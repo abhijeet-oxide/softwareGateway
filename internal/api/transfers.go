@@ -61,12 +61,27 @@ func (s *Server) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 	// a caller scoped to one product can request the one thing this system is
 	// for; it is completed here, and skipping this would let that caller start
 	// a transfer on any product in the estate.
+	//
+	// Asked of the POLICY ENGINE where one is configured, not of the role
+	// ladder. The two can disagree - the ladder is the fallback for a
+	// deployment with no engine - and a handler that took the second opinion
+	// would enforce a policy nobody wrote, on the one route that asks twice.
 	id := middleware.IdentityFrom(r.Context())
-	if !id.Can(middleware.ActionOperate, middleware.Scope{Tenant: id.Tenant, Product: req.Product}) {
+	need := middleware.Requirement{
+		Action:       middleware.ActionOperate,
+		Product:      req.Product,
+		Kind:         "software_download",
+		PolicyAction: "request",
+	}
+	allowed, err := middleware.Permits(r.Context(), s.deps.Engine, id, need)
+	switch {
+	case err != nil:
 		Error(w, r, v1.CodePermissionDenied,
-			middleware.Refusal(id, middleware.Requirement{
-				Action: middleware.ActionOperate, Product: req.Product,
-			}))
+			"Access denied: the policy engine could not be reached, so this request "+
+				"cannot be authorized. Nothing is permitted while that is true.")
+		return
+	case !allowed:
+		Error(w, r, v1.CodePermissionDenied, middleware.Refusal(id, need))
 		return
 	}
 

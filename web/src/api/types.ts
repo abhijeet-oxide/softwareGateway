@@ -1419,12 +1419,60 @@ export interface WhoAmIResponse {
    *  because the tiers differ: a tenant role covers products that do not exist
    *  yet, a product role names one. */
   productRoles?: Record<string, string[]>
-  /** `["*"]` means everything, which is what an unauthenticated deployment reports. */
+  /** PROVISIONED in this tenant, which is not the same as having been let in
+   *  by the identity provider - with a corporate directory federated, everyone
+   *  in the company can authenticate. A non-member meets a closed door; a
+   *  member holding no product yet gets the application and an empty list. */
+  member: boolean
+  /** Actions permitted TENANT-WIDE, over every product including ones that do
+   *  not exist yet. `["*"]` means unrestricted. Not a union across scopes: a
+   *  caller who reads one product and owns another would flatten to every verb
+   *  on both, and the interface would offer what the API refuses. */
   permissions: string[]
+  /** Actions permitted on ONE product, keyed by product name. Tenant-wide
+   *  verbs are not repeated here - they already cover every product. */
+  productPermissions?: Record<string, string[]>
   /** Empty means every product. */
   products?: string[]
+  /**
+   * The EFFECTIVE PERMISSION SET, in the vocabulary the policies are written
+   * in: `product.discover`, `audit_event.view`.
+   *
+   * This is what the interface renders itself from. `permissions` above is
+   * four coarse verbs and cannot express the difference between running
+   * discovery on one product and reading the audit trail across the estate -
+   * so an interface driven by it offers controls the API refuses and hides
+   * ones it would allow.
+   *
+   * The server answers this from the same authority that enforces every
+   * request, so a control offered here is a request the API accepts. Read it
+   * through `auth/access`, never directly.
+   */
+  access: AccessSet
   /** Deployment-wide switches, off a config file rather than a role. */
   features: Features
+}
+
+/**
+ * What a caller may do, split by the scope it is held over.
+ *
+ * TWO LISTS, NOT ONE, and the split is the same one the server applies: a
+ * tenant-wide permission covers every product including ones created tomorrow,
+ * a product permission covers the product it names. Flattened into one list
+ * they read as every verb on every product, which is how an interface comes to
+ * offer a promotion on a product somebody may only read.
+ */
+export interface AccessSet {
+  /** Held tenant-wide: every product, and the estate resources that have none. */
+  global: string[]
+  /** Held on ONE product. Global permissions are not repeated in here. */
+  byProduct?: Record<string, string[]>
+  /**
+   * The policy engine could not be reached, so both lists are empty because
+   * nothing could be RESOLVED - not because nothing is held. The interface
+   * says so rather than telling somebody their account has no access.
+   */
+  unavailable?: boolean
 }
 
 export interface Features {

@@ -110,6 +110,7 @@ docker compose run --rm zitadel-init
 | `GATEWAY_TENANT` | `default` | The ZITADEL organization. Anything unspecified belongs to it. Leave it alone until you genuinely have a second tenant. |
 | `CONFIG_DIR` | `./config` | Where the products, people, roles and policies are. Point it at a checkout of the configuration repository to keep content apart from code. |
 | `AUTH_ENABLED` | `true` | `false` makes every caller anonymous. Local debugging only. |
+| `ACCESS_TOKEN_LIFETIME` | `15m` | **How long removing somebody takes to bite.** Tokens are verified offline and never re-checked, so one already issued works until it expires; a removal stops the renewal, which is what ends the session. ZITADEL's own default is `12h`. |
 
 The products, the roles and the people are **not** environment variables. They
 are files in `CONFIG_DIR`, because they are content an administrator manages
@@ -124,6 +125,7 @@ The prefix is the scope. The suffix is the level.
 
 | Role | May do | Over |
 |---|---|---|
+| `org-member` | **nothing** - it says this account was provisioned here | the tenant |
 | `org-admin` | everything | every product, **including ones added later** |
 | `org-operator` | read, request, retry | every product |
 | `org-security` | read security detail | every product |
@@ -135,6 +137,14 @@ The prefix is the scope. The suffix is the level.
 An `org-` role names no product, so a product created next month is covered
 with **no re-login and no new grant**. That is the whole reason the tier exists.
 
+`org-member` is different in kind from the rest: it grants nothing at all, and
+the seeder gives it to everybody it provisions. It is what separates a
+colleague who has been added to `config/users/users.yaml` and not yet given a
+product - who signs in, sees the application, and is told which administrator
+to ask - from somebody the identity provider let in whom nobody has ever heard
+of, who gets a closed door. Being able to sign in does not make you a member:
+with a corporate directory federated, everybody in the company can sign in.
+
 ---
 
 ## 3. Adding people: the file IS the deployment
@@ -143,28 +153,33 @@ with **no re-login and no new grant**. That is the whole reason the tier exists.
 re-run the init container. Who has access is then reviewable in a pull request
 rather than being clicks in a console nobody can audit later.
 
-```jsonc
-{
-  "users": [
-    {
-      "username": "dana",
-      "email": "dana@example.com",
-      "firstName": "Dana", "lastName": "Okafor",
-      "password": "OnlyForLocalUse!23",       // ignored when SSO is configured
-      "orgRoles": ["org-security"],            // tenant-wide
-      "products": { "software-01": ["product-owner"] }
-    }
-  ],
-  "apiUsers": [
-    {
-      "username": "ci-deployer",
-      "description": "pipeline that requests downloads",
-      "orgRoles": [],
-      "products": { "software-01": ["product-operator"] }
-    }
-  ]
-}
+```yaml
+users:
+  - email: dana@example.com          # username is optional; it defaults to this
+    firstName: Dana
+    lastName: Okafor
+    password: OnlyForLocalUse!23     # ignored when SSO is configured
+    orgRoles: [org-security]         # tenant-wide
+    products:
+      software-01: [product-owner]
+
+apiUsers:
+  - username: ci-deployer
+    description: pipeline that requests downloads
+    orgRoles: []
+    products:
+      software-01: [product-operator]
 ```
+
+**One person's name in two domains.** `test@domain1.com` and `test@domain2.com`
+are two different people, and a username is unique across the whole instance -
+so they cannot both be `test`. Leave `username` out of both rather than
+inventing `test2` for the second: each then signs in as their own address,
+which was unique to begin with. (Typing the address works either way - the
+sign-in screen looks a typed value up as a login name first and as an address
+second - but the default leaves one string to know instead of two.) Two entries
+sharing one address are refused: the address is how a re-run finds an existing
+account, so they would be one account with both sets of roles on it.
 
 Apply it:
 
@@ -461,7 +476,15 @@ disable certificate verification.
 | ZITADEL answers 404 to a healthy service | The `Host` header does not match `ZITADEL_EXTERNAL_DOMAIN`. |
 | `controller` unhealthy at boot | It fails fast on broken auth config rather than starting and refusing everyone. Read its logs. |
 | Worker up but doing nothing, logging `not leasing` | No valid product YAML in `config/products/`. A worker will not lease work it cannot execute, because attempts are counted when a job is handed out. It starts anyway, says so once, and begins working the moment a product is loaded - no restart. |
+| A person with only product roles signs in and gets **"This account is not enabled"** | The interface shows that screen when `/whoami` reports no permissions, and the server was answering the tenant-wide question - which a product-scoped account correctly cannot. Fixed in the Coordinator: it now reports the verbs held anywhere, with `products` saying where they apply. Pull and redeploy the controller; no seeding or re-login needed. |
+| A user with only product roles is shown **"This account is not enabled"** | Fixed. That screen now means "nobody has provisioned this account", which is a different question from "holds no tenant-wide permission" - the two were the same test. Pull and redeploy the controller and the web tier. |
+| Somebody signs in, sees the application, and the products list is empty | Expected when they hold no product role: the listing is filtered to what they may see, and the page says so and names the support contact (`SUPPORT_CONTACT`). Grant them a product in `config/users/users.yaml` and re-run the seeder. |
+| Sign-in fails with `token is for tenant "X", this deployment serves "Y"` | Working as intended: this deployment serves one tenant (`SWGW_AUTH_TENANT`, from `GATEWAY_TENANT`) and refuses tokens from any other organization at the same issuer. If X is genuinely this deployment's tenant, the two names disagree - the ZITADEL organization name is the value to use. |
+| Sign-in fails with `token asserts no tenant` | The browser is holding a token minted before the sign-in started requesting the `urn:zitadel:iam:user:resourceowner` scope. Sign out and in again. If it persists, the web tier is older than the controller - deploy them together. |
+| A person granted product roles signs in and holds nothing - every screen refuses them, and adding an `org-` role appears to fix it | Their grant was written on the product's own ZITADEL project. A token carries roles only for the project the web application belongs to (`platform`), so ZITADEL never loads the others and the console shows a grant that the token does not carry. Re-run `docker compose run --rm zitadel-init`: it writes the grant on `platform`, removes the one that did nothing, and names each move in its summary. The person signs in again to pick it up. Granting by hand in the console means the `platform` project, whose keys are named `<product>:<role>`. |
+| A person was removed from `config/users/users.yaml` (or deleted in the console) and can still use the tool | Their access token has not expired yet. It is verified offline against the identity provider's keys and never re-checked, so removal cannot reach a token already issued - what it stops is the renewal. The wait is `ACCESS_TOKEN_LIFETIME`, 15m by default and 12h on a stack seeded before that was set: re-run `docker compose run --rm zitadel-init` and it prints the value in force under **Token lifetimes**. To end every session now, rotate the instance signing key in the ZITADEL console - everybody signs in again. |
 | Sign-in ends on "Account Not Found", or "This account is not recognised" | The address the identity provider asserted matches no account here. The seeder prints every account that can sign in, username and address together - compare that list against what the directory actually sends. If the address is right and it still fails, the directory is asserting something else (commonly a user principal name where there is no mail attribute): set `SSO_LINK_ON=username` and re-run the seeder. |
+| Two people share a local part in different domains, and only one of them can be `test` | Do not invent `test2`. Leave `username` out of both entries in `config/users/users.yaml` and each signs in as their own address. On a stack that already carries the invented names, removing the `username` lines renames those accounts on the next seeding run - the seeder prints the rename, and it ends any session those people are holding. |
 | Sign-in ends on "This account is not recognised" | Correct, and the point: accounts are provisioned here, never created by signing in. Add that person's address to `config/users/users.yaml` (or `BOOTSTRAP_ADMIN_EMAIL` for the administrator) and re-run the seeder. The seeder lists which addresses can sign in at the end of every run, and refuses to seed a stack where that list would be empty. |
 | Signed in and every page says "This account has no access yet" | Correct, and the point: routes are refused to an account holding no roles. Grant one - the row below - and sign in again. |
 | Signed in, but the profile says "Tenant roles: none" | The roles are on a different account. A sign-in through the identity provider creates its own account when nothing already holds that address, so the seeded one keeps the roles and the one you actually sign in as holds none. Set `BOOTSTRAP_ADMIN_EMAIL` to the address you sign in with, or add yourself to `config/users/users.yaml` with that address, and re-run the seeder - it matches on the address, so the roles land on the account you use. Roles arrive in the token, so sign out and back in. |

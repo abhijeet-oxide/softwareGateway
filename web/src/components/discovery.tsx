@@ -8,7 +8,8 @@ import {
   SyncOutlined,
 } from '../icons'
 import { useDiscoveryStatuses, useRunDiscovery } from '../api/queries'
-import { useCan } from '../auth/permissions'
+import { useProductsWith } from '../auth/permissions'
+import { ActionButton } from './access'
 import { formatCount, formatDuration } from '../domain/format'
 import { matches } from '../domain/derive'
 import { SearchBar } from './layout'
@@ -337,7 +338,23 @@ export function RunDiscoveryButton({
 }) {
   const { message } = App.useApp()
   const run = useRunDiscovery()
-  const mayOperate = useCan('operate', product ? { product } : undefined)
+  /*
+    THE FLEET-WIDE BUTTON ASKS `canAny`, and that is the fix for the defect
+    this whole control was reported for.
+
+    Asked as the estate-wide question - held tenant-wide, over every product -
+    it was false for every product owner in the deployment, so the one control
+    this product exists to offer was disabled for the people most likely to
+    press it. The server does not refuse them either: a fleet-wide scan is
+    narrowed to the products the caller may scan (middleware.PermittedProducts),
+    so "run discovery" for an owner means "run it on mine".
+  */
+  // Which products this caller may actually scan. `undefined` means every one
+  // of them - a tenant-wide grant covers products created after this session
+  // started - and a list means exactly those. Offering a product in the chooser
+  // that the request would then be refused for is the same defect as offering a
+  // button that answers 403, one level down.
+  const scannable = useProductsWith('product.discover')
 
   const [asking, setAsking] = useState(false)
   const [chosen, setChosen] = useState<string | undefined>(product)
@@ -375,31 +392,37 @@ export function RunDiscoveryButton({
           'Nothing was started: no source of this product has discovery enabled in configuration.',
         )
       }
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'Discovery could not be started.')
+    } catch {
+      // Already reported - every mutation failure goes through the query
+      // client's cache to components/feedback, with the code, the detail and
+      // the request id that a hand-written `message.error(e.message)` throws
+      // away. Caught here only so the dialog stays open on the failure rather
+      // than closing over a scan that never started.
     }
   }
 
   return (
     <>
-      <Tooltip
-        title={
-          mayOperate
-            ? 'Poll the vendor registries now rather than waiting for the next scheduled scan.'
-            : 'You do not have permission to run discovery.'
-        }
+      {/*
+        HIDDEN, not disabled, for somebody who may not run it.
+
+        A primary button a person can never press is furniture that reads as
+        the page refusing them personally. See components/access for when each
+        of the three treatments applies.
+      */}
+      <ActionButton
+        permission="product.discover"
+        scope={product ? { product } : undefined}
+        anyScope={!product}
+        type="primary"
+        block={block}
+        icon={<PlayCircleOutlined />}
+        busy={run.isPending}
+        title="Poll the vendor registries now rather than waiting for the next scheduled scan."
+        onClick={() => setAsking(true)}
       >
-        <Button
-          type="primary"
-          block={block}
-          icon={<PlayCircleOutlined />}
-          disabled={!mayOperate}
-          loading={run.isPending}
-          onClick={() => setAsking(true)}
-        >
-          Run Discovery
-        </Button>
-      </Tooltip>
+        Run Discovery
+      </ActionButton>
 
       <Modal
         open={asking}
@@ -430,6 +453,7 @@ export function RunDiscoveryButton({
             */
             options={products
               .filter((p) => !p.configError || p.configError.loaded)
+              .filter((p) => !scannable || scannable.includes(p.productId))
               .map((p) => ({
                 value: p.productId,
                 label: p.displayName || p.productId,
@@ -457,45 +481,39 @@ export function RunDiscoveryButton({
 function DiscoverSource({ product, scanning }: { product: string; scanning?: boolean }) {
   const { message } = App.useApp()
   const run = useRunDiscovery()
-  const mayOperate = useCan('operate', { product })
 
+  // No catch: the failure travels up to ActionButton, which reports it through
+  // the one path every failure in this application takes. A hand-written
+  // `message.error(e.message)` here would drop the code, the request id and the
+  // difference between a refusal and an outage.
   const start = async () => {
-    try {
-      const result = await run.mutateAsync(product)
-      const started = 'products' in result ? result.started : (result.started?.sources ?? 0)
-      const already = 'products' in result
-        ? (result.alreadyRunning ?? 0)
-        : (result.started?.alreadyRunning ?? 0)
-      message.success(
-        started > 0
-          ? `Scanning ${started} source${started === 1 ? '' : 's'} of ${product}. Progress is in this panel.`
-          : already > 0
-            ? `${product} is already being scanned - ${already} source${already === 1 ? '' : 's'} in progress.`
-            : `Nothing to scan: ${product} has no source with discovery enabled.`,
-      )
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'Discovery could not be started.')
-    }
+    const result = await run.mutateAsync(product)
+    const started = 'products' in result ? result.started : (result.started?.sources ?? 0)
+    const already = 'products' in result
+      ? (result.alreadyRunning ?? 0)
+      : (result.started?.alreadyRunning ?? 0)
+    message.success(
+      started > 0
+        ? `Scanning ${started} source${started === 1 ? '' : 's'} of ${product}. Progress is in this panel.`
+        : already > 0
+          ? `${product} is already being scanned - ${already} source${already === 1 ? '' : 's'} in progress.`
+          : `Nothing to scan: ${product} has no source with discovery enabled.`,
+    )
   }
 
   return (
-    <Tooltip
-      title={
-        mayOperate
-          ? `Look at ${product}'s registries now. Nothing is downloaded.`
-          : 'You do not have permission to run discovery.'
-      }
+    <ActionButton
+      permission="product.discover"
+      scope={{ product }}
+      action="Run discovery"
+      size="small"
+      icon={scanning ? <SyncOutlined spin /> : <PlayCircleOutlined />}
+      disabled={scanning}
+      title={`Look at ${product}'s registries now. Nothing is downloaded.`}
+      onClick={start}
     >
-      <Button
-        size="small"
-        icon={scanning ? <SyncOutlined spin /> : <PlayCircleOutlined />}
-        disabled={!mayOperate || scanning}
-        loading={run.isPending}
-        onClick={() => void start()}
-      >
-        {scanning ? 'Scanning' : 'Discover'}
-      </Button>
-    </Tooltip>
+      {scanning ? 'Scanning' : 'Discover'}
+    </ActionButton>
   )
 }
 

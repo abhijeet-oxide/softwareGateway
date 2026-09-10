@@ -144,7 +144,14 @@ func (i Identity) CanAny(action Action) bool {
 // already uses - so an unauthenticated deployment passes nil and every query
 // stays exactly as it is today.
 func (i Identity) VisibleProducts() []string {
-	if i.Can(ActionRead, Scope{}) {
+	// Estate-wide OR tenant-wide is unrestricted, and the second half is not
+	// redundant: an `org-` role produces a grant scoped to the TENANT, which
+	// deliberately cannot answer the estate-wide question. Asking only the
+	// first, a person holding org-reader AND a role on one product was narrowed
+	// to that product - the product tier silently cancelling the tier whose
+	// entire purpose is to name no product. It went unseen while product grants
+	// never reached a token at all, so this list only ever had one tier in it.
+	if i.Can(ActionRead, Scope{}) || i.Can(ActionRead, Scope{Tenant: i.Tenant}) {
 		return nil
 	}
 	seen := map[string]bool{}

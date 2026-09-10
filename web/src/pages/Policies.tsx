@@ -14,6 +14,7 @@ import { usePolicies } from '../api/queries'
 import { ErrorState, PageHeader } from '../components/layout'
 import { CheckSeverityTag } from '../components/compliance'
 import { c, mono } from '../uikit'
+import { CellStack } from '../components/cell'
 import type { PolicyCatalogueResponse, PolicyCheck } from '../api/types'
 
 const categoryInfo: Record<string, { meaning: string; Icon: typeof ScaleOutlined }> = {
@@ -327,7 +328,6 @@ function PolicyTable({
     <>
       <DataTable<PolicyCheck>
         tableEnhancedKey="policy-catalogue"
-        size="middle"
         rowKey="id"
         dataSource={filtered}
         scroll={{ x: '100%' }}
@@ -345,26 +345,22 @@ function PolicyTable({
           {
             title: 'Category', dataIndex: 'category', width: 220,
             render: (_: unknown, check: PolicyCheck) => (
-              <Space direction="vertical" size={0}>
-                <CategoryLabel category={check.category ?? ''} />
-                {/*
-                  The mechanism, under the section it belongs to. The section is
-                  where the requirement came from; this is what the check is
-                  about, and it is what an engineer is looking for.
-                */}
-                {check.subcategory && (
-                  <span style={{ fontSize: 11, color: c.text3 }}>{check.subcategory}</span>
-                )}
-              </Space>
+              // The mechanism, under the section it belongs to. The section is
+              // where the requirement came from; this is what the check is
+              // about, and it is what an engineer is looking for.
+              <CellStack
+                title={<CategoryLabel category={check.category ?? ''} />}
+                lines={[check.subcategory]}
+              />
             ),
           },
           {
             title: 'What it requires', dataIndex: 'title',
             render: (_: unknown, check: PolicyCheck) => (
-              <Space direction="vertical" size={2}>
-                <span>{check.title}</span>
-                {check.appliesTo && <span style={{ fontSize: 11, color: c.text3 }}>applies to {check.appliesTo}</span>}
-              </Space>
+              <CellStack
+                title={check.title}
+                lines={[check.appliesTo && `applies to ${check.appliesTo}`]}
+              />
             ),
           },
         ]}
@@ -573,7 +569,7 @@ function PackTable({
   return (
     <DataTable
       tableEnhancedKey="policy-packs"
-      size="middle"
+      
       rowKey="name"
       dataSource={packs}
       pagination={false}

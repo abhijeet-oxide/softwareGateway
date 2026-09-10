@@ -736,6 +736,124 @@ export function matches(needle: string, ...fields: (string | undefined)[]): bool
 }
 
 /**
+ * A typed search, parsed once.
+ *
+ * People write a release down the way they say it, and they say it three ways:
+ * `chart:1.4.2`, `chart@1.4.2` and `chart 1.4.2`. A plain substring test
+ * matches none of them, because no single field on the row contains the
+ * separator - so the search box answered "nothing found" for a query pasted
+ * straight out of the thing it was searching for.
+ *
+ * `pair` is set when the query names a package AND a version. The two
+ * punctuated forms say so unambiguously. The spaced form is a guess - two
+ * terms where the second one opens like a version - and it is only ever a
+ * guess, so a spaced query that fails as a pair is still tried as ordinary
+ * terms rather than returning nothing.
+ */
+export type SearchQuery = {
+  raw: string
+  /** Whitespace-separated, lowercased. Empty when the query is blank. */
+  terms: string[]
+  pair?: { name: string; version: string }
+}
+
+/** Opens like a version: a digit, or a v in front of one. */
+const VERSIONISH = /^v?\d/
+
+export function parseSearch(raw: string): SearchQuery {
+  const q = raw.trim().toLowerCase()
+  if (!q) return { raw: '', terms: [] }
+
+  const terms = q.split(/\s+/).filter(Boolean)
+
+  // `name:version` / `name@version`. Split on the LAST separator: a repository
+  // path may carry a colon of its own, and the version is what follows the
+  // final one.
+  const punctuated = /^(.*[^\s])[:@]([^\s:@]+)$/.exec(q)
+  if (punctuated) {
+    return { raw: q, terms, pair: { name: punctuated[1] ?? '', version: punctuated[2] ?? '' } }
+  }
+
+  if (terms.length === 2 && VERSIONISH.test(terms[1] ?? '')) {
+    return { raw: q, terms, pair: { name: terms[0] ?? '', version: terms[1] ?? '' } }
+  }
+
+  return { raw: q, terms }
+}
+
+/**
+ * How well a row answers the query. Higher is better; -1 does not match.
+ *
+ * The ranking exists so that the obvious answer is the first one. Substring
+ * matching alone put a release whose path merely CONTAINS the typed word above
+ * the release actually named by it, which is the failure mode that makes a
+ * reader distrust a search box and start scrolling instead.
+ *
+ * A name is a repository PATH, so its last segment is what a person means when
+ * they type one word - `.../nokia/cmm` typed as `cmm` is an exact answer, not
+ * a coincidence, and it ranks accordingly.
+ */
+function nameScore(name: string | undefined, term: string): number {
+  const n = name?.toLowerCase()
+  if (!n || !term) return 0
+  if (n === term) return 400
+  if (n.endsWith('/' + term)) return 350
+  if (n.startsWith(term)) return 300
+  if (n.includes(term)) return 200
+  return 0
+}
+
+function versionScore(version: string | undefined, term: string): number {
+  const v = version?.toLowerCase()
+  if (!v || !term) return 0
+  if (v === term) return 80
+  if (v.startsWith(term)) return 40
+  if (v.includes(term)) return 20
+  return 0
+}
+
+export function scoreRelease(
+  q: SearchQuery,
+  f: { name?: string; version?: string; others?: (string | undefined)[] },
+): number {
+  if (!q.terms.length) return 0
+
+  const others = (f.others ?? []).map((o) => o?.toLowerCase())
+  const anywhere = (term: string) =>
+    nameScore(f.name, term) ||
+    versionScore(f.version, term) ||
+    (others.some((o) => o?.includes(term)) ? 100 : 0)
+
+  if (q.pair) {
+    const punctuated = !/\s/.test(q.raw)
+    const n = nameScore(f.name, q.pair.name)
+    const v = versionScore(f.version, q.pair.version)
+
+    /* A punctuated query NAMED something, so a package that merely begins with
+     * what was typed is not it. `nokia/cmm:24.Q3.4` was pulling in
+     * `nokia/cmm-tools` on the strength of a substring, which is the whole
+     * complaint about search: the reader typed a release and got somebody
+     * else's. Exact, or the last path segment exactly - nothing looser. */
+    const strongEnough = punctuated ? n >= 350 : n > 0
+    // Both halves, or it is not the release that was asked for. A row matching
+    // only the name would otherwise outrank nothing at all and read as a hit.
+    if (strongEnough && v > 0) return n + v + 1000
+    // A PUNCTUATED pair was unambiguous: the reader said which release they
+    // meant, and a row that is not it is not an answer.
+    if (punctuated) return -1
+    // The spaced form was a guess, so fall through and try it as terms.
+  }
+
+  let total = 0
+  for (const term of q.terms) {
+    const best = anywhere(term)
+    if (best === 0) return -1
+    total += best
+  }
+  return total
+}
+
+/**
  * The repository a package came from, without the registry host.
  *
  * A transfer's source arrives as `host/path`, which is right for one transfer

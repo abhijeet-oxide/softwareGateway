@@ -720,7 +720,6 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
             <div>
               <DataTable<DiscoverySourceState>
                 tableEnhancedKey="discovery-sources"
-                size="middle"
                 pagination={{ pageSize: 20, showSizeChanger: false }}
                 dataSource={rows}
                 rowKey={(s) => `${s.product}-${s.source}`}

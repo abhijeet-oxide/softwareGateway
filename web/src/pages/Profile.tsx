@@ -97,7 +97,7 @@ export default function Profile() {
           */}
           {!anonymous && (
             <div style={{ marginTop: 10 }}>
-              <Space size={6} wrap>
+              <Space size={[7, 6]} wrap>
                 <Tag color="processing" style={{ marginInlineEnd: 0, fontWeight: 600 }}>
                   {standing}
                 </Tag>
@@ -202,7 +202,7 @@ export default function Profile() {
                     a product role names one. */}
                 <Field label="Across the tenant">
                   {tenantRoles.length ? (
-                    <Space size={4} wrap>
+                    <Space size={[7, 6]} wrap>
                       {tenantRoles.map((r) => <RoleTag key={r} role={r} />)}
                     </Space>
                   ) : (
@@ -361,6 +361,14 @@ function RoleTag({ role }: { role: string }) {
         </span>
       }
     >
+      {/*
+        marginInlineEnd is zeroed because Ant Design's own 8px right margin on
+        a Tag is a MARGIN, which the flex gap of the Space around these adds to
+        - so the last tag on a line sat 8px further from the edge than the
+        others. The consequence is that the parent's gap is then the only gap
+        there is, which is why those are [7, 6] and not 4: two bordered tags
+        four pixels apart read as one tag with a line through it.
+      */}
       <Tag style={{ marginInlineEnd: 0, cursor: 'default' }}>{roleLabel(role)}</Tag>
     </Tooltip>
   )
@@ -455,7 +463,7 @@ function ProductAccessList({ products, compact }: { products: ProductAccess; com
           >
             {p.product}
           </Typography.Text>
-          <Space size={4} wrap>
+          <Space size={[7, 6]} wrap>
             {p.roles.map((r) => <RoleTag key={r} role={r} />)}
           </Space>
         </div>

@@ -38,6 +38,8 @@
 
 import type { CSSProperties, ElementType, MouseEventHandler } from 'react'
 
+import PhFileCsv from '~icons/ph/file-csv'
+import PhFileCode from '~icons/ph/file-code'
 import PhArrowClockwise from '~icons/ph/arrow-clockwise'
 import PhArrowLeft from '~icons/ph/arrow-left'
 import PhArrowRight from '~icons/ph/arrow-right'
@@ -249,6 +251,8 @@ export const PauseOutlined = make('pause', PhPause)
 export const FileTextOutlined = make('file-text', PhFileText)
 export const FolderOutlined = make('folder', PhFolder)
 export const FolderZip24RegularIcon = make('folder-zip', PhFileZip)
+export const FileCsvOutlined = make('file-csv', PhFileCsv)
+export const FileCodeOutlined = make('file-code', PhFileCode)
 
 /**
  * Helm's own mark, for a Helm chart.

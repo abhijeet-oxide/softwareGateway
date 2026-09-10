@@ -169,7 +169,9 @@ func buildCompliance(
 	catalogue := &policyCatalogue{}
 	catalogue.set(cat)
 
-	helm := complianceHelm(cfg)
+	// WithDefaults, so the name logged below is the name actually run: Binary
+	// is empty until then, and an empty string in the log answers nothing.
+	helm := complianceHelm(cfg).WithDefaults()
 	if version, herr := helm.Version(context.Background()); herr != nil {
 		// Not fatal. Chart acquisition and the API still work; every rendered
 		// check reports `error` and the run is inconclusive. A Coordinator that
@@ -177,10 +179,15 @@ func buildCompliance(
 		// feature that degrades honestly.
 		log.Warn("helm is not available, so charts cannot be rendered; "+
 			"compliance runs will report every rendered check as undecided",
-			slog.String("error", herr.Error()))
+			slog.String("binary", helm.Binary), slog.String("error", herr.Error()))
 	} else {
+		// Logged with the BINARY as well as the version, so "does this
+		// deployment have helm" is answerable from the startup log without
+		// opening a release and looking at a tab.
 		log.Info("compliance renderer ready",
-			slog.String("helm", version), slog.String("kubeVersion", helm.KubeVersion))
+			slog.String("helm", version),
+			slog.String("binary", helm.Binary),
+			slog.String("kubeVersion", helm.KubeVersion))
 	}
 
 	preparer := &source.Preparer{

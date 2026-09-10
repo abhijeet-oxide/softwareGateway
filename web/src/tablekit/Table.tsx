@@ -1683,6 +1683,98 @@ type ContextMenuState = {
   columnTitle?: React.ReactNode;
 } | null;
 
+/**
+ * Hand the leftover width to ONE column instead of letting the browser share
+ * it out.
+ *
+ * See the call site for why: with `table-layout: fixed` and `min-width: 100%`,
+ * a surplus is distributed over every column in proportion, so narrowing one
+ * gives most of the space straight back to it and resizing appears not to
+ * work at all.
+ *
+ * Returns the columns unchanged when there is nothing to do - no measurement
+ * yet, no surplus, or any visible column without a numeric width, in which
+ * case there is no reliable total to subtract from.
+ */
+/** The effective width of one column: what was dragged, else what was declared. */
+function effectiveWidth<RecordType extends AnyRecord>(
+  column: TableEnhancedColumns<RecordType>[number],
+  index: number,
+  widths: Record<string, number | undefined>,
+): number | undefined {
+  const key = getColumnKey(column as TableEnhancedColumn<RecordType>, [index]);
+  const stored = widths[key];
+  if (typeof stored === "number") return stored;
+  const declared = (column as { width?: unknown }).width;
+  return typeof declared === "number" ? declared : undefined;
+}
+
+/**
+ * What the columns add up to, or undefined when any of them will not say.
+ *
+ * This is the table's width. See finalScroll for why it is not `max-content`.
+ */
+function totalWidthOf<RecordType extends AnyRecord>(
+  columns: TableEnhancedColumns<RecordType>,
+  widths: Record<string, number | undefined>,
+): number | undefined {
+  if (!columns.length) return undefined;
+  let total = 0;
+  for (let i = 0; i < columns.length; i++) {
+    const width = effectiveWidth(columns[i]!, i, widths);
+    if (width === undefined) return undefined;
+    total += width;
+  }
+  return total;
+}
+
+function spreadSurplus<RecordType extends AnyRecord>(
+  columns: TableEnhancedColumns<RecordType>,
+  available: number,
+  pinned: Record<string, PinSide | undefined>,
+  widths: Record<string, number | undefined>,
+): TableEnhancedColumns<RecordType> {
+  if (!columns.length || available <= 0) return columns;
+
+  /* The EFFECTIVE width, which is the persisted one where a person has
+   * dragged this column - not the width the call site declared.
+   * decorateColumns applies the persisted widths after this runs, so totalling
+   * the declared ones computes a surplus for a layout that is about to be
+   * replaced: the first drag then shrank the column, the total silently went
+   * back down, and the browser re-spread the difference over every column.
+   * The column being dragged got most of it back and looked stuck. */
+  const effective = (column: TableEnhancedColumns<RecordType>[number], i: number) =>
+    effectiveWidth(column, i, widths);
+
+  let total = 0;
+  for (let i = 0; i < columns.length; i++) {
+    const width = effective(columns[i]!, i);
+    if (width === undefined) return columns;
+    total += width;
+  }
+
+  // A hair of slack, so a rounding difference does not add a pixel forever.
+  const surplus = available - total;
+  if (surplus <= 1) return columns;
+
+  let target = -1;
+  for (let i = columns.length - 1; i >= 0; i--) {
+    const key = getColumnKey(columns[i] as TableEnhancedColumn<RecordType>, [i]);
+    const fixed = (columns[i] as { fixed?: unknown }).fixed;
+    if (!pinned[key] && !fixed) {
+      target = i;
+      break;
+    }
+  }
+  if (target < 0) return columns;
+
+  return columns.map((column, i) =>
+    i === target
+      ? { ...column, width: (effective(column, i) ?? 0) + surplus }
+      : column,
+  ) as TableEnhancedColumns<RecordType>;
+}
+
 function decorateColumns<RecordType extends AnyRecord>(
   columns: TableEnhancedColumns<RecordType>,
   options: {
@@ -2152,6 +2244,13 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
 
   const searchInputRef = React.useRef<any>(null);
   const wrapperRef = React.useRef<HTMLDivElement | null>(null);
+
+  /* Measured from the real scroller, and read by two things that must agree:
+   * whether the table overflows (so the scrollbar can be clamped) and how much
+   * room the columns have to fill (so the surplus can go to one of them). Both
+   * are set together in the effect below finalScroll. */
+  const [overflowsX, setOverflowsX] = React.useState(true);
+  const [availableX, setAvailableX] = React.useState(0);
 
   React.useEffect(() => {
     persistedRef.current = persisted;
@@ -2892,8 +2991,30 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
     // none of them RUNS during render: they are handed to the header cells and
     // called from a pointer event, a drag or a menu click. Reading a ref there
     // is exactly what refs are for.
+    /* THE SURPLUS GOES TO ONE COLUMN, or resizing does nothing.
+     *
+     * Ant Design lays the table out `table-layout: fixed` with
+     * `min-width: 100%`. When the columns' widths add up to LESS than the
+     * table - six columns totalling 1048 in a 1319 box, which is the ordinary
+     * case - the browser shares the surplus across every column in
+     * proportion. Dragging a column narrower then hands it most of that space
+     * straight back: the stored width fell to 180 and the column still
+     * rendered at 313, so every column on the page felt stuck.
+     *
+     * Giving the whole surplus to a single column makes every OTHER column
+     * exactly as wide as it says it is, which is what makes a drag move it.
+     * The last unpinned column takes it, because a pinned one is pinned for
+     * being narrow and fixed, and the rightmost column is the one with least
+     * to say about its own width.
+     *
+     * Only when everything visible has a number: with one width missing the
+     * browser is already doing something reasonable, and there is no surplus
+     * to compute. */
+    const spread = spreadSurplus(
+      visibleOrderedColumns, availableX, effectivePinned, persisted.widths);
+
     // eslint-disable-next-line react-hooks/refs
-    return decorateColumns(visibleOrderedColumns, {
+    return decorateColumns(spread, {
       widths: persisted.widths,
       recentlyMovedKeys,
       enableColumnResize,
@@ -2915,6 +3036,7 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
   }, [
     columns,
     visibleOrderedColumns,
+    availableX,
     persisted.widths,
     recentlyMovedKeys,
     enableColumnResize,
@@ -2946,18 +3068,45 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
     };
   }, [components]);
 
+  /* The table is as wide as its COLUMNS SAY, whenever they all say.
+   *
+   * `max-content` was the width everywhere, and it is the reason a column
+   * could not be resized. Under `table-layout: fixed` a colgroup width is
+   * supposed to be authoritative and the content is supposed to ellipsise -
+   * but sizing the table itself by `max-content` puts content-based sizing
+   * back: the browser measures each cell's longest unbreakable content and
+   * lets that beat the column width. Dragging the Release column to 180
+   * stored 180, wrote 180 into the colgroup, and rendered 275, because that
+   * is what its name measured.
+   *
+   * Summing the effective widths - the dragged ones where somebody has
+   * dragged - cannot drift the way a hand-maintained number would, which is
+   * the reason every call site reached for `max-content` in the first place.
+   * It also gives an honest scroll: wider than the box means the table really
+   * does need scrolling, and spreadSurplus has already made the two equal
+   * when there was room to spare.
+   *
+   * Falls back to `max-content` when any visible column has no width, because
+   * then there is no total to compute and the browser's own measurement is
+   * the best answer available. */
+  const totalColumnWidth = React.useMemo(
+    () => totalWidthOf(visibleOrderedColumns, persisted.widths),
+    [visibleOrderedColumns, persisted.widths],
+  );
+
   const finalScroll = React.useMemo(() => {
+    const x = totalColumnWidth ?? "max-content";
     if (scroll) {
       return {
         ...scroll,
-        x: scroll.x ?? "max-content",
+        // An explicit numeric x from a call site still wins: it is asking for
+        // something specific. `max-content` does not, because that is the
+        // default this replaces.
+        x: typeof scroll.x === "number" ? scroll.x : x,
       };
     }
-
-    return {
-      x: "max-content",
-    };
-  }, [scroll]);
+    return { x };
+  }, [scroll, totalColumnWidth]);
 
   /* A table that FITS must not offer to scroll.
    *
@@ -2975,7 +3124,6 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
    * a class turns overflow-x off. Toggling a paint property rather than the
    * table layout is what stops this oscillating - removing `x` would relayout
    * the table, which could stop it overflowing, which would put `x` back. */
-  const [overflowsX, setOverflowsX] = React.useState(true);
 
   React.useEffect(() => {
     const root = wrapperRef.current;
@@ -2988,14 +3136,25 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
         ".ant-table-body, .ant-table-content",
       );
 
-    // SLACK, not zero. Sub-pixel column widths and a 1px border routinely
-    // leave scrollWidth a hair over clientWidth on a table that visibly fits.
-    const SLACK = 2;
+    /* SLACK, not zero, and not two.
+     *
+     * A table of seven columns with 1px borders and fractional widths lands
+     * several pixels over its box while visibly fitting - the Products table
+     * measured 1324 against 1319. Two pixels of tolerance missed that and left
+     * the scrollbar exactly where it was.
+     *
+     * Twelve, because the number has to sit above what rounding can
+     * accumulate and below anything that could be real: the narrowest column
+     * this product draws is around eighty pixels, so no column, no value and
+     * no part of one hides in twelve. A scrollbar whose whole travel is less
+     * than that reveals nothing and is only ever noise. */
+    const SLACK = 12;
 
     const measure = () => {
       const el = scrollerOf();
       if (!el) return;
       setOverflowsX(el.scrollWidth - el.clientWidth > SLACK);
+      setAvailableX(el.clientWidth);
     };
 
     measure();

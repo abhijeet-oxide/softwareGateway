@@ -18,7 +18,7 @@ import {
 } from '../domain/derive'
 import type { Package, PackageTransfer, Product } from '../api/types'
 import {
-  AnalysisTag, LocationChip, PackageName, StatusBadge, TimeAgo, VerificationBadge,
+  AnalysisTag, LocationChip, PackageName, StatusBadge, TimeAgo, VerificationMark, VersionToken,
 } from '../components/chips'
 import { CellStack } from '../components/cell'
 import { EmptyStateCard, ErrorState, SearchBar } from '../components/layout'
@@ -26,7 +26,7 @@ import { CompareSelectionBar } from '../components/compareselect'
 import {
   COMPARISON_PRODUCT_FILTER, pickOf, samePick, useComparisonSelection,
 } from '../domain/compare'
-import { NokiaNIcon } from '../components/icons'
+import { Icon, NokiaNIcon, PackageIcon } from '../components/icons'
 import { VulnerabilityCell } from '../components/security'
 import { PromoteButton } from '../components/promote'
 import { c } from '../uikit'
@@ -863,16 +863,66 @@ export default function Packages() {
                 */
                 title: 'Release',
                 fixed: 'left',
+                /*
+                  A WIDTH, so the column can be resized.
+
+                  Without one the tablekit has no number to resize FROM, and
+                  the drag handle on this column did nothing while every other
+                  column moved. The stacked cell ellipsises rather than wraps,
+                  so narrowing it shortens the name instead of making the row
+                  two lines taller.
+                */
+                width: 300,
                 render: (_, r) => (
                   <Link
                     to={releaseHref(r.product.productId, r.pkg)}
                     style={{ display: 'block', width: '100%', minWidth: 0, maxWidth: '100%' }}
                   >
                     <CellStack
-                      title={<PackageName pkg={r.pkg} />}
+                      title={
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            <PackageName pkg={r.pkg} />
+                          </span>
+                          {/*
+                            The signature, on the name it is a signature OF.
+                            A glyph rather than the full pill: see
+                            VerificationMark. It cost a 120px column before,
+                            and sat two columns away from the thing it was
+                            asserting about.
+                          */}
+                          <VerificationMark state={verification(r.pkg)} />
+                        </span>
+                      }
                       lines={[
-                        selected ? null : (r.product.displayName || r.product.productId),
-                        version(r.pkg),
+                        /*
+                          WHOSE IT IS and WHICH RELEASE, drawn differently, on
+                          ONE line.
+
+                          These were two pieces of grey text with a dot
+                          between them, so the two facts a reader most needs
+                          to separate looked identical. The product keeps an
+                          icon and stays prose; the version becomes a mono
+                          token, because it is an identifier and that is how
+                          this product draws identifiers everywhere else. One
+                          line rather than two entries, because once the two
+                          look different the separator between them is just
+                          another mark to read.
+                        */
+                        <span
+                          key="meta"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0 }}
+                        >
+                          {!selected && (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                              <Icon as={PackageIcon} title="Product" size={11} />
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {r.product.displayName || r.product.productId}
+                              </span>
+                            </span>
+                          )}
+                          <VersionToken version={version(r.pkg)} />
+                        </span>,
                       ]}
                     />
                   </Link>
@@ -885,22 +935,20 @@ export default function Packages() {
               },
               {
                 /*
-                  EVERY STATE THIS RELEASE IS IN, together.
+                  WHERE THIS RELEASE IS IN ITS LIFE.
 
-                  Signed was its own 120px column, which spent a full column of
-                  a too-wide table on one tag - and put a release's signature
-                  somewhere other than the rest of what is true about it. Where
-                  it is in its life, whether it has been analysed and whether
-                  it is signed are three answers to one question, so they are
-                  three tags in one place.
+                  Signed used to be a column of its own, then briefly a third
+                  pill here. It is neither now: it belongs on the NAME, because
+                  it is an assertion about that exact artifact rather than a
+                  step in its progress, and two pills per row wrapped this
+                  column onto two lines on any row with a long status.
                 */
                 title: 'Status',
-                width: 210,
+                width: 170,
                 render: (_, r) => (
                   <Space size={4} wrap>
                     <StatusBadge status={r.status} reason={failureReason(r.pkg)} />
                     <AnalysisTag pkg={r.pkg} />
-                    <VerificationBadge state={verification(r.pkg)} />
                   </Space>
                 ),
               },
@@ -940,7 +988,14 @@ export default function Packages() {
               {
                 title: 'Actions',
                 fixed: 'right',
-                width: 190,
+                /*
+                  Wide enough for the widest row it can draw: View, then "View
+                  download", then the dots. At 190 the dots were clipped by a
+                  few pixels - invisible while the table let itself be scrolled
+                  those few pixels, and a visibly cut-off button once it
+                  stopped.
+                */
+                width: 214,
                 render: (_, r) => (
                   <RowActions
                     product={r.product.productId}

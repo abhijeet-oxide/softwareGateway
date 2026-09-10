@@ -338,6 +338,82 @@ const VERIFICATION: Record<VerificationState, { label: string; tone: PillTone; i
   },
 }
 
+/**
+ * The signature state as a MARK rather than a pill.
+ *
+ * The full badge is a word in a coloured pill, which is right in a column of
+ * its own and far too loud beside a release's name - and a column of its own
+ * was 120 pixels spent on one tag. Here it rides the name line: the same
+ * colour, the same icon, the same tooltip, no word and no fill.
+ *
+ * Only ever a glyph, so it costs the name nothing. Signed is the ordinary
+ * case, and an ordinary case does not need to shout - it is drawn at reduced
+ * opacity, so what stands out on a page of green ticks is the one that is not
+ * a green tick.
+ */
+export function VerificationMark({ state }: { state: VerificationState }) {
+  const v = VERIFICATION[state]
+  return (
+    <Tooltip title={v.help}>
+      <span
+        aria-label={v.label}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          fontSize: 12,
+          lineHeight: 1,
+          color: TONE_COLOR[v.tone],
+          opacity: state === 'SIGNED' ? 0.75 : 1,
+          flex: '0 0 auto',
+        }}
+      >
+        {v.icon}
+      </span>
+    </Tooltip>
+  )
+}
+
+/** The palette a tone resolves to, for the places that draw a glyph and no pill. */
+const TONE_COLOR: Record<PillTone, string> = {
+  ok: c.ok,
+  pending: c.pending,
+  review: c.review,
+  danger: c.danger,
+  neutral: c.text3,
+  accent: c.brand,
+}
+
+/**
+ * A version, shaped so it cannot be mistaken for the product beside it.
+ *
+ * Both used to be grey text on one line with a dot between them, which meant
+ * the two facts a reader most needs to tell apart - what this is, and which
+ * release of it - were drawn identically. A version is an identifier, so it
+ * gets the treatment identifiers get here: mono, in a bordered token. The
+ * product is prose and stays prose.
+ */
+export function VersionToken({ version }: { version?: string }) {
+  if (!version) return null
+  return (
+    <span
+      style={{
+        fontFamily: mono,
+        fontSize: 10.5,
+        lineHeight: 1.45,
+        color: c.text2,
+        background: c.surface2,
+        border: `1px solid ${c.border}`,
+        borderRadius: 4,
+        padding: '0 5px',
+        whiteSpace: 'nowrap',
+        flex: '0 0 auto',
+      }}
+    >
+      {version}
+    </span>
+  )
+}
+
 export function VerificationBadge({ state }: { state: VerificationState }) {
   const v = VERIFICATION[state]
   return (

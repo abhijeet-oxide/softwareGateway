@@ -7,6 +7,7 @@ import {
 } from './icons'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { initialsOf, useIdentity, type Permission } from './auth/permissions'
+import { accountBadge } from './auth/badge'
 import { accountLabel } from './auth/roles'
 import { identityClaims } from './auth/session'
 import { useTransferActivity, useVersion, useWorkers } from './api/queries'
@@ -124,12 +125,30 @@ const NAV: {
 ]
 
 /**
- * What the system is doing right now, in one line.
+ * What the system is doing right now, in one line - WHEN it is doing anything.
  *
- * Three states and no more: something is failing, something is running, or
- * everything has settled. The settled case is stated rather than left blank -
- * a bar that says nothing when all is well is a bar a reader learns to ignore,
- * and then does not notice on the day it has something to say.
+ * # Why the settled state is nothing at all
+ *
+ * It used to be a green dot reading "Downloads completed", stated rather than
+ * left blank on the argument that a bar which goes quiet is a bar people learn
+ * to ignore. That argument is right about a bar and wrong about this one, for
+ * two reasons that only became visible once the bar had more than one thing in
+ * it.
+ *
+ * It is not true. "Downloads completed" is drawn from three counts being zero,
+ * and three zeroes are also what an estate that has never downloaded anything
+ * looks like - so the sentence claims an outcome for work that was never done.
+ *
+ * And it is a second green dot. The connection indicator beside it is already
+ * a green dot, permanently, and two of them a centimetre apart say two
+ * different things in the same shape and colour: one means the service is
+ * reachable, the other meant some downloads finished at some point. A reader
+ * scanning that corner for a status has to learn which dot is which before
+ * either can tell them anything.
+ *
+ * So this renders only when there is work: running, waiting, or failed. The
+ * corner then has exactly one standing dot - whether the service is there -
+ * and anything that appears beside it is news.
  */
 function ActivityPill({ moving, held, failing, hint }: {
   moving: number
@@ -157,7 +176,13 @@ function ActivityPill({ moving, held, failing, hint }: {
             + (held > 0 ? `, ${held} waiting` : '')]
         : held > 0
           ? [c.pending, `${held} download${held === 1 ? '' : 's'} waiting to start`]
-          : [c.ok, 'Downloads completed']
+          : [undefined, undefined]
+
+  // NOTHING IS HAPPENING, so nothing is said. See the note above: the settled
+  // sentence was a claim about work that may never have existed, wearing the
+  // same green dot as the connection indicator next to it.
+  if (tone === undefined || text === undefined) return null
+
   const running = moving
 
   return (
@@ -318,6 +343,30 @@ export function Shell({ children }: { children: ReactNode }) {
       where there is room to arrange it. See auth/roles.
     */
     sub: accountLabel(who),
+    /*
+      UNTIL THE ANSWER ARRIVES, no badge, for the reason the navigation shows
+      every entry until then: not knowing is not a refusal. A padlock drawn
+      over an identity that has simply not loaded yet tells somebody their
+      account has no access, a moment before it turns out to be an
+      administrator's.
+    */
+    /*
+      WHAT KIND OF ACCOUNT, as a glyph on the avatar.
+
+      The line under the name already says it in words, and words in 10.5px
+      grey type are the least glanceable thing in the rail: Admin, Operator,
+      Security, Reader and User sit in the same place and differ by a few
+      letters, for the one fact that decides whether every control on screen is
+      available to you. Collapsed, the words are not there at all and the badge
+      is the only thing left saying it.
+
+      From auth/badge, which the profile page's standing chip also reads - one
+      picture for one meaning, in both places that name it. It is undefined
+      until /whoami answers, for the reason the navigation above shows every
+      entry until then.
+    */
+    badge: accountBadge(who),
+    badgeLabel: who ? accountLabel(who) : undefined,
     active: location.pathname.startsWith('/profile'),
     onClick: () => navigate('/profile'),
   }
@@ -360,13 +409,14 @@ export function Shell({ children }: { children: ReactNode }) {
           right={
             <>
               {/*
-                Absent, not zeroed, for a caller who may not read.
-                The settled state is deliberately STATED rather than left blank
-                - see ActivityPill - and that reasoning holds only when the
-                counts are known. A reader who is refused the estate has counts
-                of zero because nothing answered, and the bar then told them
-                "Downloads completed": a confident claim about work they cannot
-                see, on every page, made from no data at all.
+                NOT ASKED AT ALL by a caller who may not read.
+
+                The pill itself now says nothing when nothing is happening -
+                see ActivityPill - so this guard is no longer what stops a
+                reader being told "Downloads completed" about an estate they
+                cannot see. It stays because the counts behind it are a read
+                they are refused: without it the shell polls a refusal every
+                ten seconds for the whole of their session.
               */}
               {canAny('software_download.view') && (
                 <ActivityPill

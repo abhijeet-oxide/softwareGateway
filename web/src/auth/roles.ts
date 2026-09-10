@@ -26,22 +26,56 @@ import type { WhoAmIResponse } from '../api/types'
  * describes the grants rather than the person.
  */
 
+/**
+ * WHAT KIND of account this is, as one value.
+ *
+ * The discriminant exists so that the WORD and the GLYPH come out of one
+ * ladder. They were about to be two: a switch on roles here for the label and
+ * another in the shell for the icon, walking the same ladder in the same order
+ * for the same answer - which is two places to add a tier to, and the failure
+ * mode is a card reading "Operator" beside an administrator's shield.
+ */
+export type AccountKind =
+  | 'admin'
+  | 'operator'
+  | 'security'
+  | 'reader'
+  /** Access is a set of products rather than a tenant role. */
+  | 'user'
+  /** Provisioned and granted nothing, or not signed in at all. */
+  | 'none'
+
 /** The tenant-wide roles, strongest first. The order is the ladder. */
-const TENANT_LADDER: { role: string; label: string }[] = [
-  { role: 'org-admin', label: 'Admin' },
-  { role: 'org-operator', label: 'Operator' },
-  { role: 'org-security', label: 'Security' },
-  { role: 'org-reader', label: 'Reader' },
+const TENANT_LADDER: { role: string; kind: AccountKind; label: string }[] = [
+  { role: 'org-admin', kind: 'admin', label: 'Admin' },
+  { role: 'org-operator', kind: 'operator', label: 'Operator' },
+  { role: 'org-security', kind: 'security', label: 'Security' },
+  { role: 'org-reader', kind: 'reader', label: 'Reader' },
 ]
+
+/**
+ * Which kind of account this is.
+ *
+ * A tenant role names it outright, by the ladder above. An account whose
+ * access is entirely per-product is a `user`: which products, and what on
+ * each, is the profile page's subject and does not belong in a rail.
+ * `org-member` names no permission at all - it is the marker that somebody was
+ * provisioned - so it never decides this on its own.
+ */
+export function accountKind(who: WhoAmIResponse | undefined): AccountKind {
+  if (!who?.authenticated) return 'none'
+  const roles = who.roles ?? []
+  const top = TENANT_LADDER.find((entry) => roles.includes(entry.role))
+  if (top) return top.kind
+  if (Object.keys(who.productRoles ?? {}).length > 0) return 'user'
+  return 'none'
+}
 
 /**
  * ONE WORD for what this person is, for the navigation card.
  *
- * A tenant role names it outright. An account whose access is entirely
- * per-product is a `User`: which products, and what on each, is the profile
- * page's subject and does not belong in a rail. `org-member` names no
- * permission at all - it is the marker that somebody was provisioned - so it
- * never becomes a label of its own.
+ * Read from the same ladder accountKind uses, so the word and the glyph beside
+ * it cannot disagree.
  */
 export function accountLabel(who: WhoAmIResponse | undefined): string {
   if (!who) return ''

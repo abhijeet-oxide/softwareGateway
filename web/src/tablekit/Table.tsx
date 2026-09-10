@@ -3522,6 +3522,22 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
 
   const finalPagination = React.useMemo(() => {
     if (pagination === false || pagination == null) return pagination;
+    // `pagination` is typed as an object or false, but a JavaScript call site
+    // can still pass the bare `true` antd also accepts - and `"current" in
+    // true` throws. Treated as "the defaults, please", which is what it means.
+    if (typeof pagination !== "object") {
+      return {
+        hideOnSinglePage: true,
+        size: "small" as const,
+        showSizeChanger: true,
+        pageSizeOptions: PAGE_SIZE_OPTIONS,
+        defaultPageSize: pageSizeChoice ?? DEFAULT_PAGE_SIZE,
+        onShowSizeChange: (_current: number, size: number) => {
+          setPageSizeChoice(size);
+          writePageSize(storageKey, size, storage, debug);
+        },
+      };
+    }
 
     /* A call site DRIVING the pager keeps every value it passed.
      *

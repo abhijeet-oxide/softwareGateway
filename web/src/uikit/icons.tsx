@@ -192,3 +192,79 @@ export function ChevronRightIcon(p: IconProps) {
     </Glyph>
   );
 }
+
+/* WHO SOMEBODY IS, as six glyphs.
+ *
+ * They badge the avatar at the navigation's foot, where the account's standing
+ * was a word and only a word: "Admin", "Operator", "Security", "Reader",
+ * "User". Five words in 10.5px grey type, in the same position, differing by a
+ * few letters - so the one fact that decides whether every control on screen
+ * is available to you was the least glanceable thing in the rail.
+ *
+ * Chosen so the SHAPES differ rather than the details: a shield with a tick, a
+ * spanner, a plain shield, an eye, a person, a padlock. At 9px inside a badge
+ * that is all that survives, and it is enough - the word is still underneath,
+ * and the tooltip names the role in full.
+ */
+
+/** An administrator: everything in the tenant. */
+export function ShieldCheckIcon(p: IconProps) {
+  return (
+    <Glyph {...p}>
+      <path d="M8 1.9 13 3.6v4c0 3-2 5.2-5 6.5-3-1.3-5-3.5-5-6.5v-4Z" {...stroke} />
+      <path d="M5.9 7.6 7.4 9.1l2.9-3" {...stroke} />
+    </Glyph>
+  );
+}
+
+/** An operator: may request work, may not change configuration. */
+export function WrenchIcon(p: IconProps) {
+  return (
+    <Glyph {...p}>
+      <path
+        d="M9.6 2.5a3.2 3.2 0 0 1 3.9 4.2l-1.7-1.7-1.8 1.8 1.7 1.7A3.2 3.2 0 0 1 7.5 4.6L3.9 8.2"
+        {...stroke}
+      />
+      <path d="M3.2 11.1 6 8.3l1.7 1.7-2.8 2.8a1.2 1.2 0 0 1-1.7-1.7Z" {...stroke} />
+    </Glyph>
+  );
+}
+
+/** Security: reads findings and the audit trail across the estate. */
+export function ShieldIcon(p: IconProps) {
+  return (
+    <Glyph {...p}>
+      <path d="M8 1.9 13 3.6v4c0 3-2 5.2-5 6.5-3-1.3-5-3.5-5-6.5v-4Z" {...stroke} />
+    </Glyph>
+  );
+}
+
+/** A reader: everything visible, nothing changeable. */
+export function EyeIcon(p: IconProps) {
+  return (
+    <Glyph {...p}>
+      <path d="M1.6 8S3.9 3.9 8 3.9 14.4 8 14.4 8 12.1 12.1 8 12.1 1.6 8 1.6 8Z" {...stroke} />
+      <circle cx="8" cy="8" r="1.9" {...stroke} />
+    </Glyph>
+  );
+}
+
+/** A person whose access is a set of products rather than a tenant role. */
+export function UserIcon(p: IconProps) {
+  return (
+    <Glyph {...p}>
+      <circle cx="8" cy="5.6" r="2.7" {...stroke} />
+      <path d="M2.9 13.6a5.1 5.1 0 0 1 10.2 0" {...stroke} />
+    </Glyph>
+  );
+}
+
+/** Provisioned and granted nothing: the reason every control is disabled. */
+export function LockIcon(p: IconProps) {
+  return (
+    <Glyph {...p}>
+      <rect x="3.1" y="6.9" width="9.8" height="6.6" rx="1.6" {...stroke} />
+      <path d="M5.6 6.9V5.1a2.4 2.4 0 0 1 4.8 0v1.8" {...stroke} />
+    </Glyph>
+  );
+}

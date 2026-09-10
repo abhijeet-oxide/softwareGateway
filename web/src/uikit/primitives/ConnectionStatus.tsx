@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, Popover } from "antd";
 import {
   connection as defaultMonitor,
@@ -260,6 +260,7 @@ export function ConnectionPill({
   const copy = describeConnection(snapshot, service);
   const [open, setOpen] = useState(false);
   const settled = copy.tone === "ok" && !snapshot.restoredAt;
+  const checks = useCheckPulse(snapshot.checking);
 
   return (
     <Popover
@@ -278,11 +279,61 @@ export function ConnectionPill({
         aria-label={`Connection: ${copy.label}`}
         aria-expanded={open}
       >
-        <span className="ui-conn-dot" />
+        <span className="ui-conn-dot">
+          {/*
+            ONE RING PER CHECK, and the `key` is what makes it one.
+
+            A CSS animation plays when its element mounts, so a fresh element
+            per check is the whole mechanism: `checks` counts them, React
+            replaces the span, and the ring expands and fades exactly once.
+            Re-triggering an animation on a persistent element means removing
+            and re-adding a class across a forced reflow, which is the same
+            effect written in a way that can silently stop working.
+
+            Rendered even when everything is fine, and that does NOT contradict
+            the note on the halo below. The halo is INFINITE and reserved for an
+            unresolved state, because a healthy dot that pulses forever is a
+            smoke alarm chirping. This fires once, on an event that actually
+            happened, and then there is nothing on screen again - which is what
+            makes a permanently green dot legible as live rather than as
+            painted on.
+          */}
+          <span key={checks} className="ui-conn-ripple" aria-hidden="true" />
+        </span>
         {!settled && <span className="ui-conn-pill-label">{copy.label}</span>}
       </button>
     </Popover>
   );
+}
+
+/**
+ * Counts COMPLETED checks, for something that wants to fire once per check.
+ *
+ * The transition is what matters, not the flag: `checking` is true for as long
+ * as a probe is in flight, and an effect on the flag itself would fire at the
+ * start and again at the end. This increments when it goes false having been
+ * true, so the count is "checks that have finished" and a consumer keyed on it
+ * gets exactly one event each.
+ *
+ * It counts real CHECKS - a heartbeat probe, or somebody pressing Check now -
+ * and deliberately not `lastCheckAt`, which the monitor also moves on every
+ * successful request in the application (see reportReachable). Keyed on that
+ * instead, the dot would flicker on every list a page loads, which is activity
+ * rather than a check and belongs to no indicator.
+ */
+function useCheckPulse(checking: boolean): number {
+  const [checks, setChecks] = useState(0);
+  const was = useRef(false);
+  useEffect(() => {
+    if (checking) {
+      was.current = true;
+      return;
+    }
+    if (!was.current) return;
+    was.current = false;
+    setChecks((n) => n + 1);
+  }, [checking]);
+  return checks;
 }
 
 /**

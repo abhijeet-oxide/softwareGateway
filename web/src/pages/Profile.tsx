@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { Alert, Popover, Space, Tag, Tooltip, Typography } from 'antd'
 import { initialsOf, useIdentity } from '../auth/permissions'
+import { accountBadge } from '../auth/badge'
 import { accountLabel, productAccess, roleLabel, roleMeaning } from '../auth/roles'
 import { identityClaims, identityProviderName, isSignedIn, signOut } from '../auth/session'
 import { formatAbsolute } from '../domain/format'
@@ -98,7 +99,17 @@ export default function Profile() {
           {!anonymous && (
             <div style={{ marginTop: 10 }}>
               <Space size={[7, 6]} wrap>
-                <Tag color="processing" style={{ marginInlineEnd: 0, fontWeight: 600 }}>
+                {/*
+                  THE SAME GLYPH the navigation's avatar wears, on the same
+                  word. Two surfaces name this account's standing and a reader
+                  moving between them should be looking at one thing, not
+                  learning a picture in one place and a word in the other.
+                */}
+                <Tag
+                  color="processing"
+                  icon={accountBadge(who)}
+                  style={{ marginInlineEnd: 0, fontWeight: 600 }}
+                >
                   {standing}
                 </Tag>
                 <ProductChips products={products} />

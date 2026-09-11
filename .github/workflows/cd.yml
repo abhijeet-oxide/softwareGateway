@@ -190,7 +190,6 @@ jobs:
       - name: Lint
         run: |
           helm lint deploy/charts/software-gateway \
-            --set postgresql.password.value=lint \
             --set identity.masterkey.value=0123456789abcdef0123456789abcdef \
             --set identity.rootPassword.value=lint
 
@@ -252,7 +251,7 @@ jobs:
           CHART_VERSION: ${{ needs.version.outputs.chart_version }}
         run: |
           set -euo pipefail
-          file="deploy/environments/${ENVIRONMENT}/helmrelease.yaml"
+          file="deploy/environments/${ENVIRONMENT}/platform/helmrelease.yaml"
 
           # ANCHORED, AND ASSERTED. `spec.chart.spec.version` is the only key
           # at this indentation in the file; a sed that silently matched two
@@ -292,7 +291,7 @@ jobs:
             echo
             echo "- chart \`${{ needs.version.outputs.chart_version }}\`"
             echo "- images \`${{ needs.version.outputs.image_version }}\`"
-            echo "- pointer \`deploy/environments/${{ needs.version.outputs.environment }}/helmrelease.yaml\`"
+            echo "- pointer \`deploy/environments/${{ needs.version.outputs.environment }}/platform/helmrelease.yaml\`"
             echo
             echo "Flux applies it within a minute. Nothing here touched a cluster."
           } >> "$GITHUB_STEP_SUMMARY"

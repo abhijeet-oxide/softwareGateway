@@ -45,7 +45,10 @@ images:
   zitadelLogin: ghcr.io/zitadel/zitadel-login:v4.17.3
   nginx: nginx:1.27.5-alpine
   cerbos: cerbos/cerbos:0.55.0
-  # The seeder runs a script this chart carries; the image is a plain node.
+  # ONE UTILITY IMAGE, used by the seeder and by every `wait-for-...` init
+  # container. A second one would be a second thing to mirror into an air-gapped
+  # estate for the sake of `sleep`; this one is already required because the
+  # seeder is a node script this chart carries.
   node: node:22.23.2-alpine
 
 # --------------------------------------------------------------- where it is
@@ -263,32 +266,56 @@ seed:
 
 # ------------------------------------------------------------------ database
 #
-# EXTERNAL IS THE RECOMMENDATION - Azure Database for PostgreSQL. Backups,
-# failover, patching and point-in-time recovery are solved problems, and this
-# is the only stateful component in the system.
-postgresql:
-  # The bundled StatefulSet. One instance, one PVC, no failover: it exists so
-  # `helm install` works with nothing else provisioned, and lab clusters use
-  # it. Do not run production on it.
-  enabled: true
-  storage:
-    size: 20Gi
-    className: ""
-  resources:
-    requests: {cpu: 200m, memory: 512Mi}
-    limits: {memory: 1Gi}
-  # The password for the bundled instance. Ignored when `external.enabled`.
-  password:
-    existingSecret: ""
-    key: password
-    value: ""
+# NOT DEPLOYED BY THIS CHART, and that is the decision rather than an omission.
+#
+# The database is the only thing here that cannot be recreated. A `helm
+# rollback` must not be able to reach it, a `helm uninstall` must not be able to
+# delete it, and its lifecycle is not this application's - it outlives every
+# release and is upgraded on its own schedule. So it is applied BEFORE this
+# chart, by a Flux Kustomization that this one depends on
+# (deploy/environments/<env>/database), and what the chart takes is a name.
+#
+# The GitOps path uses CloudNativePG: three instances, synchronous replication
+# and automatic failover. For a standalone `helm install`, create a database
+# first - the chart's README has the one CNPG manifest that does it.
+database:
+  # CloudNativePG publishes the owner's connection as `<cluster>-app` and
+  # generates the password itself, so the password exists in one place, is in
+  # nobody's Git history and in nobody's values file, and nobody rotates it by
+  # hand. This chart reads two keys out of it.
+  existingSecret: swgw-db-app
+  usernameKey: username
+  passwordKey: password
 
-  external:
-    enabled: false
-    # The Coordinator's DSN, and ZITADEL's connection, come from ONE Secret so
-    # a rotation is one place. Keys: `dsn` for the Coordinator, plus host,
-    # port, user, password, sslmode for ZITADEL, which takes them apart.
-    existingSecret: ""
+  # WHERE IT ANSWERS. Plain values rather than more keys from the Secret,
+  # because these are read by two things that cannot take a URL apart: the
+  # `wait-for-database` init container, which has no shell, and the DSN below,
+  # which Kubernetes composes with $(VAR) substitution rather than a script.
+  #
+  # CloudNativePG's read-write endpoint is `<cluster>-rw` and it follows the
+  # primary through a failover, so a promotion needs no change here.
+  host: swgw-db-rw
+  port: 5432
+  name: swgw
+  # ZITADEL gets its OWN database in the same instance, never a shared one: it
+  # claims `public` and about 150 tables.
+  identityDatabase: zitadel
+  # `require` rather than `verify-full` because CloudNativePG issues its own
+  # certificates from a CA the client would have to be given. Raising it means
+  # mounting that CA - worth doing, and it is a change in two places rather
+  # than one setting, so it is not pretended to be a flag.
+  sslMode: require
+
+  # THE PASSWORD MUST BE URL-SAFE. The DSN is assembled by Kubernetes from
+  # $(VAR) references rather than by a shell, so nothing URL-encodes it: a `@`
+  # or a `/` in the password would silently truncate the host. CloudNativePG's
+  # generated passwords are alphanumeric and safe; this only matters if you
+  # replace the Secret with one of your own.
+
+  # How long a pod waits for the database before giving up and reporting why.
+  # It does NOT crash-loop: a pod whose dependency is not ready sits in Init,
+  # saying what it is waiting for.
+  waitTimeoutSeconds: 600
 
 # ------------------------------------------------------------------- secrets
 #

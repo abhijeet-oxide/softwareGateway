@@ -16,12 +16,27 @@ spec:
   # answer to "what is deployed".
   prune: true
   wait: true
-  timeout: 20m
+  # Long enough for the database layer to bootstrap and the platform layer to
+  # roll: both are waited on, and both are waited on in sequence.
+  timeout: 45m
   sourceRef:
     kind: GitRepository
     name: software-gateway
   healthChecks:
-    - apiVersion: helm.toolkit.fluxcd.io/v2
-      kind: HelmRelease
-      name: software-gateway
-      namespace: swgw
+    # THE TWO LAYERS, not the workloads. This reconciler's job is to create the
+    # ordered pair below it; each of those waits for its own contents, and the
+    # platform one will not begin until the database one reports Ready.
+    #
+    #   software-gateway-prod-database   the CloudNativePG Cluster
+    #   software-gateway-prod-platform   dependsOn the above; the Helm release
+    #
+    # So "this cluster is up to date" means both layers converged, which is the
+    # question somebody watching a deploy is actually asking.
+    - apiVersion: kustomize.toolkit.fluxcd.io/v1
+      kind: Kustomization
+      name: software-gateway-prod-database
+      namespace: flux-system
+    - apiVersion: kustomize.toolkit.fluxcd.io/v1
+      kind: Kustomization
+      name: software-gateway-prod-platform
+      namespace: flux-system

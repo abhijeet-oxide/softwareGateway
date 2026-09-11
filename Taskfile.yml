@@ -472,11 +472,11 @@ tasks:
     desc: Lint the chart
     deps: [chart:stage]
     cmds:
-      # The three values with no safe default. The chart REFUSES to render
-      # without them rather than inventing a password nothing stores.
+      # The two values with no safe default. The chart REFUSES to render without
+      # them rather than inventing a key that nothing stores - a ZITADEL
+      # masterkey nobody kept is a database nobody can decrypt.
       - >-
         helm lint deploy/charts/software-gateway
-        --set postgresql.password.value=lint
         --set identity.masterkey.value=0123456789abcdef0123456789abcdef
         --set identity.rootPassword.value=lint
 

@@ -8,7 +8,7 @@
 {{- else }}
   identity      external - this release deploys no identity provider
 {{- end }}
-  database      {{ if .Values.postgresql.external.enabled }}external, from Secret {{ .Values.postgresql.external.existingSecret }}{{ else }}bundled (one instance, no failover - not for production){{ end }}
+  database      {{ .Values.database.host }}, credentials from Secret {{ .Values.database.existingSecret }}
   credentials   {{ .Values.secrets.backend }}{{ if eq .Values.secrets.backend "none" }} - the Secrets in config/secrets/secrets.yaml must already exist{{ end }}
 
 WATCH IT COME UP
@@ -41,10 +41,17 @@ before this serves anyone real; deploy/STACK.md has the Entra registration,
 including the one redirect URI that has to be registered as "Web" rather than
 "Single-page application".
 {{- end }}
-{{- if and (not .Values.postgresql.external.enabled) .Values.ingress.enabled }}
 
-THE DATABASE IS THE BUNDLED ONE and this release is published through an
-ingress. One instance, one PVC, no automated failover and no backups. Point
-postgresql.external at a managed instance before this holds anything you would
-mind losing.
-{{- end }}
+WHAT THIS RELEASE DOES NOT INCLUDE
+
+The database. It is applied before this chart by its own Flux Kustomization,
+which is what lets the ZITADEL migration be a pre-install hook - Helm waits for
+it, so no pod is ever created against an unmigrated schema. It is also what
+keeps `helm rollback` away from the one thing here that cannot be recreated.
+
+  kubectl -n {{ .Release.Namespace }} get cluster.postgresql.cnpg.io
+
+CHECK THAT IT HAS BACKUPS. A CloudNativePG cluster replicates, which protects
+against losing an instance and not against losing the data: a DROP TABLE is
+replicated faithfully and immediately. `spec.backup` in the database layer is
+where continuous archiving is configured, and it ships unset.

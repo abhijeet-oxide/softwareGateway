@@ -1,0 +1,67 @@
+# LAYER 1 - the database.
+#
+# NAMED PER ENVIRONMENT because these objects live in flux-system, and lab and
+# production may be two namespaces in ONE cluster. Two reconcilers called
+# `software-gateway-database` in one flux-system is lab and production fighting
+# over the same object, each reverting the other every five minutes.
+#
+# It is first because it is the only thing here that cannot be recreated, and
+# because everything after it can then assume it exists. `wait: true` means
+# this reconciler does not report Ready until the CloudNativePG Cluster does,
+# and the layer below will not start until it has.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: software-gateway-prod-database
+  namespace: flux-system
+spec:
+  interval: 10m
+  retryInterval: 1m
+  path: ./deploy/environments/prod/database
+  prune: true
+  # WAIT FOR HEALTH, not merely for the apply to succeed. Without this the
+  # Cluster object would exist within a second and the platform layer would
+  # start against a database that has not finished initdb.
+  wait: true
+  timeout: 15m
+  sourceRef:
+    kind: GitRepository
+    name: software-gateway
+    namespace: flux-system
+  healthChecks:
+    - apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      name: swgw-db
+      namespace: swgw
+---
+# LAYER 2 - everything else, as one Helm release.
+#
+# Inside it, ordering continues by two more mechanisms: the ZITADEL migration is
+# a Helm pre-install hook that Helm waits for, and every workload has a
+# `wait-for-...` init container. So nothing starts before what it needs, and
+# nothing reaches CrashLoopBackOff to find that out.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: software-gateway-prod-platform
+  namespace: flux-system
+spec:
+  # THE DEPENDENCY. Flux holds this reconciler entirely until the database
+  # layer is Ready - not applied, Ready.
+  dependsOn:
+    - name: software-gateway-prod-database
+  interval: 10m
+  retryInterval: 1m
+  path: ./deploy/environments/prod/platform
+  prune: true
+  wait: true
+  timeout: 25m
+  sourceRef:
+    kind: GitRepository
+    name: software-gateway
+    namespace: flux-system
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: software-gateway
+      namespace: swgw

@@ -2,7 +2,9 @@ package deploy
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -271,4 +273,197 @@ func covered(src string, declared []string) bool {
 		}
 	}
 	return false
+}
+
+// TestEveryDependencyIsWaitedFor is the ordering guarantee, made checkable.
+//
+// The rule this enforces: a workload that cannot do its job without something
+// else must WAIT for that thing in an init container, not start and fail.
+//
+// The difference matters more than it sounds. A pod that starts without its
+// dependency reaches CrashLoopBackOff, which looks identical whether it is
+// waiting for its database or genuinely broken - so it trains everybody to
+// ignore the one pod state that should never be ignored, and it makes a
+// restart count meaningless. A pod waiting in an init container sits in
+// `Init:0/1`, logs what it is waiting for, and has a restart count of zero
+// that still means something.
+//
+// The list is explicit rather than derived. A dependency is a fact about what
+// a process does at startup - ZITADEL's sign-in screens read their token from a
+// file and exit if it is absent; the Coordinator migrates a schema - and there
+// is nothing in a manifest to infer that from. So adding a workload means
+// adding a line here and saying what it needs, which is the review this test
+// is really for.
+func TestEveryDependencyIsWaitedFor(t *testing.T) {
+	want := map[string][]string{
+		// Migrates the schema at startup: a database that is not there is a
+		// crash, not a degraded start.
+		"coordinator": {"wait-for-database"},
+		// Refuses an unmigrated database. The pre-install hook has already
+		// migrated it; this covers a failover in progress.
+		"zitadel": {"wait-for-database"},
+		// Reads its service-user token from a file AND EXITS if it is absent,
+		// which is the crash loop this whole design removes.
+		"zitadel-login": {"wait-for-zitadel", "wait-for-login-token"},
+		// Proxies both upstreams and serves nothing of its own, so starting
+		// early means 502 on the one address every sign-in goes through.
+		"zitadel-proxy": {"wait-for-zitadel", "wait-for-login-screens"},
+		// Soft: it renders the page that explains an outage, so it must come up
+		// during one. The waits order a first install; they do not gate it.
+		"web": {"wait-for-coordinator", "wait-for-oidc-client"},
+		// Soft: the data plane must not depend on the control plane being up
+		// first (docs/design/27 section 6).
+		"worker": {"wait-for-coordinator"},
+		// Drives the management API; there is nothing to seed without it.
+		"seed": {"wait-for-zitadel"},
+		// Talks to nothing. Listed with an empty set so this test says so
+		// rather than being silent about it.
+		"cerbos": {},
+	}
+
+	rendered := renderChart(t)
+	seen := map[string]bool{}
+
+	for _, doc := range rendered {
+		component, _ := nested(doc, "metadata", "labels", "app.kubernetes.io/component")
+		kind, _ := doc["kind"].(string)
+		if kind != "Deployment" && kind != "Job" {
+			continue
+		}
+		expected, tracked := want[component]
+		if !tracked {
+			continue
+		}
+		seen[component] = true
+
+		var got []string
+		if inits, ok := nestedSlice(doc, "spec", "template", "spec", "initContainers"); ok {
+			for _, c := range inits {
+				m, _ := c.(map[string]any)
+				name, _ := m["name"].(string)
+				if strings.HasPrefix(name, "wait-for-") {
+					got = append(got, name)
+				}
+			}
+		}
+		if !slices.Equal(got, expected) {
+			t.Errorf("%s waits for %v, but this test says it must wait for %v.\n"+
+				"\nIf the dependency really changed, change the list in this test and say why in the\n"+
+				"comment beside it. If it did not, the workload starts before something it needs and\n"+
+				"will reach CrashLoopBackOff to find out - which is the state this chart exists to\n"+
+				"never produce.\n", component, got, expected)
+		}
+	}
+
+	for component := range want {
+		if !seen[component] {
+			t.Errorf("no Deployment or Job rendered with component %q, so its waits were never "+
+				"checked. Either it was renamed or it stopped being deployed; this test cannot "+
+				"tell which, and both need a person.", component)
+		}
+	}
+}
+
+// TestTheDatabaseIsNotInTheChart guards the decision the ordered startup rests
+// on.
+//
+// The ZITADEL migration is a Helm pre-install hook, which means Helm WAITS for
+// it before creating any pod - so no pod is ever created against an unmigrated
+// schema. That only works because the database already exists when the chart is
+// installed: a pre-install hook in a chart that also deploys its own database
+// waits forever for a Postgres that Helm has not created yet.
+//
+// So the day somebody adds a Postgres workload back into this chart, the
+// ordering silently becomes a deadlock on first install. This fails instead.
+func TestTheDatabaseIsNotInTheChart(t *testing.T) {
+	for _, doc := range renderChart(t) {
+		kind, _ := doc["kind"].(string)
+		if kind != "Deployment" && kind != "StatefulSet" {
+			continue
+		}
+		containers, _ := nestedSlice(doc, "spec", "template", "spec", "containers")
+		for _, c := range containers {
+			m, _ := c.(map[string]any)
+			image, _ := m["image"].(string)
+			if strings.Contains(image, "postgres") {
+				name, _ := nested(doc, "metadata", "name")
+				t.Errorf("%s/%s runs %s: this chart must not deploy a database.\n"+
+					"\nTwo things break. A `helm rollback` gains the ability to reach the one thing here\n"+
+					"that cannot be recreated. And the ZITADEL migration can no longer be a pre-install\n"+
+					"hook - it would wait for a Postgres that Helm has not created yet - so ordered\n"+
+					"startup becomes a deadlock on every fresh install.\n"+
+					"\nThe database belongs in deploy/environments/<env>/database, applied by the Flux\n"+
+					"layer this chart's layer depends on.\n", kind, name, image)
+			}
+		}
+	}
+}
+
+// renderChart runs `helm template` with the chart's defaults and returns the
+// objects. It skips rather than fails when helm is absent: the CI job that
+// matters installs it, and a developer without helm should not be stopped by
+// `go test ./...`.
+func renderChart(t *testing.T) []map[string]any {
+	t.Helper()
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm is not on PATH; the chart job in CI covers this")
+	}
+	chart := filepath.Join(repoRoot, "deploy", "charts", "software-gateway")
+	if _, err := os.Stat(filepath.Join(chart, "files", "config", "config.yaml")); err != nil {
+		t.Skip("the chart is not staged; run `task chart:stage`")
+	}
+
+	cmd := exec.Command(helm, "template", "swgw", chart,
+		"--set", "identity.masterkey.value=0123456789abcdef0123456789abcdef",
+		"--set", "identity.rootPassword.value=test")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("helm template: %v\n%s", err, out)
+	}
+
+	var docs []map[string]any
+	for _, raw := range strings.Split(string(out), "\n---\n") {
+		var doc map[string]any
+		if err := yaml.Unmarshal([]byte(raw), &doc); err != nil || doc["kind"] == nil {
+			continue
+		}
+		docs = append(docs, doc)
+	}
+	if len(docs) == 0 {
+		t.Fatal("helm template produced no objects")
+	}
+	return docs
+}
+
+func nested(doc map[string]any, path ...string) (string, bool) {
+	var cur any = doc
+	for _, p := range path {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return "", false
+		}
+		cur, ok = m[p]
+		if !ok {
+			return "", false
+		}
+	}
+	s, ok := cur.(string)
+	return s, ok
+}
+
+func nestedSlice(doc map[string]any, path ...string) ([]any, bool) {
+	var cur any = doc
+	for _, p := range path {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur, ok = m[p]
+		if !ok {
+			return nil, false
+		}
+	}
+	s, ok := cur.([]any)
+	return s, ok
 }

@@ -244,10 +244,10 @@ func Fingerprint(dir string) (string, error) {
 // workflow's render step call this same function, so what CI proves is what a
 // developer sees.
 func EnvironmentValues(root, env string) ([]byte, error) {
-	path := filepath.Join(root, "deploy", "environments", env, "helmrelease.yaml")
-	b, err := os.ReadFile(path)
+	rel := filepath.ToSlash(filepath.Join("deploy/environments", env, "platform", "helmrelease.yaml"))
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", filepath.ToSlash(filepath.Join("deploy/environments", env, "helmrelease.yaml")), err)
+		return nil, fmt.Errorf("read %s: %w", rel, err)
 	}
 	var hr struct {
 		Spec struct {
@@ -255,11 +255,11 @@ func EnvironmentValues(root, env string) ([]byte, error) {
 		} `json:"spec"`
 	}
 	if err := yaml.Unmarshal(b, &hr); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, fmt.Errorf("parse %s: %w", rel, err)
 	}
 	if len(hr.Spec.Values) == 0 {
 		return nil, fmt.Errorf("%s has no spec.values - an environment that states no "+
-			"differences is one nobody can read the differences of", path)
+			"differences is one nobody can read the differences of", rel)
 	}
 	return yaml.Marshal(hr.Spec.Values)
 }

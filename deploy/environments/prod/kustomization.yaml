@@ -1,5 +1,11 @@
+# THE TWO LAYERS, AND THE ORDER BETWEEN THEM.
+#
+# These are Flux Kustomizations, not workloads. Applying this directory creates
+# two reconcilers, and the second states `dependsOn` the first - so Flux will
+# not apply the platform until the database reports Ready. That is
+# docker-compose's `depends_on`, at the level where it belongs in GitOps.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - namespace.yaml
-  - helmrelease.yaml
+  - layers.yaml

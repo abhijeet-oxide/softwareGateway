@@ -1,0 +1,102 @@
+# THE DATABASE, AND IT IS NOT PART OF THE APPLICATION.
+#
+# It is applied by its own Flux Kustomization, which the platform layer depends
+# on, for three reasons that all point the same way:
+#
+#   A `helm rollback` must not be able to reach it. Rolling an application back
+#   one version is routine; rolling a database back is data loss.
+#
+#   It outlives every release. The application is redeployed on every merge;
+#   this is upgraded on its own schedule, deliberately, by somebody who meant to.
+#
+#   It makes ordered startup possible. Because this exists before the chart is
+#   installed, the chart's ZITADEL migration can be a Helm pre-install hook -
+#   Helm waits for it, so no ZITADEL pod is ever created against an unmigrated
+#   schema. A chart that deployed its own database could not do that: the hook
+#   would wait for a Postgres that Helm had not created yet.
+#
+# CloudNativePG rather than a StatefulSet of our own. Synchronous replication,
+# automatic failover in seconds, and rolling minor-version upgrades are what a
+# managed service was being bought for, and this is the part of it that can be
+# run in-cluster without re-solving any of it by hand.
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: swgw-db
+  namespace: swgw
+  labels:
+    app.kubernetes.io/part-of: software-gateway
+    app.kubernetes.io/component: database
+spec:
+  # THREE. Two can fail over; three can lose one instance and still have a
+  # quorum, which is the difference between a failover and a decision somebody
+  # has to make at night.
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:16.10
+
+  # The owner and the first database. ZITADEL's own is created below: it claims
+  # `public` and about 150 tables, so it gets a database rather than a schema.
+  bootstrap:
+    initdb:
+      database: swgw
+      owner: swgw
+      # NO SECRET NAMED, DELIBERATELY. CloudNativePG generates the owner's
+      # password and publishes the connection as `swgw-db-app` - username,
+      # password, host, port, dbname. So this password exists in exactly one
+      # place, is in nobody's Git history, is in nobody's values file, and
+      # nobody has to rotate it by hand. The chart reads that Secret by name.
+      # Runs once, as superuser, on the very first bootstrap. `CREATE DATABASE`
+      # cannot run inside a transaction block, which is why it is here rather
+      # than in postInitApplicationSQL.
+      postInitSQL:
+        - CREATE DATABASE zitadel OWNER swgw
+
+  storage:
+    size: 100Gi
+    # storageClass: managed-csi-premium
+
+  # The write-ahead log on its own volume. Separating it is what stops a burst
+  # of WAL during a large transfer from filling the volume the data is on.
+  walStorage:
+    size: 20Gi
+
+  resources:
+    requests: {cpu: "1", memory: 2Gi}
+    limits: {memory: 4Gi}
+
+  postgresql:
+    parameters:
+      max_connections: "400"
+    # SYNCHRONOUS, in production only. A committed transaction is on at least
+    # two instances before the client is told it committed, so a primary failure
+    # loses nothing. It costs one network round trip per commit, which this
+    # workload can afford: the hot path moves bytes between registries and the
+    # database records what happened.
+    synchronous:
+      method: any
+      number: 1
+
+  # Failover and switchover behaviour. The defaults are sensible; these are
+  # stated because they are the numbers somebody will want during an incident.
+  primaryUpdateStrategy: unsupervised   # minor upgrades roll without a human
+  primaryUpdateMethod: switchover       # promote a replica, then update the old primary
+  switchoverDelay: 60
+
+  # BACKUPS ARE NOT CONFIGURED, and this is the gap to close before this holds
+  # data anybody would miss.
+  #
+  # CloudNativePG does continuous WAL archiving to object storage, which gives
+  # point-in-time recovery to any second in the retention window. It needs a
+  # target and a credential, and neither has been chosen yet:
+  #
+  #   backup:
+  #     retentionPolicy: 30d
+  #     barmanObjectStore:
+  #       destinationPath: https://<account>.blob.core.windows.net/swgw-backups/
+  #       azureCredentials:
+  #         storageAccount: {name: swgw-db-backup, key: account}
+  #         storageKey:     {name: swgw-db-backup, key: key}
+  #
+  # Until that exists, losing the cluster loses the data. A replica is not a
+  # backup: it replicates a DROP TABLE faithfully and immediately.

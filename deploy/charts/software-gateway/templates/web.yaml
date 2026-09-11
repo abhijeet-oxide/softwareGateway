@@ -62,6 +62,18 @@ spec:
       {{- with .Values.web.topologySpreadConstraints }}
       topologySpreadConstraints: {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        # BOTH SOFT, and deliberately. This tier renders the page that explains
+        # why the rest of the system is unavailable, so it must come up when the
+        # rest of the system has not. The waits make a first install arrive in
+        # order - the entrypoint reads the OIDC client id ONCE, at container
+        # start, so a pod that starts before the seeder has published it serves
+        # an application that cannot sign anybody in until it is replaced.
+        {{- include "swgw.waitForHTTP" (dict "ctx" . "name" "coordinator" "url" "http://controller:8080/healthz" "soft" true "timeout" 120) | nindent 8 }}
+{{- if .Values.identity.enabled }}
+        {{- include "swgw.waitForFile" (dict "ctx" . "name" "oidc-client" "path" "/oidc/web.json" "soft" true "timeout" 300
+              "mounts" (printf "- name: oidc\n  mountPath: /oidc\n  readOnly: true")) | nindent 8 }}
+{{- end }}
       containers:
         - name: web
           image: {{ include "swgw.image" (dict "ctx" . "name" "web") }}

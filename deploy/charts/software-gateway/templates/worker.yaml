@@ -69,6 +69,14 @@ spec:
       {{- with .Values.worker.topologySpreadConstraints }}
       topologySpreadConstraints: {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        # SOFT. A worker that cannot reach the Coordinator is designed to start,
+        # report DEGRADED and lease nothing (docs/design/27 section 6) - the
+        # data plane must not depend on the control plane being up first. The
+        # wait is here so a fresh install comes up in a sensible order and the
+        # fleet is not briefly red for no reason; after the budget it starts
+        # anyway, which is the behaviour that rule asks for.
+        {{- include "swgw.waitForHTTP" (dict "ctx" . "name" "coordinator" "url" "http://controller:8080/healthz" "soft" true "timeout" 120) | nindent 8 }}
       containers:
         - name: worker
           image: {{ include "swgw.image" (dict "ctx" . "name" "worker") }}

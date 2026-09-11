@@ -69,6 +69,9 @@ spec:
       {{- with .Values.cerbos.affinity }}
       affinity: {{- toYaml . | nindent 8 }}
       {{- end }}
+      # NO init container. Cerbos reads its policies from a mounted ConfigMap and
+      # talks to nothing, so it has no dependency to wait for - which is why it
+      # is the one workload here without one.
       containers:
         - name: cerbos
           image: {{ .Values.images.cerbos }}

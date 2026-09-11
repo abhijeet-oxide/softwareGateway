@@ -11,10 +11,13 @@ who cannot sign in.
 */}}
 {{- define "swgw.validate" -}}
 
-{{- if not .Values.postgresql.external.enabled }}
-{{- if and (not .Values.postgresql.password.value) (not .Values.postgresql.password.existingSecret) }}
-{{- fail "\n\npostgresql.password.value is not set.\n\nThe bundled database needs a password, and this chart will not invent one:\na generated password that nothing stores is a database nobody can open after\nthe next `helm upgrade`. Set one of:\n\n  postgresql.password.value          a literal, for a lab namespace\n  postgresql.password.existingSecret a Secret this chart does not manage\n\nOr point at a managed instance with postgresql.external.enabled and\npostgresql.external.existingSecret - which is the recommendation for anything\nthat holds real data.\n" }}
-{{- end }}
+{{/* THE DATABASE IS NOT THIS CHART'S. It is applied by the Flux layer this one
+     depends on, so the only thing to check here is that the chart was told
+     where it is - a release pointed at a Secret that does not exist fails at
+     pod creation with an event, not at render, and an event is a worse place
+     to learn it. */}}
+{{- if not .Values.database.existingSecret }}
+{{- fail "\n\ndatabase.existingSecret is not set.\n\nThis chart does not deploy a database: a `helm rollback` must not be able to\nreach one. The database is applied first, by its own Flux Kustomization that\nthe platform layer depends on - see deploy/environments/<env>/database.\n\nCloudNativePG publishes the connection as `<cluster>-app`, so for a Cluster\nnamed swgw-db this is `swgw-db-app`.\n" }}
 {{- end }}
 
 {{- if .Values.identity.enabled }}

@@ -113,14 +113,13 @@ spec:
     cerbos:
       replicas: 2
 
-    # MANAGED POSTGRESQL. The bundled StatefulSet is one instance with no
-    # failover and no backups; this is the only stateful component in the
-    # system and the one thing worth paying somebody else to run.
-    postgresql:
-      enabled: false
-      external:
-        enabled: true
-        existingSecret: swgw-postgres
+    # --- data -------------------------------------------------------------
+    # The CloudNativePG Cluster is applied by the layer BEFORE this one, so
+    # there is nothing to deploy here - only the name of the Secret it
+    # publishes. The operator generates the password, so it is in no file.
+    database:
+      existingSecret: swgw-db-app
+      host: swgw-db-rw
 
     identity:
       enabled: true

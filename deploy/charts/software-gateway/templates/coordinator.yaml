@@ -68,6 +68,12 @@ spec:
       {{- with .Values.coordinator.topologySpreadConstraints }}
       topologySpreadConstraints: {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        # A HARD dependency: this process migrates the schema at startup, so a
+        # database that is not there is a crash rather than a degraded start.
+        # Waiting here means the pod sits in Init saying so, and its application
+        # container's restart count stays zero and keeps meaning something.
+        {{- include "swgw.waitForTCP" (dict "ctx" . "name" "database" "host" .Values.database.host "port" .Values.database.port) | nindent 8 }}
       containers:
         - name: coordinator
           image: {{ include "swgw.image" (dict "ctx" . "name" "coordinator") }}
@@ -78,17 +84,18 @@ spec:
               containerPort: 8080
           env:
             {{- include "swgw.commonEnv" . | nindent 12 }}
-            - name: SWGW_DATABASE_DRIVER
-              value: postgres
             # THE DRIVER AS WELL AS THE DSN. They are two settings and the
             # driver defaults to sqlite, so a DSN on its own gives a
             # Coordinator that opens a local file, migrates it, serves from it
             # and loses everything when the pod is replaced.
+            - name: SWGW_DATABASE_DRIVER
+              value: postgres
+            {{- include "swgw.dbCredentialEnv" . | nindent 12 }}
+            # Assembled by the kubelet from the two variables above, which must
+            # be declared before it. See swgw.dbCredentialEnv for why the URL is
+            # built here rather than read from a key or composed by a shell.
             - name: SWGW_DATABASE_DSN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "swgw.dbSecretName" . }}
-                  key: dsn
+              value: postgres://$(SWGW_DB_USER):$(SWGW_DB_PASSWORD)@{{ .Values.database.host }}:{{ .Values.database.port }}/{{ .Values.database.name }}?sslmode={{ .Values.database.sslMode }}
             - name: SWGW_AUTH_ENABLED
               value: {{ .Values.identity.enabled | quote }}
             {{- if .Values.identity.enabled }}

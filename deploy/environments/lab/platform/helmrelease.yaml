@@ -111,15 +111,12 @@ spec:
       replicas: 1
 
     # --- data -------------------------------------------------------------
-    # The bundled instance. Losing lab's database is a `helm uninstall` away
-    # from being recreated, and a managed instance per environment is a cost
-    # this one does not earn.
-    postgresql:
-      enabled: true
-      storage: {size: 20Gi}
-      password:
-        existingSecret: swgw-postgres
-        key: password
+    # The CloudNativePG Cluster is applied by the layer BEFORE this one, so
+    # there is nothing to deploy here - only the Secret it publishes. The
+    # operator generates the password, so it appears in no file.
+    database:
+      existingSecret: swgw-db-app
+      host: swgw-db-rw
 
     # --- identity ---------------------------------------------------------
     identity:

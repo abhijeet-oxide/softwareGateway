@@ -354,7 +354,6 @@ jobs:
       - name: Lint
         run: |
           helm lint deploy/charts/software-gateway \
-            --set postgresql.password.value=lint \
             --set identity.masterkey.value=0123456789abcdef0123456789abcdef \
             --set identity.rootPassword.value=lint
 
@@ -405,15 +404,12 @@ jobs:
               echo "refused: $1"
             fi
           }
-          base=(--set postgresql.password.value=p
-                --set identity.masterkey.value=0123456789abcdef0123456789abcdef
+          base=(--set identity.masterkey.value=0123456789abcdef0123456789abcdef
                 --set identity.rootPassword.value=r)
-          try "a database with no password" \
-            --set identity.masterkey.value=0123456789abcdef0123456789abcdef \
-            --set identity.rootPassword.value=r
+          try "a release that is not told where its database is" \
+            "${base[@]}" --set database.existingSecret=
           try "a masterkey that is not 32 bytes" \
-            --set postgresql.password.value=p --set identity.masterkey.value=short \
-            --set identity.rootPassword.value=r
+            --set identity.masterkey.value=short --set identity.rootPassword.value=r
           try "single sign-on with the client secret in values" "${base[@]}" \
             --set identity.sso.issuer=https://example.com --set identity.sso.clientId=x
           try "an issuer that is not the host the ingress serves" "${base[@]}" \

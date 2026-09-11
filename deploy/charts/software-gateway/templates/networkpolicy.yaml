@@ -50,33 +50,15 @@ spec:
       ports:
         - {port: 3592, protocol: TCP}
         - {port: 3593, protocol: TCP}
-{{- if not .Values.postgresql.external.enabled }}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "swgw.fullname" . }}-postgres
-  labels:
-    {{- include "swgw.componentLabels" (dict "ctx" . "component" "postgres") | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "postgres") | nindent 6 }}
-  policyTypes: [Ingress]
-  ingress:
-    # WORKERS ARE ABSENT, and that is the invariant made visible: a worker holds
-    # no database credentials and contains no SQL. If this list ever needs
-    # `app: worker`, something has gone wrong in the code rather than here.
-    - from:
-        - podSelector:
-            matchLabels: {app: coordinator}
-        - podSelector:
-            matchLabels: {app: zitadel}
-        - podSelector:
-            matchLabels: {app: zitadel-setup}
-        - podSelector:
-            matchLabels: {app: seed}
-      ports:
-        - {port: 5432, protocol: TCP}
-{{- end }}
+{{/* NO POLICY FOR THE DATABASE, and that is deliberate.
+
+     The CloudNativePG Cluster is not this chart's - it is applied by the layer
+     before it - and its pods need traffic this chart knows nothing about:
+     streaming replication between instances, the operator's own connections,
+     and the instance manager's probes. A NetworkPolicy written here would fence
+     pods this release does not own, using labels it does not set, and the way
+     you would find out it was wrong is a failover that does not complete.
+
+     It belongs beside the Cluster, in deploy/environments/<env>/database, where
+     whoever changes the topology can see it. */}}
 {{- end }}

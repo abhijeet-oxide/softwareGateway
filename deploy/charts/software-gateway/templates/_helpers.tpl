@@ -130,14 +130,35 @@ rollingUpdate:
 {{- end -}}
 
 {{/* -------------------------------------------------------------- the DSN
-     One Secret, whichever database is in use, so nothing downstream has to
-     know which. */}}
+     ONE SECRET, applied by the layer BEFORE this chart. The Coordinator reads
+     `dsn`; ZITADEL wants the same connection in parts. Nothing downstream has
+     to know how the database is run. */}}
 {{- define "swgw.dbSecretName" -}}
-{{- if .Values.postgresql.external.enabled -}}
-{{- required "postgresql.external.existingSecret is required when postgresql.external.enabled" .Values.postgresql.external.existingSecret -}}
-{{- else -}}
-{{- printf "%s-postgres" (include "swgw.fullname" .) -}}
+{{- required "database.existingSecret is required - CloudNativePG publishes it as <cluster>-app" .Values.database.existingSecret -}}
 {{- end -}}
+
+{{/* The owner's credentials, as two environment variables.
+
+     THE DSN IS ASSEMBLED BY KUBERNETES, not by a shell and not by this chart.
+     `$(VAR)` in an env value is expanded by the kubelet from variables declared
+     EARLIER in the same container, so the password reaches the process without
+     ever being written into a manifest, a values file or a log line - and
+     without putting a shell in a distroless image to build a URL.
+
+     The ordering is load-bearing: a `$(VAR)` that names a variable declared
+     later is left as the literal text `$(VAR)`, which would reach the database
+     driver as a password spelled exactly that. */}}
+{{- define "swgw.dbCredentialEnv" -}}
+- name: SWGW_DB_USER
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "swgw.dbSecretName" . }}
+      key: {{ .Values.database.usernameKey }}
+- name: SWGW_DB_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "swgw.dbSecretName" . }}
+      key: {{ .Values.database.passwordKey }}
 {{- end -}}
 
 {{/* ------------------------------------------------- configuration mounts
@@ -349,17 +370,26 @@ seccompProfile:
     secretKeyRef:
       name: {{ if .Values.identity.masterkey.existingSecret }}{{ .Values.identity.masterkey.existingSecret }}{{ else }}{{ $full }}-identity{{ end }}
       key: {{ if .Values.identity.masterkey.existingSecret }}{{ .Values.identity.masterkey.key }}{{ else }}masterkey{{ end }}
-- {name: ZITADEL_DATABASE_POSTGRES_HOST, valueFrom: {secretKeyRef: {name: {{ $db }}, key: host}}}
-- {name: ZITADEL_DATABASE_POSTGRES_PORT, valueFrom: {secretKeyRef: {name: {{ $db }}, key: port}}}
-- {name: ZITADEL_DATABASE_POSTGRES_USER_USERNAME, valueFrom: {secretKeyRef: {name: {{ $db }}, key: user}}}
-- {name: ZITADEL_DATABASE_POSTGRES_USER_PASSWORD, valueFrom: {secretKeyRef: {name: {{ $db }}, key: password}}}
-- {name: ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE, valueFrom: {secretKeyRef: {name: {{ $db }}, key: sslmode}}}
-- {name: ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME, valueFrom: {secretKeyRef: {name: {{ $db }}, key: user}}}
-- {name: ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: {{ $db }}, key: password}}}
-- {name: ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE, valueFrom: {secretKeyRef: {name: {{ $db }}, key: sslmode}}}
-# ZITADEL gets its OWN database in the same instance, never a shared one: it
-# claims `public` and about 150 tables.
-- {name: ZITADEL_DATABASE_POSTGRES_DATABASE, value: zitadel}
+# ZITADEL wants the connection in PARTS rather than as a URL, which is the only
+# reason the host and port are values as well as a Secret. The credentials are
+# the same two keys the Coordinator reads, so there is one password.
+- {name: ZITADEL_DATABASE_POSTGRES_HOST, value: {{ .Values.database.host | quote }}}
+- {name: ZITADEL_DATABASE_POSTGRES_PORT, value: {{ .Values.database.port | quote }}}
+- name: ZITADEL_DATABASE_POSTGRES_USER_USERNAME
+  valueFrom: {secretKeyRef: {name: {{ $db }}, key: {{ .Values.database.usernameKey }}}}
+- name: ZITADEL_DATABASE_POSTGRES_USER_PASSWORD
+  valueFrom: {secretKeyRef: {name: {{ $db }}, key: {{ .Values.database.passwordKey }}}}
+- {name: ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE, value: {{ .Values.database.sslMode | quote }}}
+# The SAME account as the admin. It owns the `zitadel` database created by the
+# Cluster's postInitSQL, so it can create every schema ZITADEL needs and cannot
+# touch anything outside it - which is what a separate superuser would have
+# bought, at the cost of a second credential to rotate.
+- name: ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME
+  valueFrom: {secretKeyRef: {name: {{ $db }}, key: {{ .Values.database.usernameKey }}}}
+- name: ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD
+  valueFrom: {secretKeyRef: {name: {{ $db }}, key: {{ .Values.database.passwordKey }}}}
+- {name: ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE, value: {{ .Values.database.sslMode | quote }}}
+- {name: ZITADEL_DATABASE_POSTGRES_DATABASE, value: {{ .Values.database.identityDatabase | quote }}}
 - {name: ZITADEL_EXTERNALDOMAIN, value: {{ include "swgw.identityDomain" . | quote }}}
 - {name: ZITADEL_EXTERNALPORT, value: {{ include "swgw.identityPort" . | quote }}}
 - {name: ZITADEL_EXTERNALSECURE, value: {{ include "swgw.identitySecure" . | quote }}}

@@ -48,34 +48,11 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
-        # The seeder authenticates with the machine token the setup Job put in
-        # the state Secret, and drives the management API. Both need ZITADEL
-        # actually serving, so this waits rather than letting the seeder's own
-        # retry loop print a page of failures on every fresh install.
-        - name: wait-for-zitadel
-          image: {{ .Values.images.node }}
-          command: ["node", "-e"]
-          args:
-            - |
-              const url = 'http://zitadel:8080/debug/ready';
-              const deadline = Date.now() + 10 * 60 * 1000;
-              const tick = async () => {
-                while (Date.now() < deadline) {
-                  try {
-                    const r = await fetch(url);
-                    if (r.ok) { console.log('zitadel is ready'); return; }
-                  } catch {}
-                  console.log('waiting for zitadel');
-                  await new Promise(r => setTimeout(r, 3000));
-                }
-                console.error('zitadel did not become ready within ten minutes');
-                process.exit(1);
-              };
-              await tick();
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities: {drop: ["ALL"]}
+        # A HARD dependency. The seeder authenticates with the machine token the
+        # setup hook published and drives the management API; without ZITADEL
+        # serving there is nothing for it to do, and a Job that fails fast on a
+        # dependency is a Job whose failure means what it says.
+        {{- include "swgw.waitForHTTP" (dict "ctx" . "name" "zitadel" "url" "http://zitadel:8080/debug/ready") | nindent 8 }}
       containers:
         - name: seed
           image: {{ .Values.images.node }}
@@ -183,6 +160,20 @@ spec:
           emptyDir: {medium: Memory}
 {{- end }}
 {{- if .Values.identity.enabled }}
+{{/*
+THE SEEDER'S IDENTITY, AND WHY IT IS A HOOK TOO.
+
+Helm applies every hook before it applies the release's own resources. The
+ZITADEL setup Job is a pre-install hook and it publishes the instance's machine
+token to a Secret through the API - so if this ServiceAccount were an ordinary
+resource it would not exist yet, and the hook would fail on a first install
+with an error naming a ServiceAccount rather than the ordering that caused it.
+
+So these three are hooks as well, at a lower weight, which is what puts them in
+place before anything that authenticates as them. They are recreated on each
+install and upgrade, which is safe because they hold no state: no long-running
+pod uses this account, only two short-lived Jobs.
+*/}}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -190,6 +181,10 @@ metadata:
   name: {{ include "swgw.fullname" . }}-seeder
   labels:
     {{- include "swgw.componentLabels" (dict "ctx" . "component" "seed") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -197,6 +192,10 @@ metadata:
   name: {{ include "swgw.fullname" . }}-seeder
   labels:
     {{- include "swgw.componentLabels" (dict "ctx" . "component" "seed") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation
 rules:
   # ONE SECRET, BY NAME, IN ONE NAMESPACE. It is the cluster's replacement for
   # the patshare, oidcshare and workercreds volumes in docker-compose.yml.
@@ -218,6 +217,10 @@ metadata:
   name: {{ include "swgw.fullname" . }}-seeder
   labels:
     {{- include "swgw.componentLabels" (dict "ctx" . "component" "seed") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

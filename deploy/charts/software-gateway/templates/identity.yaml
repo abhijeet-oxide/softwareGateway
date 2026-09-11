@@ -11,13 +11,21 @@ share an ORIGIN, because the core's redirect to the login screen is relative,
 the login screen's redirect back is absolute from ZITADEL's own external URL,
 and every other part of this stack already agrees on one address for it.
 
-WHY A SETUP JOB. `zitadel start` refuses an unmigrated database, and a ZITADEL
-upgrade needs `zitadel setup` to run before the new binary serves. Running it
-from the Deployment would have every replica racing for the same migration
-lock. So it is a Job, named for the image tag it migrates to, and the
-Deployment waits by crash-looping until the schema is there - which is
-self-healing, visible in `kubectl get pods`, and needs no ordering primitive
-Kubernetes does not have.
+WHY A SETUP JOB, AND WHY IT IS A HOOK. `zitadel start` refuses an unmigrated
+database, and a ZITADEL upgrade needs `zitadel setup` to run before the new
+binary serves. Running it from the Deployment would have every replica racing
+for the same migration lock.
+
+So it is a Helm pre-install/pre-upgrade hook: Helm applies it, WAITS for it to
+complete, and only then applies the Deployments. The schema is migrated before
+a single ZITADEL pod is created, so none of them ever starts against a database
+it cannot use.
+
+That is possible only because the database is applied by an earlier Flux layer
+(deploy/environments/<env>/database) and already exists when this chart is
+installed. A pre-install hook in a chart that also deploys its own database
+deadlocks - the hook waits for a Postgres that Helm has not created yet - which
+is why the database does not live here.
 */}}
 apiVersion: v1
 kind: Secret
@@ -100,6 +108,15 @@ metadata:
   name: {{ printf "%s-zitadel-setup-%s" $full (.Values.images.zitadel | sha256sum | trunc 8) | trunc 63 | trimSuffix "-" }}
   labels:
     {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-setup") | nindent 4 }}
+  annotations:
+    # THE ORDERING PRIMITIVE. Helm runs hooks in weight order, waits for each to
+    # succeed, and only then applies the release's own resources.
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    # The previous run is deleted just before this one is created, so `kubectl
+    # get jobs` shows the migration that is running rather than a history of
+    # them - and a failed one is left in place to be read.
+    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   backoffLimit: 6
   ttlSecondsAfterFinished: 3600
@@ -114,24 +131,10 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
-        - name: wait-for-database
-          image: {{ .Values.images.postgres }}
-          command: ["sh", "-c"]
-          args:
-            - |
-              set -eu
-              until pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1; do
-                echo "waiting for $PGHOST:$PGPORT"
-                sleep 2
-              done
-              echo "database is accepting connections"
-          env:
-            - {name: PGHOST, valueFrom: {secretKeyRef: {name: {{ $db }}, key: host}}}
-            - {name: PGPORT, valueFrom: {secretKeyRef: {name: {{ $db }}, key: port}}}
-            - {name: PGUSER, valueFrom: {secretKeyRef: {name: {{ $db }}, key: user}}}
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities: {drop: ["ALL"]}
+        # The database layer is applied first and Flux waits for it, so this is
+        # normally satisfied at once. It is here for the case Flux cannot cover:
+        # a CloudNativePG failover in progress while this hook runs.
+        {{- include "swgw.waitForTCP" (dict "ctx" . "name" "database" "host" .Values.database.host "port" .Values.database.port) | nindent 8 }}
         - name: setup
           image: {{ .Values.images.zitadel }}
           args:
@@ -202,6 +205,12 @@ spec:
       securityContext:
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        # The schema is already migrated - the setup hook ran to completion
+        # before Helm applied this Deployment. This covers the connection
+        # itself, so a pod created during a CloudNativePG failover waits for the
+        # new primary instead of exiting and being restarted.
+        {{- include "swgw.waitForTCP" (dict "ctx" . "name" "database" "host" .Values.database.host "port" .Values.database.port) | nindent 8 }}
       containers:
         - name: zitadel
           image: {{ .Values.images.zitadel }}
@@ -258,6 +267,16 @@ spec:
       securityContext:
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        # BOTH HARD. This container reads its service-user token from a file at
+        # startup and EXITS if it is not there - so without these waits a first
+        # install restarts it every few seconds until the seeder catches up,
+        # which is the crash loop this design exists to remove. It has no
+        # degraded mode worth having: sign-in screens that cannot drive a login
+        # are not useful, they are a 500 with a spinner.
+        {{- include "swgw.waitForHTTP" (dict "ctx" . "name" "zitadel" "url" "http://zitadel:8080/debug/ready") | nindent 8 }}
+        {{- include "swgw.waitForFile" (dict "ctx" . "name" "login-token" "path" "/pat/login-client.pat"
+              "mounts" (printf "- name: pat\n  mountPath: /pat\n  readOnly: true")) | nindent 8 }}
       containers:
         - name: login
           image: {{ .Values.images.zitadelLogin }}
@@ -341,6 +360,14 @@ spec:
     spec:
       securityContext:
         {{- include "swgw.nginxPodSecurityContext" . | nindent 8 }}
+      initContainers:
+        # The front door proxies BOTH upstreams and has nothing of its own to
+        # serve, so starting before either is up means answering 502 on the one
+        # address every sign-in goes through. Hard on the core, soft on the
+        # screens: a console session is still worth serving while the sign-in
+        # app is coming up.
+        {{- include "swgw.waitForTCP" (dict "ctx" . "name" "zitadel" "host" "zitadel" "port" 8080) | nindent 8 }}
+        {{- include "swgw.waitForHTTP" (dict "ctx" . "name" "login-screens" "url" "http://zitadel-login:3000/ui/v2/login/healthy" "soft" true "timeout" 300) | nindent 8 }}
       containers:
         - name: proxy
           image: {{ .Values.images.nginx }}

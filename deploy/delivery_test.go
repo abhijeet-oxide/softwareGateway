@@ -401,6 +401,17 @@ func TestTheDatabaseIsNotInTheChart(t *testing.T) {
 	}
 }
 
+// A NOTE ON `go test` CACHING, because it will fool somebody.
+//
+// The tests in this file read YAML through helm and kustomize, which are
+// SUBPROCESSES. Go's test cache tracks files the test process itself opens; it
+// cannot see what a subprocess read. So editing a manifest and re-running gives
+// a cached `ok` that proves nothing.
+//
+// Use `go test -count=1 ./deploy/...` whenever you are checking that one of
+// these tests fails for a change you just made. CI is unaffected - a fresh
+// runner has no cache.
+
 // renderChart runs `helm template` with the chart's defaults and returns the
 // objects. It skips rather than fails when helm is absent: the CI job that
 // matters installs it, and a developer without helm should not be stopped by
@@ -674,8 +685,33 @@ func TestEveryOperatorScopeBuildsAndKeepsOneName(t *testing.T) {
 				if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
 					continue
 				}
-				if kind, _ := doc["kind"].(string); kind == "HelmRelease" {
-					releases++
+				if kind, _ := doc["kind"].(string); kind != "HelmRelease" {
+					continue
+				}
+				releases++
+
+				// THE SCOPES MUST BE MUTUALLY EXCLUSIVE, and this pair is what
+				// makes them so. The two scopes put the operator's HelmRelease
+				// in different namespaces, so they are different objects and
+				// the layer - which has prune off, because pruning an operator
+				// can take its CRDs and every database with them - will not
+				// remove the one it stopped pointing at.
+				//
+				// Helm keys a release by (releaseName, storageNamespace).
+				// Identical in every scope means the second one cannot install:
+				// it fails loudly instead of succeeding into two operators that
+				// both report healthy while fighting over one admission
+				// webhook. Drift here would restore that silent failure.
+				name, _ := nested2(doc, "spec", "releaseName")
+				storage, _ := nested2(doc, "spec", "storageNamespace")
+				if name != "cloudnative-pg" || storage != "cnpg-system" {
+					t.Errorf("this scope installs Helm release %q in storage namespace %q; every "+
+						"scope must use (cloudnative-pg, cnpg-system).\n"+
+						"\nThat pair is the only thing stopping a scope change from leaving TWO operators\n"+
+						"running - each reconciling the same cluster-scoped admission webhooks to point at\n"+
+						"itself, each reporting healthy, and nothing saying so. See\n"+
+						"deploy/flux/platform/operators/README.md, \"Changing scope after a deployment\".\n",
+						name, storage)
 				}
 			}
 			if releases != 1 {

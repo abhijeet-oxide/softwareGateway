@@ -58,6 +58,59 @@ of the better arguments for separating them.
 Either way the CRDs are shared per cluster, so where lab and production share a
 cluster their databases share a schema version whatever the operator scope is.
 
+## Changing scope after a deployment
+
+**It is a migration, not a toggle, and the repository is arranged so that
+getting it wrong fails rather than half-works.**
+
+Applying the other scope's bootstrap updates the `platform-operators`
+Kustomization in place - same name - and points it at a different directory.
+What it does NOT do is remove the operator the old scope installed: that is a
+HelmRelease in a different namespace, and this layer has `prune: false` because
+pruning an operator can take its CRDs and therefore every database with it.
+
+So without care you would end up with two operators, each reconciling the same
+cluster-scoped admission webhooks to point at itself, **both reporting healthy**.
+That is why every scope pins `releaseName: cloudnative-pg` and
+`storageNamespace: cnpg-system`: Helm keys a release by that pair, so the second
+one cannot install. The switch stops with an error the failure Alert carries,
+instead of succeeding into the broken state.
+
+To actually move it:
+
+```sh
+# 1. Stop the environments reconciling while the operator is absent. Running
+#    databases are NOT affected - the operator is a control plane, and the
+#    PostgreSQL instances keep serving without it. What stops is failover.
+flux -n flux-system suspend kustomization software-gateway-lab-database
+flux -n flux-system suspend kustomization software-gateway-lab-platform
+
+# 2. PROTECT THE CRDs BEFORE REMOVING ANYTHING. Deleting a CRD deletes every
+#    object of that kind - here, every Cluster, which is every database. This
+#    annotation tells Helm to leave them behind on uninstall.
+for crd in $(kubectl get crd -o name | grep cnpg.io); do
+  kubectl annotate "$crd" helm.sh/resource-policy=keep --overwrite
+done
+
+# 3. Remove the old operator. Check the CRDs are still there before going on -
+#    if this list is empty, STOP and restore them before step 4.
+flux -n swgw-lab delete helmrelease cloudnative-pg      # or -n cnpg-system
+kubectl get crd | grep cnpg.io
+
+# 4. Apply the scope you want.
+kubectl apply -k deploy/flux/platform/bootstrap/cluster-scoped
+
+# 5. One operator, and the databases still there.
+kubectl get deploy -A -l app.kubernetes.io/name=cloudnative-pg   # exactly one
+kubectl get cluster.postgresql.cnpg.io -A
+
+# 6. Resume.
+flux -n flux-system resume kustomization software-gateway-lab-database
+flux -n flux-system resume kustomization software-gateway-lab-platform
+```
+
+Step 2 is the one that matters. Everything else is recoverable by re-running it.
+
 ## What it does not do
 
 It does not create the environment namespace. In namespace scope the operator

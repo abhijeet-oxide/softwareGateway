@@ -15,6 +15,9 @@ kind: Kustomization
 # in, and removing the operator would take the database with it.
 namespace: swgw
 resources:
+  # Not the operator's home in this scope - see the file. It holds the Helm
+  # release record, which is what makes the scopes mutually exclusive.
+  - namespace.yaml
   - ../../base
 patches:
   - target:

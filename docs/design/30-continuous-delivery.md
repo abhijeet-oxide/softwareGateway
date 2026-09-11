@@ -402,7 +402,31 @@ carries both environments - and that topology has a consequence worth knowing
 before choosing it: a shared operator cannot be upgraded in lab first, because
 it is the same Deployment production is using.
 
-### 7.2 What happens when the operator is not there
+### 7.2 Changing scope is a migration, not a toggle
+
+Both bootstraps create a Kustomization with the **same name**, so applying the
+other one updates `spec.path` in place. What that does not do is remove the
+operator the previous scope installed - that is a HelmRelease in a different
+namespace, and this layer has `prune: false` because pruning an operator can
+take its CRDs, and deleting a CRD deletes every object of that kind.
+
+Left alone, a scope change would therefore leave **two operators running**, each
+reconciling the same cluster-scoped admission webhooks to point at itself, each
+reporting perfectly healthy. Nothing would say so, because nothing is broken
+about either one individually - only about there being two.
+
+So every scope pins `releaseName: cloudnative-pg` and
+`storageNamespace: cnpg-system`. Helm keys a release by that pair, so the second
+scope cannot install: it fails, and the failure Alert carries it. A stuck switch
+is a bad afternoon; two operators fighting over one webhook while both report
+green is a bad quarter.
+
+The migration itself has a runbook in
+[`deploy/flux/platform/operators/README.md`](../../deploy/flux/platform/operators/README.md).
+Its one irreversible step is annotating the CRDs `helm.sh/resource-policy: keep`
+**before** removing the old operator; everything else can be re-run.
+
+### 7.3 What happens when the operator is not there
 
 Nothing is applied, nothing crash-loops, and it is not silent - which is three
 separate claims and each one is a decision.

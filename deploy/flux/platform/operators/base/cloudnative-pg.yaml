@@ -24,6 +24,28 @@ metadata:
   name: cloudnative-pg
 spec:
   interval: 30m
+
+  # ONE HELM RELEASE RECORD, CLUSTER-WIDE, WHATEVER THE SCOPE.
+  #
+  # The two scopes put the operator's HelmRelease in different NAMESPACES, so
+  # they are different Kubernetes objects and `platform-operators` - which has
+  # prune off, because pruning an operator can take its CRDs and therefore every
+  # database with it - will not remove the one it is no longer pointing at.
+  # Switching scope would otherwise leave BOTH running: two operators
+  # reconciling the same cluster-scoped admission webhooks to point at
+  # themselves, each reporting perfectly healthy, and nothing saying a word.
+  #
+  # Helm keys a release by (releaseName, storageNamespace). Pinning both to the
+  # same values in every scope means the second one cannot install: the record
+  # already exists and is owned by another HelmRelease, so it fails, loudly, and
+  # the failure Alert carries it. A stuck switch is a bad afternoon; two
+  # operators fighting over one webhook while both look green is a bad quarter.
+  #
+  # Changing scope is therefore a migration with a runbook, not a toggle. See
+  # ../README.md, "Changing scope after a deployment".
+  releaseName: cloudnative-pg
+  storageNamespace: cnpg-system
+
   chart:
     spec:
       chart: cloudnative-pg

@@ -1,0 +1,185 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "swgw.fullname" . }}-coordinator
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "coordinator") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  # NOT release-prefixed. deploy/web/nginx.conf, which is baked into the web
+  # image and mounted by docker-compose.yml, proxies to `controller:8080`.
+  # See _helpers.tpl for the full reason and its one consequence.
+  name: controller
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "coordinator") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+  selector:
+    {{- include "swgw.selectorLabels" (dict "ctx" . "component" "coordinator") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "swgw.fullname" . }}-coordinator
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "coordinator") | nindent 4 }}
+spec:
+  replicas: {{ .Values.coordinator.replicas }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  strategy:
+    {{- include "swgw.strategy" . | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "coordinator") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "swgw.componentLabels" (dict "ctx" . "component" "coordinator") | nindent 8 }}
+      annotations:
+        # THE ONLY CHECKSUM ON THIS POD, and its absence elsewhere is the
+        # design. config.yaml is a subPath mount and genuinely needs a restart,
+        # so a change to it rolls the fleet. products/ and the credentials are
+        # watched and rotate in place, so they carry no checksum and changing
+        # them restarts nothing. docs/design/30 section 5.
+        checksum/system-config: {{ .Files.Get "files/config/config.yaml" | sha256sum }}
+        checksum/settings: {{ toYaml .Values.settings | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "swgw.fullname" . }}-coordinator
+      {{- include "swgw.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "swgw.podSecurityContext" . | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.coordinator.terminationGracePeriodSeconds }}
+      {{- with .Values.coordinator.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.coordinator.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.coordinator.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.coordinator.topologySpreadConstraints }}
+      topologySpreadConstraints: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        # A HARD dependency: this process migrates the schema at startup, so a
+        # database that is not there is a crash rather than a degraded start.
+        # Waiting here means the pod sits in Init saying so, and its application
+        # container's restart count stays zero and keeps meaning something.
+        {{- include "swgw.waitForTCP" (dict "ctx" . "name" "database" "host" .Values.database.host "port" .Values.database.port) | nindent 8 }}
+      containers:
+        - name: coordinator
+          image: {{ include "swgw.image" (dict "ctx" . "name" "coordinator") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["--config=/etc/softwaregateway/config.yaml"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            {{- include "swgw.commonEnv" . | nindent 12 }}
+            # THE DRIVER AS WELL AS THE DSN. They are two settings and the
+            # driver defaults to sqlite, so a DSN on its own gives a
+            # Coordinator that opens a local file, migrates it, serves from it
+            # and loses everything when the pod is replaced.
+            - name: SWGW_DATABASE_DRIVER
+              value: postgres
+            {{- include "swgw.dbCredentialEnv" . | nindent 12 }}
+            # Assembled by the kubelet from the two variables above, which must
+            # be declared before it. See swgw.dbCredentialEnv for why the URL is
+            # built here rather than read from a key or composed by a shell.
+            - name: SWGW_DATABASE_DSN
+              value: postgres://$(SWGW_DB_USER):$(SWGW_DB_PASSWORD)@{{ .Values.database.host }}:{{ .Values.database.port }}/{{ .Values.database.name }}?sslmode={{ .Values.database.sslMode }}
+            - name: SWGW_AUTH_ENABLED
+              value: {{ .Values.identity.enabled | quote }}
+            {{- if .Values.identity.enabled }}
+            # The issuer is the PUBLIC url, because that is what lands in the
+            # token's `iss`. DiscoveryURL is where this process actually
+            # fetches the keys - a browser reaches ZITADEL by its external name
+            # and a pod reaches it by Service name, and both must be
+            # expressible or nothing validates.
+            - name: SWGW_AUTH_ISSUER
+              value: {{ include "swgw.identityUrl" . | quote }}
+            - name: SWGW_AUTH_DISCOVERYURL
+              value: http://zitadel:8080
+            - name: SWGW_AUTH_HOSTHEADER
+              value: {{ include "swgw.identityHostHeader" . | quote }}
+            {{- end }}
+            - name: SWGW_AUTH_CERBOSADDR
+              value: http://cerbos:3592
+            - name: SWGW_AUTH_TENANT
+              value: {{ .Values.tenant | quote }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef: {fieldPath: metadata.name}
+            {{- with .Values.coordinatorExtraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # LIVENESS IS PROCESS-LOCAL, ON PURPOSE. /healthz touches nothing
+          # external. A liveness probe that reached the database would restart
+          # every Coordinator during a brief Postgres blip, turning a
+          # recoverable dependency hiccup into a fleet-wide crash loop at
+          # exactly the moment the process needs to stay alive and retry.
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+            failureThreshold: 3
+          # READINESS is the one that decides traffic, and it means: the
+          # database answers, its schema is the one this build expects, and the
+          # product configuration loaded. With maxUnavailable 0 this is what
+          # makes a bad image stall a rollout instead of taking capacity down.
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+            failureThreshold: 2
+          # Migrations run at startup and a first boot applies all of them.
+          # A startup probe gives that a budget without lengthening the
+          # liveness delay for every subsequent restart.
+          startupProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          resources:
+            {{- toYaml .Values.coordinator.resources | nindent 12 }}
+          securityContext:
+            {{- include "swgw.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            {{- include "swgw.configVolumeMounts" . | nindent 12 }}
+{{- if eq .Values.secrets.backend "azure" }}
+            # See templates/secrets-azure.yaml: the CSI driver produces a
+            # Secret only while a pod mounts its SecretProviderClass, so the
+            # workload that needs every credential is the one that mounts them.
+            - name: azure-secrets
+              mountPath: /mnt/azure-secrets
+              readOnly: true
+{{- end }}
+      volumes:
+        {{- include "swgw.configVolumes" . | nindent 8 }}
+{{- if eq .Values.secrets.backend "azure" }}
+        - name: azure-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ include "swgw.fullname" . }}-secrets
+{{- end }}
+{{- if .Values.coordinator.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "swgw.fullname" . }}-coordinator
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "coordinator") | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.coordinator.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "coordinator") | nindent 6 }}
+{{- end }}

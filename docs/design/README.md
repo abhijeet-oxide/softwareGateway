@@ -40,6 +40,7 @@ A cloud-native platform that continuously discovers software packages published 
 | 27 | [Configuration as data](27-configuration-as-data.md) | One directory an administrator manages, read the same way by docker compose and by Flux: products, people, roles, policies, secrets |
 | 28 | [Software flow](28-software-flow.md) | Automated ingestion, onboarding and promotion end to end, answering the brief in [software-flow-brief.md](../software-flow-brief.md) |
 | 29 | [JFrog Build Info](29-jfrog-build-info.md) | Publishing a Build Info document to Artifactory after a completed OCI transfer |
+| 30 | [Continuous delivery](30-continuous-delivery.md) | One `config/` for three runtimes, a Helm chart published to JFrog, Flux reconciling two environments, and which changes cost a restart |
 
 ## Reading order
 

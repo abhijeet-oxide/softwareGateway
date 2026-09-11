@@ -1,0 +1,297 @@
+# CD - build, publish, deploy.
+#
+# ONE PIPELINE, and the reason is that there is one artefact. A release is a
+# chart version that carries a config directory and names an image version, and
+# the three are decided together by .github/scripts/version.sh. Splitting the
+# image build from the chart publish would mean two runs that each know half of
+# the answer and a window in which they disagree.
+#
+# It does NOT deploy. It pushes to the registry and moves one line in Git, and
+# Flux does the rest - so this workflow needs no cluster credential, no
+# kubeconfig and no network path into either environment. What is deployed is
+# whatever Git says, always, and `git log -p deploy/environments/prod/helmrelease.yaml`
+# is the production deployment history.
+#
+#   push to `lab`   -> chart X.Y.Z-lab.N -> deploy/environments/lab
+#   push to `main`  -> chart X.Y.Z       -> deploy/environments/prod
+#
+# See docs/design/30-continuous-delivery.md.
+name: CD
+
+on:
+  push:
+    branches: [main, lab]
+    paths-ignore:
+      # THE POINTER THIS WORKFLOW WRITES. Without this a release would trigger
+      # the release that follows it, forever. It also means a human editing the
+      # pointer - a rollback, a pin - publishes nothing, which is correct: the
+      # version being pinned to already exists.
+      - 'deploy/environments/**'
+      - 'docs/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+# ONE RELEASE AT A TIME PER BRANCH, and queued rather than cancelled. Two
+# concurrent runs would compute the same next version from the same last tag
+# and race to publish it; cancelling the older one would abandon a half-pushed
+# set of images.
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write     # the version tag, and the one-line pointer commit
+
+env:
+  GO_VERSION: "1.25"
+  # THREE SECRETS AND ONE VARIABLE, and that is the whole credential surface of
+  # this pipeline. The same JFrog credential is what Flux pulls the chart with
+  # and what the kubelet pulls images with, held once in the cluster as well.
+  #   vars.JFROG_REGISTRY    artifactory.internal.example.com
+  #   vars.JFROG_REPOSITORY  swgw    (one OCI repo for images AND charts)
+  #   secrets.JFROG_USERNAME
+  #   secrets.JFROG_TOKEN
+  REGISTRY: ${{ vars.JFROG_REGISTRY }}
+  REPOSITORY: ${{ vars.JFROG_REPOSITORY }}
+
+jobs:
+  # ---------------------------------------------------------------- 1. version
+  version:
+    name: Decide the version
+    runs-on: ubuntu-latest
+    outputs:
+      chart_version: ${{ steps.v.outputs.chart_version }}
+      image_version: ${{ steps.v.outputs.image_version }}
+      images_changed: ${{ steps.v.outputs.images_changed }}
+      tag: ${{ steps.v.outputs.tag }}
+      environment: ${{ steps.env.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # EVERY TAG AND EVERY COMMIT. The algorithm asks which release first
+          # contained a commit, which a shallow clone cannot answer - and would
+          # answer wrongly rather than failing, by rebuilding images that
+          # already exist under another tag.
+          fetch-depth: 0
+
+      - id: env
+        run: |
+          case "${{ github.ref_name }}" in
+            main) echo "name=prod" >> "$GITHUB_OUTPUT" ;;
+            lab)  echo "name=lab"  >> "$GITHUB_OUTPUT" ;;
+            *)    echo "::error::CD runs on main and lab only"; exit 1 ;;
+          esac
+
+      - id: v
+        env:
+          CHANNEL: ${{ github.ref_name }}
+        run: .github/scripts/version.sh
+
+  # ----------------------------------------------------------------- 2. images
+  #
+  # SKIPPED ENTIRELY when no code changed, which is most releases: adding a
+  # product or a person is a chart change and nothing else. That is not an
+  # optimisation, it is the mechanism by which those changes cause no restarts.
+  images:
+    name: ${{ matrix.component }} image
+    needs: version
+    if: needs.version.outputs.images_changed == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true     # three images from one commit are one artefact
+      matrix:
+        include:
+          - component: coordinator
+            dockerfile: deploy/build/Dockerfile.coordinator
+            secret: netrc=deploy/go/netrc.default
+          - component: worker
+            dockerfile: deploy/build/Dockerfile.worker
+            secret: netrc=deploy/go/netrc.default
+          - component: web
+            dockerfile: deploy/build/Dockerfile.web
+            secret: npmrc=deploy/npm/npmrc.default
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.JFROG_USERNAME }}
+          password: ${{ secrets.JFROG_TOKEN }}
+
+      # A TAG IS WRITTEN ONCE. Overwriting one makes every recorded deployment
+      # ambiguous - a rollback to 1.4.2 would fetch whatever 1.4.2 means today -
+      # so a collision fails the release rather than resolving it silently.
+      - name: The tag must not already exist
+        run: |
+          ref="${REGISTRY}/${REPOSITORY}/software-gateway-${{ matrix.component }}:${{ needs.version.outputs.image_version }}"
+          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            echo "::error::$ref already exists. An image tag is written once."
+            echo "::error::This means a release tag was deleted and recreated, or two runs raced."
+            exit 1
+          fi
+          echo "$ref is free"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          # linux/amd64 only. AKS node pools here are amd64, and a second
+          # platform doubles a web build that is already the slowest step. The
+          # Dockerfiles read TARGETARCH, so adding linux/arm64 is this one line.
+          platforms: linux/amd64
+          tags: ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/software-gateway-${{ matrix.component }}:${{ needs.version.outputs.image_version }}
+          build-args: |
+            VERSION=${{ needs.version.outputs.image_version }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+          # Credentials for a private module or npm proxy reach the build as a
+          # MOUNTED SECRET, never as a build argument: an argument is readable
+          # forever in `docker history`. The defaults are zero-byte files - see
+          # deploy/deploy_test.go for the podman bug that requires it.
+          secret-files: ${{ matrix.secret }}
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,scope=${{ matrix.component }},mode=max
+          provenance: false
+
+  # ------------------------------------------------------------------ 3. chart
+  chart:
+    name: Package and publish the chart
+    needs: [version, images]
+    # `always()` because `images` is skipped on a config-only release, and a
+    # skipped dependency would otherwise skip this too - which is exactly the
+    # release this pipeline exists to make cheap.
+    if: always() && needs.version.result == 'success' && needs.images.result != 'failure'
+    runs-on: ubuntu-latest
+    outputs:
+      chart_version: ${{ needs.version.outputs.chart_version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.21.3
+
+      # config/ and the deployment machinery are copied into the chart. Helm
+      # packages a DIRECTORY and .Files cannot reach outside it, so this is the
+      # step that makes one config directory serve three runtimes. See
+      # deploy/chartstage.
+      - name: Stage config/ into the chart
+        run: go run ./deploy/chartstage/cmd/chartstage
+
+      - name: Lint
+        run: |
+          helm lint deploy/charts/software-gateway \
+            --set identity.masterkey.value=0123456789abcdef0123456789abcdef \
+            --set identity.rootPassword.value=lint
+
+      # THE RENDER THAT MATTERS, and it is the one `task chart:template` runs.
+      # Both environments' real values against the chart about to be published,
+      # so a template error, a missing key or a tripped validation rule fails
+      # here rather than in a cluster. BOTH, on either branch: a change that
+      # renders in lab and not in production is a change that must not be
+      # published at all, and finding that out on the merge to main is a day
+      # too late.
+      - name: Render both environments
+        run: |
+          set -euo pipefail
+          for env in lab prod; do
+            ns=$([ "$env" = prod ] && echo swgw || echo swgw-lab)
+            go run ./deploy/chartstage/cmd/chartstage -values "$env" > "/tmp/$env-values.yaml"
+            helm template swgw deploy/charts/software-gateway \
+              --namespace "$ns" --values "/tmp/$env-values.yaml" > "/tmp/$env.yaml"
+            echo "$env: $(grep -c '^kind:' "/tmp/$env.yaml") objects"
+          done
+
+      - name: Package
+        run: |
+          helm package deploy/charts/software-gateway \
+            --version "${{ needs.version.outputs.chart_version }}" \
+            --app-version "${{ needs.version.outputs.image_version }}" \
+            --destination /tmp/chart
+          ls -l /tmp/chart
+
+      - name: Publish
+        run: |
+          helm registry login "$REGISTRY" \
+            --username "${{ secrets.JFROG_USERNAME }}" \
+            --password "${{ secrets.JFROG_TOKEN }}"
+          helm push "/tmp/chart/software-gateway-${{ needs.version.outputs.chart_version }}.tgz" \
+            "oci://${REGISTRY}/${REPOSITORY}"
+
+  # ---------------------------------------------------------------- 4. promote
+  #
+  # The deployment. It is one line in one file, and Flux is what acts on it -
+  # which is why this job holds no cluster credential and why a deployment can
+  # be undone by reverting a commit.
+  promote:
+    name: Point ${{ needs.version.outputs.environment }} at it
+    needs: [version, chart]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # The pointer commit and the tag are pushed back to this branch, so
+          # the checkout needs a token that may write. GITHUB_TOKEN with
+          # `contents: write` is enough and expires with the run.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Move the pointer
+        env:
+          ENVIRONMENT: ${{ needs.version.outputs.environment }}
+          CHART_VERSION: ${{ needs.version.outputs.chart_version }}
+        run: |
+          set -euo pipefail
+          file="deploy/environments/${ENVIRONMENT}/platform/helmrelease.yaml"
+
+          # ANCHORED, AND ASSERTED. `spec.chart.spec.version` is the only key
+          # at this indentation in the file; a sed that silently matched two
+          # lines, or none, would publish a release that deploys nothing.
+          matches=$(grep -cE '^      version: ' "$file")
+          if [ "$matches" != "1" ]; then
+            echo "::error::$file has $matches lines matching the chart version; expected exactly 1"
+            exit 1
+          fi
+          sed -i -E "s|^      version: .*|      version: ${CHART_VERSION}|" "$file"
+
+          git config user.name  "software-gateway-release"
+          git config user.email "noreply@github.com"
+          git add "$file"
+          # Two -m flags rather than one multi-line string: a heredoc inside a
+          # YAML block scalar carries the block's indentation into the commit
+          # body, and every deployment record would be indented ten spaces.
+          git commit \
+            -m "deploy(${ENVIRONMENT}): ${CHART_VERSION}" \
+            -m "Published by CD from ${GITHUB_SHA}. Flux reconciles this pointer; no cluster credential was used to produce it."
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      # THE TAG IS LAST, and that ordering is the whole recovery story. It is
+      # what the next run reads to decide whether images have to be rebuilt, so
+      # a run that failed before publishing leaves no tag - and the run after it
+      # computes the same version and does the same work rather than concluding
+      # that images which do not exist are already there.
+      - name: Tag the release
+        run: |
+          git tag -a "${{ needs.version.outputs.tag }}" -m "${{ needs.version.outputs.chart_version }}"
+          git push origin "${{ needs.version.outputs.tag }}"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Deployed to ${{ needs.version.outputs.environment }}"
+            echo
+            echo "- chart \`${{ needs.version.outputs.chart_version }}\`"
+            echo "- images \`${{ needs.version.outputs.image_version }}\`"
+            echo "- pointer \`deploy/environments/${{ needs.version.outputs.environment }}/platform/helmrelease.yaml\`"
+            echo
+            echo "Flux applies it within a minute. Nothing here touched a cluster."
+          } >> "$GITHUB_STEP_SUMMARY"

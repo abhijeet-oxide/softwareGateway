@@ -1,0 +1,64 @@
+{{- if .Values.networkPolicy.enabled }}
+{{/*
+THE ONLY CONTROL IN FRONT OF THE COORDINATOR'S API that does not depend on a
+token being checked. Off by default, because a policy naming the wrong
+namespace is an outage and a cluster whose CNI does not enforce them is a false
+sense of safety - both worse than the honest absence.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "swgw.fullname" . }}-coordinator
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "coordinator") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "coordinator") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: worker}
+        - podSelector:
+            matchLabels: {app: web}
+{{- range .Values.networkPolicy.allowFromNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+{{- end }}
+      ports:
+        - {port: 8080, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "swgw.fullname" . }}-cerbos
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "cerbos") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "cerbos") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    # The PDP answers one caller. Nothing else in the namespace has a reason to
+    # ask it whether an action is permitted.
+    - from:
+        - podSelector:
+            matchLabels: {app: coordinator}
+      ports:
+        - {port: 3592, protocol: TCP}
+        - {port: 3593, protocol: TCP}
+{{/* NO POLICY FOR THE DATABASE, and that is deliberate.
+
+     The CloudNativePG Cluster is not this chart's - it is applied by the layer
+     before it - and its pods need traffic this chart knows nothing about:
+     streaming replication between instances, the operator's own connections,
+     and the instance manager's probes. A NetworkPolicy written here would fence
+     pods this release does not own, using labels it does not set, and the way
+     you would find out it was wrong is a failover that does not complete.
+
+     It belongs beside the Cluster, in deploy/environments/<env>/database, where
+     whoever changes the topology can see it. */}}
+{{- end }}

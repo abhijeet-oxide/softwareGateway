@@ -12,8 +12,8 @@ serve both deployment paths:
 
 | | local | cluster |
 |---|---|---|
-| how it arrives | `docker-compose.yml` bind-mounts `${CONFIG_DIR:-./config}` | Flux reconciles this directory |
-| how it is applied | `docker compose run --rm zitadel-init` | the seeding Job, or a CI step |
+| how it arrives | `docker-compose.yml` bind-mounts `${CONFIG_DIR:-./config}` | copied into the Helm chart at package time and mounted as ConfigMaps |
+| how it is applied | `docker compose run --rm zitadel-init` | the seeding Job the chart deploys |
 | what reads it | the same binaries, at the same paths | the same binaries, at the same paths |
 
 There is no second format, no rendering step and no per-environment fork. A
@@ -29,9 +29,13 @@ config/
   products/
     *.yaml              what this gateway replicates, one file per product
   secrets/
-    manifests/          VSO / ExternalSecret documents. Committed, no values.
+    secrets.yaml        WHAT CREDENTIALS EXIST: a name, its keys, a path. No values.
+    manifests/          worked examples of what the chart renders from it.
     local/              the same layout filled in by hand. Never committed.
 ```
+
+`task secrets:scaffold` writes `local/` from `secrets.yaml`, so a developer
+fills in files rather than guessing at paths.
 
 ## The one rule that connects them
 
@@ -53,6 +57,16 @@ to find that out is the pull request rather than the incident.
 `go test ./deploy/...` enforces the same invariant in CI, so the pull request
 that adds a product without an owner fails before anything is deployed.
 
+## The second rule
+
+**Every `credentialsRef.secretName` in `products/` must be an entry in
+`secrets/secrets.yaml`.**
+
+Same shape, same reason. A product naming a credential nobody declared loads,
+finds no file, marks itself invalid and says so in a log line - in a cluster,
+after the deployment, where nothing was going to create that Secret anyway. The
+same test catches it on the pull request.
+
 ## Applying a change
 
 ```sh
@@ -62,3 +76,10 @@ docker compose restart zitadel-login      # only if the sign-in screen changed
 
 Products and policies need neither: the controller and every worker watch their
 directories and reload in place, and Cerbos watches its own.
+
+In a cluster nothing is applied by hand at all. A change here is a commit; the
+pipeline packages a new chart and moves one line in
+`deploy/environments/<env>/helmrelease.yaml`, and Flux applies it. A product or
+a policy restarts nothing, a change to `users.yaml` runs one Job and restarts
+nothing, and only `config.yaml` rolls the fleet. See
+[docs/design/30 - Continuous delivery](../docs/design/30-continuous-delivery.md).

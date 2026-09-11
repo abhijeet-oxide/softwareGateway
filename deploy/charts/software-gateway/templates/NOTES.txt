@@ -1,0 +1,57 @@
+{{ .Chart.Name }} {{ .Chart.Version }} is installed in namespace {{ .Release.Namespace }}.
+
+  images        {{ include "swgw.imageTag" . }}   (chart appVersion)
+  tenant        {{ .Values.tenant }}
+  application   {{ include "swgw.webUrl" . }}
+{{- if .Values.identity.enabled }}
+  identity      {{ include "swgw.identityUrl" . }}
+{{- else }}
+  identity      external - this release deploys no identity provider
+{{- end }}
+  database      {{ .Values.database.host }}, credentials from Secret {{ .Values.database.existingSecret }}
+  credentials   {{ .Values.secrets.backend }}{{ if eq .Values.secrets.backend "none" }} - the Secrets in config/secrets/secrets.yaml must already exist{{ end }}
+
+WATCH IT COME UP
+
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "swgw.fullname" . }}-coordinator
+{{- if .Values.identity.enabled }}
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/component=seed --tail=-1
+
+The seeding Job is the one to read first. It prints what it provisioned - the
+people, their grants, and every account that CANNOT sign in and why. On a first
+install it runs after ZITADEL has migrated, so give it a minute.
+{{- end }}
+
+WHAT A CHANGE COSTS
+
+  a product, a policy    nothing restarts. The Coordinator, the workers and
+                         Cerbos watch their directories and reload in place.
+  a person               one Job runs. No pod is touched.
+  config.yaml, an image  a rolling update with maxUnavailable {{ .Values.rollout.maxUnavailable }}: a
+                         replica is removed only after its replacement is
+                         ready, so a bad release stalls rather than taking
+                         capacity away.
+
+{{- if and .Values.identity.enabled (not .Values.identity.sso.issuer) }}
+
+SINGLE SIGN-ON IS NOT CONFIGURED. Anybody in config/users/users.yaml signs in
+with the password in that file, which is a local and evaluation arrangement.
+Set identity.sso.issuer, identity.sso.clientId and identity.sso.existingSecret
+before this serves anyone real; deploy/STACK.md has the Entra registration,
+including the one redirect URI that has to be registered as "Web" rather than
+"Single-page application".
+{{- end }}
+
+WHAT THIS RELEASE DOES NOT INCLUDE
+
+The database. It is applied before this chart by its own Flux Kustomization,
+which is what lets the ZITADEL migration be a pre-install hook - Helm waits for
+it, so no pod is ever created against an unmigrated schema. It is also what
+keeps `helm rollback` away from the one thing here that cannot be recreated.
+
+  kubectl -n {{ .Release.Namespace }} get cluster.postgresql.cnpg.io
+
+CHECK THAT IT HAS BACKUPS. A CloudNativePG cluster replicates, which protects
+against losing an instance and not against losing the data: a DROP TABLE is
+replicated faithfully and immediately. `spec.backup` in the database layer is
+where continuous archiving is configured, and it ships unset.

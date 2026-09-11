@@ -23,13 +23,32 @@ API: no client-go, no cluster-wide Secret read permission, no API-server load,
 and the same code path works against a plain directory on a laptop.
 See `internal/product/secrets.go`.
 
+## The list itself
+
+**`secrets.yaml` is the inventory**: every credential this deployment needs, by
+name, with its keys and a path relative to whatever root the environment uses.
+No values, and there is nowhere in it to put one. Three things read it and none
+of them restates it - the chart renders one `VaultStaticSecret` or
+`SecretProviderClass` per entry, `task secrets:scaffold` writes the local
+layout from it, and `go test ./deploy/...` fails when a product references
+something it does not declare.
+
+```sh
+task secrets:scaffold      # one directory per secret, one EMPTY file per key
+```
+
+Empty rather than a placeholder: a file containing `CHANGEME` is a credential
+the registry rejects with a 401 that names nothing, and an empty one is
+reported at load, by path, as the missing value it is.
+
 ## The two directories here
 
-**`manifests/` is committed.** VaultStaticSecret / ExternalSecret / SealedSecret
-documents - whatever this organization uses to get a Secret into a cluster. They
-carry a REFERENCE to a value, never a value, which is what makes them reviewable
-in a pull request. Flux applies them; the operator writes the Secret; the
-Deployment projects it at `/etc/softwaregateway/secrets/<name>/`.
+**`manifests/` is committed.** Worked examples of the documents the chart
+renders from `secrets.yaml` - a VaultStaticSecret, an ExternalSecret - kept so
+a reader can see the shape without rendering a chart. They carry a REFERENCE to
+a value, never a value. In a deployment the chart produces them from the
+inventory rather than these files being applied directly, so there is one list
+and not two.
 
 **`local/` is not committed, and never will be.** It is the same shape, filled
 in by hand, bind-mounted by `docker-compose.yml` at the same path. A developer

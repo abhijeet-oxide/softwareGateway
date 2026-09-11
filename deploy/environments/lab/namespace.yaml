@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: swgw-lab
+  labels:
+    kubernetes.io/metadata.name: swgw-lab
+    app.kubernetes.io/part-of: software-gateway
+    softwaregateway.io/environment: lab
+    # Pod Security Standards. `restricted` is what the workloads in this chart
+    # are written for: non-root, no privilege escalation, every capability
+    # dropped, RuntimeDefault seccomp. The two nginx tiers are the exception
+    # and they are documented in the chart's _helpers.tpl - which is why this
+    # is `baseline` enforced with `restricted` audited, rather than a claim
+    # that is not true.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

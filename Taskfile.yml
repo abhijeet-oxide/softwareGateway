@@ -450,6 +450,97 @@ tasks:
       - echo "There is no separate migrate step by design - a binary and a schema"
       - echo "that can disagree is a class of outage worth designing out."
 
+  # ------------------------------------------------------------------ chart --
+  #
+  # The cluster path, and it starts from the same config/ the other two do.
+  # See docs/design/30-continuous-delivery.md.
+
+  chart:stage:
+    desc: Copy config/ and the deployment machinery into the chart
+    summary: |
+      Helm packages a DIRECTORY and .Files cannot reach outside it, so the one
+      config directory that `task run` and docker compose read has to be copied
+      in before the chart is packaged. This is that copy.
+
+      The staged tree is not committed - deploy/charts/software-gateway/files
+      is ignored - and `go test ./deploy/...` fails if a stage would produce
+      something different from what a package was built from.
+    cmds:
+      - go run ./deploy/chartstage/cmd/chartstage
+
+  chart:lint:
+    desc: Lint the chart
+    deps: [chart:stage]
+    cmds:
+      # The two values with no safe default. The chart REFUSES to render without
+      # them rather than inventing a key that nothing stores - a ZITADEL
+      # masterkey nobody kept is a database nobody can decrypt.
+      - >-
+        helm lint deploy/charts/software-gateway
+        --set identity.masterkey.value=0123456789abcdef0123456789abcdef
+        --set identity.rootPassword.value=lint
+
+  chart:template:
+    desc: Render the chart as one environment really deploys it
+    summary: |
+      task chart:template            the lab environment
+      task chart:template -- prod    production
+
+      Renders deploy/charts/software-gateway with the values in that
+      environment's HelmRelease - the same file Flux reads - so a template
+      error or a tripped validation rule shows up here rather than in a
+      cluster.
+    deps: [chart:stage]
+    vars:
+      ENV: '{{default "lab" .CLI_ARGS}}'
+    cmds:
+      - go run ./deploy/chartstage/cmd/chartstage -values {{.ENV}} > .task-values.yaml
+      - >-
+        helm template swgw deploy/charts/software-gateway
+        --values .task-values.yaml
+      - cmd: rm -f .task-values.yaml
+        platforms: [linux, darwin]
+
+  chart:package:
+    desc: Package the chart as the pipeline does
+    summary: |
+      task chart:package -- 1.4.3
+
+      Produces the same archive CD publishes, so `helm install` from it is the
+      same install a cluster gets. Without a version it packages 0.0.0, which
+      is what Chart.yaml says a local build is.
+    deps: [chart:stage]
+    vars:
+      V: '{{default "0.0.0" .CLI_ARGS}}'
+    cmds:
+      - >-
+        helm package deploy/charts/software-gateway
+        --version {{.V}} --app-version {{.V}} --destination dist/charts
+
+  release:version:
+    desc: Show what a release from this commit would be
+    summary: |
+      The version the pipeline would compute, and whether it would rebuild the
+      images. Run it before merging to see whether a change ships new images or
+      reuses the running ones.
+    platforms: [linux, darwin]
+    cmds:
+      - CHANNEL={{default "main" .CLI_ARGS}} .github/scripts/version.sh
+
+  # ---------------------------------------------------------------- secrets --
+
+  secrets:scaffold:
+    desc: Write the local credential layout from config/secrets/secrets.yaml
+    summary: |
+      One directory per declared secret, one EMPTY file per key, under
+      config/secrets/local - which is the shape a projected Kubernetes Secret
+      volume produces and is never committed.
+
+      Empty rather than a placeholder on purpose: a file containing CHANGEME is
+      a credential the registry rejects with a 401 that names nothing.
+    cmds:
+      - go run ./deploy/secretsinv/cmd/secretsinv
+
   # ----------------------------------------------------------------- docker --
 
   images:

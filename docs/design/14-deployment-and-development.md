@@ -6,56 +6,80 @@
 
 ## 1. Repository layout for deployment
 
-Flux-native. Kustomize base plus per-environment overlays.
+> **This section described a Kustomize base with per-environment overlays. It
+> was not built that way, and [30 - Continuous delivery](30-continuous-delivery.md)
+> is the design that was.** The reason is recorded here rather than deleted,
+> because the alternative is worth knowing about.
+>
+> Overlays would have meant `deploy/products/` as a sibling of `base/` - a
+> second copy of what `config/products` already holds - and a `config/system-config.yaml`
+> beside the one in `config/`. Two descriptions of one deployment, which is the
+> arrangement [27 - Configuration as data](27-configuration-as-data.md) was
+> written to end. A chart takes `config/` whole, so there is one.
 
 ```
 deploy/
-├── base/
-│   ├── kustomization.yaml
-│   ├── namespace.yaml
-│   ├── coordinator/{deployment,service,serviceaccount,pdb}.yaml
-│   ├── worker/{deployment,serviceaccount,hpa}.yaml
-│   ├── postgres/{statefulset,service,pvc}.yaml     # optional; external is preferred
-│   ├── config/system-config.yaml
-│   └── network/{networkpolicy-coordinator,networkpolicy-worker}.yaml
-├── overlays/
-│   ├── dev/          replicas 1, SQLite, debug logging
-│   ├── staging/
-│   └── production/   replicas 2 + HPA, external Postgres, full limits
-├── products/                                        # one ConfigMap per product
-│   ├── vendor-a-platform.yaml
-│   └── vendor-b-database.yaml
-├── flux/
-│   ├── gitrepository.yaml
-│   └── kustomization.yaml
-└── observability/
-    ├── servicemonitor.yaml
-    ├── prometheusrule.yaml                          # alerts from 12 section 7
-    └── dashboards/*.json
+├── charts/software-gateway/     the chart: every workload, and config/ copied
+│   ├── templates/               in at package time by deploy/chartstage
+│   └── files/                   staged, never committed
+├── environments/
+│   ├── lab/helmrelease.yaml     WHAT IS DEPLOYED. One line per environment.
+│   └── prod/helmrelease.yaml
+├── flux/clusters/{lab,prod}/    how a cluster finds the two above
+├── build/                       the Dockerfiles
+└── zitadel/ cerbos/ web/ postgres/
+                                 the machinery the chart carries in
 ```
 
-**Products are a sibling of `base`, not part of an overlay.** They are data, and they change on a different cadence and through a different review path than infrastructure - a platform team owns `base/`, product owners own `products/`. Kustomize overlays are for environment differences, not for content.
+Products are **not** a sibling of the chart and not an overlay. They are
+`config/products`, they are read by `task run` and `docker compose` unchanged,
+and the chart carries them - so a platform team owning the templates and a
+product owner adding a product still change different files, which was the
+property overlays were meant to buy.
 
 ## 2. Flux
+
+Two objects per cluster: a `GitRepository` on the environment's branch and a
+`Kustomization` pointing at `deploy/environments/<env>`, which holds one
+`HelmRelease`.
 
 ```yaml
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
-metadata: {name: softwaregateway, namespace: flux-system}
+metadata: {name: software-gateway, namespace: flux-system}
 spec:
   interval: 5m
-  path: ./deploy/overlays/production
+  path: ./deploy/environments/prod
   prune: true
-  sourceRef: {kind: GitRepository, name: softwaregateway}
+  wait: true
+  sourceRef: {kind: GitRepository, name: software-gateway}
   healthChecks:
-    - {apiVersion: apps/v1, kind: Deployment, name: coordinator, namespace: softwaregateway}
-    - {apiVersion: apps/v1, kind: Deployment, name: worker,      namespace: softwaregateway}
-  timeout: 5m
+    - {apiVersion: helm.toolkit.fluxcd.io/v2, kind: HelmRelease, name: software-gateway, namespace: swgw}
 ```
 
-Secrets are **not** in Git. VSO materializes them from Vault into the namespace; manifests reference them by name ([02](02-configuration.md) §5.5). Rotation propagates through the mounted volume with no restart ([02](02-configuration.md) §3).
+The **branch is the environment** - `lab` and `main` - so promotion is the pull
+request the team already reviews rather than a second mechanism.
+
+The HelmRelease carries `upgrade.remediation.strategy: rollback`, which is what
+replaces the health-checked rollback an overlay would have needed a person for:
+`maxUnavailable: 0` means a bad image stalls a rollout instead of taking
+capacity away, the timeout fires, and the previous release goes back with
+nothing having gone down.
+
+Secrets are **not** in Git. VSO or the Azure Key Vault CSI driver materializes
+them from `config/secrets/secrets.yaml` into the namespace; manifests reference
+them by name ([02](02-configuration.md) §5.5). Rotation propagates through the
+mounted volume with no restart ([02](02-configuration.md) §3).
 
 ## 3. Workloads
+
+> **The chart is what actually runs; the manifests below are the reasoning.**
+> Every decision in this section is implemented in
+> `deploy/charts/software-gateway/templates`, and where a detail differs the
+> chart is right - it is rendered, schema-validated and installed on every pull
+> request, and this page is not. Read it for *why* a liveness probe touches
+> nothing external and why the worker has no writable volume; read the
+> templates for what the field is called.
 
 ### 3.1 Coordinator
 
@@ -181,9 +205,13 @@ Workers hold **no database credentials** - a direct consequence of HTTP leasing 
 
 ### 3.3 Database
 
-**External managed PostgreSQL is the recommendation** - Cloud SQL, RDS, Azure Database. Backups, failover, patching, and PITR are solved problems we should not re-solve, and this is the only stateful component in the system.
+> **This section recommended external managed PostgreSQL - Cloud SQL, RDS, Azure Database - on the grounds that backups, failover, patching and PITR are solved problems we should not re-solve. That recommendation was not taken, and [30 - Continuous delivery](30-continuous-delivery.md) §7.1 is what replaced it.**
 
-The in-cluster `StatefulSet` in `base/postgres/` exists for dev and evaluation. It is a single instance with a PVC and no automated failover, and the manifest says so in a comment so nobody promotes it to production by accident.
+**PostgreSQL runs in-cluster, in every environment, and there is no managed-database path in this repository.** The reasoning above was sound about the problem and wrong about the only way to solve it: CloudNativePG solves the same four things in-cluster, declaratively, and it is the operator's job to keep solving them rather than ours.
+
+What is deployed is a `Cluster` in `deploy/environments/<env>/database` - three instances with synchronous replication in production, two in lab, automatic failover in seconds, and rolling minor-version upgrades. It is **not** part of the application chart, for three reasons set out in [30](30-continuous-delivery.md) §5.3: `helm rollback` must not be able to reach it, it is upgraded on its own schedule, and its existing first is what lets the ZITADEL migration be a Helm pre-install hook.
+
+The one thing the managed option would still have given for free is backups, and that is honestly an open gap: `spec.backup` ships unset, with the shape of the answer in a comment and the target unchosen. A replicated cluster is not a backup - it replicates a `DROP TABLE` faithfully and immediately.
 
 ### 3.4 Network policy
 
@@ -309,6 +337,11 @@ The task runner is [Task](https://taskfile.dev) (`Taskfile.yml`), not make. `tas
 | `task dev:coordinator` / `dev:worker` | Run against SQLite |
 | `task dev:registry` | Local registry seeded with a multi-arch test package |
 | `task validate` | Validate `./config/products` |
+| `task chart:stage` | Copy `config/` into the chart, so Helm can package it |
+| `task chart:lint` / `chart:template -- prod` | Lint, and render as an environment really deploys |
+| `task chart:package -- 1.4.3` | The archive CD publishes |
+| `task secrets:scaffold` | Write `config/secrets/local` from the inventory |
+| `task release:version` | What a release from this commit would publish |
 
 > **Decision - Task over make.**
 >

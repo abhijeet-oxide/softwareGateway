@@ -1,0 +1,43 @@
+# The two sources the lab cluster reconciles this product from.
+#
+# THE BRANCH IS THE ENVIRONMENT. `lab` here, `main` in clusters/prod. That is
+# the whole promotion mechanism: a change proves itself in lab, and the pull
+# request that merges it into main is the deployment to production.
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: software-gateway
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: https://github.com/abhijeet-oxide/softwareGateway
+  ref:
+    branch: lab
+  # A deploy key or a PAT with read access. `flux create secret git` writes it.
+  secretRef:
+    name: software-gateway-git
+  # Only the directory this cluster reconciles, so a commit anywhere else in
+  # the repository does not churn the source.
+  ignore: |
+    /*
+    !/deploy/environments/lab
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: software-gateway
+  namespace: flux-system
+spec:
+  # ONE OCI REPOSITORY FOR IMAGES AND CHARTS. `swgw` in Artifactory holds
+  # software-gateway-coordinator, -worker, -web and the software-gateway chart,
+  # so the cluster has one registry credential and the pipeline pushes with the
+  # same one.
+  type: oci
+  url: oci://artifactory.internal.example.com/swgw
+  interval: 5m
+  # `flux create secret oci` or a dockerconfigjson Secret. The same JFrog
+  # credential the kubelet pulls images with - see the chart's
+  # secrets.registryPullSecret.
+  secretRef:
+    name: jfrog

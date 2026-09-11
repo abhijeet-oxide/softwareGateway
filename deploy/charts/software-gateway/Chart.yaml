@@ -1,0 +1,35 @@
+apiVersion: v2
+name: software-gateway
+description: >-
+  Software Gateway - the coordinator, the worker fleet, the web tier, the
+  policy decision point and the identity provider, configured from one
+  directory that a laptop, a compose stack and a cluster all read.
+type: application
+kubeVersion: ">=1.28.0-0"
+
+home: https://github.com/abhijeet-oxide/softwareGateway
+sources:
+  - https://github.com/abhijeet-oxide/softwareGateway
+
+# BOTH OF THESE ARE SET BY THE PIPELINE, and the values here are what a
+# `helm package` from a working tree produces when nobody has said otherwise.
+#
+#   version     the CHART's version. Bumped on every release, whether the
+#               change was code, a product, a person or a template.
+#   appVersion  the IMAGE version, and the default tag for all three of this
+#               product's images. It moves only when the code changes, which
+#               is what lets a product being added ship as a new chart that
+#               reuses the running images - a rollout with no restarts.
+#
+# They diverge on purpose and the divergence is the interesting part. See
+# docs/design/30-continuous-delivery.md section 3.
+version: 0.0.0
+appVersion: "0.0.0"
+
+annotations:
+  # Read by the pipeline's release notes step and by anybody asking what a
+  # chart in the registry actually contains.
+  softwaregateway.io/images: "coordinator, worker, web"
+
+maintainers:
+  - name: Software Gateway

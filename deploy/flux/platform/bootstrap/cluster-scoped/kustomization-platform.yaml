@@ -1,6 +1,12 @@
 # THE OPERATORS THIS DEPLOYMENT NEEDS, reconciled by Flux like everything else.
 #
-# Two settings here are load-bearing and neither is a default.
+# THE NAME IS THE SAME IN EVERY SCOPE, and that is the point of this
+# arrangement: `deploy/environments/<env>/layers.yaml` says
+# `dependsOn: [platform-operators]` and never needs to know which scope the
+# cluster chose. Changing scope is one command, and nothing else in the
+# repository moves.
+#
+# Two settings below are load-bearing and neither is a default.
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
@@ -9,7 +15,7 @@ metadata:
 spec:
   interval: 30m
   retryInterval: 2m
-  path: ./deploy/flux/platform/operators
+  path: ./deploy/flux/platform/operators/cluster-scoped
   sourceRef:
     kind: GitRepository
     name: software-gateway-platform

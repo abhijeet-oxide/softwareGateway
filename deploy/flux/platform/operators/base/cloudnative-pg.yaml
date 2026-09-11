@@ -1,5 +1,9 @@
 # CloudNativePG - the operator that runs this deployment's PostgreSQL.
 #
+# THE BASE. Everything here is true wherever the operator runs; the two
+# overlays beside this directory decide the namespace it lives in and the
+# namespaces it watches. See ../README.md for which to choose.
+#
 # WHY IT IS MANAGED BY FLUX AT ALL. The alternative is `helm install` once, by
 # hand, per cluster - and then the version running in lab and the version
 # running in production are whatever each was installed with, on dates nobody
@@ -14,19 +18,10 @@
 #   CRDs are upgraded explicitly, because Helm does not do it by default;
 #   a failed upgrade STOPS rather than rolling itself back.
 ---
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: cnpg-system
-  labels:
-    app.kubernetes.io/part-of: software-gateway-platform
-    pod-security.kubernetes.io/enforce: restricted
----
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
   name: cloudnative-pg
-  namespace: cnpg-system
 spec:
   interval: 30m
   chart:
@@ -72,10 +67,8 @@ spec:
     image:
       repository: artifactory.internal.example.com/docker/cloudnative-pg/cloudnative-pg
     replicaCount: 1
-    # It reconciles every namespace in the cluster, which is what makes one
-    # operator serve both lab and production.
-    config:
-      clusterWide: true
+    # WHERE IT WATCHES is set by the overlay, not here - see the two beside
+    # this directory. It is the one thing that differs between them.
     resources:
       requests: {cpu: 100m, memory: 200Mi}
       limits: {memory: 400Mi}

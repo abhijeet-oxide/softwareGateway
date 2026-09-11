@@ -374,6 +374,58 @@ in both environments. It is deliberately not treated like the application:
 | `upgrade.crds: CreateReplace` | `helm upgrade` does not touch CRDs at all. Without it the operator moves and its schema does not, and new fields are dropped silently. |
 | `remediation.retries: 0` | no automatic rollback. Rolling a database operator back mid-upgrade, while it holds every Cluster and may already have migrated their CRDs, turns a bad ten minutes into a bad week. It stops and alerts. |
 
+**Where the operator runs is a per-cluster choice, and one thing about it is
+not a choice.** There is one CloudNativePG per cluster in either scope, because
+two pieces of what it installs are cluster-scoped singletons: the CRDs, and the
+admission webhook configurations it reconciles at startup to point at its own
+Service. Two operators would each rewrite those to point at themselves.
+
+So the switch is where the single operator LIVES and what it WATCHES:
+
+```sh
+kubectl apply -k deploy/flux/platform/bootstrap/cluster-scoped        # one cluster, both environments
+kubectl apply -k deploy/flux/platform/bootstrap/namespace-scoped/lab  # one cluster, one environment
+```
+
+Both create a Kustomization named `platform-operators`, so
+`deploy/environments/<env>/layers.yaml` depends on that one name and nothing in
+the repository moves when the scope does. `TestEveryOperatorScopeBuildsAndKeepsOneName`
+asserts both halves of that - every arrangement builds, and every one of them
+keeps the name - because a scope that renamed it would leave every environment
+waiting on a dependency that will never exist, quietly, since waiting is what
+that arrangement is designed to do.
+
+Namespace scope is the better answer where it applies: the operator holds a
+Role rather than a ClusterRole, so a bug or a compromise reaches the namespace
+it serves and nothing else. Cluster scope is **required** as soon as one cluster
+carries both environments - and that topology has a consequence worth knowing
+before choosing it: a shared operator cannot be upgraded in lab first, because
+it is the same Deployment production is using.
+
+### 7.2 What happens when the operator is not there
+
+Nothing is applied, nothing crash-loops, and it is not silent - which is three
+separate claims and each one is a decision.
+
+`software-gateway-<env>-database` declares `dependsOn: [platform-operators]`. If
+that Kustomization does not exist, Flux reports `dependencies do not meet ready
+condition`, applies nothing, and retries every minute. The platform layer waits
+behind it. **No `Cluster` is submitted to an API server that has never been
+taught the kind**, so the failure is one clear sentence rather than
+`no matches for kind Cluster` repeating in a controller log.
+
+Being told about it took a correction. The info Alert originally EXCLUDED
+`dependencies do not meet ready condition` as noise - which made the one failure
+that waits forever the one failure nobody hears about. It is no longer excluded:
+the channel repeats "waiting for platform-operators" every minute, which is how
+somebody works out they skipped a bootstrap step. Forty-five minutes in, the
+root Kustomization's own timeout fires and the failure Alert repeats it as an
+error.
+
+The failure Alert also named the two layers by glob and missed the two objects
+most likely to be the actual cause - the root Kustomization, which is what times
+out, and `platform-operators` itself. Both are named explicitly now.
+
 > **Backups are not configured.** A replicated cluster protects against losing an
 > instance, not against losing the data: a `DROP TABLE` is replicated faithfully
 > and immediately. `spec.backup` in `deploy/environments/<env>/database/cluster.yaml`

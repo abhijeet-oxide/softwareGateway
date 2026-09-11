@@ -58,23 +58,40 @@ flux create secret oci jfrog \
   --url artifactory.internal.example.com \
   --username "$JFROG_USERNAME" --password "$JFROG_TOKEN"
 
-# 4. The operators, ONCE PER CLUSTER. Not once per environment: a cluster
-#    hosting both lab and production has one CloudNativePG, not two.
-kubectl apply -k deploy/flux/platform/bootstrap
+# 4. The database operator, ONCE PER CLUSTER. There is one CloudNativePG per
+#    cluster in either scope - its CRDs and admission webhooks are cluster-
+#    scoped singletons - so the choice is where it LIVES and what it WATCHES:
+#
+#      cluster-scoped        required when one cluster hosts both environments
+#      namespace-scoped/<env>  preferred when this cluster hosts one
+#
+#    Both create a Kustomization named `platform-operators`, so nothing in
+#    deploy/environments changes either way. See
+#    deploy/flux/platform/operators/README.md.
+kubectl apply -k deploy/flux/platform/bootstrap/cluster-scoped
 
 # 5. This environment
 kubectl apply -k deploy/flux/clusters/lab      # or clusters/prod
 ```
 
-Step 4 creates a `platform-operators` Kustomization that reconciles
-`deploy/flux/platform/operators`, and the environment's database layer
-`dependsOn` it - so the `Cluster` object is never submitted to an API server
-that has not been taught the kind.
+Step 4 creates a `platform-operators` Kustomization, and the environment's
+database layer `dependsOn` it - so the `Cluster` object is never submitted to an
+API server that has not been taught the kind.
+
+**If step 4 is skipped, nothing breaks and nothing is silent.** The database
+layer reports `dependencies do not meet ready condition` naming
+`platform-operators`, applies nothing, and retries every minute; the platform
+layer waits behind it; and the info Alert says so on every retry, so the channel
+reads "waiting for platform-operators" until somebody runs the step. Forty-five
+minutes in, the root Kustomization's own timeout fires and the failure Alert
+repeats it as an error. No pod is created, nothing crash-loops, and the message
+names the missing step rather than a symptom of it.
 
 ### The operators
 
 **CloudNativePG is managed by Flux**, in `deploy/flux/platform/operators` -
-pinned, reviewed, and the same version in lab and production. The alternative
+pinned, reviewed, and the same version in lab and production. Where it runs is a
+per-cluster choice with its own page: `deploy/flux/platform/operators/README.md`. The alternative
 is `helm install` once by hand per cluster, after which the version running in
 each is whatever it was installed with on a date nobody recorded; an operator
 that owns every database in the cluster is exactly the thing whose version

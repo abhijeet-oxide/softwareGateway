@@ -345,6 +345,16 @@ jobs:
           # renders here renders there. See deploy/build/Dockerfile.coordinator.
           version: v3.21.3
 
+      # For the Flux layers, which are Kustomize rather than Helm: the database,
+      # and the database operator in each of its scopes. The tests below skip
+      # themselves without it, so a missing binary would quietly stop checking
+      # the arrangement nobody uses in CI - which is the one that breaks.
+      - name: kustomize
+        run: |
+          curl -fsSL https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.7.1/kustomize_v5.7.1_linux_amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kustomize
+          kustomize version
+
       # config/ is copied into the chart because helm packages a directory and
       # .Files cannot reach outside it. Doing it here rather than committing the
       # copy is what keeps one config directory serving all three runtimes.
@@ -370,6 +380,23 @@ jobs:
             helm template swgw deploy/charts/software-gateway \
               --namespace "$ns" --values "/tmp/$env-values.yaml" > "/tmp/$env.yaml"
             echo "$env: $(grep -c '^kind:' "/tmp/$env.yaml") objects"
+          done
+
+      # The Flux layers are Kustomize, so `helm template` says nothing about
+      # them. Every arrangement is built - both operator scopes included, so
+      # the one this estate does not currently use cannot rot unnoticed.
+      - name: Build every Flux layer
+        run: |
+          set -euo pipefail
+          for d in deploy/environments/*/ deploy/environments/*/database deploy/environments/*/platform \
+                   deploy/flux/clusters/* \
+                   deploy/flux/platform/operators/cluster-scoped \
+                   deploy/flux/platform/operators/namespace-scoped/* \
+                   deploy/flux/platform/bootstrap/cluster-scoped \
+                   deploy/flux/platform/bootstrap/namespace-scoped/*; do
+            [ -f "$d/kustomization.yaml" ] || continue
+            n=$(kustomize build "$d" | grep -c '^kind:' || true)
+            echo "$d: $n objects"
           done
 
       # The compensation for there being no admission controller in front of a

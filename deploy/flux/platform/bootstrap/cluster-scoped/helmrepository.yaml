@@ -1,5 +1,11 @@
 # Operator charts, from the internal registry like everything else.
 #
+# BESIDE THE GitRepository, NOT IN THE OPERATORS LAYER. It is a SOURCE, and
+# sources live in flux-system whichever namespace the operator ends up in - the
+# operator's HelmRelease references it across namespaces by design. Keeping it
+# in the layer would put it through that layer's namespace transformer and land
+# it next to the operator, where the sourceRef would no longer find it.
+#
 # A cluster that pulls its application from Artifactory and its database
 # operator from the public internet is not an air-gapped deployment; it is one
 # that has not been tested without egress yet. Mirror the upstream chart into a

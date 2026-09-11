@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -546,11 +547,27 @@ func imageRefs(t *testing.T, env string, values []byte) []imageRef {
 		refs = append(refs, imageRef{where: "the chart", image: m[1]})
 	}
 
-	// The database and its operator, which are plain manifests in Flux layers.
-	for _, f := range []string{
-		filepath.Join(repoRoot, "deploy", "environments", env, "database", "cluster.yaml"),
-		filepath.Join(repoRoot, "deploy", "flux", "platform", "operators", "cloudnative-pg.yaml"),
-	} {
+	// The database and its operator, which are plain manifests in Flux layers
+	// rather than Helm. GLOBBED, not listed: a file moved between overlays must
+	// not quietly take its images out of this test's sight, which is exactly
+	// what a hardcoded path would have done the first time the operator was
+	// split into a base and two scopes.
+	var manifests []string
+	manifests = append(manifests, filepath.Join(repoRoot, "deploy", "environments", env, "database", "cluster.yaml"))
+	err = filepath.WalkDir(filepath.Join(repoRoot, "deploy", "flux", "platform"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(path, ".yaml") {
+			manifests = append(manifests, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk deploy/flux/platform: %v", err)
+	}
+
+	for _, f := range manifests {
 		b, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
@@ -574,3 +591,103 @@ var (
 	// chart's values - the two spellings the non-Helm manifests use.
 	manifestImage = regexp.MustCompile(`(?m)^\s+(?:imageName|repository):\s+(\S+/\S+)\s*$`)
 )
+
+// TestEveryOperatorScopeBuildsAndKeepsOneName guards the switch that decides
+// where the database operator runs.
+//
+// Two things have to hold, and neither is visible by reading one file.
+//
+// EVERY ARRANGEMENT MUST BUILD. The overlays differ by a namespace and a
+// patched value, which is exactly the kind of difference that rots: a field
+// renamed in the base, a patch path that no longer resolves, and the scope
+// nobody uses in CI is broken on the day somebody needs it.
+//
+// EVERY BOOTSTRAP MUST PRODUCE `platform-operators`. That name is what
+// deploy/environments/<env>/layers.yaml depends on. If a scope produced a
+// differently named Kustomization, choosing it would leave every environment
+// waiting on a dependency that will never exist - and waiting is exactly what
+// that arrangement is designed to do, so it would wait quietly and forever.
+func TestEveryOperatorScopeBuildsAndKeepsOneName(t *testing.T) {
+	kustomize, err := exec.LookPath("kustomize")
+	if err != nil {
+		t.Skip("kustomize is not on PATH; the chart job in CI covers this")
+	}
+
+	bootstraps, err := filepath.Glob(filepath.Join(repoRoot, "deploy", "flux", "platform", "bootstrap", "*", "kustomization.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested, err := filepath.Glob(filepath.Join(repoRoot, "deploy", "flux", "platform", "bootstrap", "*", "*", "kustomization.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstraps = append(bootstraps, nested...)
+	if len(bootstraps) < 2 {
+		t.Fatalf("found %d bootstrap arrangements; there should be one per scope", len(bootstraps))
+	}
+
+	for _, k := range bootstraps {
+		dir := filepath.Dir(k)
+		scope, _ := filepath.Rel(filepath.Join(repoRoot, "deploy", "flux", "platform", "bootstrap"), dir)
+		t.Run(filepath.ToSlash(scope), func(t *testing.T) {
+			out, err := exec.Command(kustomize, "build", dir).CombinedOutput()
+			if err != nil {
+				t.Fatalf("kustomize build %s: %v\n%s", scope, err, out)
+			}
+
+			var operatorLayer string
+			for _, raw := range strings.Split(string(out), "\n---\n") {
+				var doc map[string]any
+				if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+					continue
+				}
+				kind, _ := doc["kind"].(string)
+				if kind != "Kustomization" {
+					continue
+				}
+				name, _ := nested2(doc, "metadata", "name")
+				path, _ := nested2(doc, "spec", "path")
+				operatorLayer = path
+				if name != "platform-operators" {
+					t.Errorf("this arrangement creates a Kustomization named %q, not "+
+						"\"platform-operators\".\n"+
+						"\ndeploy/environments/<env>/layers.yaml depends on that exact name. A scope that\n"+
+						"produces a different one leaves every environment waiting on a dependency that\n"+
+						"will never exist - quietly, because waiting is what it is designed to do.\n", name)
+				}
+			}
+			if operatorLayer == "" {
+				t.Fatal("no Kustomization was produced, so this scope installs no operator at all")
+			}
+
+			// And the layer it points at must build too, with exactly one
+			// operator in it: the CRDs and admission webhooks are cluster-scoped
+			// singletons, so a second would fight the first over both.
+			layer := filepath.Join(repoRoot, filepath.FromSlash(strings.TrimPrefix(operatorLayer, "./")))
+			out, err = exec.Command(kustomize, "build", layer).CombinedOutput()
+			if err != nil {
+				t.Fatalf("kustomize build %s (named by %s): %v\n%s", operatorLayer, scope, err, out)
+			}
+			releases := 0
+			for _, raw := range strings.Split(string(out), "\n---\n") {
+				var doc map[string]any
+				if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+					continue
+				}
+				if kind, _ := doc["kind"].(string); kind == "HelmRelease" {
+					releases++
+				}
+			}
+			if releases != 1 {
+				t.Errorf("%s renders %d operator HelmReleases; there must be exactly one.\n"+
+					"\nCloudNativePG's CRDs and admission webhooks are cluster-scoped singletons. Two\n"+
+					"operators reconcile the same webhook configuration to point at themselves, and\n"+
+					"the loser's databases are admitted - or rejected - by the winner's webhook.\n",
+					operatorLayer, releases)
+			}
+		})
+	}
+}
+
+// nested2 is nested() for documents decoded by this file's own loop.
+func nested2(doc map[string]any, path ...string) (string, bool) { return nested(doc, path...) }

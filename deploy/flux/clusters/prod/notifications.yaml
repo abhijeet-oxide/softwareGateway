@@ -43,9 +43,14 @@ spec:
   # upgraded, healthy - so this is the running commentary of a deploy.
   eventSeverity: info
   eventSources:
-    # THE TWO ORDERED LAYERS, so the sequence is legible: the database layer
-    # reports Ready, then the platform layer begins. Somebody watching sees the
-    # dependency working rather than a gap followed by activity.
+    # THE WHOLE CHAIN, so the sequence is legible: the operator becomes ready,
+    # then the database layer, then the platform layer. Somebody watching sees
+    # the dependencies working rather than gaps followed by activity - and on a
+    # cluster where a bootstrap step was skipped, sees exactly which link never
+    # closed.
+    - kind: Kustomization
+      name: platform-operators
+      namespace: flux-system
     - kind: Kustomization
       name: software-gateway-prod-database
       namespace: flux-system
@@ -58,9 +63,15 @@ spec:
   # Health-check progress is emitted every few seconds while a rollout runs and
   # says nothing a person can act on. The events that matter - the upgrade
   # starting, finishing, or being rolled back - are not filtered.
+  #
+  # "dependencies do not meet ready condition" IS NOT EXCLUDED, and that is a
+  # correction rather than an oversight. It is the message a cluster emits when
+  # the operator layer was never applied, and excluding it made the one failure
+  # that waits forever the one failure nobody was told about. It repeats, which
+  # is the cost; a channel saying "waiting for platform-operators" every minute
+  # is how somebody works out that they skipped a bootstrap step.
   exclusionList:
     - "health check.*in progress"
-    - "dependencies do not meet ready condition"
   summary: "software-gateway (production)"
 ---
 apiVersion: notification.toolkit.fluxcd.io/v1beta3
@@ -83,8 +94,21 @@ spec:
     - kind: HelmRepository
       name: "*"
       namespace: flux-system
+    # NAMED, NOT GLOBBED. `software-gateway-prod-*` matched the two layers and
+    # missed the two objects most likely to be the actual cause: the root
+    # Kustomization, which is what times out when a layer never becomes ready,
+    # and the operator layer, without which the database layer waits forever.
     - kind: Kustomization
-      name: "software-gateway-prod-*"
+      name: software-gateway
+      namespace: flux-system
+    - kind: Kustomization
+      name: software-gateway-prod-database
+      namespace: flux-system
+    - kind: Kustomization
+      name: software-gateway-prod-platform
+      namespace: flux-system
+    - kind: Kustomization
+      name: platform-operators
       namespace: flux-system
     - kind: HelmRelease
       name: "*"

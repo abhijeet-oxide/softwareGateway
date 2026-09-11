@@ -205,9 +205,13 @@ Workers hold **no database credentials** - a direct consequence of HTTP leasing 
 
 ### 3.3 Database
 
-**External managed PostgreSQL is the recommendation** - Cloud SQL, RDS, Azure Database. Backups, failover, patching, and PITR are solved problems we should not re-solve, and this is the only stateful component in the system.
+> **This section recommended external managed PostgreSQL - Cloud SQL, RDS, Azure Database - on the grounds that backups, failover, patching and PITR are solved problems we should not re-solve. That recommendation was not taken, and [30 - Continuous delivery](30-continuous-delivery.md) §7.1 is what replaced it.**
 
-The in-cluster `StatefulSet` in `base/postgres/` exists for dev and evaluation. It is a single instance with a PVC and no automated failover, and the manifest says so in a comment so nobody promotes it to production by accident.
+**PostgreSQL runs in-cluster, in every environment, and there is no managed-database path in this repository.** The reasoning above was sound about the problem and wrong about the only way to solve it: CloudNativePG solves the same four things in-cluster, declaratively, and it is the operator's job to keep solving them rather than ours.
+
+What is deployed is a `Cluster` in `deploy/environments/<env>/database` - three instances with synchronous replication in production, two in lab, automatic failover in seconds, and rolling minor-version upgrades. It is **not** part of the application chart, for three reasons set out in [30](30-continuous-delivery.md) §5.3: `helm rollback` must not be able to reach it, it is upgraded on its own schedule, and its existing first is what lets the ZITADEL migration be a Helm pre-install hook.
+
+The one thing the managed option would still have given for free is backups, and that is honestly an open gap: `spec.backup` ships unset, with the shape of the answer in a comment and the target unchosen. A replicated cluster is not a backup - it replicates a `DROP TABLE` faithfully and immediately.
 
 ### 3.4 Network policy
 

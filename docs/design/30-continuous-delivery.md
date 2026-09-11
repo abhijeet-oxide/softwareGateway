@@ -27,6 +27,8 @@ So the requirement was not "add Kubernetes manifests". It was:
    with everything above that choice unaware of it.
 5. **Few secrets to hold.** Three values in GitHub, one credential in the
    cluster.
+6. **Ordered, quiet startup.** Nothing starts before what it needs, and a pod
+   that is waiting says so rather than crash-looping to find out.
 
 ## 2. The shape
 
@@ -34,10 +36,12 @@ So the requirement was not "add Kubernetes manifests". It was:
 config/                     CONTENT. products, users, roles, policies, and the
                             credential inventory. No values, ever.
 deploy/charts/              the chart. config/ is copied in at package time.
-deploy/environments/{lab,prod}/helmrelease.yaml
-                            WHAT IS DEPLOYED. One line per environment.
+deploy/environments/<env>/
+  layers.yaml               TWO Flux Kustomizations, and the order between them
+  database/cluster.yaml     LAYER 1 - the CloudNativePG Cluster
+  platform/helmrelease.yaml LAYER 2 - WHAT IS DEPLOYED. One line per environment.
 deploy/flux/clusters/{lab,prod}/
-                            how a cluster finds the two above.
+                            how a cluster finds the above.
 .github/workflows/cd.yml    build, publish, move the pointer. No cluster access.
 ```
 
@@ -169,12 +173,13 @@ independent:
 - **`config.yaml` plus a product.** The fleet rolls for `config.yaml`; the new
   product is in the ConfigMap the new pods mount and the old ones are already
   watching. Both are correct at every instant.
-- **A fresh install.** Everything is applied at once. Postgres comes up, the
-  ZITADEL setup Job migrates, ZITADEL crash-loops until it has, the seeding Job
-  waits for ZITADEL and then provisions, and the workers start immediately and
-  lease nothing until they have credentials and products
-  ([27](27-configuration-as-data.md) §6). Nothing here needs an ordering
-  primitive Kubernetes does not have.
+- **A fresh install.** Nothing is applied at once, and nothing crash-loops.
+  Flux brings the database layer to Ready; only then does it apply the release.
+  Helm runs the ZITADEL migration as a pre-install hook and waits for it, so the
+  first ZITADEL pod is created against a schema that already exists. Every
+  other workload waits in an init container for what it needs. The whole
+  sequence is visible as pods moving from `Init:0/1` to `Running`, in order,
+  with a restart count of zero. See §5.3.
 
 ### 5.2 The one thing that is not instant
 
@@ -184,6 +189,67 @@ somebody stops the renewal; `identity.tokenLifetimes.accessToken` (15m) is the
 window. That is a property of offline verification, not of this pipeline, and
 the alternative - an introspection call per request - is a dependency on the
 identity provider in the hot path of every API call.
+
+### 5.3 Ordered startup, and why nothing crash-loops
+
+Kubernetes has no `depends_on`, and the usual substitute is to let a pod start,
+fail, and be restarted until its dependency appears. That is rejected here, for
+a reason that is about people rather than machines: **a pod in CrashLoopBackOff
+looks identical whether it is waiting for its database or is genuinely broken.**
+Accept it as normal during a deployment and you have trained everybody to ignore
+the one pod state that should never be ignored, and made a restart count mean
+nothing.
+
+Ordering is therefore explicit, at three levels, and each one covers what the
+one below it cannot:
+
+**Between layers - Flux `dependsOn`.** `software-gateway-<env>-platform`
+declares `dependsOn: [software-gateway-<env>-database]`, and both carry
+`wait: true`. Flux holds the platform layer entirely until the CloudNativePG
+Cluster reports Ready - initdb finished, instances joined, a primary elected.
+This is `depends_on`, at the level where GitOps has it.
+
+**Inside the release - Helm hooks.** The ZITADEL migration is a
+`pre-install,pre-upgrade` hook at weight -10, with its RBAC at -20. Helm applies
+hooks, waits for them to complete, and only then creates the release's own
+objects. So the schema is migrated **before the first ZITADEL pod exists**,
+rather than after it has failed a few times.
+
+This is only possible because the database is in an earlier layer. A pre-install
+hook in a chart that also deploys its own database deadlocks on a fresh install:
+the hook waits for a Postgres that Helm has not created yet. That is the third
+reason the database is not in the chart, alongside keeping `helm rollback` away
+from it and letting it be upgraded on its own schedule.
+
+**Inside a pod - `wait-for-*` init containers.** What is left is the ordering
+Helm cannot express, because it is between objects in one release:
+
+| workload | waits for | hard? |
+|---|---|---|
+| coordinator | the database | hard - it migrates a schema at startup |
+| zitadel | the database | hard - covers a failover in progress |
+| zitadel-login | ZITADEL, then the seeder's service-user token | hard - it reads the token from a file and **exits** if absent |
+| zitadel-proxy | ZITADEL, then the sign-in screens | hard, then soft |
+| web | the coordinator, then the SPA's OIDC client id | **soft** |
+| worker | the coordinator | **soft** |
+| seed Job | ZITADEL | hard |
+| cerbos | nothing | it talks to nothing |
+
+A waiting pod sits in `Init:0/1` and logs one line naming what it is waiting
+for. Its application container has not run, so its restart count stays zero and
+keeps meaning something.
+
+**Soft where the container is useful without its dependency**, and that is not a
+weakening. The web tier renders the page that explains an outage, so it must come
+up during one; a worker is designed to start, report DEGRADED and lease nothing
+([27](27-configuration-as-data.md) §6), because the data plane must not depend on
+the control plane being up first. A soft wait orders a first install and then
+gives up and starts, which is what those two rules ask for.
+
+**`go test ./deploy/...` asserts the whole table.** A workload whose waits change
+fails `TestEveryDependencyIsWaitedFor` by name, and a Postgres put back into the
+chart fails `TestTheDatabaseIsNotInTheChart` - which would otherwise turn ordered
+startup into a first-install deadlock silently.
 
 ## 6. Rolling out without dropping a request
 
@@ -244,6 +310,29 @@ it**: add a column, do not rename one; write to both while a read moves; drop
 only in a later release. This is the ordinary expand-and-contract rule and it is
 not new here - `maxUnavailable: 0` makes it load-bearing rather than merely
 good practice, because the overlap is guaranteed rather than incidental.
+
+### 7.1 The database
+
+**PostgreSQL runs in-cluster, in every environment. There is no managed-database
+path anywhere in this repository**, and CloudNativePG is what makes that a
+defensible position rather than a liability: three instances in production with
+synchronous replication, automatic failover in seconds, and rolling minor
+upgrades. Two in lab - the smallest number that can demonstrate a failover,
+which is most of what a lab is for.
+
+The operator generates the owner's password and publishes it as `swgw-db-app`.
+So it exists in exactly one place, in no values file and no commit, and there is
+nothing to rotate by hand. The chart reads two keys out of it and lets the
+kubelet assemble the DSN with `$(VAR)` substitution - which keeps the password
+out of every manifest without putting a shell into a distroless image to build a
+URL.
+
+> **Backups are not configured.** A replicated cluster protects against losing an
+> instance, not against losing the data: a `DROP TABLE` is replicated faithfully
+> and immediately. `spec.backup` in `deploy/environments/<env>/database/cluster.yaml`
+> is where continuous WAL archiving goes, with the shape of the answer in a
+> comment and the target deliberately unchosen. **This is the one gap to close
+> before the cluster holds data anybody would miss.**
 
 ## 8. Credentials
 
@@ -379,7 +468,7 @@ publishes nothing, which is correct: the version being pinned to already exists.
 ## 13. Files
 
 - [`deploy/charts/software-gateway/`](../../deploy/charts/software-gateway/) - the chart, and its README
-- [`deploy/environments/`](../../deploy/environments/) - what is deployed where
+- [`deploy/environments/`](../../deploy/environments/) - the two ordered layers, per environment
 - [`deploy/flux/`](../../deploy/flux/) - bootstrapping a cluster
 - [`deploy/chartstage/`](../../deploy/chartstage/) - the copy, and the environment values
 - [`deploy/secretsinv/`](../../deploy/secretsinv/) - the inventory, shared by the chart, the scaffold and the test

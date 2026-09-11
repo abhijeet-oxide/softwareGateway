@@ -12,6 +12,18 @@ clusters/
          kustomization.yaml  -> ./deploy/environments/prod
 ```
 
+Each of those directories creates **two more** Kustomizations, and the second
+`dependsOn` the first:
+
+```
+software-gateway-<env>-database    the CloudNativePG Cluster       wait: true
+software-gateway-<env>-platform    the Helm release  dependsOn ^   wait: true
+```
+
+Flux will not apply the platform layer until the database reports Ready. That
+is `depends_on`, and it is why nothing in this deployment ever starts against a
+database that is not there.
+
 **The branch is the environment.** `lab` deploys to the lab namespace, `main`
 to production. Promotion is therefore the pull request that merges one into the
 other - the thing the team already reviews - rather than a second mechanism
@@ -49,12 +61,32 @@ flux create secret oci jfrog \
 kubectl apply -k deploy/flux/clusters/lab      # or clusters/prod
 ```
 
-### The credential operator
+### Two operators, both cluster prerequisites
 
-The chart renders `VaultStaticSecret` or `SecretProviderClass` objects from
-`config/secrets/secrets.yaml`; the operator that acts on them is a cluster
-prerequisite and is not installed by this chart - a chart that installs its own
-secrets operator is a chart that has to hold a Vault token.
+Neither is installed by this repository. An application chart that installs its
+own secrets operator has to hold a Vault token; one that installs its own
+database operator owns every other database in the cluster.
+
+**CloudNativePG**, which runs the database:
+
+```sh
+helm install cnpg cloudnative-pg/cloudnative-pg \
+  --namespace cnpg-system --create-namespace
+```
+
+There is no managed-database option anywhere in this repository. PostgreSQL runs
+in-cluster in every environment, with replication and automatic failover, and
+`deploy/environments/<env>/database/cluster.yaml` is the whole description of it.
+
+> **Backups are not configured, and that is the one gap to close before this
+> holds data anybody would miss.** A CloudNativePG cluster replicates, which
+> protects against losing an instance and not against losing the data: a
+> `DROP TABLE` is replicated faithfully and immediately. `spec.backup` in that
+> file is where continuous WAL archiving goes, and it ships unset with the
+> shape of the answer in a comment.
+
+**The credential operator**, which turns `config/secrets/secrets.yaml` into
+Secrets:
 
 ```sh
 # HashiCorp Vault Secrets Operator (secrets.backend: vault)
@@ -75,11 +107,26 @@ same names and keys, so the choice is invisible above `secrets.backend`.
 ## Watching a deployment
 
 ```sh
-flux -n flux-system get kustomizations software-gateway
+# The layers, in order. The platform one reads "dependency not ready" until the
+# database one is Ready - which is the ordering working, not a fault.
+flux -n flux-system get kustomizations
+
+kubectl -n swgw get cluster.postgresql.cnpg.io    # instances, and which is primary
 flux -n swgw get helmreleases
-flux -n swgw events --for HelmRelease/software-gateway
-kubectl -n swgw rollout status deploy/swgw-software-gateway-coordinator
+kubectl -n swgw get pods
 ```
+
+**A pod in `Init:0/1` is waiting, not failing.** Every workload has a
+`wait-for-<dependency>` init container, so ordered startup is visible as pods
+that have not begun rather than pods that are crashing:
+
+```sh
+kubectl -n swgw logs <pod> -c wait-for-database
+#   waiting for database at swgw-db-rw:5432
+```
+
+A restart count above zero in this deployment means something actually went
+wrong, which is the whole reason the waits exist.
 
 ## When a release goes wrong
 

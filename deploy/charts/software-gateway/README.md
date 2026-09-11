@@ -5,16 +5,51 @@ decision point, and the identity provider with its sign-in screens and front
 door. It is the same software `docker compose up` runs, reading the same
 `config/` directory, with the same file at the same paths.
 
+## This chart does not deploy a database
+
+Deliberately, and it is the first thing to know about installing it. Three
+things follow from the database being applied first, by something else:
+
+- **`helm rollback` cannot reach it.** Rolling an application back a version is
+  routine; rolling a database back is data loss.
+- **The ZITADEL migration is a Helm pre-install hook.** Helm waits for a hook
+  before creating any pod, so no pod is ever created against an unmigrated
+  schema. A chart that deployed its own database could not do that - the hook
+  would wait for a Postgres Helm had not created yet.
+- **It is upgraded on its own schedule**, by somebody who meant to.
+
+Create one first. CloudNativePG is what the GitOps path uses, and this is the
+whole of it:
+
+```sh
+kubectl apply -n swgw -f - <<'YAML'
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata: {name: swgw-db}
+spec:
+  instances: 3
+  storage: {size: 100Gi}
+  walStorage: {size: 20Gi}
+  bootstrap:
+    initdb:
+      database: swgw
+      owner: swgw
+      postInitSQL: ["CREATE DATABASE zitadel OWNER swgw"]
+YAML
+```
+
+The operator generates the owner's password and publishes the connection as
+`swgw-db-app`, which is the Secret this chart reads. It is in no values file and
+no commit, and there is nothing to rotate by hand.
+
 ## The shortest install that works
 
-Three values have no safe default and the chart refuses to render without them.
-That is deliberate: a generated password that nothing stores is a database
-nobody can open after the next `helm upgrade`.
+Two values have no safe default and the chart refuses to render without them: a
+ZITADEL masterkey nobody kept is a database nobody can decrypt.
 
 ```sh
 helm install swgw oci://artifactory.internal.example.com/swgw/software-gateway \
   --version 1.4.3 --namespace swgw --create-namespace \
-  --set postgresql.password.value="$(openssl rand -base64 24)" \
   --set identity.masterkey.value="$(openssl rand -hex 16)" \
   --set identity.rootPassword.value="$(openssl rand -base64 18)" \
   --set identity.bootstrapAdmin.password='Passw0rd!'
@@ -50,13 +85,12 @@ image:
   registry: artifactory.internal.example.com
   repository: swgw
 
-# Managed PostgreSQL. The bundled StatefulSet is one instance with no failover
-# and no backups; this is the only stateful component in the system.
-postgresql:
-  enabled: false
-  external:
-    enabled: true
-    existingSecret: swgw-postgres     # keys: dsn, host, port, user, password, sslmode, database
+# The database, which this chart does not deploy. CloudNativePG publishes the
+# connection as `<cluster>-app`; `host` is its read-write endpoint, which
+# follows the primary through a failover.
+database:
+  existingSecret: swgw-db-app
+  host: swgw-db-rw
 
 secrets:
   backend: vault                      # or `azure`, or `none`
@@ -84,9 +118,28 @@ identity:
 | `worker` | the data plane | Deployment, headless Service, optional HPA |
 | `web` | the SPA, and the API on the same origin | Deployment, Service `web` |
 | `cerbos` | the policy decision point | Deployment, Service `cerbos` |
-| `zitadel` + `zitadel-login` + `zitadel-proxy` | the identity provider, its sign-in screens, and the one origin they share | three Deployments, a setup Job |
-| `postgres` | evaluation and lab only | StatefulSet, one PVC |
+| `zitadel` + `zitadel-login` + `zitadel-proxy` | the identity provider, its sign-in screens, and the one origin they share | three Deployments, plus a migration hook |
 | the seeding Job | people, roles, projects, grants | a Job, when identity input changes |
+
+## Nothing crash-loops
+
+Every workload has a `wait-for-<dependency>` init container. A pod that is not
+yet able to start sits in `Init:0/1` and logs what it is waiting for:
+
+```
+$ kubectl -n swgw logs swgw-coordinator-xxx -c wait-for-database
+waiting for database at swgw-db-rw:5432
+```
+
+Its application container has not run, so **a restart count above zero in this
+release means something actually went wrong**. That is the point of it: a pod in
+CrashLoopBackOff looks the same whether it is waiting for its database or is
+genuinely broken, and treating that as normal during a deployment trains
+everybody to ignore the one state that should never be ignored.
+
+The waits are soft where the container is useful without its dependency - the
+web tier renders the page that explains an outage, so it must come up during
+one - and hard where it is not.
 
 **Service names are not release-prefixed**, so **one release per namespace**.
 `deploy/web/nginx.conf` proxies to `controller:8080` and
@@ -116,6 +169,10 @@ capacity away.
 **Migrations must be backwards compatible with the previous release.** Both
 binaries run against one database during every rollout. Add a column, do not
 rename one; drop only in a later release.
+
+ZITADEL's own migration is different and is handled: it runs as a pre-install
+hook that Helm waits for, so its new schema is in place before any new ZITADEL
+pod is created.
 
 ## Credentials
 
@@ -158,6 +215,8 @@ directory, so a checkout needs one step first:
 task chart:stage
 helm install swgw deploy/charts/software-gateway --values my-values.yaml
 ```
+
+(And create the database first - see the top of this file.)
 
 A chart pulled from the registry is already staged and needs nothing.
 

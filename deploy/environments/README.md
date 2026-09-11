@@ -1,14 +1,40 @@
 # environments/ - what is deployed, where, and at which version
 
-One file per environment, and it is the whole deployment record:
+Two layers per environment, applied in that order:
 
 ```
-lab/helmrelease.yaml     namespace swgw-lab,  from branch `lab`
-prod/helmrelease.yaml    namespace swgw,      from branch `main`
+<env>/
+  namespace.yaml            the namespace, with Pod Security labels
+  layers.yaml               TWO Flux Kustomizations, and the order between them
+  database/cluster.yaml     LAYER 1 - the CloudNativePG Cluster
+  platform/helmrelease.yaml LAYER 2 - everything else, as one Helm release
 ```
 
-`git log -p deploy/environments/prod/helmrelease.yaml` is the production
-deployment history. Every line of it was written either by a person in a pull
+`lab/` deploys from branch `lab` into `swgw-lab`; `prod/` from `main` into
+`swgw`.
+
+## The order, and why it is real
+
+`layers.yaml` declares `software-gateway-<env>-platform` with
+`dependsOn: [software-gateway-<env>-database]`, and both carry `wait: true`.
+
+That is not "applied in sequence" - it is docker-compose's `depends_on`. Flux
+holds the platform layer entirely until the database layer reports **Ready**,
+which for a CloudNativePG Cluster means initdb finished, the instances joined,
+and a primary was elected. Only then is the HelmRelease applied at all.
+
+Two things follow from the database being first, and they are the reason it is
+not in the chart:
+
+- **`helm rollback` cannot reach it.** Rolling an application back a version is
+  routine; rolling a database back is data loss.
+- **The ZITADEL migration can be a Helm pre-install hook.** Helm waits for a
+  hook before creating any pod, so no pod is ever created against an unmigrated
+  schema. A chart that also deployed its own database could not do this - the
+  hook would wait for a Postgres Helm had not created yet.
+
+`git log -p deploy/environments/prod/platform/helmrelease.yaml` is the
+production deployment history. Every line of it was written either by a person in a pull
 request or by the release pipeline moving `spec.chart.spec.version`, and there
 is nothing else to correlate.
 
@@ -29,6 +55,10 @@ what an environment is.
 
 ## What is NOT here
 
+**The database's password.** CloudNativePG generates it and publishes the
+connection as `swgw-db-app`. It is in no values file, no commit and nobody's
+password manager, and there is nothing to rotate by hand.
+
 **Secrets.** Not one value. Everything credential-shaped is a reference to a
 Secret produced in-cluster from `config/secrets/secrets.yaml` by the Vault
 Secrets Operator or the Azure Key Vault CSI driver - see the chart's
@@ -46,9 +76,10 @@ of the shared one.
 | you want to | change |
 |---|---|
 | deploy a new release | nothing - the pipeline moves `version` on merge |
-| pin or roll back | `spec.chart.spec.version`, in a pull request |
-| stop automatic deploys | `spec.suspend: true` |
+| pin or roll back | `platform/helmrelease.yaml`, `spec.chart.spec.version` |
+| stop automatic deploys | `spec.suspend: true` on the HelmRelease |
 | scale, resize, retarget | the value under `spec.values` |
+| resize the database, change its replica count | `database/cluster.yaml` |
 
 A rollback is a pull request that sets `version` back. It is reviewed, it is in
 the history, and it takes the same path as a deploy - which is what makes it

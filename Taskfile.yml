@@ -483,8 +483,8 @@ tasks:
   chart:template:
     desc: Render the chart as one environment really deploys it
     summary: |
-      task chart:template            the lab environment
-      task chart:template -- prod    production
+      task chart:template            the nprd environment
+      task chart:template -- nprd    nprd
 
       Renders deploy/charts/software-gateway with the values in that
       environment's HelmRelease - the same file Flux reads - so a template
@@ -492,7 +492,7 @@ tasks:
       cluster.
     deps: [chart:stage]
     vars:
-      ENV: '{{default "lab" .CLI_ARGS}}'
+      ENV: '{{default "nprd" .CLI_ARGS}}'
     cmds:
       - go run ./deploy/chartstage/cmd/chartstage -values {{.ENV}} > .task-values.yaml
       - >-

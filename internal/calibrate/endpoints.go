@@ -113,7 +113,7 @@ func (c *Calibrator) resolveTarget(p *product.Product, opts Options) (endpoint, 
 //
 // It is `base + source path`, exactly what the planner computes for a real
 // job - not the target's configured repository, which is a PREFIX. That
-// distinction cost a run: probing `apm0014228-oci-stage` directly returned
+// distinction cost a run: probing `artifacts-oci-stage` directly returned
 //
 //	404 Not Found: not found
 //

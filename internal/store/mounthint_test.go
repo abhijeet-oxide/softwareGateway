@@ -23,10 +23,10 @@ import (
 func TestAStalePlacementIsStillWorthMountingFrom(t *testing.T) {
 	h := newMountHarness(t)
 
-	sibling := h.repo("target", "apm0014228-oci-stage/orbs/cfx-5000-product/nokia-ims-sas")
+	sibling := h.repo("target", "artifacts-oci-stage/orbs/cfx-5000-product/nokia-ims-sas")
 	// The new release's own repository: a different path, because the release
 	// identifier is IN the path. Nothing was ever placed here.
-	fresh := h.repo("target", "apm0014228-oci-stage/orbs/cfx-5000-k8s-25.8-9999-ncm")
+	fresh := h.repo("target", "artifacts-oci-stage/orbs/cfx-5000-k8s-25.8-9999-ncm")
 
 	digest := "sha256:" + strings.Repeat("a", 64)
 	h.place(sibling, digest)
@@ -63,8 +63,8 @@ func TestAStalePlacementIsStillWorthMountingFrom(t *testing.T) {
 func TestAMountCandidateStaysWithinOneRegistryAndProduct(t *testing.T) {
 	h := newMountHarness(t)
 
-	target := h.repo("target", "apm0014228-oci-stage/orbs/thing")
-	elsewhere := h.repoOn("target", "other-registry.example.com", "apm0014228-oci-stage/orbs/thing")
+	target := h.repo("target", "artifacts-oci-stage/orbs/thing")
+	elsewhere := h.repoOn("target", "other-registry.example.com", "artifacts-oci-stage/orbs/thing")
 
 	digest := "sha256:" + strings.Repeat("b", 64)
 	h.place(elsewhere, digest)
@@ -102,7 +102,7 @@ func newMountHarness(t *testing.T) *mountHarness {
 
 func (h *mountHarness) repo(role, path string) int64 {
 	h.t.Helper()
-	return h.repoOn(role, "artifact.it.att.com", path)
+	return h.repoOn(role, "artifact.it.example.com", path)
 }
 
 func (h *mountHarness) repoOn(role, host, path string) int64 {

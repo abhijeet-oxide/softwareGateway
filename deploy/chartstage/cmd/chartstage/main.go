@@ -9,8 +9,8 @@
 // It also prints one environment's Helm values, which is the other thing both
 // a developer and the pipeline need and neither should reimplement:
 //
-//	go run ./deploy/chartstage/cmd/chartstage -values prod
-//	task chart:template -- prod
+//	go run ./deploy/chartstage/cmd/chartstage -values nprd
+//	task chart:template -- nprd
 //
 // The staged tree is not committed. See the package comment for why the copy
 // exists at all, and deploy/deploy_test.go for the test that catches a stale one.
@@ -35,7 +35,10 @@ func main() {
 			fmt.Fprintln(os.Stderr, "chartstage:", err)
 			os.Exit(1)
 		}
-		os.Stdout.Write(b)
+		if _, err := os.Stdout.Write(b); err != nil {
+			fmt.Fprintln(os.Stderr, "chartstage:", err)
+			os.Exit(1)
+		}
 		return
 	}
 

@@ -4,7 +4,7 @@
 >
 > **Product name in the UI:** *Software Gateway*.
 >
-> **Authoritative on structure, language and layout:** this file, derived from the reviewed AT&T reference design. **Authoritative on what the system can actually do:** [19 - User Interface](../design/19-user-interface.md) (gates and constraints), [18 - Quay Replication Strategies](../design/18-quay-replication.md) (what a Quay destination does), [09 - API](../design/09-api.md) (where every number comes from).
+> **Authoritative on structure, language and layout:** this file, derived from the reviewed Company reference design. **Authoritative on what the system can actually do:** [19 - User Interface](../design/19-user-interface.md) (gates and constraints), [18 - Quay Replication Strategies](../design/18-quay-replication.md) (what a Quay destination does), [09 - API](../design/09-api.md) (where every number comes from).
 >
 > Ask for one page at a time, in order, and for each page ask for the **populated**, **empty**, **in-progress** and **error** state. The happy path is the one state that teaches you nothing.
 
@@ -23,7 +23,7 @@ A vendor (Nokia, for example) publishes a release - SBC 25.8.1 - as a set of con
 5. **Compares** - any two versions or locations, down to the file diff.
 6. **Promotes** - moves an approved release to production.
 
-The user is a **Product Owner** at AT&T. They think in releases and products, not in blobs, queues or registries.
+The user is a **Product Owner** at Company. They think in releases and products, not in blobs, queues or registries.
 
 **The lifecycle every screen must make obvious:**
 
@@ -35,7 +35,7 @@ Discover → Review → Verify → Download & Replicate → Compare → Promote
 
 ## 2. Design language
 
-- **AT&T enterprise visual language.** AT&T blue as the primary colour. Dark navy sidebar and header areas. White and light-grey content surfaces. Blue for primary actions. Green for success, verified, completed. Red for errors and verification failures. Amber for warnings. Purple sparingly, for lifecycle-state differentiation only.
+- **Company enterprise visual language.** Company blue as the primary colour. Dark navy sidebar and header areas. White and light-grey content surfaces. Blue for primary actions. Green for success, verified, completed. Red for errors and verification failures. Amber for warnings. Purple sparingly, for lifecycle-state differentiation only.
 - **Mature internal operations product, not a generic SaaS dashboard.** Compact spacing, clear hierarchy, subtle borders, restrained rounded corners, clean enterprise typography. Nothing playful, no gradients, no illustration-led empty states.
 - **Light theme is the default and the one to design first.** A dark theme may follow; it is not part of this exercise.
 - **Full-width desktop.** 1440 × 900 baseline, and important pages use the full available height rather than floating a narrow column in the middle. Responsive down to 1280 px.

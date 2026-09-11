@@ -433,7 +433,7 @@ $ transferctl compare cfx-5000-product 25.7_mp2604_2131 --to att-stage
 cfx-5000-product
 
   A  near         orbs/cfx-5000-k8s:orb_25.7_mp2604_2131
-  B  att-stage    apm0014228-oci-stage/orbs/cfx-5000-k8s:orb_25.7_mp2604_2131
+  B  att-stage    artifacts-oci-stage/orbs/cfx-5000-k8s:orb_25.7_mp2604_2131
 
     TYPE    COMPONENT                          A                               B
 -   image   cfx-5000-product/lms               1.25.212  sha256:438001f263ab   absent
@@ -662,13 +662,13 @@ $ transferctl transfers failures 28161ab
   push manifest <digest> <repository>: HTTP 400: manifest invalid: schema version 2
   with media type application/vnd.oci.image.index.v1+json is not supported
     18 jobs failed, 22 retrying · manifest · wave 1 · unsupported
-    e.g. sha256:1626c8c6f662 → apm0014228-oci-stage/orbs/cfx-5000-k8s/nokia-ims-mtcm
+    e.g. sha256:1626c8c6f662 → artifacts-oci-stage/orbs/cfx-5000-k8s/nokia-ims-mtcm
     Not retryable: the registry rejects this content every time. Retrying will not
     change the answer - the destination or the artifact has to.
 
   push manifest <digest>: HTTP 504: gateway timeout
     3 jobs retrying · manifest · waves 1, 2 · timeout
-    e.g. sha256:9a34ff012963 → apm0014228-oci-stage/orbs/cfx-5000-product/vnfmpartner
+    e.g. sha256:9a34ff012963 → artifacts-oci-stage/orbs/cfx-5000-product/vnfmpartner
     Retrying on its own. If it does not recover, the network path is the thing to
     look at - `transferctl calibrate` measures it.
 
@@ -878,8 +878,8 @@ Calibrate cfx-5000-product
   source        cfx-near  cfx-5000-product-orb-docker.swdp-us.support.nokia.com
     repository  cfx-5000-product/admin
                 holds the largest discovered package (63.7 GiB); 41 other(s) not measured
-  target        cfx-jfrog-lab  artifact.it.att.com
-    writes to   apm0014228-oci-stage/…
+  target        cfx-jfrog-lab  artifact.it.example.com
+    writes to   artifacts-oci-stage/…
   sweep         1, 2, 4, 8, 16 streams, 5s each
   write probe   on: real bytes, in an upload session that is cancelled, never committed
   estimated     1m10s

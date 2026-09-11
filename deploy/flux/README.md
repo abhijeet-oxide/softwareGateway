@@ -6,10 +6,8 @@ neither of them says anything about what the application IS.
 
 ```
 clusters/
-  lab/   source.yaml  GitRepository (branch `lab`)  + HelmRepository (JFrog)
-         kustomization.yaml  -> ./deploy/environments/lab
-  prod/  source.yaml  GitRepository (branch `main`) + HelmRepository (JFrog)
-         kustomization.yaml  -> ./deploy/environments/prod
+  nprd/  source.yaml  GitRepository (branch `main`) + HelmRepository (JFrog)
+    kustomization.yaml  -> ./deploy/environments/nprd
 ```
 
 Each of those directories creates **two more** Kustomizations, and the second
@@ -24,10 +22,9 @@ Flux will not apply the platform layer until the database reports Ready. That
 is `depends_on`, and it is why nothing in this deployment ever starts against a
 database that is not there.
 
-**The branch is the environment.** `lab` deploys to the lab namespace, `main`
-to production. Promotion is therefore the pull request that merges one into the
-other - the thing the team already reviews - rather than a second mechanism
-that has to be kept honest.
+Deployments reconcile from `main`. Promotion is the pull request that changes
+the deployment artifacts in that branch - the thing the team already reviews -
+rather than a second mechanism that has to be kept honest.
 
 Same cluster or two clusters: the manifests do not care. Two namespaces in one
 cluster works because every name in the chart is namespaced and the two
@@ -201,7 +198,7 @@ What is left for a person is deciding whether to go forward or stay put:
 
 ```sh
 # stay put: pin the version in Git, so Flux stops trying
-#   deploy/environments/prod/helmrelease.yaml -> spec.chart.spec.version
+#   deploy/environments/nprd/platform/helmrelease.yaml -> spec.chart.spec.version
 # go back further: set it to any version in the registry, in a pull request
 
 # stop deploying entirely, right now

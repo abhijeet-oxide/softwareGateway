@@ -106,7 +106,7 @@ func TestTheListSaysWhereEachTransferGoes(t *testing.T) {
 		id: "9bc63dc2-1111-2222-3333-444444444444", state: "RUNNING",
 		sourceName: "near", targetName: "att-stage",
 		source:  "cfx-5000-product-orb-docker.swdp-us.support.nokia.com/orbs/cfx-5000-k8s",
-		target:  "artifact.it.att.com/apm0014228-oci-stage",
+		target:  "artifact.it.example.com/artifacts-oci-stage",
 		planned: "1024", transferred: "0", saved: "0",
 	})
 

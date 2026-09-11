@@ -26,7 +26,7 @@ func TestXrayIsEnabledDefaultsOff(t *testing.T) {
 // the one that goes stale.
 func TestXrayRepositoryKeyIsDerived(t *testing.T) {
 	for in, want := range map[string]string{
-		"apm0014228-oci-stage":           "apm0014228-oci-stage",
+		"artifacts-oci-stage":            "artifacts-oci-stage",
 		"docker-local/vendor-a/platform": "docker-local",
 		"/docker-local/vendor-a":         "docker-local",
 		"docker-local/":                  "docker-local",

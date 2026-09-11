@@ -52,7 +52,7 @@ spec:
       # PINNED, and moved by a person. A range here would let an operator
       # upgrade - which can trigger a rolling restart of every PostgreSQL
       # instance in the cluster - happen because a mirror synced overnight.
-      version: 0.26.0
+      version: 0.27.1
       sourceRef:
         kind: HelmRepository
         name: internal-charts
@@ -88,6 +88,8 @@ spec:
     # The operator's own image, through the same mirror as everything else.
     image:
       repository: artifactory.internal.example.com/docker/cloudnative-pg/cloudnative-pg
+      imagePullSecrets:
+      - name: artifactory-secret
     replicaCount: 1
     # WHERE IT WATCHES is set by the overlay, not here - see the two beside
     # this directory. It is the one thing that differs between them.

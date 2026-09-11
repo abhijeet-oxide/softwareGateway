@@ -138,7 +138,7 @@ func TestARowIsFittedByShorteningWhatCanBeShortened(t *testing.T) {
 		{
 			"9bc63dc2",
 			"cfx-near/orbs/cfx-5000-k8s-215952-edgenac-25.7-2131_20260807-wnv5a0cscf0003c-ncm",
-			"artifact.it.att.com/apm0014228-oci-stage/orbs/cfx-5000-k8s-215952-edgenac",
+			"artifact.it.example.com/artifacts-oci-stage/orbs/cfx-5000-k8s-215952-edgenac",
 			"100%",
 		},
 	}
@@ -187,7 +187,7 @@ func TestTheListingItselfLeavesARedirectedRowWhole(t *testing.T) {
 	resp := listWith(transferFixture{
 		id: "9bc63dc2-1111-2222-3333-444444444444", state: "RUNNING",
 		source: "cfx-near/orbs/cfx-5000-k8s-215952-edgenac-25.7-2131_20260807-wnv5a0cscf0003c-ncm",
-		target: "artifact.it.att.com/apm0014228-oci-stage",
+		target: "artifact.it.example.com/artifacts-oci-stage",
 	})
 
 	var buf bytes.Buffer

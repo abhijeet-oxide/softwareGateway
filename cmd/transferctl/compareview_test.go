@@ -181,7 +181,7 @@ func mixedReport() *v1.CompareResponse {
 		},
 		B: v1.CompareEnd{
 			Label:     "att-stage",
-			Reference: "apm0014228-oci-stage/orbs/cfx-5000-k8s:orb_25.7_mp2604_2131",
+			Reference: "artifacts-oci-stage/orbs/cfx-5000-k8s:orb_25.7_mp2604_2131",
 		},
 		Rows: []v1.CompareRow{
 			{

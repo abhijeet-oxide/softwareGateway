@@ -26,7 +26,7 @@ import { CompareSelectionBar } from '../components/compareselect'
 import {
   COMPARISON_PRODUCT_FILTER, pickOf, samePick, useComparisonSelection,
 } from '../domain/compare'
-import { Icon, NokiaNIcon, PackageIcon } from '../components/icons'
+import { NokiaNIcon } from '../components/icons'
 import { VulnerabilityCell } from '../components/security'
 import { PromoteButton } from '../components/promote'
 import { c } from '../uikit'
@@ -1025,7 +1025,7 @@ export default function Packages() {
                   so narrowing it shortens the name instead of making the row
                   two lines taller.
                 */
-                width: 300,
+                width: 500,
                 render: (_, r) => (
                   <Link
                     to={releaseHref(r.product.productId, r.pkg)}
@@ -1118,7 +1118,7 @@ export default function Packages() {
                   every column at once, so there is nothing left to hoist.
                 */
                 title: 'Vulnerabilities',
-                width: 240,
+                width: 500,
                 render: (_, r) => (
                   <RowVulnerability
                     product={r.product.productId}

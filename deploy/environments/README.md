@@ -10,8 +10,7 @@ Two layers per environment, applied in that order:
   platform/helmrelease.yaml LAYER 2 - everything else, as one Helm release
 ```
 
-`lab/` deploys from branch `lab` into `swgw-lab`; `prod/` from `main` into
-`swgw`.
+`nprd/` deploys from branch `main` into `swgw`.
 
 ## The order, and why it is real
 
@@ -33,8 +32,8 @@ not in the chart:
   schema. A chart that also deployed its own database could not do this - the
   hook would wait for a Postgres Helm had not created yet.
 
-`git log -p deploy/environments/prod/platform/helmrelease.yaml` is the
-production deployment history. Every line of it was written either by a person in a pull
+`git log -p deploy/environments/nprd/platform/helmrelease.yaml` is the
+nprd deployment history. Every line of it was written either by a person in a pull
 request or by the release pipeline moving `spec.chart.spec.version`, and there
 is nothing else to correlate.
 

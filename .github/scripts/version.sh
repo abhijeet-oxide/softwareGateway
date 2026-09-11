@@ -49,11 +49,28 @@ RUN="${GITHUB_RUN_NUMBER:-0}"
 # triggering rebuilds; forgetting one is how a code change ships inside an old
 # image, so deploy/deploy_test.go asserts this list against the Dockerfiles'
 # COPY instructions.
+#
+# cmd/coordinator and cmd/worker only - not the whole cmd/ tree. cmd/transferctl
+# is a CLI this pipeline never builds into an image, so a change to it must not
+# rebuild coordinator, worker, and web just because they share a parent directory.
 CODE_PATHS=(
-  cmd internal pkg web
+  cmd/coordinator cmd/worker internal pkg web
   go.mod go.sum
   deploy/build deploy/web deploy/certs deploy/go deploy/npm
 )
+
+# EVERYTHING THAT CAN CHANGE WHAT GETS DEPLOYED - CODE_PATHS, plus the chart
+# template and the config it renders around the images. A push that touches
+# only tests, workflows, docs-that-aren't-.md, or transferctl has nothing new
+# to publish: no tag, no images, no chart, no pointer PR. Versioning noise on
+# every merge is the thing this list exists to stop.
+RELEASE_PATHS=(
+  "${CODE_PATHS[@]}"
+  config
+  deploy/charts
+  deploy/chartstage
+)
+
 
 die() { echo "version.sh: $*" >&2; exit 1; }
 
@@ -104,6 +121,30 @@ case "$CHANNEL" in
   *)    die "CHANNEL must be main or lab, got '$CHANNEL'" ;;
 esac
 
+# --- 1b. is there anything worth releasing at all? -----------------------------
+# A push that only touched tests, workflows, docs that aren't `*.md`, or
+# transferctl has not changed anything RELEASE_PATHS covers, so there is
+# nothing new to ship. Skip the whole release rather than tag, rebuild, and
+# open a pointer PR for content that is byte-for-byte what is already running.
+# An explicit `Release:` trailer always wins - somebody asked for one.
+should_release="true"
+if [ -n "$last" ]; then
+  release_rev="$(git log -1 --format=%H -- "${RELEASE_PATHS[@]}" || true)"
+  if [ -n "$release_rev" ] \
+     && git tag --contains "$release_rev" --list 'v[0-9]*.[0-9]*.[0-9]*' | grep -qxF "$last"; then
+    should_release="false"
+  fi
+  if grep -qiE '^Release:[[:space:]]*(major|minor|patch)' <<<"$msgs"; then
+    should_release="true"
+  fi
+  if [ "$should_release" = "false" ]; then
+    chart_version="$base"
+    case "$CHANNEL" in
+      lab) chart_version="${base}-lab.${RUN}" ;;
+    esac
+  fi
+fi
+
 # --- 2. the last commit that touched an image ---------------------------------
 code_rev="$(git log -1 --format=%H -- "${CODE_PATHS[@]}" || true)"
 [ -n "$code_rev" ] || die "no commit touches ${CODE_PATHS[*]} - is this a shallow clone? fetch-depth: 0 is required"
@@ -111,10 +152,11 @@ code_rev="$(git log -1 --format=%H -- "${CODE_PATHS[@]}" || true)"
 # --- 3. the release that first shipped it -------------------------------------
 containing="$(git tag --contains "$code_rev" --list 'v[0-9]*' --sort=v:refname | head -1 || true)"
 
-if [ -n "$containing" ]; then
-  image_version="${containing#v}"
+if [ "$should_release" = "false" ] || [ -n "$containing" ]; then
+  image_version="${containing:-$last}"
+  image_version="${image_version#v}"
   images_changed="false"
-  reason="code unchanged since ${containing}; reusing its images"
+  reason="code unchanged since v${image_version}; reusing its images"
 else
   image_version="$chart_version"
   images_changed="true"
@@ -127,6 +169,7 @@ emit() {
   return 0
 }
 
+emit should_release "$should_release"
 emit chart_version  "$chart_version"
 emit image_version  "$image_version"
 emit images_changed "$images_changed"
@@ -137,12 +180,21 @@ emit tag            "v${chart_version}"
 
 # The summary is the thing somebody reads when they are asking why production
 # is on the version it is on.
-{
-  echo "### Release ${chart_version}"
-  echo
-  echo "| | |"
-  echo "|---|---|"
-  echo "| chart version | \`${chart_version}\` (${bump} from \`${last:-none}\`) |"
-  echo "| image version | \`${image_version}\` |"
-  echo "| images | ${reason} |"
-} >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+if [ "$should_release" = "false" ]; then
+  {
+    echo "### No release"
+    echo
+    echo "Nothing under RELEASE_PATHS changed since \`${last}\`, so this run published"
+    echo "nothing: no tag, no images, no chart, no pointer PR."
+  } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+else
+  {
+    echo "### Release ${chart_version}"
+    echo
+    echo "| | |"
+    echo "|---|---|"
+    echo "| chart version | \`${chart_version}\` (${bump} from \`${last:-none}\`) |"
+    echo "| image version | \`${image_version}\` |"
+    echo "| images | ${reason} |"
+  } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+fi

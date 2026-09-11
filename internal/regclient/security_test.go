@@ -110,7 +110,7 @@ func TestSecurityRepositorySkipsDisabledTargets(t *testing.T) {
 // different repository - which is worse than reporting none.
 func TestRepositoryKeyIsDerivedFromTheRepository(t *testing.T) {
 	for repository, want := range map[string]string{
-		"apm0014228-oci-stage":           "apm0014228-oci-stage",
+		"artifacts-oci-stage":            "artifacts-oci-stage",
 		"docker-local/vendor-a/platform": "docker-local",
 	} {
 		if got := product.XrayRepositoryKey(repository); got != want {

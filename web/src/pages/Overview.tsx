@@ -325,12 +325,12 @@ export default function Overview() {
                       furniture anchored over them.
                     */
                     title: 'Product',
-                    width: 130,
+                    width: 150,
                     render: (_, r) => <ProductChip name={r.product.productId} display={r.product.displayName} />,
                   },
                   {
-                    title: 'Version',
-                    width: 170,
+                    title: 'Release',
+                    width: 550,
                     render: (_, r) => (
                       <VersionChip product={r.product.productId} version={version(r.pkg)} pkg={r.pkg} />
                     ),
@@ -347,7 +347,7 @@ export default function Overview() {
                   },
                   {
                     title: 'Status',
-                    width: 200,
+                    width: 140,
                     render: (_, r) => (
                       <StatusBadge status={r.status} reason={failureReason(r.pkg)} />
                     ),

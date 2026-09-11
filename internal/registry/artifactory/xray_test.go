@@ -316,7 +316,7 @@ const realXrayArtifactV2 = `{
     "name": "cbur-agent:1.5.7-alpine-24",
     "component_id": "cbur-agent:1.5.7-alpine-24",
     "pkg_type": "Docker",
-    "path": "default/apm0014228-oci-stage/cbur-agent/1.5.7-alpine-24/",
+    "path": "default/artifacts-oci-stage/cbur-agent/1.5.7-alpine-24/",
     "sha256": "aaa"
   },
   "issues": [
@@ -336,8 +336,8 @@ const realXrayArtifactV2 = `{
       ],
       "created": "2026-06-10T00:00:00.000Z",
       "impact_path": [
-        "default/apm0014228-oci-stage/cbur-agent/1.5.7-alpine-24/sha256__0b37.tar.gz/3.23:libcrypto3:3.5.5-r0",
-        "default/apm0014228-oci-stage/cbur-agent/1.5.7-alpine-24/sha256__0b37.tar.gz/3.23:libssl3:3.5.5-r0"
+        "default/artifacts-oci-stage/cbur-agent/1.5.7-alpine-24/sha256__0b37.tar.gz/3.23:libcrypto3:3.5.5-r0",
+        "default/artifacts-oci-stage/cbur-agent/1.5.7-alpine-24/sha256__0b37.tar.gz/3.23:libssl3:3.5.5-r0"
       ],
       "components": [
         {

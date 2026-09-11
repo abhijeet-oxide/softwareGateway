@@ -88,7 +88,7 @@ func XrayIsEnabled(enabled *bool) bool { return enabled != nil && *enabled }
 //
 // It is the first segment, always: Artifactory addresses content as
 // `<repoKey>/<path>`, so `docker-local/vendor-a/platform` is the repository
-// `docker-local` holding `vendor-a/platform`, and `apm0014228-oci-stage` is a
+// `docker-local` holding `vendor-a/platform`, and `artifacts-oci-stage` is a
 // repository holding everything at its root.
 //
 // Derived rather than declared because a declared one is a second place to

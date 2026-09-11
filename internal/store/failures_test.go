@@ -180,7 +180,7 @@ func (h *failureHarness) manifestJob(transferID string, n int) int64 {
 	h.t.Helper()
 
 	digest := "sha256:" + strings.Repeat("a", 60) + padded(n)
-	repo := "apm0014228-oci-stage/orbs/cfx-5000-product/component-" + strconv.Itoa(n)
+	repo := "artifacts-oci-stage/orbs/cfx-5000-product/component-" + strconv.Itoa(n)
 
 	res, err := h.st.DB().ExecContext(h.t.Context(),
 		`INSERT INTO jobs (transfer_id, kind, digest, size_bytes, source_repo_id, target_repo_id,
@@ -250,14 +250,14 @@ func TestTheProductionRejectionGroupsIntoOneCause(t *testing.T) {
 
 	messages := []string{
 		"push manifest sha256:aaaa000000000000000000000000000000000000000000000000000000000001 " +
-			"artifact.it.att.com/apm0014228-oci-stage/orbs/cfx-5000-product/nokia-ims-sas: " +
+			"artifact.it.example.com/artifacts-oci-stage/orbs/cfx-5000-product/nokia-ims-sas: " +
 			"HTTP 400: manifest invalid: manifest invalid: map[description:Failed to copy blob " +
 			"sha256:bbbb000000000000000000000000000000000000000000000000000000000001 to " +
 			"cfx-5000-product/nokia-ims-sas/sha256:aaaa000000000000000000000000000000000000000000000000000000000001/" +
 			"sha256__dc82908b11cffc06a831a0ff2382e0d9080441a806978d087c1f6d0f2e3278ee0]: " +
 			"unsupported by registry",
 		"push manifest sha256:aaaa000000000000000000000000000000000000000000000000000000000002 " +
-			"artifact.it.att.com/apm0014228-oci-stage/orbs/cfx-5000-product/nokia-ims-rcg: " +
+			"artifact.it.example.com/artifacts-oci-stage/orbs/cfx-5000-product/nokia-ims-rcg: " +
 			"HTTP 400: manifest invalid: manifest invalid: map[description:Failed to copy blob " +
 			"sha256:bbbb000000000000000000000000000000000000000000000000000000000002 to " +
 			"cfx-5000-product/nokia-ims-rcg/sha256:aaaa000000000000000000000000000000000000000000000000000000000002/" +
@@ -270,7 +270,7 @@ func TestTheProductionRejectionGroupsIntoOneCause(t *testing.T) {
 		// The path the transfer wrote to, which is NOT the path the registry
 		// echoed: Artifactory strips its own repository key.
 		h.exec(`UPDATE jobs SET target_repository = ? WHERE id = ?`,
-			"apm0014228-oci-stage/orbs/cfx-5000-product/nokia-ims-"+[]string{"sas", "rcg"}[i], job)
+			"artifacts-oci-stage/orbs/cfx-5000-product/nokia-ims-"+[]string{"sas", "rcg"}[i], job)
 		h.fail(job, "blob_unknown", strings.ReplaceAll(message,
 			"sha256:aaaa00000000000000000000000000000000000000000000000000000000000"+
 				strconv.Itoa(i+1), h.digestOf(job)))
@@ -529,7 +529,7 @@ func TestTagRefusalsAcrossTheReleasesTagsAreOneCause(t *testing.T) {
 	for i, tag := range tags {
 		job := h.manifestJob(id, i)
 		h.setTags(job, tag)
-		h.fail(job, "auth", "tag "+h.digestOf(job)+" as "+tag+" artifact.it.att.com/"+
+		h.fail(job, "auth", "tag "+h.digestOf(job)+" as "+tag+" artifact.it.example.com/"+
 			h.repositoryOf(job)+": HTTP 401: unauthorized: authentication required"+
 			" (the tag does not exist at the destination, so this write would have created it)")
 	}

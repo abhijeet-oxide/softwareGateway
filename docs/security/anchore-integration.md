@@ -87,7 +87,7 @@ spec:
   targets:
     - name: internal-jfrog
       registry: artifact.example.com
-      repository: apm0014228-oci-stage
+      repository: artifacts-oci-stage
       type: jfrog
       credentialsRef: {secretName: cfx-jfrog-secret}
       xrayEnabled: true
@@ -114,7 +114,7 @@ spec:
       secretName: customer-anchore     # <secretsDir>/customer-anchore/{username,password}
       usernameKey: username            # optional, this is the default
       passwordKey: password            # optional; an API key goes here
-    account: apm0014228                # optional; sent as x-anchore-account
+    account: artifacts                # optional; sent as x-anchore-account
   targets:
     - name: internal-jfrog
       # ...

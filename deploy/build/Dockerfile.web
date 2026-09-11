@@ -82,10 +82,12 @@ ARG PNPM_VERSION=12.3.4
 # npmrc is mounted and NPM_REGISTRY alone decides where packages come from.
 ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY}
 RUN --mount=type=secret,id=npmrc,target=/root/.npmrc \
-    npm install -g "pnpm@$PNPM_VERSION" && \
+  npm config get registry && \
+    npm install --global --registry="$NPM_REGISTRY" "pnpm@$PNPM_VERSION" && \
     if [ -f pnpm-lock.yaml ]; then \
-      pnpm install --frozen-lockfile; \
-    elif [ -f package-lock.json ]; then npm ci; else npm install; fi
+      pnpm install --frozen-lockfile --registry="$NPM_REGISTRY"; \
+    elif [ -f package-lock.json ]; then npm ci --registry="$NPM_REGISTRY"; \
+    else npm install --registry="$NPM_REGISTRY"; fi
 
 COPY web/ ./
 RUN if [ -f pnpm-lock.yaml ]; then pnpm run build; else npm run build; fi

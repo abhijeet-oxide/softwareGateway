@@ -4,7 +4,7 @@
 --
 -- Artifactory answers `HEAD /v2/<path>/blobs/<digest>` from its checksum index,
 -- which spans the whole Artifactory repository rather than the image path the
--- request named. A blob present anywhere under `apm0014228-oci-stage` therefore
+-- request named. A blob present anywhere under `artifacts-oci-stage` therefore
 -- reads as present under every path in it. The blob fast path takes that as an
 -- answer, skips the upload, and records a placement.
 --

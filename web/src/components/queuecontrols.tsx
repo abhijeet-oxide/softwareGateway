@@ -142,10 +142,7 @@ export function QueueControls({
           title="Remove this download's record?"
           description={
             <div style={{ maxWidth: 320 }}>
-              Deletes the download and its jobs from this tool's database.
-              Nothing at the destination is removed, and nothing could be: what a
-              download put there is content-addressed and shared with every other
-              release that uses the same layers.
+              Deletes only the download record and related jobs. Nothing at the source or destination is removed.
             </div>
           }
           okText="Remove the record"

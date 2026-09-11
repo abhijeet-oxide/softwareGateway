@@ -427,7 +427,7 @@ func renderChart(t *testing.T) []map[string]any {
 		t.Skip("the chart is not staged; run `task chart:stage`")
 	}
 
-	cmd := exec.Command(helm, "template", "swgw", chart,
+	cmd := exec.CommandContext(t.Context(), helm, "template", "swgw", chart,
 		"--set", "identity.masterkey.value=0123456789abcdef0123456789abcdef",
 		"--set", "identity.rootPassword.value=test")
 	out, err := cmd.CombinedOutput()
@@ -496,7 +496,7 @@ func nestedSlice(doc map[string]any, path ...string) ([]any, bool) {
 // name a list of public ones. A denylist of hostnames would pass the first
 // registry nobody thought of.
 func TestNothingIsPulledFromThePublicInternet(t *testing.T) {
-	for _, env := range []string{"lab", "prod"} {
+	for _, env := range []string{"nprd"} {
 		t.Run(env, func(t *testing.T) {
 			values, err := chartstage.EnvironmentValues(repoRoot, env)
 			if err != nil {
@@ -550,7 +550,7 @@ func imageRefs(t *testing.T, env string, values []byte) []imageRef {
 	if err := os.WriteFile(valuesFile, values, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command(helm, "template", "swgw", chart, "--values", valuesFile).CombinedOutput()
+	out, err := exec.CommandContext(t.Context(), helm, "template", "swgw", chart, "--values", valuesFile).CombinedOutput()
 	if err != nil {
 		t.Fatalf("helm template %s: %v\n%s", env, err, out)
 	}
@@ -641,7 +641,7 @@ func TestEveryOperatorScopeBuildsAndKeepsOneName(t *testing.T) {
 		dir := filepath.Dir(k)
 		scope, _ := filepath.Rel(filepath.Join(repoRoot, "deploy", "flux", "platform", "bootstrap"), dir)
 		t.Run(filepath.ToSlash(scope), func(t *testing.T) {
-			out, err := exec.Command(kustomize, "build", dir).CombinedOutput()
+			out, err := exec.CommandContext(t.Context(), kustomize, "build", dir).CombinedOutput()
 			if err != nil {
 				t.Fatalf("kustomize build %s: %v\n%s", scope, err, out)
 			}
@@ -675,7 +675,7 @@ func TestEveryOperatorScopeBuildsAndKeepsOneName(t *testing.T) {
 			// operator in it: the CRDs and admission webhooks are cluster-scoped
 			// singletons, so a second would fight the first over both.
 			layer := filepath.Join(repoRoot, filepath.FromSlash(strings.TrimPrefix(operatorLayer, "./")))
-			out, err = exec.Command(kustomize, "build", layer).CombinedOutput()
+			out, err = exec.CommandContext(t.Context(), kustomize, "build", layer).CombinedOutput()
 			if err != nil {
 				t.Fatalf("kustomize build %s (named by %s): %v\n%s", operatorLayer, scope, err, out)
 			}

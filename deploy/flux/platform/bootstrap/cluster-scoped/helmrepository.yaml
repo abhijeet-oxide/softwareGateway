@@ -18,7 +18,7 @@ metadata:
 spec:
   type: oci
   url: oci://artifactory.internal.example.com/helm
-  interval: 30m
+  interval: 5m
   # The same JFrog credential everything else uses.
   secretRef:
     name: jfrog

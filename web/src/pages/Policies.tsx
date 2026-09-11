@@ -4,7 +4,7 @@ import { Alert, Button, Card, Input, Select, Space, Tabs, Tooltip, Typography } 
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
 import {
-  BarChartOutlined, ClusterOutlined, CompareOutlined,
+  BarChartOutlined, ClusterOutlined,
   CopyOutlined, HddOutlined, PackageOutlined, SearchOutlined,
   ScaleOutlined, SafetyOutlined, SettingOutlined,
   BookOutlined,

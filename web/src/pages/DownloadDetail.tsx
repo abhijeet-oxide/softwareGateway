@@ -7,7 +7,7 @@ import {
 import { Table as DataTable } from '../tablekit'
 import { LoadingOutlined } from '../icons'
 import { useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import {
   useReplication, useSyncs, useTransfer, useTransferFailures, useTransferJobs, useWorkers,
 } from '../api/queries'
@@ -660,12 +660,10 @@ export default function DownloadDetail() {
               <Tooltip
                 title={
                   interrupted
-                    ? `Time a worker was actually moving this. It sat for `
-                      + `${formatDuration(idle)} without one - a fleet that was down, or `
-                      + `capacity taken by other work - and that is not counted here. `
-                      + `From first job to last it was ${formatDuration(wallClock)}.`
-                    : 'Time a worker was actually moving this. Any period the download '
-                      + 'spent waiting for one is not counted.'
+                    ? `Time this release was being downloaded. It was idle for `
+                      + `${formatDuration(idle)} and that is not considered here. `
+                      + `The overall time was ${formatDuration(wallClock)}.`
+                    : 'Acutal time this release was being downloaded. Time spent waiting is not considered.'
                 }
               >
                 <span>
@@ -1037,10 +1035,7 @@ export default function DownloadDetail() {
                   bundle is not copied again.
                 */}
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Counted as the release page counts them: images and charts as components,
-                  files as files - a file bundle is one component however many files it
-                  carries. Layers are what actually moves: each is pushed, mounted or
-                  skipped on its own, and a component is only complete once every layer
+                  Images, Charts or files contain multiple layers. Individual layers are pushed, mounted or skipped if they exists in the destination, The component is only complete once every layer
                   under it and the manifest naming it have landed.
                 </Typography.Text>
 
@@ -1189,24 +1184,7 @@ export default function DownloadDetail() {
               </Descriptions.Item>
             </Descriptions>
 
-            {/*
-              WHERE TO TAKE A SPEED THAT LOOKS WRONG.
 
-              A rate on its own cannot say whether it is the link, the route or
-              the number of streams we are asking for - the number is identical
-              in all three cases, which is why "the download is slow" has
-              historically been unanswerable from this page. The path test
-              measures all three; this is the sentence that tells somebody it
-              exists, at the moment they are looking at the number that
-              prompted the question.
-            */}
-            {t?.strategy !== 'relocate' && (
-              <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 12, marginBottom: 0 }}>
-                A speed on its own cannot say whether the link is slow, the route is wrong, or
-                we are asking for too few streams at once.{' '}
-                <Link to="/settings">Measure what this path can carry</Link> to find out which.
-              </Typography.Paragraph>
-            )}
           </Card>
         </Col>
       </Row>

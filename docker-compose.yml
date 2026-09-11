@@ -396,7 +396,7 @@ services:
       context: .
       dockerfile: deploy/build/Dockerfile.coordinator
       args:
-        GO_IMAGE: ${GO_IMAGE:-golang:1.25.14}
+        GO_IMAGE: ${GO_IMAGE:-golang:1.26.5}
         RUNTIME_IMAGE: ${RUNTIME_IMAGE:-gcr.io/distroless/static-debian12:nonroot}
         # A build container inherits NOTHING from the host, so a corporate
         # proxy must be handed to it explicitly or every fetch times out.
@@ -505,7 +505,7 @@ services:
       context: .
       dockerfile: deploy/build/Dockerfile.worker
       args:
-        GO_IMAGE: ${GO_IMAGE:-golang:1.25.14}
+        GO_IMAGE: ${GO_IMAGE:-golang:1.26.5}
         RUNTIME_IMAGE: ${RUNTIME_IMAGE:-gcr.io/distroless/static-debian12:nonroot}
         # A build container inherits NOTHING from the host, so a corporate
         # proxy must be handed to it explicitly or every fetch times out.

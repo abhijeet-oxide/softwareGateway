@@ -156,7 +156,7 @@ func copyTree(from, to string) error {
 			return err
 		}
 		if rel == "." {
-			return os.MkdirAll(to, 0o755)
+			return os.MkdirAll(to, 0o750)
 		}
 		if excluded(rel) {
 			if d.IsDir() {
@@ -166,7 +166,7 @@ func copyTree(from, to string) error {
 		}
 		target := filepath.Join(to, rel)
 		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			return os.MkdirAll(target, 0o750)
 		}
 		info, err := d.Info()
 		if err != nil {
@@ -177,11 +177,11 @@ func copyTree(from, to string) error {
 }
 
 func copyFile(from, to string, mode fs.FileMode) error {
-	b, err := os.ReadFile(from)
+	b, err := os.ReadFile(from) // #nosec G304 -- source paths are fixed by the staging manifest.
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(to), 0o750); err != nil {
 		return err
 	}
 	// The mode is narrowed to the executable bit. A chart's files are read by
@@ -219,7 +219,7 @@ func Fingerprint(dir string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		b, err := os.ReadFile(p)
+		b, err := os.ReadFile(p) // #nosec G304 -- paths are produced by walking the staged directory.
 		if err != nil {
 			return "", err
 		}
@@ -240,12 +240,12 @@ func Fingerprint(dir string) (string, error) {
 // It is here rather than as a line of yq in the pipeline for the reason the
 // rest of this repository moved off make: a pipeline that reimplements
 // something drifts from what a developer runs, and the drift is found when CI
-// passes and the laptop does not. `task chart:template -- prod` and the CD
+// passes and the laptop does not. `task chart:template -- nprd` and the CD
 // workflow's render step call this same function, so what CI proves is what a
 // developer sees.
 func EnvironmentValues(root, env string) ([]byte, error) {
 	rel := filepath.ToSlash(filepath.Join("deploy/environments", env, "platform", "helmrelease.yaml"))
-	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel))) // #nosec G304 -- env is a controlled deployment environment name.
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", rel, err)
 	}

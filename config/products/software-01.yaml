@@ -3,7 +3,8 @@ kind: Product
 metadata:
   name: software-01
   displayName: Sample Software 01
-  owner: mobility-core
+  owner: mobility-core  
+  enabled: false
 spec:
   sources:
     - name: vendor

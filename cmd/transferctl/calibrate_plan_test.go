@@ -16,7 +16,7 @@ func samplePlan() calibrationPlan {
 		source: v1.Repository{Name: "cfx-near",
 			Registry: "cfx-5000-product-orb-docker.swdp-us.support.nokia.com"},
 		target: v1.Repository{Name: "cfx-jfrog-lab",
-			Registry: "artifact.it.att.com", Repository: "apm0014228-oci-stage"},
+			Registry: "artifact.it.example.com", Repository: "artifacts-oci-stage"},
 		repository:        "cfx-5000-product/admin",
 		why:               "holds the largest discovered package (63.7 GiB)",
 		otherRepositories: 41,
@@ -40,7 +40,7 @@ func TestThePlanSaysWhichRepositoryAndWhy(t *testing.T) {
 		"cfx-5000-product/admin",     // what will be measured
 		"largest discovered package", // why it was chosen
 		"41 other(s) not measured",   // what will not be
-		"apm0014228-oci-stage/",      // where the write probe goes
+		"artifacts-oci-stage/",       // where the write probe goes
 		"1, 2, 4 streams",            // the sweep it will run
 		"never committed",            // what the write probe leaves
 	} {

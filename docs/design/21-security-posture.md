@@ -74,7 +74,7 @@ spec:
   targets:
     - name: cfx-jfrog-lab
       registry: artifact.example.com
-      repository: apm0014228-oci-stage
+      repository: artifacts-oci-stage
       type: jfrog                    # or `artifactory` - one backend, two spellings
       credentialsRef:
         secretName: cfx-jfrog-secret # THE SAME CREDENTIAL. There is no second one.
@@ -926,7 +926,7 @@ spec:
   targets:
     - name: cfx-jfrog-lab
       registry: artifact.example.com
-      repository: apm0014228-oci-stage
+      repository: artifacts-oci-stage
       type: jfrog
       xrayEnabled: true
       anchoreEnabled: true      # <- the whole of it
@@ -992,7 +992,7 @@ spec:
       secretName: customer-anchore     # <secretsDir>/customer-anchore/{username,password}
       usernameKey: username            # optional, this is the default
       passwordKey: password            # optional; an API key goes here
-    account: apm0014228                # optional; sent as x-anchore-account
+    account: artifacts                # optional; sent as x-anchore-account
 ```
 
 **It is the same credential mechanism as a source or a target**, deliberately

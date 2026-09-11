@@ -8,21 +8,21 @@
 #
 # 1. NCD Harbor
 #    Example:
-#      harbor.wst2m0ncdx0001c.oamwnvlil.itn.att.com
+#      harbor.wst2m0ncdx0001c.oamwnvlil.itn.example.com
 #    Rule:
 #      registry host must start with "harbor"
-#      and end with "itn.att.com"
+#      and end with "itn.example.com"
 #
 # 2. Quay Registry
 #    Example:
-#      quay-registry.apps.wnv6h1.itn.3pc.att.com
+#      quay-registry.apps.wnv6h1.itn.3pc.example.com
 #    Rule:
 #      registry host must start with "quay-registry.apps."
-#      and end with "itn.3pc.att.com"
+#      and end with "itn.3pc.example.com"
 #
 # 3. JFrog
 #    Exact:
-#      artifact.it.att.com
+#      artifact.it.example.com
 #
 # 4. Local ITMS
 #    Exact:
@@ -40,7 +40,7 @@ _reference := "https://kubernetes.io/docs/concepts/containers/images/#image-name
 
 # ── Approved exact registry hosts ─────────────────────────────────
 _approved_exact_hosts := {
-	"artifact.it.att.com",
+	"artifact.it.example.com",
 	"quay.local",
 }
 
@@ -105,10 +105,10 @@ _container_image(container) := image if {
 # ── Image parsing helpers ─────────────────────────────────────────
 #
 # Image examples:
-#   artifact.it.att.com/team/app:1.2.3
+#   artifact.it.example.com/team/app:1.2.3
 #   quay.local/team/app@sha256:<digest>
-#   harbor.wst2m0ncdx0001c.oamwnvlil.itn.att.com/team/app:1.2.3
-#   quay-registry.apps.wnv6h1.itn.3pc.att.com/team/app:1.2.3
+#   harbor.wst2m0ncdx0001c.oamwnvlil.itn.example.com/team/app:1.2.3
+#   quay-registry.apps.wnv6h1.itn.3pc.example.com/team/app:1.2.3
 #
 # Registry host is the first path segment before the first "/".
 # Bare image names without a registry host are considered unapproved.
@@ -158,12 +158,12 @@ _registry_host_exact_approved(host) if {
 
 _registry_host_harbor_approved(host) if {
 	startswith(host, "harbor")
-	endswith(host, "itn.att.com")
+	endswith(host, "itn.example.com")
 }
 
 _registry_host_quay_approved(host) if {
 	startswith(host, "quay-registry.apps.")
-	endswith(host, "itn.3pc.att.com")
+	endswith(host, "itn.3pc.example.com")
 }
 
 _registry_host_approved(host) if {
@@ -236,13 +236,13 @@ violations contains violation if {
 		"severity": "fail",
 		"category": _category,
 		"objective": "Ensure all container images come only from approved registries",
-		"expected_outcome": "Image registry is one of: quay.local, artifact.it.att.com, harbor*.itn.att.com, or quay-registry.apps.*.itn.3pc.att.com",
+		"expected_outcome": "Image registry is one of: quay.local, artifact.it.example.com, harbor*.itn.example.com, or quay-registry.apps.*.itn.3pc.example.com",
 		"resource": {
 			"kind": manifest.kind,
 			"namespace": _manifest_namespace(manifest),
 			"name": _manifest_name(manifest),
 		},
-		"remediation": "Use an approved image registry: quay.local, artifact.it.att.com, harbor*.itn.att.com, or quay-registry.apps.*.itn.3pc.att.com. External/non-approved registries are not allowed.",
+		"remediation": "Use an approved image registry: quay.local, artifact.it.example.com, harbor*.itn.example.com, or quay-registry.apps.*.itn.3pc.example.com. External/non-approved registries are not allowed.",
 		"reference": _reference,
 	}
 }

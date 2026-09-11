@@ -6,12 +6,12 @@
 # require Go 1.25, which raised the module's floor. Recorded in docs/design/16.
 
 # Pinned, and overridable so an internal registry or pull-through proxy can be
-# used: docker compose build --build-arg GO_IMAGE=registry.corp/golang:1.25.14
+# used: docker compose build --build-arg GO_IMAGE=registry.corp/golang:1.26.5
 # Base images: declared here, above every FROM, because an ARG used in a
 # FROM must be in the global scope - one declared inside a stage is
 # invisible to the next FROM and fails with "base name should not be blank".
 # All are overridable for an internal registry or pull-through proxy.
-ARG GO_IMAGE=golang:1.25.14
+ARG GO_IMAGE=golang:1.26.5
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 
 # Helm, fetched in its own stage and copied into the runtime image.
@@ -109,7 +109,8 @@ RUN set -eu; \
       *) echo "no pinned helm checksum for architecture $arch" >&2; exit 1 ;; \
     esac; \
     tarball="helm-v${HELM_VERSION}-linux-${arch}.tar.gz"; \
-    curl -fsSL -o "/tmp/$tarball" "https://get.helm.sh/$tarball"; \
+    curl --fail --show-error --silent --location --retry 5 --retry-all-errors --retry-delay 2 \
+      --connect-timeout 30 --max-time 300 -o "/tmp/$tarball" "https://get.helm.sh/$tarball"; \
     echo "$want  /tmp/$tarball" | sha256sum -c -; \
     tar -xzf "/tmp/$tarball" -C /tmp; \
     install -m 0755 "/tmp/linux-${arch}/helm" /out-helm; \

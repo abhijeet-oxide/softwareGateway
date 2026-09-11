@@ -422,12 +422,12 @@ func position(tags []string, want string) int {
 // an image repository.
 func TestWriteProbeUsesAPathATransferWouldWrite(t *testing.T) {
 	target := endpoint{
-		basePath: "apm0014228-oci-stage",
-		cfg:      registry.ClientConfig{Repository: "apm0014228-oci-stage"},
+		basePath: "artifacts-oci-stage",
+		cfg:      registry.ClientConfig{Repository: "artifacts-oci-stage"},
 	}
 
 	got := writeProbePath(target, "cfx-5000-product/admin")
-	if want := "apm0014228-oci-stage/cfx-5000-product/admin"; got != want {
+	if want := "artifacts-oci-stage/cfx-5000-product/admin"; got != want {
 		t.Errorf("write probe path = %q, want %q", got, want)
 	}
 

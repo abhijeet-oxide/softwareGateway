@@ -5,7 +5,7 @@
 kubectl apply -k deploy/flux/platform/bootstrap/cluster-scoped
 
 # this cluster hosts one environment
-kubectl apply -k deploy/flux/platform/bootstrap/namespace-scoped/lab      # or /prod
+kubectl apply -k deploy/flux/platform/bootstrap/namespace-scoped/nprd
 ```
 
 That is the whole switch. Both create a Kustomization named **`platform-operators`**,
@@ -82,8 +82,8 @@ To actually move it:
 # 1. Stop the environments reconciling while the operator is absent. Running
 #    databases are NOT affected - the operator is a control plane, and the
 #    PostgreSQL instances keep serving without it. What stops is failover.
-flux -n flux-system suspend kustomization software-gateway-lab-database
-flux -n flux-system suspend kustomization software-gateway-lab-platform
+flux -n flux-system suspend kustomization software-gateway-nprd-database
+flux -n flux-system suspend kustomization software-gateway-nprd-platform
 
 # 2. PROTECT THE CRDs BEFORE REMOVING ANYTHING. Deleting a CRD deletes every
 #    object of that kind - here, every Cluster, which is every database. This
@@ -105,8 +105,8 @@ kubectl get deploy -A -l app.kubernetes.io/name=cloudnative-pg   # exactly one
 kubectl get cluster.postgresql.cnpg.io -A
 
 # 6. Resume.
-flux -n flux-system resume kustomization software-gateway-lab-database
-flux -n flux-system resume kustomization software-gateway-lab-platform
+flux -n flux-system resume kustomization software-gateway-nprd-database
+flux -n flux-system resume kustomization software-gateway-nprd-platform
 ```
 
 Step 2 is the one that matters. Everything else is recoverable by re-running it.

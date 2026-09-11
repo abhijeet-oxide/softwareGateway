@@ -46,7 +46,7 @@ export default function Profile() {
    *
    * An identity provider is free to make the preferred username the address,
    * and Microsoft does: the page then introduced somebody as
-   * `ap999e@att.com  ·  ap999e@att.com`, which reads as a rendering fault and
+   * `email@example.com  ·  email@example.com`, which reads as a rendering fault and
    * is one. Compared against the address as well as the name, because those
    * are the two things already on screen. */
   const subtitle = [email, extraIdentifier(username, name, email)]

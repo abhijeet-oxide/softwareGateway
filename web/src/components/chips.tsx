@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Badge, Space, Tag, Tooltip, Typography } from 'antd'
 import {
-  CheckCircleOutlined, ExportOutlined, ExclamationCircleOutlined,
+   ExportOutlined, ExclamationCircleOutlined,
   CloseCircleOutlined, GithubOutlined, LoadingOutlined, QuestionCircleOutlined,
   CheckMarkFilled,
 } from '../icons'
@@ -539,7 +539,7 @@ export function ManagedInGit({ url }: { url?: string }) {
  *
  * And it was a filled block of dark green. Ant Design's `success` tag derives
  * its background from `colorSuccess`, which this theme overrides with a dark
- * AT&T green - so the status tags rendered heavy while every preset-coloured
+ * Company green - so the status tags rendered heavy while every preset-coloured
  * tag beside them rendered light. Preset palettes are used throughout instead,
  * so a production target and an enabled rule look like they belong on the same
  * page.

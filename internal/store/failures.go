@@ -210,7 +210,7 @@ func normaliseFailure(message, digest, repository string, tags []string) string 
 // A registry does not necessarily quote the path we sent it. Artifactory strips
 // its own repository key and reports what is left:
 //
-//	we sent      apm0014228-oci-stage/orbs/cfx-5000-product/nokia-ims-sas
+//	we sent      artifacts-oci-stage/orbs/cfx-5000-product/nokia-ims-sas
 //	it said      cfx-5000-product/nokia-ims-sas
 //
 // So the exact string is not present in the message and a whole-string

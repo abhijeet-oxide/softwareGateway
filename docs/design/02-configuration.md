@@ -340,7 +340,7 @@ One field, valid only on a `jfrog` (or `artifactory`) repository:
 ```yaml
 - name: cfx-jfrog-lab
   registry: artifact.example.com
-  repository: apm0014228-oci-stage
+  repository: artifacts-oci-stage
   type: jfrog
   credentialsRef:
     secretName: cfx-jfrog-secret

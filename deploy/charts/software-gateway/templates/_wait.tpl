@@ -28,7 +28,7 @@ order to say so.
 {{/* (dict "ctx" $ "name" "database" "host" "..." "port" "5432") */}}
 {{- define "swgw.waitForTCP" -}}
 - name: wait-for-{{ .name }}
-  image: {{ .ctx.Values.images.node }}
+  image: {{ include "swgw.mirroredImage" (dict "ctx" .ctx "image" .ctx.Values.images.node) }}
   imagePullPolicy: {{ .ctx.Values.image.pullPolicy }}
   command: ["node", "-e"]
   args:
@@ -63,7 +63,7 @@ order to say so.
 {{/* (dict "ctx" $ "name" "zitadel" "url" "http://zitadel:8080/debug/ready") */}}
 {{- define "swgw.waitForHTTP" -}}
 - name: wait-for-{{ .name }}
-  image: {{ .ctx.Values.images.node }}
+  image: {{ include "swgw.mirroredImage" (dict "ctx" .ctx "image" .ctx.Values.images.node) }}
   imagePullPolicy: {{ .ctx.Values.image.pullPolicy }}
   command: ["node", "-e"]
   args:
@@ -100,7 +100,7 @@ order to say so.
      the kubelet materialises it when the seeder writes it. */}}
 {{- define "swgw.waitForFile" -}}
 - name: wait-for-{{ .name }}
-  image: {{ .ctx.Values.images.node }}
+  image: {{ include "swgw.mirroredImage" (dict "ctx" .ctx "image" .ctx.Values.images.node) }}
   imagePullPolicy: {{ .ctx.Values.image.pullPolicy }}
   command: ["node", "-e"]
   args:

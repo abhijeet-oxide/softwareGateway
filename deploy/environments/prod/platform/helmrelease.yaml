@@ -59,6 +59,13 @@ spec:
     image:
       registry: artifactory.internal.example.com
       repository: swgw
+    images:
+      # EVERY third-party image too - ZITADEL, its sign-in screens, nginx,
+      # Cerbos, node. A virtual repository that aggregates Docker Hub and
+      # ghcr.io resolves all of them with one hostname and one credential, and
+      # the chart refuses to render with this empty while image.registry is set:
+      # half-mirrored looks air-gapped until the first node without egress.
+      mirror: artifactory.internal.example.com/docker
     secrets:
       backend: vault
       vault:

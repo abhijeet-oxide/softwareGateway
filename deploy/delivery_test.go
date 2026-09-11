@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -467,3 +468,109 @@ func nestedSlice(doc map[string]any, path ...string) ([]any, bool) {
 	s, ok := cur.([]any)
 	return s, ok
 }
+
+// TestNothingIsPulledFromThePublicInternet is the air-gap invariant.
+//
+// This product ships into estates with no egress, and the way that breaks is
+// never the obvious way. Nobody forgets the coordinator's image. What gets
+// forgotten is nginx, or the node image an init container uses for three
+// seconds, or the PostgreSQL image CloudNativePG pulls only during a failover -
+// and a cluster missing that last one does not fail when it is deployed, it
+// fails when the primary dies, which is the worst possible moment to discover
+// that a mirror was never configured.
+//
+// So every image reference that a DEPLOYED environment produces is checked, and
+// the check is that it names the internal registry rather than that it does not
+// name a list of public ones. A denylist of hostnames would pass the first
+// registry nobody thought of.
+func TestNothingIsPulledFromThePublicInternet(t *testing.T) {
+	for _, env := range []string{"lab", "prod"} {
+		t.Run(env, func(t *testing.T) {
+			values, err := chartstage.EnvironmentValues(repoRoot, env)
+			if err != nil {
+				t.Fatalf("%v", err)
+			}
+			var v struct {
+				Image struct {
+					Registry string `json:"registry"`
+				} `json:"image"`
+			}
+			if err := yaml.Unmarshal(values, &v); err != nil {
+				t.Fatalf("parse %s values: %v", env, err)
+			}
+			registry := v.Image.Registry
+			if registry == "" {
+				t.Fatalf("%s sets no image.registry, so this environment pulls this product's "+
+					"own images from wherever their path points", env)
+			}
+
+			for _, ref := range imageRefs(t, env, values) {
+				if !strings.HasPrefix(ref.image, registry+"/") {
+					t.Errorf("%s: %s pulls %q, which does not come from %s.\n"+
+						"\nAn estate with no egress cannot start this pod, and nothing here would say so\n"+
+						"until it tried. Route it through the mirror - images.mirror in the chart, or the\n"+
+						"reference itself for anything outside it.\n", env, ref.where, ref.image, registry)
+				}
+			}
+		})
+	}
+}
+
+type imageRef struct{ where, image string }
+
+// imageRefs collects every image a deployed environment produces: the rendered
+// chart, the CloudNativePG Cluster beside it, and the operator that runs it.
+// The last two are not Helm and would be missed by rendering alone - which is
+// exactly where the forgettable ones live.
+func imageRefs(t *testing.T, env string, values []byte) []imageRef {
+	t.Helper()
+	var refs []imageRef
+
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm is not on PATH; the chart job in CI covers this")
+	}
+	chart := filepath.Join(repoRoot, "deploy", "charts", "software-gateway")
+	if _, err := os.Stat(filepath.Join(chart, "files", "config", "config.yaml")); err != nil {
+		t.Skip("the chart is not staged; run `task chart:stage`")
+	}
+	valuesFile := filepath.Join(t.TempDir(), "values.yaml")
+	if err := os.WriteFile(valuesFile, values, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(helm, "template", "swgw", chart, "--values", valuesFile).CombinedOutput()
+	if err != nil {
+		t.Fatalf("helm template %s: %v\n%s", env, err, out)
+	}
+	for _, m := range imageLine.FindAllStringSubmatch(string(out), -1) {
+		refs = append(refs, imageRef{where: "the chart", image: m[1]})
+	}
+
+	// The database and its operator, which are plain manifests in Flux layers.
+	for _, f := range []string{
+		filepath.Join(repoRoot, "deploy", "environments", env, "database", "cluster.yaml"),
+		filepath.Join(repoRoot, "deploy", "flux", "platform", "operators", "cloudnative-pg.yaml"),
+	} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		for _, m := range manifestImage.FindAllStringSubmatch(string(b), -1) {
+			refs = append(refs, imageRef{where: filepath.Base(f), image: m[1]})
+		}
+	}
+
+	if len(refs) == 0 {
+		t.Fatal("found no image references at all, so this test is not testing anything")
+	}
+	return refs
+}
+
+var (
+	// Indented `image:` only, so a `#` comment that happens to contain the word
+	// is not read as a reference.
+	imageLine = regexp.MustCompile(`(?m)^\s+image:\s+(\S+:\S+)\s*$`)
+	// `imageName:` for a CloudNativePG Cluster, `repository:` for the operator
+	// chart's values - the two spellings the non-Helm manifests use.
+	manifestImage = regexp.MustCompile(`(?m)^\s+(?:imageName|repository):\s+(\S+/\S+)\s*$`)
+)

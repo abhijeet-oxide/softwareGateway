@@ -418,6 +418,11 @@ jobs:
           try "a pull secret that no inventory entry produces" "${base[@]}" \
             --set secrets.backend=vault --set secrets.registryPullSecret.enabled=true \
             --set secrets.registryPullSecret.from=nothing-declares-this
+          # HALF-MIRRORED: this product's own images from the internal registry
+          # and every third-party one from the public internet. It is the state
+          # that looks air-gapped right up until a node without egress.
+          try "an internal registry with no mirror for the third-party images" \
+            "${base[@]}" --set images.mirror=
           exit $fails
 
   release:

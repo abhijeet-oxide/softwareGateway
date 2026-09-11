@@ -15,6 +15,16 @@ metadata:
   name: software-gateway-prod-database
   namespace: flux-system
 spec:
+  # THE OPERATOR FIRST. This layer submits a `Cluster`, which is a kind the API
+  # server only knows about once CloudNativePG has registered its CRD - and
+  # which its validating webhook must be up to admit. Without this the apply
+  # fails with "no matches for kind Cluster" and retries until it happens to
+  # work, which is the flapping this whole arrangement exists to remove.
+  #
+  # platform-operators is CLUSTER-scoped and applied once per cluster, by hand:
+  #   kubectl apply -k deploy/flux/platform/bootstrap
+  dependsOn:
+    - name: platform-operators
   interval: 10m
   retryInterval: 1m
   path: ./deploy/environments/prod/database

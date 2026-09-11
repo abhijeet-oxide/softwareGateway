@@ -1,0 +1,81 @@
+# CloudNativePG - the operator that runs this deployment's PostgreSQL.
+#
+# WHY IT IS MANAGED BY FLUX AT ALL. The alternative is `helm install` once, by
+# hand, per cluster - and then the version running in lab and the version
+# running in production are whatever each was installed with, on dates nobody
+# recorded. An operator that owns every database in the cluster is exactly the
+# thing whose version should be written down, reviewed, and the same in both
+# places. That is what this file is.
+#
+# WHY IT IS NOT TREATED LIKE THE APPLICATION. Three differences, all of them
+# because an operator upgrade can restart every database it manages:
+#
+#   the version is PINNED and moves in a pull request, never by a range;
+#   CRDs are upgraded explicitly, because Helm does not do it by default;
+#   a failed upgrade STOPS rather than rolling itself back.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cnpg-system
+  labels:
+    app.kubernetes.io/part-of: software-gateway-platform
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cloudnative-pg
+  namespace: cnpg-system
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: cloudnative-pg
+      # PINNED, and moved by a person. A range here would let an operator
+      # upgrade - which can trigger a rolling restart of every PostgreSQL
+      # instance in the cluster - happen because a mirror synced overnight.
+      version: 0.26.0
+      sourceRef:
+        kind: HelmRepository
+        name: internal-charts
+        namespace: flux-system
+      interval: 0s
+
+  install:
+    # Helm installs the chart's CRDs on first install by default; stated because
+    # the upgrade behaviour below is NOT the default and the pair should be read
+    # together.
+    crds: Create
+    timeout: 10m
+  upgrade:
+    # THE ONE THAT IS NOT A DEFAULT. `helm upgrade` does not touch CRDs at all -
+    # it installs them once and never again - so an operator upgraded to a
+    # version whose Cluster schema gained a field would run against the old CRD,
+    # and the new field would be silently dropped by the API server on every
+    # apply. CreateReplace moves them with the operator.
+    crds: CreateReplace
+    timeout: 10m
+    remediation:
+      # NO AUTOMATIC ROLLBACK, deliberately. Rolling an application back is
+      # free; rolling a database operator back mid-upgrade, while it holds
+      # every Cluster in the cluster and has possibly already migrated their
+      # CRDs, is how a bad ten minutes becomes a bad week. A failed upgrade
+      # here should stop, fire an alert, and wait for somebody - which is what
+      # the notification Alert in deploy/flux/clusters/<env> is for.
+      retries: 0
+  driftDetection:
+    mode: enabled
+
+  values:
+    # The operator's own image, through the same mirror as everything else.
+    image:
+      repository: artifactory.internal.example.com/docker/cloudnative-pg/cloudnative-pg
+    replicaCount: 1
+    # It reconciles every namespace in the cluster, which is what makes one
+    # operator serve both lab and production.
+    config:
+      clusterWide: true
+    resources:
+      requests: {cpu: 100m, memory: 200Mi}
+      limits: {memory: 400Mi}

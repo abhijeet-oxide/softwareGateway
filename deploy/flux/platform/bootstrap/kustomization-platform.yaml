@@ -1,0 +1,35 @@
+# THE OPERATORS THIS DEPLOYMENT NEEDS, reconciled by Flux like everything else.
+#
+# Two settings here are load-bearing and neither is a default.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: platform-operators
+  namespace: flux-system
+spec:
+  interval: 30m
+  retryInterval: 2m
+  path: ./deploy/flux/platform/operators
+  sourceRef:
+    kind: GitRepository
+    name: software-gateway-platform
+
+  # PRUNE IS OFF, and this is the most important line in the file.
+  #
+  # Pruning removes objects that have left Git. For an operator, the objects
+  # include its CustomResourceDefinitions - and deleting a CRD deletes every
+  # object of that kind, cluster-wide, immediately and without confirmation.
+  # For CloudNativePG that is every `Cluster`, which is every database.
+  #
+  # So a mistake that would cost an application a restart costs this one all of
+  # the data. Removing an operator is a deliberate act with a maintenance
+  # window, not something a merge should be able to do, so it is done by hand
+  # and this stays off.
+  prune: false
+
+  # Wait for the operator to be Ready, because the environment layers depend on
+  # this one and what they need from it is the CRD registered and the webhook
+  # answering. Applied-but-not-running would let a `Cluster` be submitted to an
+  # API server whose validating webhook is not up yet.
+  wait: true
+  timeout: 10m

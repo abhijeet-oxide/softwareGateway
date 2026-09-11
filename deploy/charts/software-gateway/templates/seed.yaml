@@ -55,7 +55,7 @@ spec:
         {{- include "swgw.waitForHTTP" (dict "ctx" . "name" "zitadel" "url" "http://zitadel:8080/debug/ready") | nindent 8 }}
       containers:
         - name: seed
-          image: {{ .Values.images.node }}
+          image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.node) }}
           command: ["/bin/sh", "-c"]
           args:
             # THREE STEPS, and the middle one is byte for byte what

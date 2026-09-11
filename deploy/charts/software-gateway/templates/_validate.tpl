@@ -62,6 +62,22 @@ who cannot sign in.
 {{- fail "\n\nsecrets.registryPullSecret.enabled is set with secrets.backend \"none\".\n\nNothing would create the pull Secret. Either choose a backend, or create the\nSecret yourself and name it in image.pullSecrets.\n" }}
 {{- end }}
 
+{{/* HALF-MIRRORED, WHICH IS THE WORST OF THE THREE STATES.
+
+     `image.registry` names the internal registry this product's own three
+     images come from. `images.mirror` is where the six third-party ones come
+     from. Setting the first and not the second gives a cluster that pulls the
+     coordinator from Artifactory and nginx, ZITADEL, Cerbos and node from the
+     public internet - which is not an air-gapped deployment, and is
+     indistinguishable from one until a node without egress tries to schedule a
+     pod, or until the day Docker Hub rate-limits the whole cluster.
+
+     Neither set is a laptop or a public evaluation, and is fine. Both set is a
+     real deployment. One of them is always a mistake. */}}
+{{- if and .Values.image.registry (not .Values.images.mirror) }}
+{{- fail (printf "\n\nimage.registry is %q but images.mirror is empty.\n\nThis product's own images would come from the internal registry and every\nthird-party one - ZITADEL, its sign-in screens, nginx, Cerbos, node - would be\npulled from the public internet. That is not an air-gapped deployment and it\nlooks exactly like one until a node without egress tries to start a pod.\n\nSet images.mirror to a virtual repository that aggregates the upstreams, e.g.\n\n  images:\n    mirror: %s/docker\n\nor clear image.registry if this really is meant to pull from the internet.\n" .Values.image.registry .Values.image.registry) }}
+{{- end }}
+
 {{/* THE HOLE THIS CLOSES. Every pod gets imagePullSecrets naming the Secret,
      and the Secret is produced from the inventory - so a pull secret enabled
      without an inventory entry is a deployment whose every pod sits in

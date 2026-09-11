@@ -86,6 +86,21 @@ app: {{ .component }}
 {{- end -}}
 {{- end -}}
 
+{{/* A third-party image, resolved through the mirror.
+
+     Call as (dict "ctx" $ "image" .Values.images.nginx). The value is the
+     UPSTREAM PATH; this puts the internal registry in front of it, so there is
+     one hostname to change and no per-image registry field to forget. An empty
+     mirror leaves the path alone, which is what a laptop wants. */}}
+{{- define "swgw.mirroredImage" -}}
+{{- $mirror := .ctx.Values.images.mirror | trimSuffix "/" -}}
+{{- if $mirror -}}
+{{- printf "%s/%s" $mirror .image -}}
+{{- else -}}
+{{- .image -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "swgw.imagePullSecrets" -}}
 {{- $secrets := .Values.image.pullSecrets -}}
 {{- if and .Values.secrets.registryPullSecret.enabled (ne .Values.secrets.backend "none") -}}

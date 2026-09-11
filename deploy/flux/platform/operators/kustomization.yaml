@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - helmrepository.yaml
+  - cloudnative-pg.yaml
+  # The credential operator goes here too, the same way, when this estate
+  # settles on one: a VaultSecretsOperator HelmRelease for secrets.backend
+  # "vault", or the Azure Key Vault CSI driver for "azure". Both are cluster
+  # scoped and both are prerequisites of the environment layers, which is the
+  # same shape as the file above.

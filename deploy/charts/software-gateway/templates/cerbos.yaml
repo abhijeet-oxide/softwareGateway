@@ -74,7 +74,7 @@ spec:
       # is the one workload here without one.
       containers:
         - name: cerbos
-          image: {{ .Values.images.cerbos }}
+          image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.cerbos) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["server", "--config=/config/config.yaml"]
           ports:

@@ -35,20 +35,40 @@ image:
   pullSecrets: []
   #  - name: jfrog
 
-# Third-party images, listed here rather than beside each component so an
-# air-gapped estate has ONE place to repoint at its mirror. Tags are pinned to
-# the same versions docker-compose.yml runs, so the two stacks are the same
-# software.
+# Third-party images. Listed here rather than beside each component so an
+# air-gapped estate has ONE place to repoint, and tagged to the same versions
+# docker-compose.yml runs so the two stacks are the same software.
+#
+# EVERY ONE OF THESE IS PULLED THROUGH `mirror`. They are written as the
+# upstream path - `zitadel/zitadel:v4.17.3` - and the mirror is prefixed, so a
+# virtual repository in Artifactory that aggregates Docker Hub, ghcr.io and
+# whatever else resolves all of them with one credential and one hostname.
+#
+# `postgres` is deliberately absent: the database is not deployed by this chart
+# and its image is named by the CloudNativePG Cluster in the layer before it.
 images:
-  postgres: postgres:16.15-alpine
-  zitadel: ghcr.io/zitadel/zitadel:v4.17.3
-  zitadelLogin: ghcr.io/zitadel/zitadel-login:v4.17.3
+  # THE ONE LINE THAT DECIDES WHETHER THIS DEPLOYMENT REACHES THE INTERNET.
+  #
+  # Empty pulls each image from wherever its path points. The default is NOT
+  # empty, and is the same placeholder registry `image.registry` carries, for
+  # one reason: the chart REFUSES to render with an internal registry set for
+  # this product's own images and an empty mirror for everything else. That
+  # combination is a cluster pulling three images from Artifactory and five
+  # from the internet, which is not an air-gapped deployment and looks exactly
+  # like one until the first node without egress - so the defaults describe a
+  # consistent deployment rather than a half of one.
+  #
+  # Clear BOTH to pull everything from upstream, which is what a public
+  # evaluation wants.
+  mirror: artifactory.internal.example.com/docker
+  zitadel: zitadel/zitadel:v4.17.3
+  zitadelLogin: zitadel/zitadel-login:v4.17.3
   nginx: nginx:1.27.5-alpine
   cerbos: cerbos/cerbos:0.55.0
   # ONE UTILITY IMAGE, used by the seeder and by every `wait-for-...` init
-  # container. A second one would be a second thing to mirror into an air-gapped
-  # estate for the sake of `sleep`; this one is already required because the
-  # seeder is a node script this chart carries.
+  # container. A second one would be a second thing to mirror for the sake of
+  # `sleep`; this one is already required because the seeder is a node script
+  # this chart carries.
   node: node:22.23.2-alpine
 
 # --------------------------------------------------------------- where it is

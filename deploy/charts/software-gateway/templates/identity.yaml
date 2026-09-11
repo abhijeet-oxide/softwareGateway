@@ -136,7 +136,7 @@ spec:
         # a CloudNativePG failover in progress while this hook runs.
         {{- include "swgw.waitForTCP" (dict "ctx" . "name" "database" "host" .Values.database.host "port" .Values.database.port) | nindent 8 }}
         - name: setup
-          image: {{ .Values.images.zitadel }}
+          image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.zitadel) }}
           args:
             - setup
             - --masterkeyFromEnv
@@ -158,7 +158,7 @@ spec:
             capabilities: {drop: ["ALL"]}
       containers:
         - name: publish
-          image: {{ .Values.images.node }}
+          image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.node) }}
           command: ["node", "/seeder/k8s-state.mjs", "push"]
           env:
             - name: K8S_STATE_SECRET
@@ -213,7 +213,7 @@ spec:
         {{- include "swgw.waitForTCP" (dict "ctx" . "name" "database" "host" .Values.database.host "port" .Values.database.port) | nindent 8 }}
       containers:
         - name: zitadel
-          image: {{ .Values.images.zitadel }}
+          image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.zitadel) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # `start`, not `start-from-init`. The Job above owns migrations; this
           # process refuses an unmigrated database and restarts until the Job
@@ -279,7 +279,7 @@ spec:
               "mounts" (printf "- name: pat\n  mountPath: /pat\n  readOnly: true")) | nindent 8 }}
       containers:
         - name: login
-          image: {{ .Values.images.zitadelLogin }}
+          image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.zitadelLogin) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
@@ -370,7 +370,7 @@ spec:
         {{- include "swgw.waitForHTTP" (dict "ctx" . "name" "login-screens" "url" "http://zitadel-login:3000/ui/v2/login/healthy" "soft" true "timeout" 300) | nindent 8 }}
       containers:
         - name: proxy
-          image: {{ .Values.images.nginx }}
+          image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.nginx) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # The same entrypoint compose runs. It renders the resolver address
           # from /etc/resolv.conf - kube-dns here, aardvark or 127.0.0.11 there

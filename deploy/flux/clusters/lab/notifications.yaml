@@ -1,0 +1,92 @@
+# WHAT IS HAPPENING TO THIS ENVIRONMENT, said out loud.
+#
+# The pipeline moves one line in Git and stops; Flux does the deployment. So
+# without this, the only place a deploy exists is `flux get` on somebody's
+# laptop, and the first anybody hears of a failed upgrade is a user. The
+# notification-controller is what closes that: it watches the same objects Flux
+# reconciles and posts what they do.
+#
+# TWO ALERTS, NOT ONE, and the split is the point. A deploy is routine and its
+# stream is noisy - progressing, applied, upgraded, healthy - and a failure is
+# neither. Sending both to one channel means the failures arrive in a scroll of
+# successes and are read on Monday.
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: deploys-lab
+  namespace: flux-system
+spec:
+  # Microsoft Teams, because this estate's directory is Entra and its people
+  # are already there. Every other target is the same three lines with a
+  # different `type` - slack, discord, generic (any webhook), githubdispatch.
+  type: msteams
+  # The webhook URL, from the credential backend like everything else - it is
+  # in config/secrets/secrets.yaml as `flux-notifications`, so it is one more
+  # entry in the one list rather than a secret somebody created by hand and
+  # nobody can find later.
+  secretRef:
+    name: flux-notifications
+  # Stamped on every message, because a person reading a channel that carries
+  # more than one cluster needs to know which one is talking.
+  channel: lab
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Alert
+metadata:
+  name: deploys-lab
+  namespace: flux-system
+spec:
+  providerRef:
+    name: deploys-lab
+  # info carries the whole life of a reconciliation - started, applied,
+  # upgraded, healthy - so this is the running commentary of a deploy.
+  eventSeverity: info
+  eventSources:
+    # THE TWO ORDERED LAYERS, so the sequence is legible: the database layer
+    # reports Ready, then the platform layer begins. Somebody watching sees the
+    # dependency working rather than a gap followed by activity.
+    - kind: Kustomization
+      name: software-gateway-lab-database
+      namespace: flux-system
+    - kind: Kustomization
+      name: software-gateway-lab-platform
+      namespace: flux-system
+    - kind: HelmRelease
+      name: software-gateway
+      namespace: swgw-lab
+  # Health-check progress is emitted every few seconds while a rollout runs and
+  # says nothing a person can act on. The events that matter - the upgrade
+  # starting, finishing, or being rolled back - are not filtered.
+  exclusionList:
+    - "health check.*in progress"
+    - "dependencies do not meet ready condition"
+  summary: "software-gateway (lab)"
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Alert
+metadata:
+  name: deploys-lab-failures
+  namespace: flux-system
+spec:
+  providerRef:
+    name: deploys-lab
+  eventSeverity: error
+  # WIDER THAN THE ALERT ABOVE. A failure is worth hearing about from anything
+  # that can break this environment, including the things a deploy does not
+  # touch: a source that cannot be fetched, a chart that cannot be pulled from
+  # the internal registry, a credential the operator could not resolve.
+  eventSources:
+    - kind: GitRepository
+      name: "*"
+      namespace: flux-system
+    - kind: HelmRepository
+      name: "*"
+      namespace: flux-system
+    - kind: Kustomization
+      name: "software-gateway-lab-*"
+      namespace: flux-system
+    - kind: HelmRelease
+      name: "*"
+      namespace: swgw-lab
+  summary: "FAILED - software-gateway (lab)"

@@ -40,8 +40,11 @@ deploy/environments/<env>/
   layers.yaml               TWO Flux Kustomizations, and the order between them
   database/cluster.yaml     LAYER 1 - the CloudNativePG Cluster
   platform/helmrelease.yaml LAYER 2 - WHAT IS DEPLOYED. One line per environment.
+deploy/flux/platform/       CloudNativePG, pinned and Flux-managed. Cluster
+                            scoped, applied once per cluster.
 deploy/flux/clusters/{lab,prod}/
-                            how a cluster finds the above.
+                            how a cluster finds the above, and the Alerts that
+                            say what it is doing.
 .github/workflows/cd.yml    build, publish, move the pointer. No cluster access.
 ```
 
@@ -137,6 +140,28 @@ builds and fails if the tag exists. Overwriting one would make every recorded
 deployment ambiguous - a rollback to 1.4.2 would fetch whatever 1.4.2 means
 today.
 
+### 4.1 Everything comes from it, including the parts nobody remembers
+
+`image.registry` covers this product's three images. `images.mirror` covers the
+other five - ZITADEL, its sign-in screens, nginx, Cerbos and the node image two
+init containers use for a few seconds. The CloudNativePG `Cluster` names its
+PostgreSQL image, and the operator's own HelmRelease names the operator's.
+
+**Setting one and not the other is refused at render.** Half-mirrored is the
+worst of the three states: a cluster pulling three images from Artifactory and
+five from the internet is not an air-gapped deployment, and is
+indistinguishable from one until a node without egress tries to schedule a pod,
+or until Docker Hub rate-limits the whole cluster on a Tuesday.
+
+The forgettable one is CloudNativePG's PostgreSQL image. A cluster missing it
+does not fail when it is deployed - it fails **during a failover**, which is
+the worst possible moment to learn that a mirror was never configured. So
+`TestNothingIsPulledFromThePublicInternet` collects every reference a deployed
+environment produces, from the rendered chart AND from the two Flux layers that
+are not Helm, and asserts each names the internal registry. It is an allowlist
+rather than a denylist of public hostnames, because a denylist passes the first
+registry nobody thought of.
+
 ## 5. What a change costs
 
 This is the requirement the design is actually built around, and it is a
@@ -203,11 +228,22 @@ nothing.
 Ordering is therefore explicit, at three levels, and each one covers what the
 one below it cannot:
 
-**Between layers - Flux `dependsOn`.** `software-gateway-<env>-platform`
-declares `dependsOn: [software-gateway-<env>-database]`, and both carry
-`wait: true`. Flux holds the platform layer entirely until the CloudNativePG
-Cluster reports Ready - initdb finished, instances joined, a primary elected.
-This is `depends_on`, at the level where GitOps has it.
+**Between layers - Flux `dependsOn`.** A three-link chain, each with
+`wait: true`, so each holds entirely until the one before it reports **Ready**
+rather than merely applied:
+
+```
+platform-operators                 CloudNativePG. Cluster-scoped, once per cluster.
+  └─ software-gateway-<env>-database   the Cluster: initdb, instances joined, a primary elected
+       └─ software-gateway-<env>-platform   the Helm release
+```
+
+This is `depends_on`, at the level where GitOps has it. The first link matters
+for a reason that is easy to miss: the database layer submits a `Cluster`, a
+kind the API server only knows once the operator has registered its CRD and
+whose validating webhook must be answering to admit it. Without the dependency
+the apply fails with `no matches for kind Cluster` and retries until it happens
+to work - the flapping this whole arrangement exists to remove.
 
 **Inside the release - Helm hooks.** The ZITADEL migration is a
 `pre-install,pre-upgrade` hook at weight -10, with its RBAC at -20. Helm applies
@@ -311,7 +347,7 @@ only in a later release. This is the ordinary expand-and-contract rule and it is
 not new here - `maxUnavailable: 0` makes it load-bearing rather than merely
 good practice, because the overlap is guaranteed rather than incidental.
 
-### 7.1 The database
+### 7.1 The database, and the operator that runs it
 
 **PostgreSQL runs in-cluster, in every environment. There is no managed-database
 path anywhere in this repository**, and CloudNativePG is what makes that a
@@ -326,6 +362,17 @@ nothing to rotate by hand. The chart reads two keys out of it and lets the
 kubelet assemble the DSN with `$(VAR)` substitution - which keeps the password
 out of every manifest without putting a shell into a distroless image to build a
 URL.
+
+**The operator is managed by Flux too**, in `deploy/flux/platform/operators`,
+pinned and reviewed - because an operator that owns every database in the
+cluster is exactly the thing whose version should be written down and the same
+in both environments. It is deliberately not treated like the application:
+
+| | why |
+|---|---|
+| `prune: false` | pruning removes CRDs, and deleting a CRD deletes every object of that kind - here, every database. Removing an operator is a maintenance window, not something a merge can do. |
+| `upgrade.crds: CreateReplace` | `helm upgrade` does not touch CRDs at all. Without it the operator moves and its schema does not, and new fields are dropped silently. |
+| `remediation.retries: 0` | no automatic rollback. Rolling a database operator back mid-upgrade, while it holds every Cluster and may already have migrated their CRDs, turns a bad ten minutes into a bad week. It stops and alerts. |
 
 > **Backups are not configured.** A replicated cluster protects against losing an
 > instance, not against losing the data: a `DROP TABLE` is replicated faithfully
@@ -427,6 +474,28 @@ the ones that change nothing about identity, and a hook failure fails the
 release. As an ordinary resource, a provisioning problem is a failed Job
 somebody reads rather than a rollback of unrelated code.
 
+### 10.2 Being told what happened
+
+The pipeline moves one line in Git and stops. That is the property that keeps
+cluster credentials out of CI, and it has a corollary: **nothing in the pipeline
+knows whether the deployment worked.** A green CD run means a chart was
+published and a pointer moved, which is not the same claim.
+
+So the notification-controller closes it, with two Alerts per environment and
+the split is the point:
+
+- **info** is the running commentary - the database layer reaching Ready, the
+  platform layer starting because of it, the upgrade finishing. Health-check
+  progress is excluded; it fires every few seconds during a rollout and says
+  nothing anybody can act on.
+- **error** is wider than the deploy: every source and release in the namespace,
+  so a chart that cannot be pulled from the internal registry, or a credential
+  the operator could not resolve, is heard about too - none of which a deploy
+  would have touched.
+
+One channel for both would put the failures in a scroll of successes, where
+they are read on Monday.
+
 ## 11. Two environments
 
 The **branch is the environment**: `lab` deploys to the lab namespace, `main` to
@@ -469,7 +538,8 @@ publishes nothing, which is correct: the version being pinned to already exists.
 
 - [`deploy/charts/software-gateway/`](../../deploy/charts/software-gateway/) - the chart, and its README
 - [`deploy/environments/`](../../deploy/environments/) - the two ordered layers, per environment
-- [`deploy/flux/`](../../deploy/flux/) - bootstrapping a cluster
+- [`deploy/flux/`](../../deploy/flux/) - bootstrapping a cluster, the operators, the alerts
+- [`deploy/flux/platform/operators/`](../../deploy/flux/platform/operators/) - CloudNativePG, pinned and Flux-managed
 - [`deploy/chartstage/`](../../deploy/chartstage/) - the copy, and the environment values
 - [`deploy/secretsinv/`](../../deploy/secretsinv/) - the inventory, shared by the chart, the scaffold and the test
 - [`deploy/zitadel/k8s-state.mjs`](../../deploy/zitadel/k8s-state.mjs) - a compose volume, as a Secret

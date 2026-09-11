@@ -40,8 +40,9 @@ Once per cluster, by somebody with admin on it. Everything after this is a
 pull request.
 
 ```sh
-# 1. Flux itself
-flux install --namespace flux-system
+# 1. Flux itself, from the internal registry like everything else
+flux install --namespace flux-system \
+  --registry=artifactory.internal.example.com/docker/fluxcd
 
 # 2. Read access to this repository
 flux create secret git software-gateway-git \
@@ -57,26 +58,44 @@ flux create secret oci jfrog \
   --url artifactory.internal.example.com \
   --username "$JFROG_USERNAME" --password "$JFROG_TOKEN"
 
-# 4. This product
+# 4. The operators, ONCE PER CLUSTER. Not once per environment: a cluster
+#    hosting both lab and production has one CloudNativePG, not two.
+kubectl apply -k deploy/flux/platform/bootstrap
+
+# 5. This environment
 kubectl apply -k deploy/flux/clusters/lab      # or clusters/prod
 ```
 
-### Two operators, both cluster prerequisites
+Step 4 creates a `platform-operators` Kustomization that reconciles
+`deploy/flux/platform/operators`, and the environment's database layer
+`dependsOn` it - so the `Cluster` object is never submitted to an API server
+that has not been taught the kind.
 
-Neither is installed by this repository. An application chart that installs its
-own secrets operator has to hold a Vault token; one that installs its own
-database operator owns every other database in the cluster.
+### The operators
 
-**CloudNativePG**, which runs the database:
+**CloudNativePG is managed by Flux**, in `deploy/flux/platform/operators` -
+pinned, reviewed, and the same version in lab and production. The alternative
+is `helm install` once by hand per cluster, after which the version running in
+each is whatever it was installed with on a date nobody recorded; an operator
+that owns every database in the cluster is exactly the thing whose version
+should be written down.
 
-```sh
-helm install cnpg cloudnative-pg/cloudnative-pg \
-  --namespace cnpg-system --create-namespace
-```
+It is deliberately **not** treated like the application, and the three
+differences are all because an operator upgrade can restart every database it
+manages:
+
+| | why |
+|---|---|
+| `prune: false` on its Kustomization | pruning would remove its CRDs, and deleting a CRD deletes every object of that kind - for CloudNativePG, every database. Removing an operator is a maintenance window, not something a merge can do. |
+| `upgrade.crds: CreateReplace` | `helm upgrade` does **not** touch CRDs by default. Without this the operator moves and its schema does not, and new fields are silently dropped by the API server. |
+| `remediation.retries: 0` | no automatic rollback. Rolling an application back is free; rolling a database operator back mid-upgrade, while it holds every Cluster and may already have migrated their CRDs, turns a bad ten minutes into a bad week. It stops, alerts, and waits for a person. |
 
 There is no managed-database option anywhere in this repository. PostgreSQL runs
 in-cluster in every environment, with replication and automatic failover, and
 `deploy/environments/<env>/database/cluster.yaml` is the whole description of it.
+
+The credential operator belongs in the same directory and the same shape, and
+is left for whichever this estate settles on:
 
 > **Backups are not configured, and that is the one gap to close before this
 > holds data anybody would miss.** A CloudNativePG cluster replicates, which
@@ -85,8 +104,7 @@ in-cluster in every environment, with replication and automatic failover, and
 > file is where continuous WAL archiving goes, and it ships unset with the
 > shape of the answer in a comment.
 
-**The credential operator**, which turns `config/secrets/secrets.yaml` into
-Secrets:
+
 
 ```sh
 # HashiCorp Vault Secrets Operator (secrets.backend: vault)
@@ -127,6 +145,32 @@ kubectl -n swgw logs <pod> -c wait-for-database
 
 A restart count above zero in this deployment means something actually went
 wrong, which is the whole reason the waits exist.
+
+## Being told what happened
+
+The pipeline moves one line in Git and stops; Flux does the deployment. So
+without notifications the only place a deploy exists is `flux get` on somebody's
+laptop, and the first anybody hears of a failed upgrade is a user.
+
+`deploy/flux/clusters/<env>/notifications.yaml` carries a Provider and **two**
+Alerts, and the split is the point:
+
+- **`deploys-<env>`** (`eventSeverity: info`) is the running commentary: the
+  database layer reaching Ready, the platform layer starting because of it, the
+  Helm upgrade finishing. Health-check progress is excluded - it is emitted
+  every few seconds during a rollout and says nothing anybody can act on.
+- **`deploys-<env>-failures`** (`eventSeverity: error`) is wider than the first:
+  it listens to every source and release in the namespace, not only the ones a
+  deploy touches, so a chart that cannot be pulled from the internal registry or
+  a credential the operator could not resolve is heard about too.
+
+Sending both to one channel would put the failures in a scroll of successes,
+where they are read on Monday.
+
+The target is Microsoft Teams because this estate's directory is Entra. Any
+other is the same three lines with a different `type` - `slack`, `discord`,
+`generic` for any webhook. The webhook URL comes from the credential backend
+like everything else, as `flux-notifications` in flux-system.
 
 ## When a release goes wrong
 

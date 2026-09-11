@@ -33,7 +33,10 @@ spec:
   # demonstrate a failover, which is most of what a lab is for; one would make
   # every node drain an outage and would prove nothing.
   instances: 2
-  imageName: ghcr.io/cloudnative-pg/postgresql:16.10
+  # Through the internal registry, like every other image in this deployment.
+  # CloudNativePG pulls this on every instance, including during a failover, so
+  # a cluster that cannot reach it cannot recover.
+  imageName: artifactory.internal.example.com/docker/cloudnative-pg/postgresql:16.10
 
   # The owner and the first database. ZITADEL's own is created below: it claims
   # `public` and about 150 tables, so it gets a database rather than a schema.

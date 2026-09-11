@@ -33,7 +33,10 @@ spec:
   # quorum, which is the difference between a failover and a decision somebody
   # has to make at night.
   instances: 3
-  imageName: ghcr.io/cloudnative-pg/postgresql:16.10
+  # Through the internal registry, like every other image in this deployment.
+  # CloudNativePG pulls this on every instance, including during a failover, so
+  # a cluster that cannot reach it cannot recover.
+  imageName: artifactory.internal.example.com/docker/cloudnative-pg/postgresql:16.10
 
   # The owner and the first database. ZITADEL's own is created below: it claims
   # `public` and about 150 tables, so it gets a database rather than a schema.

@@ -1,42 +1,14 @@
-# What Flux applies in this cluster for this product, and nothing else. Flux
-# reconciles many applications here; this is the one directory that is ours.
-apiVersion: kustomize.toolkit.fluxcd.io/v1
+# Applied once per cluster:  kubectl apply -k deploy/flux/clusters/<env>
+#
+# This is a KUSTOMIZE kustomization - the thing `kubectl -k` reads - and
+# sync.yaml beside it is a FLUX Kustomization, which is a different kind with
+# the same name. Keeping them in one file is not possible and putting both
+# under the name `kustomization.yaml` is how `kubectl apply -k` ends up parsing
+# a Flux object and reporting a field it has never heard of.
+apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-metadata:
-  name: software-gateway
-  namespace: flux-system
-spec:
-  interval: 5m
-  # A failed apply is retried in a minute rather than waiting out the interval
-  # above, so a transient admission or registry error costs a minute.
-  retryInterval: 1m
-  path: ./deploy/environments/prod
-  # PRUNE. An object removed from Git is removed from the cluster. Without it,
-  # deleting a manifest leaves it running forever and Git stops being the
-  # answer to "what is deployed".
-  prune: true
-  wait: true
-  # Long enough for the database layer to bootstrap and the platform layer to
-  # roll: both are waited on, and both are waited on in sequence.
-  timeout: 45m
-  sourceRef:
-    kind: GitRepository
-    name: software-gateway
-  healthChecks:
-    # THE TWO LAYERS, not the workloads. This reconciler's job is to create the
-    # ordered pair below it; each of those waits for its own contents, and the
-    # platform one will not begin until the database one reports Ready.
-    #
-    #   software-gateway-prod-database   the CloudNativePG Cluster
-    #   software-gateway-prod-platform   dependsOn the above; the Helm release
-    #
-    # So "this cluster is up to date" means both layers converged, which is the
-    # question somebody watching a deploy is actually asking.
-    - apiVersion: kustomize.toolkit.fluxcd.io/v1
-      kind: Kustomization
-      name: software-gateway-prod-database
-      namespace: flux-system
-    - apiVersion: kustomize.toolkit.fluxcd.io/v1
-      kind: Kustomization
-      name: software-gateway-prod-platform
-      namespace: flux-system
+resources:
+  - source.yaml         # where this cluster reads the repository and the charts
+  - sync.yaml           # what it reconciles from them
+  - notifications.yaml  # and what it says while doing it
+  - notification-secret.yaml  # the webhook it says it to

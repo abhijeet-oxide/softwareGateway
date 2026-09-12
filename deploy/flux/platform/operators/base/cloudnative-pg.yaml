@@ -1,57 +1,15 @@
-# CloudNativePG - the operator that runs this deployment's PostgreSQL.
-#
-# THE BASE. Everything here is true wherever the operator runs; the two
-# overlays beside this directory decide the namespace it lives in and the
-# namespaces it watches. See ../README.md for which to choose.
-#
-# WHY IT IS MANAGED BY FLUX AT ALL. The alternative is `helm install` once, by
-# hand, per cluster - and then the version running in lab and the version
-# running in production are whatever each was installed with, on dates nobody
-# recorded. An operator that owns every database in the cluster is exactly the
-# thing whose version should be written down, reviewed, and the same in both
-# places. That is what this file is.
-#
-# WHY IT IS NOT TREATED LIKE THE APPLICATION. Three differences, all of them
-# because an operator upgrade can restart every database it manages:
-#
-#   the version is PINNED and moves in a pull request, never by a range;
-#   CRDs are upgraded explicitly, because Helm does not do it by default;
-#   a failed upgrade STOPS rather than rolling itself back.
----
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
   name: cloudnative-pg
 spec:
   interval: 30m
-
-  # ONE HELM RELEASE RECORD, CLUSTER-WIDE, WHATEVER THE SCOPE.
-  #
-  # The two scopes put the operator's HelmRelease in different NAMESPACES, so
-  # they are different Kubernetes objects and `platform-operators` - which has
-  # prune off, because pruning an operator can take its CRDs and therefore every
-  # database with it - will not remove the one it is no longer pointing at.
-  # Switching scope would otherwise leave BOTH running: two operators
-  # reconciling the same cluster-scoped admission webhooks to point at
-  # themselves, each reporting perfectly healthy, and nothing saying a word.
-  #
-  # Helm keys a release by (releaseName, storageNamespace). Pinning both to the
-  # same values in every scope means the second one cannot install: the record
-  # already exists and is owned by another HelmRelease, so it fails, loudly, and
-  # the failure Alert carries it. A stuck switch is a bad afternoon; two
-  # operators fighting over one webhook while both look green is a bad quarter.
-  #
-  # Changing scope is therefore a migration with a runbook, not a toggle. See
-  # ../README.md, "Changing scope after a deployment".
   releaseName: cloudnative-pg
   storageNamespace: cnpg-system
 
   chart:
     spec:
       chart: cloudnative-pg
-      # PINNED, and moved by a person. A range here would let an operator
-      # upgrade - which can trigger a rolling restart of every PostgreSQL
-      # instance in the cluster - happen because a mirror synced overnight.
       version: 0.27.1
       sourceRef:
         kind: HelmRepository
@@ -60,9 +18,6 @@ spec:
       interval: 0s
 
   install:
-    # Helm installs the chart's CRDs on first install by default; stated because
-    # the upgrade behaviour below is NOT the default and the pair should be read
-    # together.
     crds: Create
     timeout: 10m
   upgrade:
@@ -74,25 +29,17 @@ spec:
     crds: CreateReplace
     timeout: 10m
     remediation:
-      # NO AUTOMATIC ROLLBACK, deliberately. Rolling an application back is
-      # free; rolling a database operator back mid-upgrade, while it holds
-      # every Cluster in the cluster and has possibly already migrated their
-      # CRDs, is how a bad ten minutes becomes a bad week. A failed upgrade
-      # here should stop, fire an alert, and wait for somebody - which is what
-      # the notification Alert in deploy/flux/clusters/<env> is for.
+      # NO AUTOMATIC ROLLBACK, deliberately.
       retries: 0
   driftDetection:
     mode: enabled
 
   values:
-    # The operator's own image, through the same mirror as everything else.
     image:
       repository: artifactory.internal.example.com/docker/cloudnative-pg/cloudnative-pg
-      imagePullSecrets:
+    imagePullSecrets:
       - name: artifactory-secret
     replicaCount: 1
-    # WHERE IT WATCHES is set by the overlay, not here - see the two beside
-    # this directory. It is the one thing that differs between them.
     resources:
       requests: {cpu: 100m, memory: 200Mi}
       limits: {memory: 400Mi}

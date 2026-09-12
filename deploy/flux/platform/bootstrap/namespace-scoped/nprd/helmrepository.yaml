@@ -6,5 +6,6 @@ metadata:
 spec:
   type: oci
   url: oci://artifactory.internal.example.com/helm
+  interval: 5m
   secretRef:
     name: jfrog

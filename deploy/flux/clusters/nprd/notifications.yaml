@@ -1,44 +1,24 @@
-# WHAT IS HAPPENING TO THIS ENVIRONMENT, said out loud.
-#
-# The pipeline moves one line in Git and stops; Flux does the deployment. So
-# without this, the only place a deploy exists is `flux get` on somebody's
-# laptop, and the first anybody hears of a failed upgrade is a user. The
-# notification-controller is what closes that: it watches the same objects Flux
-# reconciles and posts what they do.
-#
-# TWO ALERTS, NOT ONE, and the split is the point. A deploy is routine and its
-# stream is noisy - progressing, applied, upgraded, healthy - and a failure is
-# neither. Sending both to one channel means the failures arrive in a scroll of
-# successes and are read on Monday.
----
 apiVersion: notification.toolkit.fluxcd.io/v1beta3
 kind: Provider
 metadata:
-  name: deploys-lab
+  name: deploys-nprd
   namespace: flux-system
 spec:
-  # Microsoft Teams, because this estate's directory is Entra and its people
-  # are already there. Every other target is the same three lines with a
-  # different `type` - slack, discord, generic (any webhook), githubdispatch.
   type: msteams
-  # The webhook URL, from the credential backend like everything else - it is
-  # in config/secrets/secrets.yaml as `flux-notifications`, so it is one more
-  # entry in the one list rather than a secret somebody created by hand and
-  # nobody can find later.
   secretRef:
     name: flux-notifications
   # Stamped on every message, because a person reading a channel that carries
   # more than one cluster needs to know which one is talking.
-  channel: lab
+  channel: nprd
 ---
 apiVersion: notification.toolkit.fluxcd.io/v1beta3
 kind: Alert
 metadata:
-  name: deploys-lab
+  name: deploys-nprd
   namespace: flux-system
 spec:
   providerRef:
-    name: deploys-lab
+    name: deploys-nprd
   # info carries the whole life of a reconciliation - started, applied,
   # upgraded, healthy - so this is the running commentary of a deploy.
   eventSeverity: info
@@ -52,14 +32,14 @@ spec:
       name: platform-operators
       namespace: flux-system
     - kind: Kustomization
-      name: software-gateway-lab-database
+      name: software-gateway-nprd-database
       namespace: flux-system
     - kind: Kustomization
-      name: software-gateway-lab-platform
+      name: software-gateway-nprd-platform
       namespace: flux-system
     - kind: HelmRelease
       name: software-gateway
-      namespace: swgw-lab
+      namespace: swgw-nprd
   # Health-check progress is emitted every few seconds while a rollout runs and
   # says nothing a person can act on. The events that matter - the upgrade
   # starting, finishing, or being rolled back - are not filtered.
@@ -72,16 +52,16 @@ spec:
   # is how somebody works out that they skipped a bootstrap step.
   exclusionList:
     - "health check.*in progress"
-  summary: "software-gateway (lab)"
+  summary: "software-gateway (nprd)"
 ---
 apiVersion: notification.toolkit.fluxcd.io/v1beta3
 kind: Alert
 metadata:
-  name: deploys-lab-failures
+  name: deploys-nprd-failures
   namespace: flux-system
 spec:
   providerRef:
-    name: deploys-lab
+    name: deploys-nprd
   eventSeverity: error
   # WIDER THAN THE ALERT ABOVE. A failure is worth hearing about from anything
   # that can break this environment, including the things a deploy does not
@@ -94,7 +74,7 @@ spec:
     - kind: HelmRepository
       name: "*"
       namespace: flux-system
-    # NAMED, NOT GLOBBED. `software-gateway-lab-*` matched the two layers and
+    # NAMED, NOT GLOBBED. `software-gateway-nprd-*` matched the two layers and
     # missed the two objects most likely to be the actual cause: the root
     # Kustomization, which is what times out when a layer never becomes ready,
     # and the operator layer, without which the database layer waits forever.
@@ -102,15 +82,15 @@ spec:
       name: software-gateway
       namespace: flux-system
     - kind: Kustomization
-      name: software-gateway-lab-database
+      name: software-gateway-nprd-database
       namespace: flux-system
     - kind: Kustomization
-      name: software-gateway-lab-platform
+      name: software-gateway-nprd-platform
       namespace: flux-system
     - kind: Kustomization
       name: platform-operators
       namespace: flux-system
     - kind: HelmRelease
       name: "*"
-      namespace: swgw-lab
-  summary: "FAILED - software-gateway (lab)"
+      namespace: swgw-nprd
+  summary: "FAILED - software-gateway (nprd)"

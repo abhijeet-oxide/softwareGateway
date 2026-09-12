@@ -1,0 +1,130 @@
+# NPRD. Deployed from branch `main`, into namespace wst2m0uspa0001c.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: software-gateway
+  namespace: swgw-lab
+spec:
+  interval: 10m
+  releaseName: swgw
+  chart:
+    spec:
+      chart: software-gateway
+      # THE DEPLOYMENT POINTER. Moved by the release pipeline on every merge to
+      # `main`, and by a person in a pull request to pin or roll back.
+      version: 0.1.6
+      sourceRef:
+        kind: HelmRepository
+        name: software-gateway
+        namespace: flux-system
+      interval: 0s
+  install:
+    remediation:
+      retries: 3
+    timeout: 20m
+  upgrade:
+    timeout: 15m
+    remediation:
+      retries: 2
+      remediateLastFailure: true
+      strategy: rollback
+    cleanupOnFail: true
+  driftDetection:
+    mode: enabled
+  values:
+    externalUrls:
+      web: https://swgw-nprd.example.com
+      identity: https://id-swgw-nprd.example.com
+    tenant: default
+    ingress:
+      enabled: true
+      className: nginx
+      app:
+        host: swgw-nprd.example.com
+        tls: {enabled: true, secretName: swgw-nprd-tls}
+      identity:
+        host: id-swgw-nprd.example.com
+        tls: {enabled: true, secretName: id-swgw-nprd-tls}
+    image:
+      registry: artifactory.internal.example.com
+      repository: swgw
+    images:
+      mirror: artifactory.internal.example.com/docker
+      zitadel: zitadel:v4.17.3
+      zitadelLogin: zitadel-login:v4.17.3
+      nginx: nginx:1.27.5-alpine
+      cerbos: cerbos:0.55.0
+      node: node:22.23.2-alpine
+    secrets:
+      backend: vault
+      vault:
+        authRef: vault-auth
+        mount: kv
+        pathPrefix: softwaregateway/lab
+      registryPullSecret:
+        enabled: true
+        name: jfrog
+        from: jfrog
+    coordinator:
+      replicas: 3
+      resources:
+        requests: {cpu: 500m, memory: 512Mi}
+        limits: {memory: 1Gi}
+      podDisruptionBudget: {enabled: true, minAvailable: 2}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app: coordinator}
+    worker:
+      replicas: 4
+      resources:
+        requests: {cpu: "1", memory: 512Mi}
+        limits: {memory: 1Gi}
+      podDisruptionBudget: {enabled: true, minAvailable: 2}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app: worker}
+      autoscaling:
+        enabled: false
+        minReplicas: 4
+        maxReplicas: 30
+    web:
+      replicas: 3
+      supportContact: swgw-support@example.com
+      podDisruptionBudget: {enabled: true, minAvailable: 2}
+    cerbos:
+      replicas: 2
+    database:
+      existingSecret: swgw-db-app
+      host: swgw-db-rw
+    identity:
+      enabled: true
+      masterkey:
+        existingSecret: swgw-zitadel
+        key: masterkey
+      rootPassword:
+        existingSecret: swgw-zitadel
+        key: rootPassword
+      bootstrapAdmin:
+        username: admin
+        email: swgw-admin@example.com
+      sso:
+        issuer: https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0
+        clientId: "00000000-0000-0000-0000-000000000000"
+        existingSecret: swgw-sso
+        displayName: Microsoft
+      zitadel: {replicas: 2}
+      login: {replicas: 2}
+      proxy: {replicas: 2}
+
+    metrics:
+      serviceMonitor:
+        enabled: false
+    networkPolicy:
+      enabled: true
+      allowFromNamespaces: [monitoring]

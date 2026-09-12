@@ -1,6 +1,6 @@
 module github.com/abhijeet-oxide/softwareGateway
 
-go 1.25.7
+go 1.26.5
 
 require (
 	cel.dev/cel-go v0.32.0

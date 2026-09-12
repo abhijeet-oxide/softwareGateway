@@ -1,9 +1,3 @@
-# THE OPERATOR IN ITS OWN NAMESPACE, WATCHING ALL OF THEM.
-#
-# REQUIRED when one cluster hosts more than one environment - lab and
-# production in two namespaces of the same cluster. There can only be one
-# CloudNativePG per cluster (see ../README.md), so it cannot live in either
-# environment's namespace without one environment owning the other's operator.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: cnpg-system

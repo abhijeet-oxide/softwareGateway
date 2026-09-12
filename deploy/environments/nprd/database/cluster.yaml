@@ -1,0 +1,57 @@
+# A `helm rollback` must not be able to reach it. Rolling an application back
+# one version is routine; rolling a database back is data loss.
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: swgw-db
+  namespace: swgw-lab
+  labels:
+    app.kubernetes.io/part-of: software-gateway
+    app.kubernetes.io/component: database
+spec:
+  instances: 3
+  imageName: artifactory.internal.example.com/docker/cloudnative-pg/postgresql:16.10
+  imagePullSecrets:
+    - name: jfrog
+  bootstrap:
+    initdb:
+      database: swgw
+      owner: swgw
+      postInitSQL:
+        - CREATE DATABASE zitadel OWNER swgw
+  storage:
+    size: 50Gi
+    # storageClass: managed-csi-premium
+  # The write-ahead log on its own volume. Separating it is what stops a burst
+  # of WAL during a large transfer from filling the volume the data is on.
+  walStorage:
+    size: 10Gi
+  resources:
+    requests: {cpu: "1", memory: 2Gi}
+    limits: {memory: 4Gi}
+  postgresql:
+    parameters:
+      max_connections: "400"
+    synchronous:
+      method: any
+      number: 1
+  primaryUpdateStrategy: unsupervised   # minor upgrades roll without a human
+  primaryUpdateMethod: switchover       # promote a replica, then update the old primary
+  switchoverDelay: 60
+
+  # BACKUPS ARE NOT CONFIGURED
+  # CloudNativePG does continuous WAL archiving to object storage, which gives
+  # point-in-time recovery to any second in the retention window. It needs a
+  # target and a credential, and neither has been chosen yet:
+  #
+  #   backup:
+  #     retentionPolicy: 30d
+  #     barmanObjectStore:
+  #       destinationPath: https://<account>.blob.core.windows.net/swgw-backups/
+  #       azureCredentials:
+  #         storageAccount: {name: swgw-db-backup, key: account}
+  #         storageKey:     {name: swgw-db-backup, key: key}
+  #
+  # Until that exists, losing the cluster loses the data. A replica is not a
+  # backup: it replicates a DROP TABLE faithfully and immediately.

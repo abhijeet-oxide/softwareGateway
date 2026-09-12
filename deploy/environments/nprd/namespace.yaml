@@ -5,7 +5,7 @@ metadata:
   labels:
     kubernetes.io/metadata.name: swgw-lab
     app.kubernetes.io/part-of: software-gateway
-    softwaregateway.io/environment: lab
+    softwaregateway.io/environment: nprd
     # Pod Security Standards. `restricted` is what the workloads in this chart
     # are written for: non-root, no privilege escalation, every capability
     # dropped, RuntimeDefault seccomp. The two nginx tiers are the exception

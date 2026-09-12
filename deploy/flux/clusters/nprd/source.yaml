@@ -1,0 +1,27 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: software-gateway
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: https://github.com/abhijeet-oxide/softwareGateway
+  ref:
+    branch: main
+  secretRef:
+    name: software-gateway-git
+  ignore: |
+    /*
+    !/deploy/environments/nprd
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: software-gateway
+  namespace: flux-system
+spec:
+  type: oci
+  url: oci://artifactory.internal.example.com/swgw
+  interval: 5m
+  secretRef:
+    name: jfrog

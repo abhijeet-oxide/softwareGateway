@@ -1,0 +1,24 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: software-gateway
+  namespace: flux-system
+spec:
+  interval: 5m
+  retryInterval: 1m
+  path: ./deploy/environments/nprd
+  prune: true
+  wait: true
+  timeout: 45m
+  sourceRef:
+    kind: GitRepository
+    name: software-gateway
+  healthChecks:
+    - apiVersion: kustomize.toolkit.fluxcd.io/v1
+      kind: Kustomization
+      name: software-gateway-nprd-database
+      namespace: flux-system
+    - apiVersion: kustomize.toolkit.fluxcd.io/v1
+      kind: Kustomization
+      name: software-gateway-nprd-platform
+      namespace: flux-system

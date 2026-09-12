@@ -6,7 +6,7 @@ metadata:
 spec:
   interval: 30m
   retryInterval: 2m
-  path: ./deploy/flux/platform/operators/cluster-scoped
+  path: ./deploy/flux/platform/operators/namespace-scoped/nprd
   sourceRef:
     kind: GitRepository
     name: software-gateway-platform

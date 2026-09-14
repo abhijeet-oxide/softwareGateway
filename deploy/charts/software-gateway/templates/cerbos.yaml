@@ -57,6 +57,7 @@ spec:
         checksum/cerbos-config: {{ .Files.Get "files/cerbos/config.yaml" | sha256sum }}
     spec:
       serviceAccountName: {{ include "swgw.fullname" . }}-cerbos
+      {{- include "swgw.imagePullSecrets" . | nindent 6 }}
       securityContext:
         {{- include "swgw.podSecurityContext" . | nindent 8 }}
         runAsUser: 1000

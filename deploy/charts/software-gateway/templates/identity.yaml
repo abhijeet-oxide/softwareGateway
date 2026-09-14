@@ -125,6 +125,7 @@ spec:
       labels:
         {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-setup") | nindent 8 }}
     spec:
+      {{- include "swgw.imagePullSecrets" . | nindent 6 }}
       restartPolicy: Never
       serviceAccountName: {{ $full }}-seeder
       securityContext:
@@ -156,13 +157,36 @@ spec:
         # because the foundational ZITADEL event-store schema had never been
         # created.
         #
-        # `zitadel init` prepares the database structures required by
-        # migrations and is safe to execute on a brand-new installation.
+        # CloudNativePG has already created the `zitadel` database and assigned
+        # ownership to the non-superuser `swgw` role. Therefore this Job runs
+        # `zitadel init schema` rather than the full `zitadel init`.
+        #
+        # The schema-only command creates ZITADEL's foundational schemas and
+        # tables without attempting CREATE ROLE, CREATE DATABASE, or GRANT,
+        # operations that require PostgreSQL administrative privileges.
+        #
+        # Running the full `zitadel init` previously failed with:
+        #
+        #   permission denied to create database (SQLSTATE 42501)
+        #
+        # After schema bootstrap completes, the setup container below performs
+        # migrations and creates the first ZITADEL instance.
+        # CloudNativePG already creates the database and owner account.
+        #
+        # We therefore initialize only ZITADEL's internal schemas and tables.
+        #
+        # `init database` and the top-level `init` provisioning flow require
+        # PostgreSQL privileges to create databases and users. The CNPG
+        # application account intentionally does not have those permissions.
+        #
+        # `init zitadel` assumes the database and user already exist and
+        # bootstraps only the internal ZITADEL objects.
         - name: init-database
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.zitadel) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - init
+            - zitadel
           env:
             {{- include "swgw.zitadelEnv" . | nindent 12 }}
           securityContext:
@@ -209,9 +233,7 @@ spec:
             - {name: state, mountPath: /pat}
             - {name: seeder, mountPath: /seeder, readOnly: true}
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities: {drop: ["ALL"]}
+            {{- include "swgw.containerSecurityContext" . | nindent 12 }}
       volumes:
         - name: state
           emptyDir: {medium: Memory}
@@ -239,6 +261,7 @@ spec:
       labels:
         {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel") | nindent 8 }}
     spec:
+      {{- include "swgw.imagePullSecrets" . | nindent 6 }}
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -299,6 +322,7 @@ spec:
       labels:
         {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-login") | nindent 8 }}
     spec:
+      {{- include "swgw.imagePullSecrets" . | nindent 6 }}
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -393,6 +417,7 @@ spec:
         checksum/proxy-config: {{ .Files.Get "files/zitadel/nginx.conf" | sha256sum }}
         checksum/proxy-entrypoint: {{ printf "%s|%s" (.Files.Get "files/zitadel/docker-entrypoint.sh") (default "" .Values.web.supportContact) | sha256sum }}
     spec:
+      {{- include "swgw.imagePullSecrets" . | nindent 6 }}
       securityContext:
         {{- include "swgw.nginxPodSecurityContext" . | nindent 8 }}
       initContainers:

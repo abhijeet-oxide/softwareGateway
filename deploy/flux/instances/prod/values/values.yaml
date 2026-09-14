@@ -1,0 +1,120 @@
+# yaml-language-server: $schema=../../../software/schema/values.schema.json
+#
+# PRODUCTION - the whole of what makes this instance different.
+
+tenant: default
+supportContact: https://support.example.com/software-gateway
+
+# Two DNS names with certificates, behind the cluster's ingress controller.
+access:
+  scheme: https
+  web:
+    host: gateway.example.com
+  identity:
+    host: id.gateway.example.com
+  expose:
+    type: ingress
+    ingress:
+      className: nginx
+      tls:
+        enabled: true
+        webSecretName: gateway-tls
+        identitySecretName: id-gateway-tls
+
+image:
+  registry: contoso.azurecr.io
+  repository: software-gateway
+images:
+  mirror: contoso.azurecr.io/docker
+
+database:
+  cluster:
+    name: swgw-db
+    instances: 3
+    image: contoso.azurecr.io/docker/cloudnative-pg/postgresql:16.10
+    storage: {size: 200Gi, className: managed-csi-premium}
+    walStorage: {size: 40Gi, className: managed-csi-premium}
+    resources:
+      requests: {cpu: "2", memory: 4Gi}
+      limits: {memory: 8Gi}
+    # A commit is on two instances before the client is told it committed, so a
+    # primary failure loses nothing. One network round trip per commit, which
+    # this workload can afford.
+    synchronousReplicas: 1
+    backup:
+      enabled: true
+      destinationPath: https://contosobackups.blob.core.windows.net/swgw/
+      retentionPolicy: 30d
+      azureCredentials:
+        storageAccount: {name: swgw-db-backup, key: account}
+        storageKey: {name: swgw-db-backup, key: key}
+
+identity:
+  masterkey: {existingSecret: swgw-zitadel, key: masterkey}
+  rootPassword: {existingSecret: swgw-zitadel, key: rootPassword}
+  bootstrapAdmin:
+    username: admin
+    email: platform-team@example.com
+  # Single sign-on against the corporate directory. The redirect URI to register
+  # is https://id.gateway.example.com/idps/callback, under the "Web" platform -
+  # not "Single-page application".
+  sso:
+    issuer: https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0
+    clientId: "00000000-0000-0000-0000-000000000000"
+    existingSecret: swgw-sso
+    displayName: Microsoft
+    requireMfa: true
+
+# The Vault Secrets Operator turns every entry in config/secrets/secrets.yaml
+# into a Kubernetes Secret, refreshed on a timer. The VaultAuth it resolves is in
+# 0-secrets/.
+secrets:
+  backend: vault
+  vault:
+    authRef: vault-auth
+    mount: kv
+    pathPrefix: softwaregateway/prod
+  registryPullSecret:
+    enabled: true
+    name: registry-pull
+    from: registry-pull
+
+coordinator:
+  replicas: 3
+  resources:
+    requests: {cpu: 500m, memory: 512Mi}
+    limits: {memory: 1Gi}
+  podDisruptionBudget: {enabled: true, minAvailable: 2}
+  # ScheduleAnyway rather than DoNotSchedule: a zone outage must degrade the
+  # spread, not stop scheduling.
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels: {app: coordinator}
+
+worker:
+  replicas: 4
+  resources:
+    requests: {cpu: "1", memory: 512Mi}
+    limits: {memory: 1Gi}
+  podDisruptionBudget: {enabled: true, minAvailable: 2}
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels: {app: worker}
+
+web:
+  replicas: 3
+  podDisruptionBudget: {enabled: true, minAvailable: 2}
+
+networkPolicy:
+  enabled: true
+  allowFromNamespaces: [monitoring]
+
+metrics:
+  serviceMonitor:
+    enabled: true

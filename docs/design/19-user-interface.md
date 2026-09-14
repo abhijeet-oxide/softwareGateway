@@ -265,7 +265,7 @@ G1 is absolute: shipping a UI in front of an unauthenticated API would expose tr
 - **Fast on real data**: virtualised tables, because a transfer has thousands of job rows; server-side pagination and filtering, which the API already provides; no client-side aggregation of anything the API can aggregate.
 - **Accessible**: WCAG AA, full keyboard operation, no meaning carried by colour alone.
 - **Honest**: the rule from [18](18-quay-replication.md) §6.1 is a UI rule above all - no progress bar, percentage or ETA for work whose bytes we are not counting. In the download flow this is visible as a real asymmetry the design must preserve: the JFrog step reports measured bytes, speed and ETA, and the **Configure Mirror to Quay** step reports configured-at, sync-completed-at and whether the content matches. Two steps of one operation, two different kinds of truth, shown differently on purpose.
-- **AT&T enterprise visual language**, light theme first: AT&T blue for primary actions, dark navy navigation, white and light-grey content, green/red/amber carrying only success, failure and warning. A mature internal operations product rather than a generic dashboard.
+- **Enterprise visual language**, light theme first: one saturated brand blue for primary actions, dark navy navigation, white and light-grey content, green/red/amber carrying only success, failure and warning. A mature internal operations product rather than a generic dashboard.
 - **Boring technology**, chosen at M10 against the same criteria as [ADR-001](16-technology-choices.md#adr-001): one framework, one build, no exotic runtime, and a dependency footprint an air-gapped estate can vendor.
 
 ## 7. Delivery

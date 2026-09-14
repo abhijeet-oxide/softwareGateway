@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: swgw-lab
+  labels:
+    app.kubernetes.io/part-of: software-gateway
+    softwaregateway.io/instance: lab
+    # `baseline` enforced with `restricted` audited, rather than a claim that is
+    # not true: every workload here is written for `restricted`, and the two
+    # nginx tiers are the documented exception (see the chart's _helpers.tpl).
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

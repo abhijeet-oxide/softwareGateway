@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=../charts/software-gateway/values.schema.json
+#
+# OPENSHIFT: Routes instead of Ingress, and the cluster's own image registry
+# mirrored through an ImageContentSourcePolicy or a private Quay.
+#
+# One thing to know before installing. OpenShift's `restricted-v2` SCC assigns
+# every pod a random high UID, and the two nginx tiers in this chart bind port 80
+# and write at container start - so either run this namespace under the
+# `nonroot-v2` SCC, or grant it explicitly:
+#
+#   oc adm policy add-scc-to-user nonroot-v2 -z default -n swgw
+#
+# Everything else in the chart already runs non-root with a read-only root
+# filesystem and every capability dropped.
+
+tenant: default
+supportContact: platform-team@example.com
+
+access:
+  scheme: https
+  # Hosts on the cluster's wildcard apps domain, so no DNS record is needed.
+  web: {host: swgw.apps.ocp.example.com}
+  identity: {host: id-swgw.apps.ocp.example.com}
+  expose:
+    type: route
+    route:
+      # The router terminates TLS with its own wildcard certificate and speaks
+      # plain HTTP to the Services. `passthrough` and `reencrypt` are the other
+      # two; leave it empty for a Route with no TLS at all.
+      termination: edge
+
+image:
+  registry: quay.example.com
+  repository: software-gateway
+images:
+  mirror: quay.example.com/docker
+
+imagePullSecrets:
+  - quay-pull
+
+database:
+  cluster:
+    name: swgw-db
+    instances: 3
+    image: quay.example.com/docker/cloudnative-pg/postgresql:16.10
+    storage: {size: 100Gi, className: ocs-storagecluster-ceph-rbd}
+    walStorage: {size: 20Gi, className: ocs-storagecluster-ceph-rbd}
+    synchronousReplicas: 1
+
+identity:
+  masterkey: {existingSecret: swgw-zitadel, key: masterkey}
+  rootPassword: {existingSecret: swgw-zitadel, key: rootPassword}
+  bootstrapAdmin:
+    username: admin
+    email: platform-team@example.com
+
+secrets:
+  backend: vault
+  vault:
+    authRef: vault-auth
+    mount: kv
+    pathPrefix: softwaregateway/ocp
+
+coordinator: {replicas: 3}
+worker: {replicas: 4}
+web: {replicas: 3}

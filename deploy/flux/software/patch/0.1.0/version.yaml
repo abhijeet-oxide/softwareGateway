@@ -1,0 +1,4 @@
+# Applied to both HelmReleases: the two layers are one chart and one version.
+- op: replace
+  path: /spec/chart/spec/version
+  value: "0.1.0"

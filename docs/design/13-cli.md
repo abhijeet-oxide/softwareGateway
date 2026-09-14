@@ -428,12 +428,12 @@ VERIFIED - 5 of 5 artifacts (1.8s)
 ### 5.1 `compare` - what is different between two places?
 
 ```
-$ transferctl compare cfx-5000-product 25.7_mp2604_2131 --to att-stage
+$ transferctl compare cfx-5000-product 25.7_mp2604_2131 --to edge-stage
 
 cfx-5000-product
 
   A  near         orbs/cfx-5000-k8s:orb_25.7_mp2604_2131
-  B  att-stage    artifacts-oci-stage/orbs/cfx-5000-k8s:orb_25.7_mp2604_2131
+  B  edge-stage    artifacts-oci-stage/orbs/cfx-5000-k8s:orb_25.7_mp2604_2131
 
     TYPE    COMPONENT                          A                               B
 -   image   cfx-5000-product/lms               1.25.212  sha256:438001f263ab   absent
@@ -449,7 +449,7 @@ Differences
       cfx-5000-product/cvlk:1.0.7 points at sha256:8533f4a71a43 on the second side, not sha256:4573b0b15ceb
       2 files: 1 changed, 1 removed
 
-Also in att-stage, not part of this release
+Also in edge-stage, not part of this release
   orb_25.6_mp2601_2011
 
 1 identical, 1 changed, 1 only in A, 1 only in B.

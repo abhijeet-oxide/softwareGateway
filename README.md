@@ -47,7 +47,7 @@ users, products and roles, and how to turn on Microsoft SSO.
 ## Run it in a cluster
 
 ```bash
-helm install swgw oci://artifactory.internal.example.com/swgw/software-gateway \
+helm install swgw oci://registry.example.internal/charts/software-gateway \
   --version 1.4.3 --namespace swgw --create-namespace --values my-values.yaml
 ```
 
@@ -56,9 +56,15 @@ commands above read - as a Helm chart, reconciled by Flux from this repository.
 Adding a product or a person restarts nothing; only a code or `config.yaml`
 change rolls the fleet, and it does that without dropping a request.
 
+One values file is the whole of what a deployment differs in — the addresses, the
+registry, the database, the credentials backend. Annotated examples for an AKS
+lab with no DNS, AKS production and OpenShift are in
+[`deploy/examples/`](deploy/examples/README.md).
+
+**[Deploying it](docs/deployment.md)** ·
 **[The chart](deploy/charts/software-gateway/README.md)** ·
 **[Bootstrapping a cluster](deploy/flux/README.md)** ·
-**[How a change reaches it](docs/design/30-continuous-delivery.md)**
+**[When something is wrong](docs/deployment-troubleshooting.md)**
 
 ## Documentation
 

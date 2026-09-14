@@ -1,0 +1,13 @@
+# Where the chart is pulled from. The credential is the same one the pipeline
+# pushes with and the kubelet pulls images with.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: software-gateway
+  namespace: flux-system
+spec:
+  type: oci
+  url: oci://contoso.azurecr.io/charts
+  interval: 5m
+  secretRef:
+    name: registry-pull

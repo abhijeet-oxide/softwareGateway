@@ -1,20 +1,12 @@
 {{/*
-Names, labels and the two or three expressions that would otherwise be repeated
-in fifteen files.
+Names, labels, images, security contexts and the expressions that would
+otherwise be repeated in fifteen files.
 
-THE SERVICE NAMES ARE NOT PREFIXED, and that is a decision rather than an
-oversight. `deploy/web/nginx.conf` proxies to `controller:8080` and
-`deploy/zitadel/nginx.conf` proxies to `zitadel:8080` and
-`zitadel-login:3000`. Those files are baked into images and mounted by
-docker-compose.yml, and they are the same files here - which is the whole point
-of the split in docs/design/27. A release-prefixed Service would mean a second
-copy of both, differing in three words, and a class of bug where the compose
-stack works and the cluster 502s.
-
-The consequence, stated plainly: ONE RELEASE PER NAMESPACE. That is already the
-deployment model - lab in one namespace, production in another, possibly in
-different clusters - so it costs nothing. Two releases in one namespace collide
-on Service names and Helm says so at install time.
+THE SERVICE NAMES ARE NOT RELEASE-PREFIXED. deploy/web/nginx.conf proxies to
+`controller:8080` and deploy/zitadel/nginx.conf proxies to `zitadel:8080` and
+`zitadel-login:3000`; those files are baked into images and mounted by
+docker-compose.yml, and they are the same files here. The consequence is one
+release per namespace, which is already the deployment model.
 */}}
 
 {{- define "swgw.name" -}}
@@ -38,9 +30,8 @@ on Service names and Helm says so at install time.
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{/* Labels every object carries. app.kubernetes.io/version is the IMAGE
-     version, so `kubectl get deploy -L app.kubernetes.io/version` answers what
-     is actually running rather than which chart delivered it. */}}
+{{/* app.kubernetes.io/version is the IMAGE version, so `kubectl get deploy -L
+     app.kubernetes.io/version` answers what is running. */}}
 {{- define "swgw.labels" -}}
 helm.sh/chart: {{ include "swgw.chart" . }}
 app.kubernetes.io/name: {{ include "swgw.name" . }}
@@ -50,10 +41,8 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/part-of: software-gateway
 {{- end -}}
 
-{{/* Selector labels for one component. Call as (dict "ctx" $ "component" "worker").
-     `app` is included because deploy/web/nginx.conf and the NetworkPolicies
-     select on it, and because it is what the compose stack calls the same
-     process. */}}
+{{/* (dict "ctx" $ "component" "worker"). `app` is included because the two
+     nginx configs and the NetworkPolicies select on it. */}}
 {{- define "swgw.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "swgw.name" .ctx }}
 app.kubernetes.io/instance: {{ .ctx.Release.Name }}
@@ -67,31 +56,26 @@ app.kubernetes.io/component: {{ .component }}
 app: {{ .component }}
 {{- end -}}
 
-{{/* THE IMAGE TAG, in one place. Empty `image.tag` means the chart's
-     appVersion, which the pipeline stamps to the version of the last commit
-     that touched code. All three images share it: they are built from one
-     commit and are one artifact. */}}
+{{/* ------------------------------------------------------------------ images */}}
+
 {{- define "swgw.imageTag" -}}
 {{- default .Chart.AppVersion .Values.image.tag -}}
 {{- end -}}
 
-{{/* Call as (dict "ctx" $ "name" "coordinator"). */}}
+{{/* (dict "ctx" $ "name" "coordinator") */}}
 {{- define "swgw.image" -}}
 {{- $i := .ctx.Values.image -}}
 {{- $tag := include "swgw.imageTag" .ctx -}}
+{{- $path := printf "%s/software-gateway-%s" $i.repository .name -}}
 {{- if $i.registry -}}
-{{- printf "%s/%s/software-gateway-%s:%s" $i.registry $i.repository .name $tag -}}
+{{- printf "%s/%s:%s" $i.registry $path $tag -}}
 {{- else -}}
-{{- printf "%s/software-gateway-%s:%s" $i.repository .name $tag -}}
+{{- printf "%s:%s" $path $tag -}}
 {{- end -}}
 {{- end -}}
 
-{{/* A third-party image, resolved through the mirror.
-
-     Call as (dict "ctx" $ "image" .Values.images.nginx). The value is the
-     UPSTREAM PATH; this puts the internal registry in front of it, so there is
-     one hostname to change and no per-image registry field to forget. An empty
-     mirror leaves the path alone, which is what a laptop wants. */}}
+{{/* A third-party image, resolved through the mirror. The value is the upstream
+     path; an empty mirror leaves it alone. (dict "ctx" $ "image" ...) */}}
 {{- define "swgw.mirroredImage" -}}
 {{- $mirror := .ctx.Values.images.mirror | trimSuffix "/" -}}
 {{- if $mirror -}}
@@ -101,24 +85,31 @@ app: {{ .component }}
 {{- end -}}
 {{- end -}}
 
-{{- define "swgw.imagePullSecrets" -}}
-{{- $secrets := .Values.image.pullSecrets -}}
-{{- if and .Values.secrets.registryPullSecret.enabled (ne .Values.secrets.backend "none") -}}
-{{- $secrets = append $secrets (dict "name" .Values.secrets.registryPullSecret.name) -}}
+{{/* Every pull Secret this release uses, as a YAML list of names. The one the
+     credentials backend renders is included without being restated. */}}
+{{- define "swgw.pullSecretNames" -}}
+{{- $names := default (list) .Values.imagePullSecrets -}}
+{{- $pull := .Values.secrets.registryPullSecret -}}
+{{- if and $pull.enabled (ne .Values.secrets.backend "none") -}}
+{{- $names = append $names $pull.name -}}
 {{- end -}}
-{{- if $secrets }}
+{{- range ($names | uniq) }}
+- {{ . }}
+{{- end }}
+{{- end -}}
+
+{{- define "swgw.imagePullSecrets" -}}
+{{- $names := include "swgw.pullSecretNames" . | fromYamlArray -}}
+{{- if $names }}
 imagePullSecrets:
-{{- range $secrets }}
-  - name: {{ .name }}
+{{- range $names }}
+  - name: {{ . }}
 {{- end }}
 {{- end -}}
 {{- end -}}
 
-{{/* --------------------------------------------------------------- security
-     Identical for every workload this repository builds, because they have
-     identical needs: nothing writes to disk, nothing needs a capability, and
-     nothing runs as root. Stated once so a new component cannot quietly get
-     a weaker one. */}}
+{{/* ---------------------------------------------------------------- security */}}
+
 {{- define "swgw.podSecurityContext" -}}
 runAsNonRoot: true
 seccompProfile:
@@ -135,11 +126,25 @@ capabilities:
   drop: ["ALL"]
 {{- end -}}
 
-{{/* --------------------------------------------------------------- rollout
-     maxUnavailable 0: a replica is removed only after its replacement is
-     READY. On the Coordinator, ready means the database answers, the schema is
-     the one this build expects and products loaded - so a bad image stalls the
-     rollout with the old pods still serving instead of taking capacity away. */}}
+{{/* WEAKER THAN EVERY OTHER WORKLOAD HERE, and deliberately. nginx:alpine runs
+     its master as root and binds port 80, and both entrypoints write at start:
+     the web tier renders /runtime-config.json, and both fill in nginx's
+     `resolver` from /etc/resolv.conf. Neither runAsNonRoot nor a read-only root
+     can hold without forking the images compose runs. These containers hold no
+     credential and terminate no TLS. */}}
+{{- define "swgw.nginxContainerSecurityContext" -}}
+allowPrivilegeEscalation: false
+readOnlyRootFilesystem: false
+capabilities:
+  drop: ["ALL"]
+  add: ["NET_BIND_SERVICE", "CHOWN", "SETGID", "SETUID"]
+{{- end -}}
+
+{{- define "swgw.nginxPodSecurityContext" -}}
+seccompProfile:
+  type: RuntimeDefault
+{{- end -}}
+
 {{- define "swgw.strategy" -}}
 type: RollingUpdate
 rollingUpdate:
@@ -147,50 +152,65 @@ rollingUpdate:
   maxUnavailable: {{ .Values.rollout.maxUnavailable }}
 {{- end -}}
 
-{{/* -------------------------------------------------------------- the DSN
-     ONE SECRET, applied by the layer BEFORE this chart. The Coordinator reads
-     `dsn`; ZITADEL wants the same connection in parts. Nothing downstream has
-     to know how the database is run. */}}
-{{- define "swgw.dbSecretName" -}}
-{{- required "database.existingSecret is required - CloudNativePG publishes it as <cluster>-app" .Values.database.existingSecret -}}
+{{/* ---------------------------------------------------------------- database */}}
+
+{{/* CloudNativePG publishes the owner's connection as `<cluster>-app` and its
+     read-write endpoint as `<cluster>-rw`, which follows the primary through a
+     failover. Deriving both from one name is what keeps a renamed cluster from
+     being a three-line change with two places to get wrong. */}}
+{{- define "swgw.dbHost" -}}
+{{- if .Values.database.host -}}
+{{- .Values.database.host -}}
+{{- else -}}
+{{- printf "%s-rw" (required "database.host is required when database.cluster.name is empty" .Values.database.cluster.name) -}}
+{{- end -}}
 {{- end -}}
 
-{{/* The owner's credentials, as two environment variables.
+{{- define "swgw.dbSecretName" -}}
+{{- if .Values.database.existingSecret -}}
+{{- .Values.database.existingSecret -}}
+{{- else -}}
+{{- printf "%s-app" (required "database.existingSecret is required when database.cluster.name is empty" .Values.database.cluster.name) -}}
+{{- end -}}
+{{- end -}}
 
-     THE DSN IS ASSEMBLED BY KUBERNETES, not by a shell and not by this chart.
-     `$(VAR)` in an env value is expanded by the kubelet from variables declared
-     EARLIER in the same container, so the password reaches the process without
-     ever being written into a manifest, a values file or a log line - and
-     without putting a shell in a distroless image to build a URL.
+{{/* The DSN, from a key when the Secret carries one and composed by the kubelet
+     otherwise.
 
-     The ordering is load-bearing: a `$(VAR)` that names a variable declared
-     later is left as the literal text `$(VAR)`, which would reach the database
-     driver as a password spelled exactly that. */}}
-{{- define "swgw.dbCredentialEnv" -}}
+     `$(VAR)` in an env value is expanded from variables declared EARLIER in the
+     same container, so the password reaches the process without being written
+     into a manifest and without a shell in a distroless image. The ordering is
+     load-bearing: a `$(VAR)` naming a later variable is passed through as
+     literal text. */}}
+{{- define "swgw.dbEnv" -}}
+{{- $db := include "swgw.dbSecretName" . -}}
+{{- if .Values.database.dsnKey }}
+- name: SWGW_DATABASE_DSN
+  valueFrom:
+    secretKeyRef:
+      name: {{ $db }}
+      key: {{ .Values.database.dsnKey }}
+{{- else }}
 - name: SWGW_DB_USER
   valueFrom:
-    secretKeyRef:
-      name: {{ include "swgw.dbSecretName" . }}
-      key: {{ .Values.database.usernameKey }}
+    secretKeyRef: {name: {{ $db }}, key: {{ .Values.database.usernameKey }}}
 - name: SWGW_DB_PASSWORD
   valueFrom:
-    secretKeyRef:
-      name: {{ include "swgw.dbSecretName" . }}
-      key: {{ .Values.database.passwordKey }}
+    secretKeyRef: {name: {{ $db }}, key: {{ .Values.database.passwordKey }}}
+- name: SWGW_DATABASE_DSN
+  value: postgres://$(SWGW_DB_USER):$(SWGW_DB_PASSWORD)@{{ include "swgw.dbHost" . }}:{{ .Values.database.port }}/{{ .Values.database.name }}?sslmode={{ .Values.database.sslMode }}
+{{- end }}
 {{- end -}}
 
-{{/* ------------------------------------------------- configuration mounts
-     The three paths every component that reads product configuration uses.
-     They are the SAME paths docker-compose.yml mounts, which is why
-     config/config.yaml needs no cluster-specific fork: configDir moves, and
-     the loader derives the rest.
+{{/* ----------------------------------------------------- configuration mounts
+     The same paths docker-compose.yml mounts, which is why config/config.yaml
+     needs no cluster-specific fork.
 
-     products/ and secrets/ are NOT subPath mounts. A subPath mount does not
-     receive ConfigMap or Secret updates, which would silently break both the
-     product watcher and credential rotation - the two things this deployment
-     relies on to change without a restart. config.yaml IS a subPath mount,
-     deliberately: a change to it genuinely requires a restart, and its
-     checksum annotation is what performs one. */}}
+     products/ and secrets/ are NOT subPath mounts: a subPath does not receive
+     ConfigMap or Secret updates, and the product watcher and credential
+     rotation are the two things this deployment relies on to change without a
+     restart. config.yaml IS a subPath mount, because a change to it genuinely
+     requires one and its checksum annotation performs it. */}}
 {{- define "swgw.configVolumeMounts" -}}
 - name: system-config
   mountPath: /etc/softwaregateway/config.yaml
@@ -218,10 +238,9 @@ rollingUpdate:
     name: {{ include "swgw.fullname" . }}-products
 - name: secrets
   projected:
-    # EVERY inventory entry, and `optional` on each one. A missing credential
-    # must take ONE PRODUCT out of service and say which file it looked for -
-    # which is what internal/product/secrets.go does - rather than leaving the
-    # pod unschedulable and the whole deployment down.
+    # `optional` on each entry: a missing credential must take ONE PRODUCT out
+    # of service and say which file it looked for, not leave the pod
+    # unschedulable.
     sources:
 {{- range (include "swgw.secretNames" . | fromYamlArray) }}
       - secret:
@@ -229,8 +248,6 @@ rollingUpdate:
           optional: true
 {{- end }}
 {{- if not (include "swgw.secretNames" . | fromYamlArray) }}
-      # No entries in config/secrets/secrets.yaml. An empty projected volume is
-      # still mounted, so the path exists and an anonymous estate works.
       - downwardAPI:
           items:
             - path: .keep
@@ -243,16 +260,9 @@ rollingUpdate:
 {{- end }}
 {{- end -}}
 
-{{/* The Secrets projected into /etc/softwaregateway/secrets, as a YAML list so
-     callers can `fromYamlArray` it. Read from the STAGED config directory, so
-     the list is whatever config/secrets/secrets.yaml says and nothing has to
-     be restated in values.
-
-     THE REGISTRY PULL CREDENTIAL IS LEFT OUT. It is in the inventory because
-     the backend has to produce it, and it is read by the kubelet rather than
-     by any process in these containers - so projecting it would put a
-     credential for a registry the application never talks to inside the
-     directory the application reads credentials from. */}}
+{{/* The Secrets projected into /etc/softwaregateway/secrets, from the staged
+     inventory. The registry pull credential is left out: it is read by the
+     kubelet, not by any process in these containers. */}}
 {{- define "swgw.secretNames" -}}
 {{- $inv := .Files.Get "files/config/secrets/secrets.yaml" | fromYaml -}}
 {{- $pull := .Values.secrets.registryPullSecret -}}
@@ -263,10 +273,8 @@ rollingUpdate:
 {{- end }}
 {{- end -}}
 
-{{/* ------------------------------------------------------- shared env
-     What both the Coordinator and the Worker need. The two SWGW_ overrides
-     are the ONLY difference between this file in a container and the same file
-     on a laptop: configDir moves, and secretsDir is derived from it. */}}
+{{/* The only difference between config.yaml in a container and the same file on
+     a laptop: configDir moves, and secretsDir is derived from it. */}}
 {{- define "swgw.commonEnv" -}}
 - name: SWGW_CONFIGDIR
   value: /etc/softwaregateway
@@ -282,50 +290,56 @@ rollingUpdate:
 {{- end }}
 {{- end -}}
 
-{{/* ZITADEL's external URL, taken apart the way ZITADEL wants it. It refuses a
-     Host header it does not know and stamps this into every token's `iss`, so
-     these three are derived from one value rather than set three times. */}}
-{{- define "swgw.identityUrl" -}}
-{{- .Values.externalUrls.identity | trimSuffix "/" -}}
+{{/* -------------------------------------------------------------- addresses
+     Every browser-facing URL is derived from `access`, so the URL a token
+     carries and the host an Ingress serves cannot disagree. */}}
+
+{{- define "swgw.defaultPort" -}}
+{{- if eq .Values.access.scheme "https" }}443{{ else }}80{{ end -}}
 {{- end -}}
 
+{{/* (dict "ctx" $ "entry" .Values.access.web) */}}
+{{- define "swgw.url" -}}
+{{- $scheme := .ctx.Values.access.scheme -}}
+{{- $host := required "access.<web|identity>.host is required" .entry.host -}}
+{{- $port := int (default 0 .entry.port) -}}
+{{- $default := int (include "swgw.defaultPort" .ctx) -}}
+{{- if or (eq $port 0) (eq $port $default) -}}
+{{- printf "%s://%s" $scheme $host -}}
+{{- else -}}
+{{- printf "%s://%s:%d" $scheme $host $port -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "swgw.webUrl" -}}
+{{- include "swgw.url" (dict "ctx" . "entry" .Values.access.web) -}}
+{{- end -}}
+
+{{- define "swgw.identityUrl" -}}
+{{- include "swgw.url" (dict "ctx" . "entry" .Values.access.identity) -}}
+{{- end -}}
+
+{{/* What a browser actually sends, which is what ZITADEL matches against. */}}
 {{- define "swgw.identityHostHeader" -}}
 {{- $u := urlParse (include "swgw.identityUrl" .) -}}
 {{- $u.host -}}
 {{- end -}}
 
 {{- define "swgw.identityDomain" -}}
-{{- $h := include "swgw.identityHostHeader" . -}}
-{{- (splitList ":" $h) | first -}}
+{{- .Values.access.identity.host -}}
 {{- end -}}
 
 {{- define "swgw.identityPort" -}}
-{{- $u := urlParse (include "swgw.identityUrl" .) -}}
-{{- $parts := splitList ":" $u.host -}}
-{{- if gt (len $parts) 1 -}}
-{{- index $parts 1 -}}
-{{- else if eq $u.scheme "https" -}}
-443
-{{- else -}}
-80
-{{- end -}}
+{{- $port := int (default 0 .Values.access.identity.port) -}}
+{{- if eq $port 0 }}{{ include "swgw.defaultPort" . }}{{ else }}{{ $port }}{{ end -}}
 {{- end -}}
 
 {{- define "swgw.identitySecure" -}}
-{{- $u := urlParse (include "swgw.identityUrl" .) -}}
-{{- if eq $u.scheme "https" }}true{{ else }}false{{ end -}}
+{{- if eq .Values.access.scheme "https" }}true{{ else }}false{{ end -}}
 {{- end -}}
 
-{{- define "swgw.webUrl" -}}
-{{- .Values.externalUrls.web | trimSuffix "/" -}}
-{{- end -}}
-
-{{/* THE HASH THAT DECIDES WHETHER PEOPLE GET PROVISIONED.
-     Only the two files the seeder reads for identity, plus the settings that
-     change what it writes. A product added to config/products does not appear
-     here, because adding a product does not change who may sign in - it is the
-     seeder's OTHER input, and the ownership check reads it on the run that
-     does happen. */}}
+{{/* THE HASH THAT DECIDES WHETHER PEOPLE GET PROVISIONED. Only what the seeder
+     reads for identity, plus the settings that change what it writes. */}}
 {{- define "swgw.identityHash" -}}
 {{- $parts := list
       (.Files.Get "files/config/users/users.yaml")
@@ -341,44 +355,9 @@ rollingUpdate:
 {{- join "\x00" $parts | sha256sum | trunc 10 -}}
 {{- end -}}
 
-{{/* --------------------------------------------------- the two nginx tiers
-     WEAKER THAN EVERY OTHER WORKLOAD HERE, and it is worth saying why rather
-     than letting a reader assume it was forgotten.
-
-     nginx:alpine runs its master as root and binds port 80, and both entrypoints
-     WRITE at container start: the web tier renders /runtime-config.json into
-     the document root (the SPA's issuer and OIDC client id are not knowable at
-     build time), and both fill in nginx's `resolver` with the engine's embedded
-     DNS address. So neither runAsNonRoot nor readOnlyRootFilesystem can hold
-     without changing the images, and an image change would fork the two tiers
-     from the ones docker-compose.yml runs.
-
-     What IS held: no privilege escalation, every capability dropped except the
-     one that binding 80 requires, and the RuntimeDefault seccomp profile.
-     These containers hold no credential and terminate no TLS. */}}
-{{- define "swgw.nginxContainerSecurityContext" -}}
-allowPrivilegeEscalation: false
-readOnlyRootFilesystem: false
-capabilities:
-  drop: ["ALL"]
-  add: ["NET_BIND_SERVICE", "CHOWN", "SETGID", "SETUID"]
-{{- end -}}
-
-{{- define "swgw.nginxPodSecurityContext" -}}
-seccompProfile:
-  type: RuntimeDefault
-{{- end -}}
-
-{{/* ------------------------------------------------------ ZITADEL's settings
+{{/* ------------------------------------------------------- ZITADEL's settings
      The core and the setup Job take the SAME environment: setup writes the
-     first instance from it, start reads the rest of it. Stating it twice is
-     how the two drift, and a drift here is a login flow that half-works.
-
-     The four LOGINV2 values tell the core where the sign-in screens are
-     reachable FROM A BROWSER, which is the front door's address and never the
-     Service name. v4 defaults to /ui/v2/login already; they are set anyway
-     because "it happened to default that way" is not a thing to build a login
-     flow on. */}}
+     first instance from it, start reads the rest of it. */}}
 {{- define "swgw.zitadelEnv" -}}
 {{- $db := include "swgw.dbSecretName" . -}}
 {{- $full := include "swgw.fullname" . -}}
@@ -388,20 +367,18 @@ seccompProfile:
     secretKeyRef:
       name: {{ if .Values.identity.masterkey.existingSecret }}{{ .Values.identity.masterkey.existingSecret }}{{ else }}{{ $full }}-identity{{ end }}
       key: {{ if .Values.identity.masterkey.existingSecret }}{{ .Values.identity.masterkey.key }}{{ else }}masterkey{{ end }}
-# ZITADEL wants the connection in PARTS rather than as a URL, which is the only
-# reason the host and port are values as well as a Secret. The credentials are
-# the same two keys the Coordinator reads, so there is one password.
-- {name: ZITADEL_DATABASE_POSTGRES_HOST, value: {{ .Values.database.host | quote }}}
+# ZITADEL wants the connection in parts rather than as a URL. The credentials
+# are the same two keys the Coordinator reads, so there is one password.
+- {name: ZITADEL_DATABASE_POSTGRES_HOST, value: {{ include "swgw.dbHost" . | quote }}}
 - {name: ZITADEL_DATABASE_POSTGRES_PORT, value: {{ .Values.database.port | quote }}}
 - name: ZITADEL_DATABASE_POSTGRES_USER_USERNAME
   valueFrom: {secretKeyRef: {name: {{ $db }}, key: {{ .Values.database.usernameKey }}}}
 - name: ZITADEL_DATABASE_POSTGRES_USER_PASSWORD
   valueFrom: {secretKeyRef: {name: {{ $db }}, key: {{ .Values.database.passwordKey }}}}
 - {name: ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE, value: {{ .Values.database.sslMode | quote }}}
-# The SAME account as the admin. It owns the `zitadel` database created by the
-# Cluster's postInitSQL, so it can create every schema ZITADEL needs and cannot
-# touch anything outside it - which is what a separate superuser would have
-# bought, at the cost of a second credential to rotate.
+# The same account as the application's. It owns the `zitadel` database, so it
+# can create every schema ZITADEL needs and nothing outside it - which is what a
+# separate superuser would have bought, at the cost of a second credential.
 - name: ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME
   valueFrom: {secretKeyRef: {name: {{ $db }}, key: {{ .Values.database.usernameKey }}}}
 - name: ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD

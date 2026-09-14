@@ -22,10 +22,11 @@ deploy/
 ├── charts/software-gateway/     the chart: every workload, and config/ copied
 │   ├── templates/               in at package time by deploy/chartstage
 │   └── files/                   staged, never committed
-├── environments/
-│   ├── lab/helmrelease.yaml     WHAT IS DEPLOYED. One line per environment.
-│   └── prod/helmrelease.yaml
-├── flux/clusters/{lab,prod}/    how a cluster finds the two above
+├── examples/                    a values file per situation, annotated
+├── flux/
+│   ├── clusters/<cluster>/      sources and operators - what is true of a cluster
+│   ├── instances/<instance>/    ONE VALUES FILE. Everything a deployment differs in.
+│   └── software/                the two HelmReleases, and the version each instance runs
 ├── build/                       the Dockerfiles
 └── zitadel/ cerbos/ web/ postgres/
                                  the machinery the chart carries in
@@ -39,9 +40,9 @@ property overlays were meant to buy.
 
 ## 2. Flux
 
-Two objects per cluster: a `GitRepository` on the environment's branch and a
-`Kustomization` pointing at `deploy/environments/<env>`, which holds one
-`HelmRelease`.
+A `GitRepository` on the deployment branch and a `Kustomization` per instance,
+pointing at `deploy/flux/instances/<instance>` — which holds one values file and
+the two `HelmRelease` objects that read it.
 
 ```yaml
 apiVersion: kustomize.toolkit.fluxcd.io/v1
@@ -49,7 +50,7 @@ kind: Kustomization
 metadata: {name: software-gateway, namespace: flux-system}
 spec:
   interval: 5m
-  path: ./deploy/environments/prod
+  path: ./deploy/flux/instances/prod
   prune: true
   wait: true
   sourceRef: {kind: GitRepository, name: software-gateway}
@@ -209,7 +210,7 @@ Workers hold **no database credentials** - a direct consequence of HTTP leasing 
 
 **PostgreSQL runs in-cluster, in every environment, and there is no managed-database path in this repository.** The reasoning above was sound about the problem and wrong about the only way to solve it: CloudNativePG solves the same four things in-cluster, declaratively, and it is the operator's job to keep solving them rather than ours.
 
-What is deployed is a `Cluster` in `deploy/environments/<env>/database` - three instances with synchronous replication in production, two in lab, automatic failover in seconds, and rolling minor-version upgrades. It is **not** part of the application chart, for three reasons set out in [30](30-continuous-delivery.md) §5.3: `helm rollback` must not be able to reach it, it is upgraded on its own schedule, and its existing first is what lets the ZITADEL migration be a Helm pre-install hook.
+What is deployed is a CloudNativePG `Cluster`, rendered by the chart's `database` layer and installed as its own HelmRelease - three instances with synchronous replication in production, two in lab, automatic failover in seconds, and rolling minor-version upgrades. It is **not** part of the application chart, for three reasons set out in [30](30-continuous-delivery.md) §5.3: `helm rollback` must not be able to reach it, it is upgraded on its own schedule, and its existing first is what lets the ZITADEL migration be a Helm pre-install hook.
 
 The one thing the managed option would still have given for free is backups, and that is honestly an open gap: `spec.backup` ships unset, with the shape of the answer in a comment and the target unchosen. A replicated cluster is not a backup - it replicates a `DROP TABLE` faithfully and immediately.
 

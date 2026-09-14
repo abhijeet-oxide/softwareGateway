@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=../charts/software-gateway/values.schema.json
+#
+# THE SMALLEST VALUES FILE THAT DEPLOYS A WORKING STACK.
+#
+# Everything not written here is a chart default. `helm show values
+# software-gateway` lists them; `../charts/software-gateway/values.yaml` is the
+# same file with the reasoning attached.
+#
+# This one pulls every image from the public internet and publishes nothing, so
+# it is an evaluation on a cluster with egress. Reach it with:
+#
+#   kubectl -n swgw port-forward svc/web 8000:80
+#   kubectl -n swgw port-forward svc/zitadel-proxy 8090:80
+
+access:
+  # The addresses a BROWSER uses. With port-forwarding they are localhost, and
+  # the ports must match the port-forwards above - the identity one is stamped
+  # into every token's `iss`, so it has to be the address that really answers.
+  scheme: http
+  web: {host: localhost, port: 8000}
+  identity: {host: localhost, port: 8090}
+  expose:
+    # ClusterIP only. Nothing outside the cluster can reach this.
+    type: none
+
+identity:
+  masterkey:
+    # EXACTLY 32 bytes, and the one value here that must be kept: a ZITADEL
+    # database cannot be decrypted without it. Fine inline for an evaluation;
+    # use `existingSecret` for anything else.
+    value: "0123456789abcdef0123456789abcdef"
+  rootPassword:
+    value: "change-me-before-anybody-signs-in"
+  bootstrapAdmin:
+    username: admin
+    email: admin@example.com
+    # Local and evaluation only. The chart and the seeder both refuse this once
+    # single sign-on is configured.
+    password: "change-me-too"

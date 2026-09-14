@@ -7,7 +7,8 @@ on:
     branches: [main]
     paths-ignore:
       # Pointer changes are deployment-only and must not publish a new release.
-      - 'deploy/environments/**'
+      - 'deploy/flux/instances/**'
+      - 'deploy/flux/software/patch/**'
       - 'docs/**'
       - '**/*.md'
   workflow_dispatch:
@@ -24,24 +25,25 @@ permissions:
 env:
   GO_VERSION: "1.26"
   GODEBUG: http2client=0
-  JFROG_REGISTRY: https://artifact.it.example.com
-  JFROG_REPOSITORY: artifacts-oci-stage
-  REGISTRY_HOST: artifact.it.example.com
+  # The registry this product publishes to. Set these three repository
+  # variables to point the pipeline at your own Artifactory, ACR or Harbor.
+  REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
+  REGISTRY_URL: https://${{ vars.REGISTRY_HOST }}
+  REGISTRY_REPOSITORY: ${{ vars.REGISTRY_REPOSITORY }}
 
 jobs:
   # ---------------------------------------------------------------- 1. version
   version:
     name: Decide the version
-    runs-on:
-      group: Concordia-WestUS3
-      labels: concordia-linux-cpu2-ram7gi-dockerio
+    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     outputs:
       chart_version: ${{ steps.v.outputs.chart_version }}
       image_version: ${{ steps.v.outputs.image_version }}
       images_changed: ${{ steps.v.outputs.images_changed }}
       should_release: ${{ steps.v.outputs.should_release }}
       tag: ${{ steps.v.outputs.tag }}
-      environment: ${{ steps.env.outputs.name }}
+      instance: ${{ steps.env.outputs.name }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -51,7 +53,7 @@ jobs:
       - id: env
         run: |
           case "${{ github.ref_name }}" in
-            main) echo "name=nprd" >> "$GITHUB_OUTPUT" ;;
+            main) echo "name=lab" >> "$GITHUB_OUTPUT" ;;
             *)    echo "::error::CD runs on main only"; exit 1 ;;
           esac
 
@@ -80,9 +82,8 @@ jobs:
     name: ${{ matrix.component }} image
     needs: version
     if: needs.version.outputs.should_release == 'true' && needs.version.outputs.images_changed == 'true'
-    runs-on:
-      group: Concordia-WestUS3
-      labels: concordia-linux-cpu2-ram7gi-dockerio
+    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     strategy:
       fail-fast: true
       matrix:
@@ -103,40 +104,41 @@ jobs:
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY_HOST }}
-          username: ${{ secrets.JFROG_USERNAME }}
-          password: ${{ secrets.JFROG_TOKEN }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
 
       - name: Prepare npm registry credentials
         if: matrix.component == 'web'
         env:
-          JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          NPM_REGISTRY: ${{ vars.NPM_REGISTRY || 'https://registry.npmjs.org/' }}
         run: |
           umask 077
           cat > "$RUNNER_TEMP/npmrc" <<EOF
-          registry=https://${REGISTRY_HOST}/artifactory/api/npm/npm-proxy/
-          //${REGISTRY_HOST}/artifactory/api/npm/npm-proxy/:_authToken=${JFROG_TOKEN}
+          registry=${NPM_REGISTRY}
+          ${NPM_REGISTRY#https:}:_authToken=${REGISTRY_TOKEN}
           always-auth=true
           EOF
 
       - name: Prepare Go module proxy credentials
         if: matrix.component != 'web'
         env:
-          JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
-          JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         run: |
           umask 077
           cat > "$RUNNER_TEMP/netrc" <<EOF
           machine ${REGISTRY_HOST}
-            login ${JFROG_USERNAME}
-            password ${JFROG_TOKEN}
+            login ${REGISTRY_USERNAME}
+            password ${REGISTRY_TOKEN}
           EOF
 
       # Image tags are immutable; fail on collisions instead of overwriting.
       - name: The tag must not already exist
         run: |
-          registry="${JFROG_REGISTRY#https://}"
+          registry="${REGISTRY_URL#https://}"
           registry="${registry#http://}"
-          ref="${registry}/${JFROG_REPOSITORY}/software-gateway-${{ matrix.component }}:${{ needs.version.outputs.image_version }}"
+          ref="${registry}/${REGISTRY_REPOSITORY}/software-gateway-${{ matrix.component }}:${{ needs.version.outputs.image_version }}"
           if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
             echo "::error::$ref already exists. An image tag is written once."
             echo "::error::This means a release tag was deleted and recreated, or two runs raced."
@@ -150,16 +152,16 @@ jobs:
           file: ${{ matrix.dockerfile }}
           push: true
           platforms: linux/amd64
-          tags: ${{ env.REGISTRY_HOST }}/${{ env.JFROG_REPOSITORY }}/software-gateway-${{ matrix.component }}:${{ needs.version.outputs.image_version }}
+          tags: ${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_REPOSITORY }}/software-gateway-${{ matrix.component }}:${{ needs.version.outputs.image_version }}
           build-args: |
             VERSION=${{ needs.version.outputs.image_version }}
             COMMIT=${{ github.sha }}
             BUILD_DATE=${{ github.event.repository.updated_at }}
-            HTTP_PROXY=${{ vars.HTTP_PROXY || 'http://proxy.conexus.svc.local:3128' }}
-            HTTPS_PROXY=${{ vars.HTTPS_PROXY || 'http://proxy.conexus.svc.local:3128' }}
+            HTTP_PROXY=${{ vars.HTTP_PROXY }}
+            HTTPS_PROXY=${{ vars.HTTPS_PROXY }}
             NO_PROXY=${{ vars.NO_PROXY }}
-            GOPROXY=https://artifact.it.example.com/artifactory/api/go/att-go-proxy-group
-            NPM_REGISTRY=https://artifact.it.example.com/artifactory/api/npm/npm-proxy/
+            GOPROXY=${{ vars.GOPROXY || 'https://proxy.golang.org,direct' }}
+            NPM_REGISTRY=${{ vars.NPM_REGISTRY || 'https://registry.npmjs.org/' }}
           # Mount credentials into builds; build arguments remain visible in image history.
           secret-files: ${{ matrix.component == 'web' && format('npmrc={0}/npmrc', runner.temp) || format('netrc={0}/netrc', runner.temp) }}
           provenance: false
@@ -170,9 +172,8 @@ jobs:
     needs: [version, images]
     # Run even when the images job is skipped for a configuration-only release.
     if: always() && needs.version.result == 'success' && needs.version.outputs.should_release == 'true' && (needs.images.result == 'success' || needs.images.result == 'skipped')
-    runs-on:
-      group: Concordia-WestUS3
-      labels: concordia-linux-cpu2-ram7gi-dockerio
+    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     outputs:
       chart_version: ${{ needs.version.outputs.chart_version }}
     steps:
@@ -203,16 +204,24 @@ jobs:
             --set identity.masterkey.value=0123456789abcdef0123456789abcdef \
             --set identity.rootPassword.value=lint
 
-      # Render the environment before publishing the chart.
-      - name: Render nprd environment
+      # Render every instance, both layers, before publishing the chart. A
+      # values file that trips a validation rule must fail here rather than as a
+      # reconciliation error in a cluster.
+      - name: Render every instance
         run: |
           set -euo pipefail
-          env=nprd
-          ns=swg
-          go run ./deploy/chartstage/cmd/chartstage -values "$env" > "/tmp/$env-values.yaml"
-          helm template swgw deploy/charts/software-gateway \
-            --namespace "$ns" --values "/tmp/$env-values.yaml" > "/tmp/$env.yaml"
-          echo "$env: $(grep -c '^kind:' "/tmp/$env.yaml") objects"
+          for instance in $(go run ./deploy/chartstage/cmd/chartstage -instances | awk '{print $1}'); do
+            go run ./deploy/chartstage/cmd/chartstage -values "$instance" > "/tmp/$instance-values.yaml"
+            for layer in database application; do
+              db=false; app=false
+              [ "$layer" = database ] && db=true || app=true
+              helm template swgw deploy/charts/software-gateway \
+                --values "/tmp/$instance-values.yaml" \
+                --set "layers.database=$db" --set "layers.application=$app" \
+                > "/tmp/$instance-$layer.yaml"
+              echo "$instance/$layer: $(grep -c '^kind:' "/tmp/$instance-$layer.yaml") objects"
+            done
+          done
 
       - name: Package
         run: |
@@ -224,24 +233,23 @@ jobs:
 
       - name: Publish
         run: |
-          registry="${JFROG_REGISTRY#https://}"
+          registry="${REGISTRY_URL#https://}"
           registry="${registry#http://}"
           helm registry login "$registry" \
-            --username "${{ secrets.JFROG_USERNAME }}" \
-            --password "${{ secrets.JFROG_TOKEN }}"
+            --username "${{ secrets.REGISTRY_USERNAME }}" \
+            --password "${{ secrets.REGISTRY_TOKEN }}"
           helm push "/tmp/chart/software-gateway-${{ needs.version.outputs.chart_version }}.tgz" \
-            "oci://${registry}/${JFROG_REPOSITORY}"
+            "oci://${registry}/${REGISTRY_REPOSITORY}"
 
   # ---------------------------------------------------------------- 4. promote
   #
   # Deployment is a Git pointer update; Flux performs the cluster reconciliation.
   promote:
-    name: Point ${{ needs.version.outputs.environment }} at it
+    name: Point ${{ needs.version.outputs.instance }} at it
     needs: [version, chart]
     if: always() && needs.version.result == 'success' && needs.version.outputs.should_release == 'true' && needs.chart.result == 'success'
-    runs-on:
-      group: Concordia-WestUS3
-      labels: concordia-linux-cpu2-ram7gi-dockerio
+    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -254,23 +262,21 @@ jobs:
       - name: Move the pointer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ENVIRONMENT: ${{ needs.version.outputs.environment }}
+          INSTANCE: ${{ needs.version.outputs.instance }}
           CHART_VERSION: ${{ needs.version.outputs.chart_version }}
           IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
           IMAGES_CHANGED: ${{ needs.version.outputs.images_changed }}
           BASE_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          file="deploy/environments/${ENVIRONMENT}/platform/helmrelease.yaml"
 
-          # Update exactly one chart version field.
-          matches=$(grep -cE '^      version: ' "$file")
-          if [ "$matches" != "1" ]; then
-            echo "::error::$file has $matches lines matching the chart version; expected exactly 1"
-            exit 1
-          fi
-          previous_version="$(grep -E '^      version: ' "$file" | awk '{print $2}')"
-          sed -i -E "s|^      version: .*|      version: ${CHART_VERSION}|" "$file"
+          # The same command a person runs to roll back: it creates the patch
+          # directory for this version if it does not exist and repoints the
+          # instance at it.
+          previous_version="$(go run ./deploy/chartstage/cmd/chartstage -instances \
+            | awk -v i="$INSTANCE" '$1 == i {print $2}')"
+          go run ./deploy/chartstage/cmd/chartstage -instance "$INSTANCE" -set-version "$CHART_VERSION"
+          file="deploy/flux/instances/${INSTANCE}/release/kustomization.yaml"
 
           if [ "$IMAGES_CHANGED" = "true" ]; then
             image_note="New images were built and pushed for this release (tag \`${IMAGE_VERSION}\`)."
@@ -280,13 +286,13 @@ jobs:
 
           body=$(cat <<EOF
           ## What this PR does
-          Points **${ENVIRONMENT}** at release **${CHART_VERSION}** (previously \`${previous_version}\`).
+          Points **${INSTANCE}** at release **${CHART_VERSION}** (previously \`${previous_version}\`).
 
-          This only edits one line in \`${file}\`. [Flux](https://fluxcd.io/) picks up the change and applies it to the cluster automatically - no manual deployment step is needed.
+          This repoints \`${file}\` at \`deploy/flux/software/patch/${CHART_VERSION}\`. [Flux](https://fluxcd.io/) picks up the change and applies it to the cluster automatically - no manual deployment step is needed.
 
           | | |
           |---|---|
-          | Environment | \`${ENVIRONMENT}\` |
+          | Instance | \`${INSTANCE}\` |
           | Chart version | \`${CHART_VERSION}\` (was \`${previous_version}\`) |
           | Image tag | \`${IMAGE_VERSION}\` |
           | Images rebuilt? | ${IMAGES_CHANGED} |
@@ -299,20 +305,20 @@ jobs:
           EOF
           )
 
-          branch="deploy/${ENVIRONMENT}-${CHART_VERSION}"
+          branch="deploy/${INSTANCE}-${CHART_VERSION}"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
-          git add "$file"
+          git add deploy/flux
           git commit \
-            -m "deploy(${ENVIRONMENT}): ${CHART_VERSION}" \
-            -m "Points ${ENVIRONMENT} at release ${CHART_VERSION} (was ${previous_version}). ${image_note}"
+            -m "deploy(${INSTANCE}): ${CHART_VERSION}" \
+            -m "Points ${INSTANCE} at release ${CHART_VERSION} (was ${previous_version}). ${image_note}"
           git push origin "$branch"
 
           pr_url=$(gh pr create \
             --base "$BASE_REF" \
             --head "$branch" \
-            --title "deploy(${ENVIRONMENT}): ${previous_version} -> ${CHART_VERSION}" \
+            --title "deploy(${INSTANCE}): ${previous_version} -> ${CHART_VERSION}" \
             --body "$body")
 
           # Auto-merge needs a repo setting this token cannot flip, so poll for
@@ -340,11 +346,11 @@ jobs:
       - name: Summary
         run: |
           {
-            echo "### Deployed to ${{ needs.version.outputs.environment }}"
+            echo "### Deployed to ${{ needs.version.outputs.instance }}"
             echo
             echo "- chart \`${{ needs.version.outputs.chart_version }}\`"
             echo "- images \`${{ needs.version.outputs.image_version }}\`"
-            echo "- pointer \`deploy/environments/${{ needs.version.outputs.environment }}/platform/helmrelease.yaml\`"
+            echo "- pointer \`deploy/flux/instances/${{ needs.version.outputs.instance }}/release/kustomization.yaml\`"
             echo
             echo "Flux applies it within a minute. Nothing here touched a cluster."
           } >> "$GITHUB_STEP_SUMMARY"

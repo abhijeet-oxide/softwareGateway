@@ -38,11 +38,11 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
-
-	"sigs.k8s.io/yaml"
 )
 
 // Source is one tree or file copied into the chart, and where it lands.
@@ -99,6 +99,14 @@ var Sources = []Source{
 // ChartFilesDir is where staged files land, relative to the repository root.
 const ChartFilesDir = "deploy/charts/software-gateway/files"
 
+// ChartSchema is the chart's values schema, and SchemaCopy is where the Flux
+// tree keeps a copy for editors to validate an instance's values file against.
+// Staging the copy is what stops the two from drifting.
+const (
+	ChartSchema = "deploy/charts/software-gateway/values.schema.json"
+	SchemaCopy  = "deploy/flux/software/schema/values.schema.json"
+)
+
 // excluded reports whether a path inside a staged tree must not be copied.
 //
 // Two rules, and the first one is the important one.
@@ -144,6 +152,22 @@ func Stage(root string) error {
 		}
 	}
 	return nil
+}
+
+// StageSchema copies the chart's values schema into the Flux tree, where an
+// editor validates an instance's values file against it. Separate from Stage
+// because it writes outside the chart; TestFluxSchemaMatchesTheChart is what
+// catches a stale copy.
+func StageSchema(root string) error {
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(ChartSchema))) // #nosec G304 -- fixed path.
+	if err != nil {
+		return fmt.Errorf("stage %s: %w", ChartSchema, err)
+	}
+	out := filepath.Join(root, filepath.FromSlash(SchemaCopy))
+	if err := os.MkdirAll(filepath.Dir(out), 0o750); err != nil {
+		return err
+	}
+	return os.WriteFile(out, b, 0o600)
 }
 
 func copyTree(from, to string) error {
@@ -234,32 +258,112 @@ func Fingerprint(dir string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// EnvironmentValues returns the `spec.values` block of an environment's
-// HelmRelease, as YAML.
+// InstanceDir is where a Flux instance's directory lives, relative to the
+// repository root.
+func InstanceDir(instance string) string {
+	return path.Join("deploy/flux/instances", instance)
+}
+
+// InstanceValues returns an instance's values file - the one file a deployment
+// differs in.
 //
-// It is here rather than as a line of yq in the pipeline for the reason the
-// rest of this repository moved off make: a pipeline that reimplements
+// It is here rather than as a path spelled out in the pipeline for the reason
+// the rest of this repository moved off make: a pipeline that reimplements
 // something drifts from what a developer runs, and the drift is found when CI
-// passes and the laptop does not. `task chart:template -- nprd` and the CD
-// workflow's render step call this same function, so what CI proves is what a
-// developer sees.
-func EnvironmentValues(root, env string) ([]byte, error) {
-	rel := filepath.ToSlash(filepath.Join("deploy/environments", env, "platform", "helmrelease.yaml"))
-	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel))) // #nosec G304 -- env is a controlled deployment environment name.
+// passes and the laptop does not. `task chart:template -- lab` and the CD
+// workflow's render step call this same function.
+func InstanceValues(root, instance string) ([]byte, error) {
+	rel := path.Join(InstanceDir(instance), "values", "values.yaml")
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel))) // #nosec G304 -- instance is a controlled deployment name.
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", rel, err)
 	}
-	var hr struct {
-		Spec struct {
-			Values map[string]any `json:"values"`
-		} `json:"spec"`
+	if len(bytes.TrimSpace(b)) == 0 {
+		return nil, fmt.Errorf("%s is empty - an instance that states no differences is one "+
+			"nobody can read the differences of", rel)
 	}
-	if err := yaml.Unmarshal(b, &hr); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", rel, err)
+	return b, nil
+}
+
+// Instances lists the deployment instances in the tree, sorted.
+func Instances(root string) ([]string, error) {
+	dir := filepath.Join(root, filepath.FromSlash("deploy/flux/instances"))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read deploy/flux/instances: %w", err)
 	}
-	if len(hr.Spec.Values) == 0 {
-		return nil, fmt.Errorf("%s has no spec.values - an environment that states no "+
-			"differences is one nobody can read the differences of", rel)
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
 	}
-	return yaml.Marshal(hr.Spec.Values)
+	sort.Strings(names)
+	return names, nil
+}
+
+// InstanceVersion reports which chart version an instance runs, by reading the
+// one line in its release kustomization that says so.
+func InstanceVersion(root, instance string) (string, error) {
+	rel := path.Join(InstanceDir(instance), "release", "kustomization.yaml")
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel))) // #nosec G304 -- instance is a controlled deployment name.
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", rel, err)
+	}
+	m := releaseResource.FindStringSubmatch(string(b))
+	if m == nil {
+		return "", fmt.Errorf("%s does not reference a software/patch/<version> directory", rel)
+	}
+	return m[1], nil
+}
+
+// releaseResource matches the single `resources` entry that names the version an
+// instance runs.
+var releaseResource = regexp.MustCompile(`(?m)^\s*-\s+\.\./\.\./\.\./software/patch/(\S+)\s*$`)
+
+// SetInstanceVersion points an instance at a chart version, creating the patch
+// directory for that version when it does not exist yet.
+//
+// One function rather than a step in the release workflow and a second one in
+// somebody's notes: the pipeline moves a deployment pointer on every merge and a
+// person moves it to roll back, and those must be the same edit.
+func SetInstanceVersion(root, instance, version string) error {
+	if version == "" {
+		return fmt.Errorf("no version given")
+	}
+	patchDir := filepath.Join(root, filepath.FromSlash(path.Join("deploy/flux/software/patch", version)))
+	if err := os.MkdirAll(patchDir, 0o750); err != nil {
+		return fmt.Errorf("create %s: %w", patchDir, err)
+	}
+	kustomization := "apiVersion: kustomize.config.k8s.io/v1beta1\n" +
+		"kind: Kustomization\n" +
+		"resources:\n" +
+		"  - ../../base\n" +
+		"patches:\n" +
+		"  - path: version.yaml\n" +
+		"    target:\n" +
+		"      kind: HelmRelease\n"
+	patch := "# Applied to both HelmReleases: the two layers are one chart and one version.\n" +
+		"- op: replace\n" +
+		"  path: /spec/chart/spec/version\n" +
+		fmt.Sprintf("  value: %q\n", version)
+	if err := os.WriteFile(filepath.Join(patchDir, "kustomization.yaml"), []byte(kustomization), 0o600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(patchDir, "version.yaml"), []byte(patch), 0o600); err != nil {
+		return err
+	}
+
+	rel := path.Join(InstanceDir(instance), "release", "kustomization.yaml")
+	file := filepath.Join(root, filepath.FromSlash(rel))
+	b, err := os.ReadFile(file) // #nosec G304 -- instance is a controlled deployment name.
+	if err != nil {
+		return fmt.Errorf("read %s: %w", rel, err)
+	}
+	updated := releaseResource.ReplaceAllString(string(b),
+		"  - ../../../software/patch/"+version)
+	if updated == string(b) && !strings.Contains(updated, "software/patch/"+version) {
+		return fmt.Errorf("%s does not reference a software/patch/<version> directory", rel)
+	}
+	return os.WriteFile(file, []byte(updated), 0o600)
 }

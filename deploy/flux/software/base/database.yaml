@@ -1,0 +1,45 @@
+# LAYER 1 - the database.
+#
+# A separate release from the application, for three reasons that point the same
+# way: a `helm rollback` of the application must not be able to reach it, a
+# `helm uninstall` must not delete it, and the application's ZITADEL migration is
+# a Helm pre-install hook that needs the database to already exist.
+#
+# It reads the SAME values ConfigMap as the application, so an instance states
+# its database once, in one file, and both releases agree.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: software-gateway-db
+spec:
+  interval: 5m
+  releaseName: swgw-db
+  chart:
+    spec:
+      chart: software-gateway
+      # Pinned by the instance, through software/patch/<version>.
+      version: "0.0.0"
+      sourceRef:
+        kind: HelmRepository
+        name: software-gateway
+        namespace: flux-system
+      interval: 0s
+  install:
+    remediation:
+      retries: 3
+    timeout: 20m
+  upgrade:
+    timeout: 15m
+    # NO AUTOMATIC ROLLBACK. Rolling an application back is free; rolling a
+    # database back mid-upgrade is not. It stops, alerts, and waits for a person.
+    remediation:
+      retries: 0
+    cleanupOnFail: false
+  valuesFrom:
+    - kind: ConfigMap
+      name: software-gateway-values
+      valuesKey: values.yaml
+  values:
+    layers:
+      database: true
+      application: false

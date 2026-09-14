@@ -79,7 +79,8 @@ directories and reload in place, and Cerbos watches its own.
 
 In a cluster nothing is applied by hand at all. A change here is a commit; the
 pipeline packages a new chart and moves one line in
-`deploy/environments/<env>/helmrelease.yaml`, and Flux applies it. A product or
+`deploy/flux/instances/<instance>/release/kustomization.yaml`, and Flux applies
+it. A product or
 a policy restarts nothing, a change to `users.yaml` runs one Job and restarts
 nothing, and only `config.yaml` rolls the fleet. See
 [docs/design/30 - Continuous delivery](../docs/design/30-continuous-delivery.md).

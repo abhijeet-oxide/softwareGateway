@@ -14,7 +14,7 @@ The seeder, run again immediately afterwards, reported the opposite:
 
 ```
 1 account(s) can sign in through Microsoft, matched on address:
-    ap999e                       ap999e@att.com
+    ap999e                       ap999e@example.com
 ```
 
 Both statements were true. Neither pointed at the fault, and the two obvious

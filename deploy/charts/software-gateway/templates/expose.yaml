@@ -1,0 +1,200 @@
+{{- if .Values.layers.application }}
+{{/*
+HOW A BROWSER REACHES THIS DEPLOYMENT.
+
+Two addresses, because they are two origins: the identity one is stamped into
+every token's `iss` and ZITADEL answers 404 to a Host header it does not
+recognise as its own. Both are derived from `access`, so the URL a token
+carries and the host an entry point serves cannot disagree.
+
+`none` renders nothing. The `web` and `zitadel-proxy` Services are ClusterIP and
+an external reverse proxy is pointed at them - which is the arrangement in a lab
+with no public DNS.
+*/}}
+{{- $full := include "swgw.fullname" . -}}
+{{- $e := .Values.access.expose -}}
+{{- $identity := .Values.identity.enabled -}}
+
+{{- if eq $e.type "ingress" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $full }}-web
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+  annotations:
+    # A privileged user's token carries org-wide roles and does not fit an
+    # ingress controller's default header buffers, which rejects it as a 400 the
+    # application never sees. Both nginx configs here raise the same limit.
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "32k"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    {{- range $k, $v := $e.annotations }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+spec:
+  {{- with $e.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if $e.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.access.web.host | quote }}]
+      secretName: {{ required "access.expose.ingress.tls.webSecretName is required" $e.ingress.tls.webSecretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.access.web.host | quote }}
+      http:
+        paths:
+          # ONE BACKEND, and the API is not a second one: the Coordinator ships
+          # no CORS middleware, so the browser must reach /api/v1 on the origin
+          # that served the page. The web tier proxies it same-origin.
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: web, port: {number: 80}}
+{{- if $identity }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $full }}-identity
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-proxy") | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "32k"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    {{- range $k, $v := $e.annotations }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+spec:
+  {{- with $e.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if $e.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.access.identity.host | quote }}]
+      secretName: {{ required "access.expose.ingress.tls.identitySecretName is required" $e.ingress.tls.identitySecretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.access.identity.host | quote }}
+      http:
+        paths:
+          # Always zitadel-proxy, never the two Services behind it: routing
+          # /ui/v2/login and / separately drops the sub_filter rules that file
+          # carries. See deploy/zitadel/nginx.conf.
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: zitadel-proxy, port: {number: 80}}
+{{- end }}
+{{- end }}
+
+{{- if eq $e.type "route" }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ $full }}-web
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+  {{- if $e.annotations }}
+  annotations:
+    {{- range $k, $v := $e.annotations }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+  {{- end }}
+spec:
+  host: {{ .Values.access.web.host | quote }}
+  to: {kind: Service, name: web}
+  port: {targetPort: http}
+  {{- with $e.route.termination }}
+  tls:
+    termination: {{ . }}
+    insecureEdgeTerminationPolicy: Redirect
+  {{- end }}
+{{- if $identity }}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ $full }}-identity
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-proxy") | nindent 4 }}
+  {{- if $e.annotations }}
+  annotations:
+    {{- range $k, $v := $e.annotations }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+  {{- end }}
+spec:
+  host: {{ .Values.access.identity.host | quote }}
+  to: {kind: Service, name: zitadel-proxy}
+  port: {targetPort: http}
+  {{- with $e.route.termination }}
+  tls:
+    termination: {{ . }}
+    insecureEdgeTerminationPolicy: Redirect
+  {{- end }}
+{{- end }}
+{{- end }}
+
+{{- if or (eq $e.type "loadBalancer") (eq $e.type "nodePort") }}
+{{/* Extra Services rather than a change of type on the internal ones, so the
+     names the two nginx configs resolve stay ClusterIP and unchanged. */}}
+{{- $isLB := eq $e.type "loadBalancer" -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-web
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+  {{- if $e.annotations }}
+  annotations:
+    {{- range $k, $v := $e.annotations }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+  {{- end }}
+spec:
+  type: {{ ternary "LoadBalancer" "NodePort" $isLB }}
+  {{- if and $isLB $e.loadBalancer.webIP }}
+  loadBalancerIP: {{ $e.loadBalancer.webIP | quote }}
+  {{- end }}
+  ports:
+    - name: http
+      port: {{ int (default (include "swgw.defaultPort" .) .Values.access.web.port) }}
+      targetPort: http
+      {{- if not $isLB }}
+      nodePort: {{ int (default .Values.access.web.port $e.nodePort.web) }}
+      {{- end }}
+  selector:
+    {{- include "swgw.selectorLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+{{- if $identity }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-identity
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-proxy") | nindent 4 }}
+  {{- if $e.annotations }}
+  annotations:
+    {{- range $k, $v := $e.annotations }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+  {{- end }}
+spec:
+  type: {{ ternary "LoadBalancer" "NodePort" $isLB }}
+  {{- if and $isLB $e.loadBalancer.identityIP }}
+  loadBalancerIP: {{ $e.loadBalancer.identityIP | quote }}
+  {{- end }}
+  ports:
+    - name: http
+      port: {{ int (default (include "swgw.defaultPort" .) .Values.access.identity.port) }}
+      targetPort: http
+      {{- if not $isLB }}
+      nodePort: {{ int (default .Values.access.identity.port $e.nodePort.identity) }}
+      {{- end }}
+  selector:
+    {{- include "swgw.selectorLabels" (dict "ctx" . "component" "zitadel-proxy") | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}

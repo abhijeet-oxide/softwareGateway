@@ -416,7 +416,7 @@ Everything above is the compose path. The cluster path deploys the same images,
 the same `config/`, and the same seeder - as a Helm chart reconciled by Flux:
 
 ```sh
-helm install swgw oci://artifactory.internal.example.com/swgw/software-gateway \
+helm install swgw oci://registry.example.internal/charts/software-gateway \
   --version 1.4.3 --namespace swgw --create-namespace --values my-values.yaml
 ```
 
@@ -425,7 +425,7 @@ helm install swgw oci://artifactory.internal.example.com/swgw/software-gateway \
 - [docs/design/30 - Continuous delivery](../docs/design/30-continuous-delivery.md) - how a change reaches it, and what each kind costs
 
 The Entra registration above is the same either way; the redirect URI is
-`${externalUrls.identity}/idps/callback` rather than `${ZITADEL_PUBLIC_URL}`.
+`${access.identity}/idps/callback` rather than `${ZITADEL_PUBLIC_URL}`.
 
 See [docs/design/24 - Identity and Access](../docs/design/24-identity-and-access.md)
 for why it is built this way, including four environment behaviours that are

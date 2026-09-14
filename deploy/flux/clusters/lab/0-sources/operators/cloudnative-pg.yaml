@@ -1,0 +1,59 @@
+# THE DATABASE OPERATOR, ONE PER CLUSTER.
+#
+# Its CRDs and admission webhooks are cluster-scoped singletons, so this is a
+# cluster concern rather than an instance one - which is why it lives here and
+# every instance depends on it.
+#
+# Managed by Flux rather than installed by hand, because an operator that owns
+# every database in the cluster is exactly the thing whose version should be
+# written down. It is deliberately NOT treated like the application:
+#
+#   prune disabled       pruning removes its CRDs, and deleting a CRD deletes
+#                        every object of that kind - here, every database.
+#                        Removing it is a maintenance window, not a merge.
+#   crds: CreateReplace  `helm upgrade` does not touch CRDs by default, so
+#                        without this the operator moves and its schema does not.
+#   retries: 0           no automatic rollback. Rolling a database operator back
+#                        mid-upgrade turns a bad ten minutes into a bad week.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cnpg-system
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: cloudnative-pg
+  namespace: flux-system
+spec:
+  type: oci
+  url: oci://ghcr.io/cloudnative-pg/charts
+  interval: 24h
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cloudnative-pg
+  namespace: cnpg-system
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: cloudnative-pg
+      version: "0.26.0"
+      sourceRef:
+        kind: HelmRepository
+        name: cloudnative-pg
+        namespace: flux-system
+      interval: 0s
+  install:
+    crds: Create
+    remediation:
+      retries: 0
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      retries: 0

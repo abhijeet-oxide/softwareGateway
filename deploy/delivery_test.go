@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"bytes"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -394,8 +395,8 @@ func TestTheDatabaseIsNotInTheChart(t *testing.T) {
 					"that cannot be recreated. And the ZITADEL migration can no longer be a pre-install\n"+
 					"hook - it would wait for a Postgres that Helm has not created yet - so ordered\n"+
 					"startup becomes a deadlock on every fresh install.\n"+
-					"\nThe database belongs in deploy/environments/<env>/database, applied by the Flux\n"+
-					"layer this chart's layer depends on.\n", kind, name, image)
+					"\nThe database is the `database` layer: a CloudNativePG Cluster, installed as its\n"+
+					"own HelmRelease before this one. See deploy/flux/software/base.\n", kind, name, image)
 			}
 		}
 	}
@@ -496,9 +497,17 @@ func nestedSlice(doc map[string]any, path ...string) ([]any, bool) {
 // name a list of public ones. A denylist of hostnames would pass the first
 // registry nobody thought of.
 func TestNothingIsPulledFromThePublicInternet(t *testing.T) {
-	for _, env := range []string{"nprd"} {
-		t.Run(env, func(t *testing.T) {
-			values, err := chartstage.EnvironmentValues(repoRoot, env)
+	instances, err := chartstage.Instances(repoRoot)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if len(instances) == 0 {
+		t.Fatal("no instances under deploy/flux/instances, so this test is not testing anything")
+	}
+
+	for _, instance := range instances {
+		t.Run(instance, func(t *testing.T) {
+			values, err := chartstage.InstanceValues(repoRoot, instance)
 			if err != nil {
 				t.Fatalf("%v", err)
 			}
@@ -508,20 +517,20 @@ func TestNothingIsPulledFromThePublicInternet(t *testing.T) {
 				} `json:"image"`
 			}
 			if err := yaml.Unmarshal(values, &v); err != nil {
-				t.Fatalf("parse %s values: %v", env, err)
+				t.Fatalf("parse %s values: %v", instance, err)
 			}
 			registry := v.Image.Registry
 			if registry == "" {
-				t.Fatalf("%s sets no image.registry, so this environment pulls this product's "+
-					"own images from wherever their path points", env)
+				t.Fatalf("%s sets no image.registry, so this instance pulls this product's "+
+					"own images from wherever their path points", instance)
 			}
 
-			for _, ref := range imageRefs(t, env, values) {
+			for _, ref := range imageRefs(t, instance, values) {
 				if !strings.HasPrefix(ref.image, registry+"/") {
 					t.Errorf("%s: %s pulls %q, which does not come from %s.\n"+
 						"\nAn estate with no egress cannot start this pod, and nothing here would say so\n"+
 						"until it tried. Route it through the mirror - images.mirror in the chart, or the\n"+
-						"reference itself for anything outside it.\n", env, ref.where, ref.image, registry)
+						"reference itself for anything outside it.\n", instance, ref.where, ref.image, registry)
 				}
 			}
 		})
@@ -530,13 +539,12 @@ func TestNothingIsPulledFromThePublicInternet(t *testing.T) {
 
 type imageRef struct{ where, image string }
 
-// imageRefs collects every image a deployed environment produces: the rendered
-// chart, the CloudNativePG Cluster beside it, and the operator that runs it.
-// The last two are not Helm and would be missed by rendering alone - which is
-// exactly where the forgettable ones live.
-func imageRefs(t *testing.T, env string, values []byte) []imageRef {
+// imageRefs collects every image an instance produces, from BOTH layers of the
+// chart. The database one matters most and is the easiest to miss: CloudNativePG
+// pulls its PostgreSQL image during a failover, so a cluster missing that mirror
+// does not fail when it is deployed - it fails when the primary dies.
+func imageRefs(t *testing.T, instance string, values []byte) []imageRef {
 	t.Helper()
-	var refs []imageRef
 
 	helm, err := exec.LookPath("helm")
 	if err != nil {
@@ -550,41 +558,21 @@ func imageRefs(t *testing.T, env string, values []byte) []imageRef {
 	if err := os.WriteFile(valuesFile, values, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.CommandContext(t.Context(), helm, "template", "swgw", chart, "--values", valuesFile).CombinedOutput()
-	if err != nil {
-		t.Fatalf("helm template %s: %v\n%s", env, err, out)
-	}
-	for _, m := range imageLine.FindAllStringSubmatch(string(out), -1) {
-		refs = append(refs, imageRef{where: "the chart", image: m[1]})
-	}
 
-	// The database and its operator, which are plain manifests in Flux layers
-	// rather than Helm. GLOBBED, not listed: a file moved between overlays must
-	// not quietly take its images out of this test's sight, which is exactly
-	// what a hardcoded path would have done the first time the operator was
-	// split into a base and two scopes.
-	var manifests []string
-	manifests = append(manifests, filepath.Join(repoRoot, "deploy", "environments", env, "database", "cluster.yaml"))
-	err = filepath.WalkDir(filepath.Join(repoRoot, "deploy", "flux", "platform"), func(path string, d fs.DirEntry, err error) error {
+	var refs []imageRef
+	for _, layer := range []string{"application", "database"} {
+		args := []string{"template", "swgw", chart, "--values", valuesFile,
+			"--set", "layers.application=" + boolFor(layer, "application"),
+			"--set", "layers.database=" + boolFor(layer, "database")}
+		out, err := exec.CommandContext(t.Context(), helm, args...).CombinedOutput()
 		if err != nil {
-			return err
+			t.Fatalf("helm template %s (%s layer): %v\n%s", instance, layer, err, out)
 		}
-		if !d.IsDir() && strings.HasSuffix(path, ".yaml") {
-			manifests = append(manifests, path)
+		for _, m := range imageLine.FindAllStringSubmatch(string(out), -1) {
+			refs = append(refs, imageRef{where: "the " + layer + " layer", image: m[1]})
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk deploy/flux/platform: %v", err)
-	}
-
-	for _, f := range manifests {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("read %s: %v", f, err)
-		}
-		for _, m := range manifestImage.FindAllStringSubmatch(string(b), -1) {
-			refs = append(refs, imageRef{where: filepath.Base(f), image: m[1]})
+		for _, m := range manifestImage.FindAllStringSubmatch(string(out), -1) {
+			refs = append(refs, imageRef{where: "the " + layer + " layer", image: m[1]})
 		}
 	}
 
@@ -594,136 +582,153 @@ func imageRefs(t *testing.T, env string, values []byte) []imageRef {
 	return refs
 }
 
+func boolFor(layer, want string) string {
+	if layer == want {
+		return "true"
+	}
+	return "false"
+}
+
 var (
 	// Indented `image:` only, so a `#` comment that happens to contain the word
 	// is not read as a reference.
 	imageLine = regexp.MustCompile(`(?m)^\s+image:\s+(\S+:\S+)\s*$`)
-	// `imageName:` for a CloudNativePG Cluster, `repository:` for the operator
-	// chart's values - the two spellings the non-Helm manifests use.
-	manifestImage = regexp.MustCompile(`(?m)^\s+(?:imageName|repository):\s+(\S+/\S+)\s*$`)
+	// `imageName:` is what a CloudNativePG Cluster calls the same thing.
+	manifestImage = regexp.MustCompile(`(?m)^\s+imageName:\s+(\S+/\S+)\s*$`)
 )
 
-// TestEveryOperatorScopeBuildsAndKeepsOneName guards the switch that decides
-// where the database operator runs.
+// TestFluxSchemaMatchesTheChart keeps the copy an editor validates an instance's
+// values against identical to the one Helm enforces.
 //
-// Two things have to hold, and neither is visible by reading one file.
+// A stale copy is worse than no copy: it accepts a key the chart will refuse,
+// which is exactly the mistake the schema exists to catch, found one layer later.
+func TestFluxSchemaMatchesTheChart(t *testing.T) {
+	chart, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(chartstage.ChartSchema)))
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	copied, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(chartstage.SchemaCopy)))
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if !bytes.Equal(bytes.ReplaceAll(chart, []byte("\r\n"), []byte("\n")),
+		bytes.ReplaceAll(copied, []byte("\r\n"), []byte("\n"))) {
+		t.Errorf("%s is not the chart's schema.\n\nRun:\n\n    task chart:stage\n", chartstage.SchemaCopy)
+	}
+}
+
+// TestEveryFluxDirectoryBuilds is the cheapest test in this file and catches the
+// most.
 //
-// EVERY ARRANGEMENT MUST BUILD. The overlays differ by a namespace and a
-// patched value, which is exactly the kind of difference that rots: a field
-// renamed in the base, a patch path that no longer resolves, and the scope
-// nobody uses in CI is broken on the day somebody needs it.
-//
-// EVERY BOOTSTRAP MUST PRODUCE `platform-operators`. That name is what
-// deploy/environments/<env>/layers.yaml depends on. If a scope produced a
-// differently named Kustomization, choosing it would leave every environment
-// waiting on a dependency that will never exist - and waiting is exactly what
-// that arrangement is designed to do, so it would wait quietly and forever.
-func TestEveryOperatorScopeBuildsAndKeepsOneName(t *testing.T) {
+// The Flux tree is three layers of kustomize - clusters, instances, software -
+// and the ones nobody is currently deploying are the ones that rot: a renamed
+// field in `software/base`, a `resources` path that no longer resolves, a patch
+// target that matches nothing. None of that is visible by reading one file, and
+// all of it fails as a reconciliation error in a cluster rather than on a pull
+// request.
+func TestEveryFluxDirectoryBuilds(t *testing.T) {
 	kustomize, err := exec.LookPath("kustomize")
 	if err != nil {
 		t.Skip("kustomize is not on PATH; the chart job in CI covers this")
 	}
 
-	bootstraps, err := filepath.Glob(filepath.Join(repoRoot, "deploy", "flux", "platform", "bootstrap", "*", "kustomization.yaml"))
+	root := filepath.Join(repoRoot, "deploy", "flux")
+	var dirs []string
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && d.Name() == "kustomization.yaml" {
+			dirs = append(dirs, filepath.Dir(path))
+		}
+		return nil
+	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("walk deploy/flux: %v", err)
 	}
-	nested, err := filepath.Glob(filepath.Join(repoRoot, "deploy", "flux", "platform", "bootstrap", "*", "*", "kustomization.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	bootstraps = append(bootstraps, nested...)
-	if len(bootstraps) < 2 {
-		t.Fatalf("found %d bootstrap arrangements; there should be one per scope", len(bootstraps))
+	if len(dirs) < 6 {
+		t.Fatalf("found %d kustomizations under deploy/flux; the tree has more than that, so "+
+			"this test is looking in the wrong place", len(dirs))
 	}
 
-	for _, k := range bootstraps {
-		dir := filepath.Dir(k)
-		scope, _ := filepath.Rel(filepath.Join(repoRoot, "deploy", "flux", "platform", "bootstrap"), dir)
-		t.Run(filepath.ToSlash(scope), func(t *testing.T) {
+	for _, dir := range dirs {
+		rel, _ := filepath.Rel(root, dir)
+		t.Run(filepath.ToSlash(rel), func(t *testing.T) {
 			out, err := exec.CommandContext(t.Context(), kustomize, "build", dir).CombinedOutput()
 			if err != nil {
-				t.Fatalf("kustomize build %s: %v\n%s", scope, err, out)
+				t.Fatalf("kustomize build: %v\n%s", err, out)
 			}
+		})
+	}
+}
 
-			var operatorLayer string
-			for _, raw := range strings.Split(string(out), "\n---\n") {
-				var doc map[string]any
-				if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
-					continue
-				}
-				kind, _ := doc["kind"].(string)
-				if kind != "Kustomization" {
-					continue
-				}
-				name, _ := nested2(doc, "metadata", "name")
-				path, _ := nested2(doc, "spec", "path")
-				operatorLayer = path
-				if name != "platform-operators" {
-					t.Errorf("this arrangement creates a Kustomization named %q, not "+
-						"\"platform-operators\".\n"+
-						"\ndeploy/environments/<env>/layers.yaml depends on that exact name. A scope that\n"+
-						"produces a different one leaves every environment waiting on a dependency that\n"+
-						"will never exist - quietly, because waiting is what it is designed to do.\n", name)
-				}
-			}
-			if operatorLayer == "" {
-				t.Fatal("no Kustomization was produced, so this scope installs no operator at all")
-			}
+// TestEveryInstanceReadsOneValuesFile is the property the whole Flux layout
+// exists for, made checkable.
+//
+// Both HelmReleases must read the SAME ConfigMap. The day one of them stops -
+// a copied file, a renamed generator, an inline `values:` block that grew
+// past the two `layers` keys - the database and the application can disagree
+// about which database they mean, and the symptom is a coordinator talking to
+// an empty schema.
+func TestEveryInstanceReadsOneValuesFile(t *testing.T) {
+	kustomize, err := exec.LookPath("kustomize")
+	if err != nil {
+		t.Skip("kustomize is not on PATH; the chart job in CI covers this")
+	}
+	instances, err := chartstage.Instances(repoRoot)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
 
-			// And the layer it points at must build too, with exactly one
-			// operator in it: the CRDs and admission webhooks are cluster-scoped
-			// singletons, so a second would fight the first over both.
-			layer := filepath.Join(repoRoot, filepath.FromSlash(strings.TrimPrefix(operatorLayer, "./")))
-			out, err = exec.CommandContext(t.Context(), kustomize, "build", layer).CombinedOutput()
+	for _, instance := range instances {
+		t.Run(instance, func(t *testing.T) {
+			dir := filepath.Join(repoRoot, filepath.FromSlash(chartstage.InstanceDir(instance)))
+			out, err := exec.CommandContext(t.Context(), kustomize, "build", dir).CombinedOutput()
 			if err != nil {
-				t.Fatalf("kustomize build %s (named by %s): %v\n%s", operatorLayer, scope, err, out)
+				t.Fatalf("kustomize build: %v\n%s", err, out)
 			}
+
+			sources := map[string]int{}
+			generated := ""
 			releases := 0
 			for _, raw := range strings.Split(string(out), "\n---\n") {
 				var doc map[string]any
 				if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
 					continue
 				}
-				if kind, _ := doc["kind"].(string); kind != "HelmRelease" {
-					continue
-				}
-				releases++
-
-				// THE SCOPES MUST BE MUTUALLY EXCLUSIVE, and this pair is what
-				// makes them so. The two scopes put the operator's HelmRelease
-				// in different namespaces, so they are different objects and
-				// the layer - which has prune off, because pruning an operator
-				// can take its CRDs and every database with them - will not
-				// remove the one it stopped pointing at.
-				//
-				// Helm keys a release by (releaseName, storageNamespace).
-				// Identical in every scope means the second one cannot install:
-				// it fails loudly instead of succeeding into two operators that
-				// both report healthy while fighting over one admission
-				// webhook. Drift here would restore that silent failure.
-				name, _ := nested2(doc, "spec", "releaseName")
-				storage, _ := nested2(doc, "spec", "storageNamespace")
-				if name != "cloudnative-pg" || storage != "cnpg-system" {
-					t.Errorf("this scope installs Helm release %q in storage namespace %q; every "+
-						"scope must use (cloudnative-pg, cnpg-system).\n"+
-						"\nThat pair is the only thing stopping a scope change from leaving TWO operators\n"+
-						"running - each reconciling the same cluster-scoped admission webhooks to point at\n"+
-						"itself, each reporting healthy, and nothing saying so. See\n"+
-						"deploy/flux/platform/operators/README.md, \"Changing scope after a deployment\".\n",
-						name, storage)
+				switch kind, _ := doc["kind"].(string); kind {
+				case "ConfigMap":
+					generated, _ = nested(doc, "metadata", "name")
+				case "HelmRelease":
+					releases++
+					from, _ := nestedSlice(doc, "spec", "valuesFrom")
+					if len(from) != 1 {
+						name, _ := nested(doc, "metadata", "name")
+						t.Errorf("%s reads %d valuesFrom entries; it must read exactly one, so "+
+							"there is one place to look.", name, len(from))
+						continue
+					}
+					m, _ := from[0].(map[string]any)
+					name, _ := m["name"].(string)
+					sources[name]++
 				}
 			}
-			if releases != 1 {
-				t.Errorf("%s renders %d operator HelmReleases; there must be exactly one.\n"+
-					"\nCloudNativePG's CRDs and admission webhooks are cluster-scoped singletons. Two\n"+
-					"operators reconcile the same webhook configuration to point at themselves, and\n"+
-					"the loser's databases are admitted - or rejected - by the winner's webhook.\n",
-					operatorLayer, releases)
+
+			if releases != 2 {
+				t.Fatalf("%d HelmReleases; an instance is the database layer and the application "+
+					"layer, and nothing else", releases)
+			}
+			if len(sources) != 1 {
+				t.Fatalf("the two layers read %d different values sources: %v.\n"+
+					"\nThey must read one, or they can disagree about the database they share.\n",
+					len(sources), sources)
+			}
+			for name := range sources {
+				if name != generated {
+					t.Errorf("the HelmReleases read ConfigMap %q but this instance generates %q, "+
+						"so nothing in Git supplies their values.", name, generated)
+				}
 			}
 		})
 	}
 }
-
-// nested2 is nested() for documents decoded by this file's own loop.
-func nested2(doc map[string]any, path ...string) (string, bool) { return nested(doc, path...) }

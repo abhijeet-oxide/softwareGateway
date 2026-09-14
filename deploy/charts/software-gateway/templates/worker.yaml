@@ -1,3 +1,4 @@
+{{- if .Values.layers.application }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -14,9 +15,8 @@ metadata:
     {{- include "swgw.componentLabels" (dict "ctx" . "component" "worker") | nindent 4 }}
 spec:
   type: ClusterIP
-  # Headless: nothing routes TO a worker. This Service exists so Prometheus can
-  # discover the fleet's /metrics, and a load-balanced VIP in front of pods that
-  # take no requests would only be misleading.
+  # Headless: nothing routes TO a worker. This exists so Prometheus can discover
+  # the fleet's /metrics.
   clusterIP: None
   ports:
     - name: http
@@ -49,13 +49,11 @@ spec:
         checksum/system-config: {{ .Files.Get "files/config/config.yaml" | sha256sum }}
         checksum/settings: {{ toYaml .Values.settings | sha256sum }}
     spec:
+      enableServiceLinks: false
       serviceAccountName: {{ include "swgw.fullname" . }}-worker
       {{- include "swgw.imagePullSecrets" . | nindent 6 }}
       securityContext:
         {{- include "swgw.podSecurityContext" . | nindent 8 }}
-      # A worker streams a blob registry to registry. On SIGTERM it stops
-      # leasing, finishes what it holds and exits. A blob that outlives this is
-      # killed and its lease expires - correct, merely slower.
       terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
       {{- with .Values.worker.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
@@ -70,12 +68,10 @@ spec:
       topologySpreadConstraints: {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
-        # SOFT. A worker that cannot reach the Coordinator is designed to start,
-        # report DEGRADED and lease nothing (docs/design/27 section 6) - the
-        # data plane must not depend on the control plane being up first. The
-        # wait is here so a fresh install comes up in a sensible order and the
-        # fleet is not briefly red for no reason; after the budget it starts
-        # anyway, which is the behaviour that rule asks for.
+        # SOFT. A worker that cannot reach the Coordinator starts, reports
+        # DEGRADED and leases nothing: the data plane must not depend on the
+        # control plane being up first. The wait only keeps a fresh install from
+        # going briefly red for no reason.
         {{- include "swgw.waitForHTTP" (dict "ctx" . "name" "coordinator" "url" "http://controller:8080/healthz" "soft" true "timeout" 120) | nindent 8 }}
       containers:
         - name: worker
@@ -89,22 +85,17 @@ spec:
             {{- include "swgw.commonEnv" . | nindent 12 }}
             - name: SWGW_WORKER_COORDINATORENDPOINT
               value: http://controller:8080
-            # The POD NAME, which is already both readable and unique, so no
-            # suffix is added. Under compose this is `worker` and the container
-            # id becomes the suffix, because a container's hostname is its id
-            # and a fleet list reading `16b81c38de5c` names nothing.
             - name: SWGW_WORKER_NAME
               valueFrom:
                 fieldRef: {fieldPath: metadata.name}
             # NO DATABASE. A worker holds no database credentials and contains
-            # no SQL: it leases over HTTP. See docs/design/00 section 5.2.
+            # no SQL: it leases over HTTP.
             {{- with .Values.workerExtraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           # A worker the Coordinator refuses must NOT be restarted: restarting
           # fixes none of the causes and turns a bad credential into a crash
-          # loop. So liveness asks only whether the loop is ticking, and
-          # readiness carries the registration.
+          # loop. Liveness asks only whether the loop is ticking.
           livenessProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 20
@@ -120,17 +111,15 @@ spec:
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
           securityContext:
-            # readOnlyRootFilesystem with NO writable volume and no emptyDir.
-            # This is invariant I5 enforced by the platform rather than by code
-            # review: a worker CANNOT buffer a blob to disk, because there is
-            # nowhere to put it.
+            # No writable volume and no emptyDir: a worker CANNOT buffer a blob
+            # to disk, because there is nowhere to put it.
             {{- include "swgw.containerSecurityContext" . | nindent 12 }}
           volumeMounts:
             {{- include "swgw.configVolumeMounts" . | nindent 12 }}
 {{- if .Values.identity.enabled }}
-            # WHO THIS WORKER IS. One machine account for the whole fleet,
-            # written by the seeder, mounted read-only, identical for every
-            # replica - so `replicas: 20` needs no conversation with anybody.
+            # One machine account for the whole fleet, written by the seeder and
+            # identical for every replica - so `replicas: 20` needs no
+            # conversation with anybody.
             - name: credentials
               mountPath: /etc/softwaregateway/credentials
               readOnly: true
@@ -141,15 +130,9 @@ spec:
         - name: credentials
           secret:
             secretName: {{ include "swgw.fullname" . }}-state
-            # Optional so a worker STARTS before the seeder has run and reports
-            # the reason in readiness rather than refusing to schedule. The
-            # loop gates on configuration; it does not gate on booting.
+            # Optional, so a worker starts before the seeder has run and reports
+            # the reason in readiness rather than refusing to schedule.
             optional: true
-            # 0444, not 0600. bootstrap.mjs chowns the file to the worker's uid
-            # when it writes it to a compose volume, because the writer is root
-            # and the reader is distroless nonroot. A Secret volume is owned by
-            # root either way, so here the mode does that job instead - the
-            # protection is the Secret, not the bits inside a read-only mount.
             defaultMode: 0444
             items:
               - key: worker.json
@@ -192,9 +175,8 @@ spec:
         target:
           type: AverageValue
           averageValue: {{ .Values.worker.autoscaling.targetAverageValue | quote }}
-  # ASYMMETRIC ON PURPOSE. Scaling up fast is cheap and serves throughput
-  # directly. Scaling down fast kills workers holding leases, and a package
-  # finishing at 10:00 followed by another at 10:02 would thrash the fleet.
+  # ASYMMETRIC ON PURPOSE. Scaling up serves throughput; scaling down fast kills
+  # workers holding leases and thrashes the fleet between packages.
   behavior:
     scaleUp:
       stabilizationWindowSeconds: 30
@@ -204,4 +186,5 @@ spec:
       stabilizationWindowSeconds: 300
       policies:
         - {type: Pods, value: 1, periodSeconds: 60}
+{{- end }}
 {{- end }}

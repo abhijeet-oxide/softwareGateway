@@ -1,0 +1,22 @@
+# The cluster reconciling its own configuration. Adding an instance is a commit
+# to 1-instances/, not another kubectl.
+#
+# `wait: false` deliberately: everything this applies is either a source or
+# another reconciler, and each of those reports its own health. Waiting here
+# would mean waiting for the instances it creates, which wait for the operator
+# layer it also creates.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: software-gateway-cluster-lab
+  namespace: flux-system
+spec:
+  interval: 5m
+  retryInterval: 1m
+  path: ./deploy/flux/clusters/lab
+  prune: true
+  wait: false
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: software-gateway

@@ -36,15 +36,17 @@ So the requirement was not "add Kubernetes manifests". It was:
 config/                     CONTENT. products, users, roles, policies, and the
                             credential inventory. No values, ever.
 deploy/charts/              the chart. config/ is copied in at package time.
-deploy/environments/<env>/
-  layers.yaml               TWO Flux Kustomizations, and the order between them
-  database/cluster.yaml     LAYER 1 - the CloudNativePG Cluster
-  platform/helmrelease.yaml LAYER 2 - WHAT IS DEPLOYED. One line per environment.
-deploy/flux/platform/       CloudNativePG, pinned and Flux-managed. Cluster
-                            scoped, applied once per cluster.
-deploy/flux/clusters/{lab,prod}/
-                            how a cluster finds the above, and the Alerts that
-                            say what it is doing.
+deploy/flux/clusters/<c>/   what is true of a cluster: the sources, and the
+                            operators every instance depends on.
+deploy/flux/instances/<i>/
+  values/values.yaml        THE ONE FILE. Everything this deployment differs in.
+  release/                  WHICH RELEASE it runs. One line.
+  0-secrets/                what must exist before the release installs.
+deploy/flux/software/
+  base/                     TWO HelmReleases - the database layer and the
+                            application layer - reading one values ConfigMap.
+  patch/<version>/          one directory per chart version an instance may run.
+  schema/                   what a values file is allowed to say.
 .github/workflows/cd.yml    build, publish, move the pointer. No cluster access.
 ```
 
@@ -53,8 +55,8 @@ in Git; Flux does the rest. So CD holds no kubeconfig, no cluster credential and
 no network path into either environment, and a compromise of the pipeline
 cannot reach a cluster except through a commit somebody can see.
 
-**`git log -p deploy/environments/prod/helmrelease.yaml` is the production
-deployment history.** Every line was written by a person in a pull request or by
+**`git log -p deploy/flux/instances/prod/` is the production deployment
+history.** Every line was written by a person in a pull request or by
 the pipeline moving a version, and there is nothing else to correlate.
 
 ## 3. The version, and why there are two of them
@@ -363,7 +365,7 @@ kubelet assemble the DSN with `$(VAR)` substitution - which keeps the password
 out of every manifest without putting a shell into a distroless image to build a
 URL.
 
-**The operator is managed by Flux too**, in `deploy/flux/platform/operators`,
+**The operator is managed by Flux too**, in `deploy/flux/clusters/<cluster>/0-sources/operators`,
 pinned and reviewed - because an operator that owns every database in the
 cluster is exactly the thing whose version should be written down and the same
 in both environments. It is deliberately not treated like the application:
@@ -383,12 +385,11 @@ Service. Two operators would each rewrite those to point at themselves.
 So the switch is where the single operator LIVES and what it WATCHES:
 
 ```sh
-kubectl apply -k deploy/flux/platform/bootstrap/cluster-scoped        # one cluster, both environments
-kubectl apply -k deploy/flux/platform/bootstrap/namespace-scoped/lab  # one cluster, one environment
+kubectl apply -k deploy/flux/clusters/lab     # once per cluster
 ```
 
 Both create a Kustomization named `platform-operators`, so
-`deploy/environments/<env>/layers.yaml` depends on that one name and nothing in
+`deploy/flux/clusters/<cluster>/1-instances/` depends on that one name and nothing in
 the repository moves when the scope does. `TestEveryOperatorScopeBuildsAndKeepsOneName`
 asserts both halves of that - every arrangement builds, and every one of them
 keeps the name - because a scope that renamed it would leave every environment
@@ -422,7 +423,7 @@ is a bad afternoon; two operators fighting over one webhook while both report
 green is a bad quarter.
 
 The migration itself has a runbook in
-[`deploy/flux/platform/operators/README.md`](../../deploy/flux/platform/operators/README.md).
+[`deploy/flux/README.md`](../../deploy/flux/README.md).
 Its one irreversible step is annotating the CRDs `helm.sh/resource-policy: keep`
 **before** removing the old operator; everything else can be re-run.
 
@@ -452,7 +453,7 @@ out, and `platform-operators` itself. Both are named explicitly now.
 
 > **Backups are not configured.** A replicated cluster protects against losing an
 > instance, not against losing the data: a `DROP TABLE` is replicated faithfully
-> and immediately. `spec.backup` in `deploy/environments/<env>/database/cluster.yaml`
+> and immediately. `database.cluster.backup` in an instance's values file
 > is where continuous WAL archiving goes, with the shape of the answer in a
 > comment and the target deliberately unchosen. **This is the one gap to close
 > before the cluster holds data anybody would miss.**
@@ -462,7 +463,7 @@ out, and `platform-operators` itself. Both are named explicitly now.
 `config/secrets/secrets.yaml` lists what this deployment needs: a name, its
 keys, and a **relative** path. No values, and there is nowhere in the schema to
 put one. The environment supplies the root (`secrets.vault.pathPrefix`,
-`secrets.azure.keyvaultName`); the inventory supplies the leaf. That is why lab
+`secrets.azureKeyVault.name`); the inventory supplies the leaf. That is why lab
 and production share one list.
 
 From it, `templates/secrets.yaml` renders either a `VaultStaticSecret` or a
@@ -613,9 +614,9 @@ publishes nothing, which is correct: the version being pinned to already exists.
 ## 13. Files
 
 - [`deploy/charts/software-gateway/`](../../deploy/charts/software-gateway/) - the chart, and its README
-- [`deploy/environments/`](../../deploy/environments/) - the two ordered layers, per environment
+- [`deploy/flux/instances/`](../../deploy/flux/instances/) - one values file per deployment
 - [`deploy/flux/`](../../deploy/flux/) - bootstrapping a cluster, the operators, the alerts
-- [`deploy/flux/platform/operators/`](../../deploy/flux/platform/operators/) - CloudNativePG, pinned and Flux-managed
+- [`deploy/flux/software/base/`](../../deploy/flux/software/base/) - the two ordered layers, as HelmReleases
 - [`deploy/chartstage/`](../../deploy/chartstage/) - the copy, and the environment values
 - [`deploy/secretsinv/`](../../deploy/secretsinv/) - the inventory, shared by the chart, the scaffold and the test
 - [`deploy/zitadel/k8s-state.mjs`](../../deploy/zitadel/k8s-state.mjs) - a compose volume, as a Secret

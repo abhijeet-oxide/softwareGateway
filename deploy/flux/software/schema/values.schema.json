@@ -1,0 +1,300 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Software Gateway values",
+  "description": "Checked by Helm before a render, so a typo is a failed pull request rather than a deployment that came up wrong.",
+  "type": "object",
+  "required": ["layers", "access", "database", "image", "images", "identity", "secrets"],
+  "properties": {
+    "nameOverride": {"type": "string"},
+    "fullnameOverride": {"type": "string"},
+    "tenant": {"type": "string", "minLength": 1},
+    "supportContact": {"type": "string"},
+
+    "layers": {
+      "type": "object",
+      "required": ["database", "application"],
+      "properties": {
+        "database": {"type": "boolean"},
+        "application": {"type": "boolean"}
+      }
+    },
+
+    "image": {
+      "type": "object",
+      "required": ["repository", "pullPolicy"],
+      "properties": {
+        "registry": {"type": "string"},
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string"},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+
+    "images": {
+      "type": "object",
+      "required": ["zitadel", "zitadelLogin", "nginx", "cerbos", "node"],
+      "properties": {
+        "mirror": {"type": "string"},
+        "zitadel": {"type": "string", "minLength": 1},
+        "zitadelLogin": {"type": "string", "minLength": 1},
+        "nginx": {"type": "string", "minLength": 1},
+        "cerbos": {"type": "string", "minLength": 1},
+        "node": {"type": "string", "minLength": 1}
+      }
+    },
+
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+
+    "access": {
+      "type": "object",
+      "required": ["scheme", "web", "identity", "expose"],
+      "properties": {
+        "scheme": {"enum": ["http", "https"]},
+        "web": {"$ref": "#/$defs/endpoint"},
+        "identity": {"$ref": "#/$defs/endpoint"},
+        "expose": {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": {"enum": ["none", "ingress", "route", "loadBalancer", "nodePort"]},
+            "annotations": {"type": "object"},
+            "ingress": {
+              "type": "object",
+              "properties": {
+                "className": {"type": "string"},
+                "tls": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {"type": "boolean"},
+                    "webSecretName": {"type": "string"},
+                    "identitySecretName": {"type": "string"}
+                  }
+                }
+              }
+            },
+            "route": {
+              "type": "object",
+              "properties": {
+                "termination": {"enum": ["", "edge", "passthrough", "reencrypt"]}
+              }
+            },
+            "loadBalancer": {
+              "type": "object",
+              "properties": {
+                "webIP": {"type": "string"},
+                "identityIP": {"type": "string"}
+              }
+            },
+            "nodePort": {
+              "type": "object",
+              "properties": {
+                "web": {"type": "integer", "minimum": 0, "maximum": 65535},
+                "identity": {"type": "integer", "minimum": 0, "maximum": 65535}
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "database": {
+      "type": "object",
+      "required": ["port", "name"],
+      "properties": {
+        "host": {"type": "string"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "name": {"type": "string", "minLength": 1},
+        "identityDatabase": {"type": "string", "minLength": 1},
+        "sslMode": {"enum": ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]},
+        "existingSecret": {"type": "string"},
+        "usernameKey": {"type": "string"},
+        "passwordKey": {"type": "string"},
+        "dsnKey": {"type": "string"},
+        "waitTimeoutSeconds": {"type": "integer", "minimum": 1},
+        "cluster": {
+          "type": "object",
+          "properties": {
+            "name": {"type": "string"},
+            "instances": {"type": "integer", "minimum": 1},
+            "image": {"type": "string", "minLength": 1},
+            "storage": {"$ref": "#/$defs/volume"},
+            "walStorage": {"$ref": "#/$defs/volume"},
+            "resources": {"type": "object"},
+            "parameters": {"type": "object"},
+            "synchronousReplicas": {"type": "integer", "minimum": 0},
+            "backup": {
+              "type": "object",
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "destinationPath": {"type": "string"},
+                "retentionPolicy": {"type": "string"},
+                "azureCredentials": {"type": "object"},
+                "s3Credentials": {"type": "object"},
+                "googleCredentials": {"type": "object"}
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "coordinator": {"$ref": "#/$defs/workload"},
+    "worker": {"$ref": "#/$defs/workload"},
+    "web": {"$ref": "#/$defs/workload"},
+    "cerbos": {"$ref": "#/$defs/workload"},
+
+    "identity": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "masterkey": {"$ref": "#/$defs/secretValue"},
+        "rootPassword": {"$ref": "#/$defs/secretValue"},
+        "bootstrapAdmin": {
+          "type": "object",
+          "properties": {
+            "username": {"type": "string", "minLength": 1},
+            "email": {"type": "string", "minLength": 1},
+            "firstName": {"type": "string"},
+            "lastName": {"type": "string"},
+            "password": {"type": "string"},
+            "existingSecret": {"type": "string"}
+          }
+        },
+        "sso": {
+          "type": "object",
+          "properties": {
+            "issuer": {"type": "string"},
+            "clientId": {"type": "string"},
+            "existingSecret": {"type": "string"},
+            "clientSecretKey": {"type": "string"},
+            "displayName": {"type": "string"},
+            "allowPasswordLogin": {"type": "boolean"},
+            "requireMfa": {"type": "boolean"}
+          }
+        },
+        "tokenLifetimes": {"type": "object"},
+        "branding": {"type": "object"},
+        "zitadel": {"$ref": "#/$defs/replicaSet"},
+        "login": {"$ref": "#/$defs/replicaSet"},
+        "proxy": {"$ref": "#/$defs/replicaSet"}
+      }
+    },
+
+    "seed": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "ttlSecondsAfterFinished": {"type": "integer", "minimum": 0},
+        "backoffLimit": {"type": "integer", "minimum": 0},
+        "resources": {"type": "object"},
+        "rotateWorkerSecret": {"type": "boolean"}
+      }
+    },
+
+    "secrets": {
+      "type": "object",
+      "required": ["backend"],
+      "properties": {
+        "backend": {"enum": ["none", "vault", "azureKeyVault"]},
+        "vault": {"type": "object"},
+        "azureKeyVault": {"type": "object"},
+        "registryPullSecret": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "name": {"type": "string"},
+            "from": {"type": "string"}
+          }
+        }
+      }
+    },
+
+    "extraCAs": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "existingConfigMap": {"type": "string"},
+        "certificates": {"type": "string"}
+      }
+    },
+
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "allowFromNamespaces": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+
+    "metrics": {"type": "object"},
+    "settings": {"type": "object", "additionalProperties": {"type": ["string", "number", "boolean"]}},
+    "coordinatorExtraEnv": {"type": "array"},
+    "workerExtraEnv": {"type": "array"},
+
+    "rollout": {
+      "type": "object",
+      "properties": {
+        "maxSurge": {"type": ["integer", "string"]},
+        "maxUnavailable": {"type": ["integer", "string"]},
+        "progressDeadlineSeconds": {"type": "integer", "minimum": 1}
+      }
+    }
+  },
+
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "required": ["host"],
+      "properties": {
+        "host": {"type": "string", "minLength": 1},
+        "port": {"type": "integer", "minimum": 0, "maximum": 65535}
+      }
+    },
+    "volume": {
+      "type": "object",
+      "properties": {
+        "size": {"type": "string"},
+        "className": {"type": "string"}
+      }
+    },
+    "replicaSet": {
+      "type": "object",
+      "properties": {
+        "replicas": {"type": "integer", "minimum": 0},
+        "resources": {"type": "object"}
+      }
+    },
+    "secretValue": {
+      "type": "object",
+      "properties": {
+        "existingSecret": {"type": "string"},
+        "key": {"type": "string"},
+        "value": {"type": "string"}
+      }
+    },
+    "workload": {
+      "type": "object",
+      "properties": {
+        "replicas": {"type": "integer", "minimum": 0},
+        "resources": {"type": "object"},
+        "podDisruptionBudget": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "minAvailable": {"type": ["integer", "string"]}
+          }
+        },
+        "nodeSelector": {"type": "object"},
+        "tolerations": {"type": "array"},
+        "affinity": {"type": "object"},
+        "topologySpreadConstraints": {"type": "array"},
+        "terminationGracePeriodSeconds": {"type": "integer", "minimum": 0},
+        "autoscaling": {"type": "object"}
+      }
+    }
+  }
+}

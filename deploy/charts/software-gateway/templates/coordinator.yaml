@@ -1,3 +1,4 @@
+{{- if .Values.layers.application }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -9,9 +10,8 @@ automountServiceAccountToken: false
 apiVersion: v1
 kind: Service
 metadata:
-  # NOT release-prefixed. deploy/web/nginx.conf, which is baked into the web
-  # image and mounted by docker-compose.yml, proxies to `controller:8080`.
-  # See _helpers.tpl for the full reason and its one consequence.
+  # NOT release-prefixed: deploy/web/nginx.conf, baked into the web image and
+  # mounted by docker-compose.yml, proxies to `controller:8080`.
   name: controller
   labels:
     {{- include "swgw.componentLabels" (dict "ctx" . "component" "coordinator") | nindent 4 }}
@@ -43,14 +43,15 @@ spec:
       labels:
         {{- include "swgw.componentLabels" (dict "ctx" . "component" "coordinator") | nindent 8 }}
       annotations:
-        # THE ONLY CHECKSUM ON THIS POD, and its absence elsewhere is the
-        # design. config.yaml is a subPath mount and genuinely needs a restart,
-        # so a change to it rolls the fleet. products/ and the credentials are
-        # watched and rotate in place, so they carry no checksum and changing
-        # them restarts nothing. docs/design/30 section 5.
+        # THE ONLY CHECKSUMS ON THIS POD, and their absence elsewhere is the
+        # design: config.yaml is a subPath mount and needs a restart, while
+        # products and credentials are watched and rotate in place.
         checksum/system-config: {{ .Files.Get "files/config/config.yaml" | sha256sum }}
         checksum/settings: {{ toYaml .Values.settings | sha256sum }}
     spec:
+      # Kubernetes injects <SERVICE>_PORT=tcp://ip:port for every Service in the
+      # namespace. Those names collide with configuration keys and the failure
+      # reads as a parse error three services away. Off for every pod here.
       enableServiceLinks: false
       serviceAccountName: {{ include "swgw.fullname" . }}-coordinator
       {{- include "swgw.imagePullSecrets" . | nindent 6 }}
@@ -70,11 +71,10 @@ spec:
       topologySpreadConstraints: {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
-        # A HARD dependency: this process migrates the schema at startup, so a
-        # database that is not there is a crash rather than a degraded start.
-        # Waiting here means the pod sits in Init saying so, and its application
-        # container's restart count stays zero and keeps meaning something.
-        {{- include "swgw.waitForTCP" (dict "ctx" . "name" "database" "host" .Values.database.host "port" .Values.database.port) | nindent 8 }}
+        # HARD: this process migrates the schema at startup. Waiting here keeps
+        # the pod in Init saying so, and the application container's restart
+        # count at zero, where it still means something.
+        {{- include "swgw.waitForTCP" (dict "ctx" . "name" "database" "host" (include "swgw.dbHost" .) "port" .Values.database.port) | nindent 8 }}
       containers:
         - name: coordinator
           image: {{ include "swgw.image" (dict "ctx" . "name" "coordinator") }}
@@ -85,29 +85,19 @@ spec:
               containerPort: 8080
           env:
             {{- include "swgw.commonEnv" . | nindent 12 }}
-            # THE DRIVER AS WELL AS THE DSN. They are two settings and the
-            # driver defaults to sqlite, so a DSN on its own gives a
-            # Coordinator that opens a local file, migrates it, serves from it
-            # and loses everything when the pod is replaced.
+            # The driver as well as the DSN: it defaults to sqlite, so a DSN on
+            # its own gives a Coordinator that opens a local file and loses it
+            # with the pod.
             - name: SWGW_DATABASE_DRIVER
               value: postgres
-            # Assembled by the kubelet from the two variables above, which must
-            # be declared before it. See swgw.dbCredentialEnv for why the URL is
-            # built here rather than read from a key or composed by a shell.
-            - name: SWGW_DATABASE_DSN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "swgw.dbSecretName" . }}
-                  key: uri
-              # value: postgres://$(SWGW_DB_USER):$(SWGW_DB_PASSWORD)@{{ .Values.database.host }}:{{ .Values.database.port }}/{{ .Values.database.name }}?sslmode={{ .Values.database.sslMode }}
+            {{- include "swgw.dbEnv" . | nindent 12 }}
             - name: SWGW_AUTH_ENABLED
               value: {{ .Values.identity.enabled | quote }}
             {{- if .Values.identity.enabled }}
             # The issuer is the PUBLIC url, because that is what lands in the
-            # token's `iss`. DiscoveryURL is where this process actually
-            # fetches the keys - a browser reaches ZITADEL by its external name
-            # and a pod reaches it by Service name, and both must be
-            # expressible or nothing validates.
+            # token's `iss`. DiscoveryURL is where this process fetches keys: a
+            # browser reaches ZITADEL by its external name and a pod reaches it
+            # by Service name, and both must be expressible.
             - name: SWGW_AUTH_ISSUER
               value: {{ include "swgw.identityUrl" . | quote }}
             - name: SWGW_AUTH_DISCOVERYURL
@@ -125,26 +115,21 @@ spec:
             {{- with .Values.coordinatorExtraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          # LIVENESS IS PROCESS-LOCAL, ON PURPOSE. /healthz touches nothing
-          # external. A liveness probe that reached the database would restart
-          # every Coordinator during a brief Postgres blip, turning a
-          # recoverable dependency hiccup into a fleet-wide crash loop at
-          # exactly the moment the process needs to stay alive and retry.
+          # LIVENESS IS PROCESS-LOCAL. A liveness probe that reached the
+          # database would restart every Coordinator during a brief Postgres
+          # blip - a fleet-wide crash loop at the moment the process most needs
+          # to stay alive and retry.
           livenessProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 20
             failureThreshold: 3
-          # READINESS is the one that decides traffic, and it means: the
-          # database answers, its schema is the one this build expects, and the
-          # product configuration loaded. With maxUnavailable 0 this is what
-          # makes a bad image stall a rollout instead of taking capacity down.
+          # READINESS decides traffic, and means: the database answers, its
+          # schema is the one this build expects, and products loaded. With
+          # maxUnavailable 0 this is what stalls a bad rollout.
           readinessProbe:
             httpGet: {path: /readyz, port: http}
             periodSeconds: 10
             failureThreshold: 2
-          # Migrations run at startup and a first boot applies all of them.
-          # A startup probe gives that a budget without lengthening the
-          # liveness delay for every subsequent restart.
           startupProbe:
             httpGet: {path: /readyz, port: http}
             periodSeconds: 5
@@ -155,12 +140,14 @@ spec:
             {{- include "swgw.containerSecurityContext" . | nindent 12 }}
           volumeMounts:
             {{- include "swgw.configVolumeMounts" . | nindent 12 }}
+            # Compliance bundles are staged here, and the root filesystem is
+            # read-only.
             - name: tmp
               mountPath: /tmp
-{{- if eq .Values.secrets.backend "azure" }}
-            # See templates/secrets-azure.yaml: the CSI driver produces a
-            # Secret only while a pod mounts its SecretProviderClass, so the
-            # workload that needs every credential is the one that mounts them.
+{{- if eq .Values.secrets.backend "azureKeyVault" }}
+            # The CSI driver produces a Secret only while a pod mounts its
+            # SecretProviderClass, so the workload that needs every credential
+            # is the one that mounts them. See templates/secrets.yaml.
             - name: azure-secrets
               mountPath: /mnt/azure-secrets
               readOnly: true
@@ -169,7 +156,7 @@ spec:
         {{- include "swgw.configVolumes" . | nindent 8 }}
         - name: tmp
           emptyDir: {}
-{{- if eq .Values.secrets.backend "azure" }}
+{{- if eq .Values.secrets.backend "azureKeyVault" }}
         - name: azure-secrets
           csi:
             driver: secrets-store.csi.k8s.io
@@ -190,4 +177,5 @@ spec:
   selector:
     matchLabels:
       {{- include "swgw.selectorLabels" (dict "ctx" . "component" "coordinator") | nindent 6 }}
+{{- end }}
 {{- end }}

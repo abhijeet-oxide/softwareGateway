@@ -1,0 +1,90 @@
+{{- if .Values.layers.database }}
+{{- $p := .Values.database.cluster -}}
+{{/*
+THE DATABASE, rendered by the `database` layer.
+
+It carries helm.sh/resource-policy: keep, so `helm uninstall` leaves it: the
+database is the only thing in this deployment that cannot be recreated.
+
+CloudNativePG generates the owner's password and publishes the connection as
+`<name>-app` - username, password, host, port, dbname and a ready-made `uri`.
+That password is therefore in no values file, no commit and nobody's password
+manager, and `database.existingSecret` is a name rather than a credential.
+
+Leave this off and point `database.host` and `database.existingSecret` at a
+database somebody else runs.
+*/}}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $p.name }}
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "database") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  instances: {{ $p.instances }}
+  imageName: {{ include "swgw.mirroredImage" (dict "ctx" . "image" $p.image) }}
+  {{- $pullSecrets := include "swgw.pullSecretNames" . | fromYamlArray }}
+  {{- if $pullSecrets }}
+  imagePullSecrets:
+    {{- range $pullSecrets }}
+    - name: {{ . }}
+    {{- end }}
+  {{- end }}
+
+  bootstrap:
+    initdb:
+      database: {{ .Values.database.name }}
+      owner: {{ .Values.database.name }}
+      # CREATE DATABASE cannot run inside a transaction block, which is why this
+      # is postInitSQL rather than postInitApplicationSQL. The owner is the
+      # application account, so ZITADEL creates its schemas without a superuser.
+      postInitSQL:
+        - CREATE DATABASE {{ .Values.database.identityDatabase }} OWNER {{ .Values.database.name }}
+
+  storage:
+    size: {{ $p.storage.size }}
+    {{- with $p.storage.className }}
+    storageClass: {{ . }}
+    {{- end }}
+  {{- if $p.walStorage.size }}
+  walStorage:
+    size: {{ $p.walStorage.size }}
+    {{- with $p.walStorage.className }}
+    storageClass: {{ . }}
+    {{- end }}
+  {{- end }}
+
+  resources:
+    {{- toYaml $p.resources | nindent 4 }}
+
+  postgresql:
+    parameters:
+      {{- toYaml $p.parameters | nindent 6 }}
+    {{- if and (gt (int $p.instances) 1) (gt (int $p.synchronousReplicas) 0) }}
+    synchronous:
+      method: any
+      number: {{ $p.synchronousReplicas }}
+    {{- end }}
+
+  primaryUpdateStrategy: unsupervised
+  primaryUpdateMethod: switchover
+  switchoverDelay: 60
+
+  {{- if $p.backup.enabled }}
+  backup:
+    retentionPolicy: {{ $p.backup.retentionPolicy }}
+    barmanObjectStore:
+      destinationPath: {{ required "database.cluster.backup.destinationPath is required when backups are enabled" $p.backup.destinationPath | quote }}
+      {{- with $p.backup.azureCredentials }}
+      azureCredentials: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $p.backup.s3Credentials }}
+      s3Credentials: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $p.backup.googleCredentials }}
+      googleCredentials: {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- end }}
+{{- end }}

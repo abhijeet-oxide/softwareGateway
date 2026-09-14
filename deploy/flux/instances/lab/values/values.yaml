@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../../software/schema/values.schema.json
+#
+# LAB - the whole of what makes this instance different.
+#
+# Both HelmReleases read this file through a ConfigMap. There is no second place
+# to look: if a setting is not here, it is the chart's default, and
+# `helm show values software-gateway` lists those.
+
+# The ZITADEL organization this instance serves.
+tenant: default
+
+# Who the UI and the sign-in screens name when somebody is refused.
+supportContact: platform-team@example.internal
+
+# --------------------------------------------------------------------- access
+#
+# A lab with no public DNS: both addresses are private load balancer IPs on the
+# cluster's own subnet, and nothing here has a certificate. `scheme: http` is
+# therefore the truth, and it is what ZITADEL stamps into every token's `iss` -
+# claiming https here is how a stack comes up green and cannot sign anybody in.
+access:
+  scheme: http
+  web:
+    host: 10.20.30.40
+    port: 80
+  identity:
+    host: 10.20.30.41
+    port: 80
+  expose:
+    type: loadBalancer
+    annotations:
+      # An internal load balancer: an address on the cluster's subnet, reachable
+      # from the corporate network and from nowhere else.
+      service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    loadBalancer:
+      # Must be free addresses in the node subnet. Leave empty to let Azure
+      # allocate, then put what it allocated into access.*.host above.
+      webIP: 10.20.30.40
+      identityIP: 10.20.30.41
+
+# --------------------------------------------------------------------- images
+#
+# Everything comes from the internal registry, including the third-party images:
+# `mirror` is a repository that proxies Docker Hub and ghcr.io, so one hostname
+# and one credential resolve all of them.
+image:
+  registry: contoso.azurecr.io
+  repository: software-gateway
+images:
+  mirror: contoso.azurecr.io/docker
+
+# Created once in this namespace, by hand or by the credentials backend:
+#   kubectl -n swgw-lab create secret docker-registry acr-pull \
+#     --docker-server=contoso.azurecr.io \
+#     --docker-username=<sp-id> --docker-password=<sp-secret>
+imagePullSecrets:
+  - acr-pull
+
+# ------------------------------------------------------------------- database
+#
+# Provisioned by the database layer. `host` and `existingSecret` are derived
+# from this name, so there is one place to change it.
+database:
+  cluster:
+    name: swgw-db
+    instances: 2
+    image: contoso.azurecr.io/docker/cloudnative-pg/postgresql:16.10
+    storage:
+      size: 32Gi
+      className: managed-csi
+    walStorage:
+      size: 8Gi
+      className: managed-csi
+    resources:
+      requests: {cpu: 500m, memory: 1Gi}
+      limits: {memory: 2Gi}
+    # Two instances, so one synchronous standby is the whole fleet. A lab can
+    # afford to lose the last few seconds of a transfer log.
+    synchronousReplicas: 0
+
+# ------------------------------------------------------------------ identity
+identity:
+  masterkey:
+    # Exactly 32 bytes. Created once, kept somewhere it can be found again: a
+    # ZITADEL database cannot be decrypted without it.
+    #   kubectl -n swgw-lab create secret generic swgw-zitadel \
+    #     --from-literal=masterkey="$(head -c 32 /dev/urandom | base64 | head -c 32)" \
+    #     --from-literal=rootPassword="$(head -c 24 /dev/urandom | base64)"
+    existingSecret: swgw-zitadel
+    key: masterkey
+  rootPassword:
+    existingSecret: swgw-zitadel
+    key: rootPassword
+  bootstrapAdmin:
+    username: admin
+    email: platform-team@example.internal
+  # No single sign-on in the lab: everybody in config/users/users.yaml signs in
+  # with the password that file carries. Set sso.issuer, sso.clientId and
+  # sso.existingSecret before this serves anyone real.
+  zitadel: {replicas: 1}
+  login: {replicas: 1}
+  proxy: {replicas: 1}
+
+# ------------------------------------------------------------------- secrets
+#
+# `none` means the Secrets in config/secrets/secrets.yaml already exist in this
+# namespace - made by hand, which is what a lab does. Production uses an
+# operator; see instances/prod.
+secrets:
+  backend: none
+
+# ----------------------------------------------------------------- capacity
+coordinator:
+  replicas: 2
+worker:
+  replicas: 2
+web:
+  replicas: 2
+cerbos:
+  replicas: 1
+
+# A lab is a place to read logs.
+settings:
+  SWGW_OBSERVABILITY_LOG_LEVEL: debug

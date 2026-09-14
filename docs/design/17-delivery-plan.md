@@ -154,7 +154,7 @@ The declared form of the operation the estate actually performs: vendor → JFro
 
 ### M10 - Web UI
 
-The second client of the same API. Direction, scope and the six gates in [19](19-user-interface.md); information architecture in the [UI generation brief](../ui/ui-generation-brief.md).
+The second client of the same API. Direction, scope, the six gates and the information architecture are in [19](19-user-interface.md).
 
 - **Gate first: API authentication, identity and roles** ([09](09-api.md) §10, Q6). Nothing else in this milestone may start before it
 - OpenAPI generated from the router; server-sent events for live progress

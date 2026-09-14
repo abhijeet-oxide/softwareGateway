@@ -32,4 +32,4 @@ NPM_CONFIG_FILE=./deploy/npm/npmrc
 
 `deploy/npm/npmrc` is gitignored. Note that a credentialed npmrc is by
 definition not empty, so under podman on Windows it hits the bug above until
-podman fixes it. `deploy/STACK.md` lists what to do about that.
+podman fixes it. QUICKSTART.md section 5 lists what to do about that.

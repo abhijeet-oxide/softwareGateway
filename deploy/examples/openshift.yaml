@@ -36,7 +36,7 @@ images:
   mirror: quay.example.com/docker
 
 imagePullSecrets:
-  - quay-pull
+  - registry-pull
 
 database:
   cluster:

@@ -2,12 +2,15 @@ package deploy
 
 import (
 	"bytes"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -731,4 +734,77 @@ func TestEveryInstanceReadsOneValuesFile(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestNoInstanceRestatesAChartDefault keeps one rule true: the chart holds every
+// default, and an instance's values file holds only what differs.
+//
+// A restated default is not harmless. It reads as a decision somebody made for
+// this deployment, so the next person changing the chart's default changes it
+// everywhere except the places that silently pinned the old one - and the
+// divergence is invisible until something behaves differently in one namespace.
+//
+// It also makes the file answer the only question worth asking of it: what is
+// different here.
+func TestNoInstanceRestatesAChartDefault(t *testing.T) {
+	var defaults map[string]any
+	b, err := os.ReadFile(filepath.Join(repoRoot, "deploy", "charts", "software-gateway", "values.yaml"))
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if err := yaml.Unmarshal(b, &defaults); err != nil {
+		t.Fatalf("parse the chart's values: %v", err)
+	}
+
+	instances, err := chartstage.Instances(repoRoot)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	for _, instance := range instances {
+		t.Run(instance, func(t *testing.T) {
+			raw, err := chartstage.InstanceValues(repoRoot, instance)
+			if err != nil {
+				t.Fatalf("%v", err)
+			}
+			var values map[string]any
+			if err := yaml.Unmarshal(raw, &values); err != nil {
+				t.Fatalf("parse values: %v", err)
+			}
+			for _, restated := range sameAsDefault(values, defaults, "") {
+				t.Errorf("%s states %s, which is already the chart's default.\n"+
+					"\nDelete the line. If this deployment genuinely depends on that value rather than\n"+
+					"on whatever the chart says, the chart's default is the thing to change.\n",
+					instance, restated)
+			}
+		})
+	}
+}
+
+// sameAsDefault returns the dotted paths an instance sets to the value the chart
+// already has. Maps are walked; anything else is compared whole, because a list
+// that happens to equal the default is still a restatement.
+func sameAsDefault(values, defaults map[string]any, prefix string) []string {
+	var found []string
+	for key, got := range values {
+		want, ok := defaults[key]
+		if !ok {
+			continue
+		}
+		path := key
+		if prefix != "" {
+			path = prefix + "." + key
+		}
+		gotMap, gotIsMap := got.(map[string]any)
+		wantMap, wantIsMap := want.(map[string]any)
+		if gotIsMap && wantIsMap {
+			found = append(found, sameAsDefault(gotMap, wantMap, path)...)
+			continue
+		}
+		if reflect.DeepEqual(got, want) {
+			found = append(found, fmt.Sprintf("%s: %v", path, got))
+		}
+	}
+	sort.Strings(found)
+	return found
 }

@@ -68,11 +68,11 @@ images:
 # The kubelet's pull credential, on every pod and on the database cluster.
 # Create it once in the namespace:
 #
-#   kubectl -n <namespace> create secret docker-registry acr-pull \
+#   kubectl -n <namespace> create secret docker-registry registry-pull \
 #     --docker-server=contoso.azurecr.io \
 #     --docker-username="$SP_ID" --docker-password="$SP_SECRET"
 imagePullSecrets:
-  - acr-pull
+  - registry-pull
 
 # ------------------------------------------------------------------- database
 #

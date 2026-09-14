@@ -1,87 +1,24 @@
-# Software Gateway - full stack
+# Registering the application in Microsoft Entra
 
-One command brings up the product, its database, an identity provider and a
-policy engine, seeded and ready to use.
+Single sign-on against Entra needs one app registration, and three of its
+settings are easy to get wrong in ways that fail only after somebody has typed
+their password. This is that registration, once.
 
-```bash
-curl -O    https://raw.githubusercontent.com/abhijeet-oxide/softwareGateway/main/deploy/docker-compose.yml
-curl -o .env https://raw.githubusercontent.com/abhijeet-oxide/softwareGateway/main/deploy/.env.example
-# edit .env: at minimum POSTGRES_PASSWORD and ZITADEL_MASTERKEY
-docker compose up -d
-```
+It is the same registration for every way of running this: the only thing that
+differs is the redirect URI, which is `<identity url>/idps/callback` — so
+`http://localhost:8090/idps/callback` under compose, and whatever
+`access.identity` says in a cluster. The seeder prints the exact URI on every
+run.
 
-| What | Where | Credentials |
+Where the values go:
+
+| | compose | a cluster |
 |---|---|---|
-| Software Gateway | http://localhost:8000 | `admin` / `BOOTSTRAP_ADMIN_PASSWORD` |
-| ZITADEL console | http://localhost:8090/ui/console | the same |
-| Controller API | http://localhost:8080 | bearer token |
+| issuer | `SSO_ISSUER` in `.env` | `identity.sso.issuer` in the instance's values |
+| client id | `SSO_CLIENT_ID` | `identity.sso.clientId` |
+| client secret | `SSO_CLIENT_SECRET` | a Secret named by `identity.sso.existingSecret` — never a value in Git |
 
-## What gets created for you
-
-The `zitadel-init` container runs once and exits. Everything it creates it
-reads out of `config/`, which is the one directory an administrator manages and
-the same one Flux reconciles in a cluster:
-
-| from | it creates |
-|---|---|
-| `config/products/*.yaml` | one ZITADEL project per product, with its roles |
-| `config/access/roles.yaml` | the roles themselves, both tiers |
-| `config/users/users.yaml` | the people and machine accounts, and their grants |
-| `.env` | the tenant, the SSO connector, the first administrator |
-
-It is **idempotent**. Add a product and re-run it; only the new one is created.
-
-```bash
-# add config/products/software-04.yaml, give it an owner in
-# config/users/users.yaml, then:
-docker compose run --rm zitadel-init
-```
-
-It **refuses** to write anything when the files disagree: a product with no
-`metadata.name`, or one that nobody in `users.yaml` holds the owner role on. A
-product nobody owns is a product whose downloads nobody can approve, and the
-run that would create it says so instead. `go test ./deploy/...` makes the same
-check on the pull request.
-
-## Roles
-
-The prefix is the scope, the suffix is the level.
-
-| Role | Covers |
-|---|---|
-| `org-admin` | everything, every product, **including products added later** |
-| `org-operator` | request and retry on every product; not promote |
-| `org-security` | security detail on every product |
-| `org-reader` | read every product |
-| `product-owner` | everything on one product |
-| `product-operator` | request and retry on one product |
-| `product-reader` | read one product |
-
-An `org-` role names no product, so a product created next month is covered
-with no re-login and no new grant.
-
-Assign them in the ZITADEL console: **Organization → Projects → platform (or a
-product) → Authorizations**.
-
-## Turning on Microsoft SSO
-
-Fill `SSO_ISSUER`, `SSO_CLIENT_ID` and `SSO_CLIENT_SECRET` in `.env`, then
-re-run `docker compose run --rm zitadel-init`. Login then redirects straight to
-Microsoft and ZITADEL's own form is never shown.
-
-With SSO configured the seeder **refuses** to start if
-`BOOTSTRAP_ADMIN_PASSWORD` is still set, so the local shortcut cannot reach
-production.
-
-## Everyday commands
-
-```bash
-docker compose up -d           # start, in dependency order
-docker compose logs -f web     # follow one service
-docker compose ps              # health of everything
-docker compose down            # stop; databases kept
-docker compose down -v         # stop and discard all data
-```
+---
 
 ## Microsoft Entra: registering the app
 
@@ -145,7 +82,7 @@ The seeder configures the screen as well as the connector:
   console; from then on the linking is automatic.
 - **The screen is branded** with `deploy/zitadel/branding/logo.svg` and this
   product's colours, and ZITADEL's watermark is off. See
-  [zitadel/branding/README.md](zitadel/branding/README.md).
+  [zitadel/branding/README.md](../deploy/zitadel/branding/README.md).
 - **One language.** ZITADEL's login still draws the picker - there is no
   setting that removes it - but with a single allowed language it has nothing
   to offer.
@@ -358,75 +295,3 @@ client ID and issuer are shown there.
 client ID and issuer for a connector and never the secret. There is no way to
 confirm a stored secret is correct except by using it, which is why the seeder
 pushes `.env` into the connector on every run rather than trying to compare.
-
-## Podman: `archive/tar: write too long`
-
-```
-archive/tar: write too long
-Error: Post "http://d/v5.5.2/libpod/build?...&secrets=["id=netrc,src=podman-build-secret311835887"]": io: read/write on closed pipe
-```
-
-This is an open podman bug, and the trigger is **a build secret whose file is
-not empty**.
-
-podman's remote client - podman machine, so every Windows and macOS host -
-cannot pass a build secret to the server over the wire. It copies each secret
-INTO THE BUILD CONTEXT, keeps the handle open, and tars the context. On Windows
-the size in the tar header comes from the directory entry, which still reads
-zero while podman's writes sit unflushed, so the copy delivers the real bytes
-and `archive/tar` refuses them. A zero byte secret is immune, because zero is
-what the header promised.
-
-Upstream: [containers/podman#26914](https://github.com/containers/podman/issues/26914)
-("empty secret files work, any non-empty file causes the build to fail"),
-[#17899](https://github.com/containers/podman/issues/17899),
-[#23815](https://github.com/containers/podman/issues/23815).
-
-**With no credentials configured this now works**, because
-`deploy/npm/npmrc.default` and `deploy/go/netrc.default` are zero bytes.
-They used to carry a comment saying "Intentionally empty" while being 423 and
-215 bytes, and on Windows those comments broke every build.
-`deploy/deploy_test.go` fails if either file grows again.
-
-**With credentials configured it does not**, because a credentialed npmrc or
-netrc is not empty. Until podman fixes it, the choices are:
-
-- Build that one image with Docker, which is unaffected: buildx streams secrets
-  over its session rather than through the context.
-- Build inside the podman machine (`podman machine ssh`, then `podman build` on
-  a checkout there). A local build reads the secret from disk and never copies
-  it into the context.
-- Put the credential in the registry URL instead - `NPM_REGISTRY` for npm,
-  `GOPROXY` for Go - and accept the exposure. **These are build arguments.**
-  They are recorded in the build request, printed in full in any error the
-  build reports, and kept in the build cache. Anyone who is sent a screenshot
-  of a failed build is sent the token with it. They do not reach the shipped
-  image, because both are used only in a discarded build stage, but treat a
-  token used this way as published and rotate it when you stop.
-
-Things that are not the fix: `--parallel 1` (the failure needs no concurrency;
-a single build fails on its own), a smaller build context, and ignoring
-`podman-build-secret*` in `.dockerignore` - podman ships the secret to the
-server as part of the context, so excluding it means the build cannot find its
-secret at all ([#25314](https://github.com/containers/podman/issues/25314)).
-
-## The same stack in a cluster
-
-Everything above is the compose path. The cluster path deploys the same images,
-the same `config/`, and the same seeder - as a Helm chart reconciled by Flux:
-
-```sh
-helm install swgw oci://registry.example.internal/charts/software-gateway \
-  --version 1.4.3 --namespace swgw --create-namespace --values my-values.yaml
-```
-
-- [deploy/charts/software-gateway/README.md](charts/software-gateway/README.md) - the chart, and the values a real deployment states
-- [deploy/flux/README.md](flux/README.md) - bootstrapping a cluster
-- [docs/design/30 - Continuous delivery](../docs/design/30-continuous-delivery.md) - how a change reaches it, and what each kind costs
-
-The Entra registration above is the same either way; the redirect URI is
-`${access.identity}/idps/callback` rather than `${ZITADEL_PUBLIC_URL}`.
-
-See [docs/design/24 - Identity and Access](../docs/design/24-identity-and-access.md)
-for why it is built this way, including four environment behaviours that are
-easy to get wrong and cost real debugging time.

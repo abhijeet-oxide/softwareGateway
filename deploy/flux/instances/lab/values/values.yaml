@@ -1,25 +1,19 @@
 # yaml-language-server: $schema=../../../software/schema/values.schema.json
 #
-# LAB - the whole of what makes this instance different.
+# LAB - only what differs from the chart's defaults.
 #
-# Both HelmReleases read this file through a ConfigMap. There is no second place
-# to look: if a setting is not here, it is the chart's default, and
-# `helm show values software-gateway` lists those.
+# Every key not here is a chart default: `helm show values software-gateway`,
+# or deploy/charts/software-gateway/values.yaml with the reasoning attached.
+# Restating a default is how the two drift, so `go test ./deploy/...` fails on
+# one.
 
-# The ZITADEL organization this instance serves.
-tenant: default
-
-# Who the UI and the sign-in screens name when somebody is refused.
 supportContact: platform-team@example.internal
 
-# --------------------------------------------------------------------- access
-#
-# A lab with no public DNS: both addresses are private load balancer IPs on the
-# cluster's own subnet, and nothing here has a certificate. `scheme: http` is
-# therefore the truth, and it is what ZITADEL stamps into every token's `iss` -
-# claiming https here is how a stack comes up green and cannot sign anybody in.
+# No public DNS and nothing that terminates TLS, so the scheme stays the chart's
+# default `http` and both addresses are private load balancer IPs. Claiming https
+# here would be a stack that comes up green and refuses every sign-in: the scheme
+# is stamped into every token's `iss` and the coordinator checks it.
 access:
-  scheme: http
   web:
     host: 10.20.30.40
     port: 80
@@ -29,93 +23,50 @@ access:
   expose:
     type: loadBalancer
     annotations:
-      # An internal load balancer: an address on the cluster's subnet, reachable
-      # from the corporate network and from nowhere else.
+      # Without this Azure allocates a PUBLIC address.
       service.beta.kubernetes.io/azure-load-balancer-internal: "true"
     loadBalancer:
-      # Must be free addresses in the node subnet. Leave empty to let Azure
-      # allocate, then put what it allocated into access.*.host above.
+      # Free addresses in the node subnet. Leave empty to let Azure allocate,
+      # then put what it allocated into access.*.host above.
       webIP: 10.20.30.40
       identityIP: 10.20.30.41
 
-# --------------------------------------------------------------------- images
-#
-# Everything comes from the internal registry, including the third-party images:
-# `mirror` is a repository that proxies Docker Hub and ghcr.io, so one hostname
-# and one credential resolve all of them.
+# Everything through one registry, the third-party images included.
 image:
   registry: contoso.azurecr.io
-  repository: software-gateway
 images:
   mirror: contoso.azurecr.io/docker
 
-# Created once in this namespace, by hand or by the credentials backend:
-#   kubectl -n swgw-lab create secret docker-registry acr-pull \
-#     --docker-server=contoso.azurecr.io \
-#     --docker-username=<sp-id> --docker-password=<sp-secret>
+# Created by hand: `task flux:secrets -- lab` prints the command.
 imagePullSecrets:
-  - acr-pull
+  - registry-pull
 
-# ------------------------------------------------------------------- database
-#
-# Provisioned by the database layer. `host` and `existingSecret` are derived
-# from this name, so there is one place to change it.
 database:
   cluster:
-    name: swgw-db
     instances: 2
     image: contoso.azurecr.io/docker/cloudnative-pg/postgresql:16.10
-    storage:
-      size: 32Gi
-      className: managed-csi
-    walStorage:
-      size: 8Gi
-      className: managed-csi
+    storage: {size: 32Gi, className: managed-csi}
+    walStorage: {size: 8Gi, className: managed-csi}
     resources:
       requests: {cpu: 500m, memory: 1Gi}
       limits: {memory: 2Gi}
-    # Two instances, so one synchronous standby is the whole fleet. A lab can
-    # afford to lose the last few seconds of a transfer log.
+    # With two instances a synchronous standby is the whole fleet, and a lab can
+    # afford to lose the last few seconds.
     synchronousReplicas: 0
 
-# ------------------------------------------------------------------ identity
 identity:
   masterkey:
-    # Exactly 32 bytes. Created once, kept somewhere it can be found again: a
-    # ZITADEL database cannot be decrypted without it.
-    #   kubectl -n swgw-lab create secret generic swgw-zitadel \
-    #     --from-literal=masterkey="$(head -c 32 /dev/urandom | base64 | head -c 32)" \
-    #     --from-literal=rootPassword="$(head -c 24 /dev/urandom | base64)"
     existingSecret: swgw-zitadel
-    key: masterkey
   rootPassword:
     existingSecret: swgw-zitadel
-    key: rootPassword
   bootstrapAdmin:
-    username: admin
     email: platform-team@example.internal
-  # No single sign-on in the lab: everybody in config/users/users.yaml signs in
-  # with the password that file carries. Set sso.issuer, sso.clientId and
-  # sso.existingSecret before this serves anyone real.
+  # No single sign-on here: everybody in config/users/users.yaml signs in with
+  # the password that file carries.
   zitadel: {replicas: 1}
   login: {replicas: 1}
   proxy: {replicas: 1}
 
-# ------------------------------------------------------------------- secrets
-#
-# `none` means the Secrets in config/secrets/secrets.yaml already exist in this
-# namespace - made by hand, which is what a lab does. Production uses an
-# operator; see instances/prod.
-secrets:
-  backend: none
-
-# ----------------------------------------------------------------- capacity
-coordinator:
-  replicas: 2
-worker:
-  replicas: 2
-web:
-  replicas: 2
 cerbos:
   replicas: 1
 

@@ -272,7 +272,7 @@ Accounts that cannot sign in through Microsoft
 ```
 
 The console steps that produce a linkable account are in
-[`deploy/STACK.md`](../../deploy/STACK.md).
+[`docs/entra-app-registration.md`](../entra-app-registration.md).
 
 ## 9. Files
 

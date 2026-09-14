@@ -516,6 +516,21 @@ tasks:
       FLUX_DIRS:
         sh: find deploy/flux -name kustomization.yaml -exec dirname {} \;
 
+  flux:secrets:
+    desc: Print the kubectl commands for the Secrets an instance needs created by hand
+    summary: |
+      task flux:secrets -- lab
+
+      Derived from that instance's values file, so it cannot go stale: turning
+      single sign-on on adds a Secret to this list in the same commit.
+
+      Export the values first and paste the output - nothing lands in shell
+      history, and no credential is ever written to a file in this repository.
+    vars:
+      INSTANCE: '{{default "lab" .CLI_ARGS}}'
+    cmds:
+      - go run ./deploy/chartstage/cmd/chartstage -secrets {{.INSTANCE}}
+
   flux:instances:
     desc: List the deployment instances and the chart version each runs
     cmds:
@@ -585,7 +600,7 @@ tasks:
       Extra arguments are passed through:  task images -- --no-cache
 
       If a podman build fails with "archive/tar: write too long", the cause is
-      a build secret whose file is not empty - see deploy/STACK.md. It is not
+      a build secret whose file is not empty - see QUICKSTART.md section 5. It is not
       concurrency, and building serially does not help.
     cmds:
       - |

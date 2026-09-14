@@ -7,6 +7,7 @@
 //	go run ./deploy/chartstage/cmd/chartstage                     stage the chart
 //	go run ./deploy/chartstage/cmd/chartstage -values lab         print an instance's values
 //	go run ./deploy/chartstage/cmd/chartstage -instances          list the instances
+//	go run ./deploy/chartstage/cmd/chartstage -secrets lab        the Secrets to create by hand
 //	go run ./deploy/chartstage/cmd/chartstage -instance lab -set-version 1.4.3
 //
 // The staged tree is not committed. See the package comment for why the copy
@@ -26,18 +27,22 @@ func main() {
 	root := flag.String("root", ".", "repository root")
 	values := flag.String("values", "", "print this instance's values file and exit")
 	list := flag.Bool("instances", false, "list the deployment instances and the version each runs")
+	secrets := flag.String("secrets", "", "print the kubectl commands for the Secrets this instance needs created by hand")
 	instance := flag.String("instance", "", "the instance -set-version applies to")
 	setVersion := flag.String("set-version", "", "point -instance at this chart version, creating the patch directory if needed")
 	flag.Parse()
 
-	if err := run(*root, *values, *list, *instance, *setVersion); err != nil {
+	if err := run(*root, *values, *list, *secrets, *instance, *setVersion); err != nil {
 		fmt.Fprintln(os.Stderr, "chartstage:", err)
 		os.Exit(1)
 	}
 }
 
-func run(root, values string, list bool, instance, setVersion string) error {
+func run(root, values string, list bool, secrets, instance, setVersion string) error {
 	switch {
+	case secrets != "":
+		return chartstage.WriteSecretSetup(os.Stdout, root, secrets)
+
 	case values != "":
 		b, err := chartstage.InstanceValues(root, values)
 		if err != nil {

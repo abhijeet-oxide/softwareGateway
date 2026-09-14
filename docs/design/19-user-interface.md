@@ -33,7 +33,7 @@ Everything `transferctl` does ([13](13-cli.md) §2), because a UI that can do mo
 
 Plus the one thing the CLI does awkwardly and a UI does naturally: **comprehension at a glance** - which releases are where, which have diverged, and what is failing right now, without composing a query first.
 
-Screen-by-screen intent, layout and the visual system live in the [UI generation brief](../ui/ui-generation-brief.md), which is a working document for producing mockups rather than a specification. **Ten pages, eight of them navigable:**
+**Ten pages, eight of them navigable:**
 
 ```
 Home · Products · Software · Downloads · Repositories · Activity · Reports · Settings
@@ -270,4 +270,4 @@ G1 is absolute: shipping a UI in front of an unauthenticated API would expose tr
 
 ## 7. Delivery
 
-M10, after M9. It depends on G1, which is a deployment gate rather than a milestone, so the ordering is: authentication ships, then the UI is buildable. The [UI generation brief](../ui/ui-generation-brief.md) exists now so the information architecture can be reviewed - on paper, at zero cost - long before any of that.
+M10, after M9. It depends on G1, which is a deployment gate rather than a milestone, so the ordering is: authentication ships, then the UI is buildable. The information architecture in section 4 exists so it can be reviewed - on paper, at zero cost - long before any of that.

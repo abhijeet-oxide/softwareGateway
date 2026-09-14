@@ -91,7 +91,7 @@ flux create secret git software-gateway-git \
 
 # 3. The registry credential. Used twice: Flux pulls the chart with it, and the
 #    kubelet pulls the images with it.
-flux create secret oci registry-pull \
+flux create secret oci chart-registry \
   --namespace flux-system \
   --url <registry host> \
   --username "$REGISTRY_USERNAME" --password "$REGISTRY_TOKEN"

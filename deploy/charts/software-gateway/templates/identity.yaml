@@ -18,6 +18,10 @@ Deployments - so no ZITADEL pod is ever created against a schema it cannot use.
 That requires the database to exist BEFORE this release is installed, which is
 why `layers.database` is a separate release.
 */}}
+{{- $inlineIdentity := or (not .Values.identity.masterkey.existingSecret) (not .Values.identity.rootPassword.existingSecret) (and .Values.identity.bootstrapAdmin.password (not .Values.identity.bootstrapAdmin.existingSecret)) -}}
+{{- if $inlineIdentity }}
+{{/* Only when a value is given here rather than named in a Secret. A deployment
+     that points all three at existing Secrets renders no Secret of its own. */}}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -38,6 +42,7 @@ stringData:
   adminPassword: {{ .Values.identity.bootstrapAdmin.password | quote }}
 {{- end }}
 ---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:

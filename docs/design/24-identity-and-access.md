@@ -1175,7 +1175,7 @@ resourcePolicy:
 
 ## 10. Configer inherits this
 
-[Configer](../../../configer) becomes a second client of the same ZITADEL, the
+A second product becomes a second client of the same ZITADEL, the
 same product projects and the same policy files. It needs:
 
 - an OIDC client in the `platform` project;

@@ -430,7 +430,7 @@ looks at twice, which is why the assertion is a test rather than a comment.
 
 Upstream: containers/podman#26914 ("empty secret files work, any non-empty file
 causes the build to fail"), #17899, #23815. The bug is open, so a CREDENTIALED
-secret still fails under podman on Windows; `deploy/STACK.md` lists what to do
+secret still fails under podman on Windows; QUICKSTART.md section 5 lists what to do
 about that.
 
 Three things that look like fixes and are not:

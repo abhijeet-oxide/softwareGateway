@@ -261,13 +261,21 @@ rollingUpdate:
 {{- end -}}
 
 {{/* The Secrets projected into /etc/softwaregateway/secrets, from the staged
-     inventory. The registry pull credential is left out: it is read by the
-     kubelet, not by any process in these containers. */}}
+     inventory.
+
+     PULL CREDENTIALS ARE LEFT OUT. They are read by the kubelet, not by any
+     process in these containers, so projecting one would put a credential for a
+     registry the application never talks to inside the directory it reads
+     credentials from. That holds however the Secret came to exist - rendered by
+     the backend, or created by hand and named in imagePullSecrets. */}}
 {{- define "swgw.secretNames" -}}
 {{- $inv := .Files.Get "files/config/secrets/secrets.yaml" | fromYaml -}}
-{{- $pull := .Values.secrets.registryPullSecret -}}
+{{- $pull := include "swgw.pullSecretNames" . | fromYamlArray -}}
+{{- if .Values.secrets.registryPullSecret.enabled -}}
+{{- $pull = append $pull .Values.secrets.registryPullSecret.from -}}
+{{- end -}}
 {{- range (default (list) $inv.secrets) }}
-{{- if not (and $pull.enabled (eq .name $pull.from)) }}
+{{- if not (has .name $pull) }}
 - {{ .name }}
 {{- end }}
 {{- end }}

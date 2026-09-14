@@ -59,12 +59,12 @@ app: {{ .component }}
 {{/* ------------------------------------------------------------------ images */}}
 
 {{- define "swgw.imageTag" -}}
-{{- default .Chart.AppVersion .Values.image.tag -}}
+{{- default .Chart.AppVersion .Values.images.tag -}}
 {{- end -}}
 
 {{/* (dict "ctx" $ "name" "coordinator") */}}
 {{- define "swgw.image" -}}
-{{- $i := .ctx.Values.image -}}
+{{- $i := .ctx.Values.images -}}
 {{- $tag := include "swgw.imageTag" .ctx -}}
 {{- $path := printf "%s/software-gateway-%s" $i.repository .name -}}
 {{- if $i.registry -}}
@@ -74,12 +74,29 @@ app: {{ .component }}
 {{- end -}}
 {{- end -}}
 
-{{/* A third-party image, resolved through the mirror. The value is the upstream
-     path; an empty mirror leaves it alone. (dict "ctx" $ "image" ...) */}}
+{{/* A third-party image, resolved through the mirror.
+
+     Every one is written as its FULL upstream reference, so an empty mirror
+     pulls it from where it actually lives - ZITADEL and CloudNativePG publish to
+     ghcr.io and nowhere else, and a host-less path would send a public
+     evaluation to a Docker Hub repository that does not exist.
+
+     The mirror REPLACES that host rather than being prefixed to it, so
+     `ghcr.io/zitadel/zitadel:v4.17.3` under mirror `reg.internal/docker` becomes
+     `reg.internal/docker/zitadel/zitadel:v4.17.3`. Prefixing would produce
+     `reg.internal/docker/ghcr.io/zitadel/...`, which no aggregating repository
+     serves.
+
+     (dict "ctx" $ "image" .ctx.Values.images.nginx) */}}
 {{- define "swgw.mirroredImage" -}}
 {{- $mirror := .ctx.Values.images.mirror | trimSuffix "/" -}}
 {{- if $mirror -}}
-{{- printf "%s/%s" $mirror .image -}}
+{{- $parts := splitList "/" .image -}}
+{{- $first := index $parts 0 -}}
+{{- if and (gt (len $parts) 1) (or (contains "." $first) (contains ":" $first)) -}}
+{{- $parts = rest $parts -}}
+{{- end -}}
+{{- printf "%s/%s" $mirror (join "/" $parts) -}}
 {{- else -}}
 {{- .image -}}
 {{- end -}}
@@ -88,7 +105,7 @@ app: {{ .component }}
 {{/* Every pull Secret this release uses, as a YAML list of names. The one the
      credentials backend renders is included without being restated. */}}
 {{- define "swgw.pullSecretNames" -}}
-{{- $names := default (list) .Values.imagePullSecrets -}}
+{{- $names := default (list) .Values.images.pullSecrets -}}
 {{- $pull := .Values.secrets.registryPullSecret -}}
 {{- if and $pull.enabled (ne .Values.secrets.backend "none") -}}
 {{- $names = append $names $pull.name -}}
@@ -299,51 +316,60 @@ rollingUpdate:
 {{- end -}}
 
 {{/* -------------------------------------------------------------- addresses
-     Every browser-facing URL is derived from `access`, so the URL a token
-     carries and the host an Ingress serves cannot disagree. */}}
-
-{{- define "swgw.defaultPort" -}}
-{{- if eq .Values.access.scheme "https" }}443{{ else }}80{{ end -}}
-{{- end -}}
-
-{{/* (dict "ctx" $ "entry" .Values.access.web) */}}
-{{- define "swgw.url" -}}
-{{- $scheme := .ctx.Values.access.scheme -}}
-{{- $host := required "access.<web|identity>.host is required" .entry.host -}}
-{{- $port := int (default 0 .entry.port) -}}
-{{- $default := int (include "swgw.defaultPort" .ctx) -}}
-{{- if or (eq $port 0) (eq $port $default) -}}
-{{- printf "%s://%s" $scheme $host -}}
-{{- else -}}
-{{- printf "%s://%s:%d" $scheme $host $port -}}
-{{- end -}}
-{{- end -}}
+     Every browser-facing value is read out of the two URLs in `access`, so the
+     issuer a token carries and the host an entry point serves cannot disagree. */}}
 
 {{- define "swgw.webUrl" -}}
-{{- include "swgw.url" (dict "ctx" . "entry" .Values.access.web) -}}
+{{- required "access.webUrl is required" .Values.access.webUrl | trimSuffix "/" -}}
 {{- end -}}
 
 {{- define "swgw.identityUrl" -}}
-{{- include "swgw.url" (dict "ctx" . "entry" .Values.access.identity) -}}
+{{- required "access.identityUrl is required" .Values.access.identityUrl | trimSuffix "/" -}}
 {{- end -}}
 
-{{/* What a browser actually sends, which is what ZITADEL matches against. */}}
+{{/* (dict "ctx" $ "url" "https://id.example.com:8443") */}}
+{{- define "swgw.urlScheme" -}}
+{{- (urlParse .).scheme -}}
+{{- end -}}
+
+{{/* host[:port], which is what a browser sends and what ZITADEL matches on. */}}
+{{- define "swgw.urlAuthority" -}}
+{{- (urlParse .).host -}}
+{{- end -}}
+
+{{/* The host alone. An Ingress rule and a Route take this, never a port. */}}
+{{- define "swgw.urlHost" -}}
+{{- (splitList ":" (urlParse .).host) | first -}}
+{{- end -}}
+
+{{/* The port a browser really uses, stated even when it is the scheme's
+     default - ZITADEL_EXTERNALPORT and a Service port both need a number. */}}
+{{- define "swgw.urlPort" -}}
+{{- $u := urlParse . -}}
+{{- $parts := splitList ":" $u.host -}}
+{{- if gt (len $parts) 1 -}}
+{{- index $parts 1 -}}
+{{- else if eq $u.scheme "https" -}}
+443
+{{- else -}}
+80
+{{- end -}}
+{{- end -}}
+
 {{- define "swgw.identityHostHeader" -}}
-{{- $u := urlParse (include "swgw.identityUrl" .) -}}
-{{- $u.host -}}
+{{- include "swgw.urlAuthority" (include "swgw.identityUrl" .) -}}
 {{- end -}}
 
 {{- define "swgw.identityDomain" -}}
-{{- .Values.access.identity.host -}}
+{{- include "swgw.urlHost" (include "swgw.identityUrl" .) -}}
 {{- end -}}
 
 {{- define "swgw.identityPort" -}}
-{{- $port := int (default 0 .Values.access.identity.port) -}}
-{{- if eq $port 0 }}{{ include "swgw.defaultPort" . }}{{ else }}{{ $port }}{{ end -}}
+{{- include "swgw.urlPort" (include "swgw.identityUrl" .) -}}
 {{- end -}}
 
 {{- define "swgw.identitySecure" -}}
-{{- if eq .Values.access.scheme "https" }}true{{ else }}false{{ end -}}
+{{- if eq (include "swgw.urlScheme" (include "swgw.identityUrl" .)) "https" }}true{{ else }}false{{ end -}}
 {{- end -}}
 
 {{/* THE HASH THAT DECIDES WHETHER PEOPLE GET PROVISIONED. Only what the seeder

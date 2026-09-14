@@ -44,9 +44,8 @@ identity:
     email: admin@example.com
 
 access:
-  scheme: https
-  web: {host: gateway.example.com}
-  identity: {host: id.gateway.example.com}
+  webUrl: https://gateway.example.com
+  identityUrl: https://id.gateway.example.com
   expose:
     type: ingress
     ingress:

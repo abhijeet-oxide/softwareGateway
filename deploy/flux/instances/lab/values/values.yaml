@@ -2,49 +2,35 @@
 #
 # LAB - only what differs from the chart's defaults.
 #
-# Every key not here is a chart default: `helm show values software-gateway`,
-# or deploy/charts/software-gateway/values.yaml with the reasoning attached.
-# Restating a default is how the two drift, so `go test ./deploy/...` fails on
-# one.
+# Every key not here is a chart default: `helm show values software-gateway`, or
+# deploy/charts/software-gateway/values.yaml with the reasoning attached.
+# Restating a default is a test failure, so this file answers one question -
+# what is different here.
+#
+# The namespace is NOT here. It is a kustomize concern, written once in
+# ../../kustomization.yaml.
 
 supportContact: platform-team@example.internal
 
-# No public DNS and nothing that terminates TLS, so the scheme stays the chart's
-# default `http` and both addresses are private load balancer IPs. Claiming https
-# here would be a stack that comes up green and refuses every sign-in: the scheme
-# is stamped into every token's `iss` and the coordinator checks it.
+# THE TWO ADDRESSES A BROWSER USES. Two names on one private IP, served by the
+# proxy this team already runs; the chart publishes nothing and that proxy is
+# pointed at the `web` and `zitadel-proxy` Services.
+#
+# Two names rather than one with paths, because ZITADEL cannot serve under a path
+# prefix and its address is stamped into every token's `iss`.
 access:
-  web:
-    host: 10.20.30.40
-    port: 80
-  identity:
-    host: 10.20.30.41
-    port: 80
-  expose:
-    type: loadBalancer
-    annotations:
-      # Without this Azure allocates a PUBLIC address.
-      service.beta.kubernetes.io/azure-load-balancer-internal: "true"
-    loadBalancer:
-      # Free addresses in the node subnet. Leave empty to let Azure allocate,
-      # then put what it allocated into access.*.host above.
-      webIP: 10.20.30.40
-      identityIP: 10.20.30.41
+  webUrl: https://gateway.lab.example.internal
+  identityUrl: https://id.gateway.lab.example.internal
 
-# Everything through one registry, the third-party images included.
-image:
-  registry: contoso.azurecr.io
 images:
+  registry: contoso.azurecr.io
   mirror: contoso.azurecr.io/docker
-
-# Created by hand: `task flux:secrets -- lab` prints the command.
-imagePullSecrets:
-  - registry-pull
+  # Created by hand: `task flux:secrets -- lab` prints the command.
+  pullSecrets: [registry-pull]
 
 database:
   cluster:
     instances: 2
-    image: contoso.azurecr.io/docker/cloudnative-pg/postgresql:16.10
     storage: {size: 32Gi, className: managed-csi}
     walStorage: {size: 8Gi, className: managed-csi}
     resources:
@@ -56,7 +42,7 @@ database:
 
 identity:
   # masterkey and rootPassword are generated on first install and read back on
-  # every upgrade, so there is nothing to create. See the chart's values.yaml.
+  # every upgrade, so there is nothing to create.
   bootstrapAdmin:
     email: platform-team@example.internal
   # No single sign-on here: everybody in config/users/users.yaml signs in with

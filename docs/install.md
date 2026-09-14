@@ -53,32 +53,48 @@ The four things a real deployment changes:
 
 ```yaml
 access:
-  web:      {host: 10.20.30.40, port: 80}   # what a browser types for the UI
-  identity: {host: 10.20.30.41, port: 80}   # where it is redirected to sign in
-image:    {registry: registry.example.internal}
-images:   {mirror: registry.example.internal/docker}
-imagePullSecrets: [registry-pull]
+  webUrl:      https://gateway.lab.example.internal
+  identityUrl: https://id.gateway.lab.example.internal
+images:
+  registry: registry.example.internal
+  mirror:   registry.example.internal/docker
+  pullSecrets: [registry-pull]
 ```
 
 ### The two addresses
 
-`access.web.host` is **what somebody types to reach Software Gateway**.
-`access.identity.host` is **where their browser is sent to sign in** — ZITADEL.
-They are two origins, not one host with two paths, for two reasons that both
-bite late:
+`access.webUrl` is **what somebody types to reach Software Gateway**.
+`access.identityUrl` is **where their browser is sent to sign in** — ZITADEL.
 
-- ZITADEL stamps `access.identity` into every token's `iss`, and the coordinator
-  refuses a token whose issuer is not the one it was configured with.
-- ZITADEL answers 404 to a Host header it does not recognise as its own.
+Write each as the whole address, exactly as a browser would use it. Scheme, host
+and port are read out of the URL, so there is nothing to keep in step.
 
-So both must be the address a browser **really** reaches, character for
-character. A hostname, an IP, with or without a port — no DNS is required. Two
-IPs, or one IP on two ports, are both fine.
+They are two **origins**, not one host with two paths, for three reasons:
 
-`access.scheme` is what the BROWSER speaks to whatever is in front. Leave it
-`http` unless something really terminates TLS: claiming `https` over a plain
-HTTP entry point is a stack that comes up green and refuses every sign-in, and
-the error names ZITADEL three services away from the line that caused it.
+- **ZITADEL cannot serve under a path prefix.** `/identity/...` is not an option
+  it has.
+- It stamps `identityUrl` into every token's `iss`, and the coordinator refuses
+  a token whose issuer is not the one it was configured with.
+- It answers 404 to a Host header it does not recognise as its own.
+
+One IP with two DNS names, or one name on two ports, are both fine. No public
+DNS is required — an IP literal works, and so does a name that only your
+resolver knows.
+
+The **scheme** is what the browser speaks to whatever is in front. `https` here
+with a plain-HTTP front door is a stack that comes up green and refuses every
+sign-in, and the error names ZITADEL three services away from the line that
+caused it. ZITADEL always serves plain HTTP behind the front door; that is a
+different question and does not change the issuer.
+
+### Images
+
+`images.registry` is where this product's three images live. `images.mirror` is a
+repository that proxies Docker Hub and ghcr.io; every third-party image is
+rewritten through it, so one line repoints all six.
+
+The image **versions** are chart defaults, pinned and tested together — a values
+file names a registry, never a tag.
 
 ### Turning features on
 

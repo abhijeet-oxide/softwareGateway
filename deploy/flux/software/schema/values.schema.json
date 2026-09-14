@@ -3,7 +3,7 @@
   "title": "Software Gateway values",
   "description": "Checked by Helm before a render, so a typo is a failed pull request rather than a deployment that came up wrong.",
   "type": "object",
-  "required": ["layers", "access", "database", "image", "images", "identity", "secrets"],
+  "required": ["layers", "access", "database", "images", "identity", "secrets"],
   "properties": {
     "nameOverride": {"type": "string"},
     "fullnameOverride": {"type": "string"},
@@ -19,42 +19,31 @@
       }
     },
 
-    "image": {
-      "type": "object",
-      "required": ["repository", "pullPolicy"],
-      "properties": {
-        "registry": {"type": "string"},
-        "repository": {"type": "string", "minLength": 1},
-        "tag": {"type": "string"},
-        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
-      }
-    },
-
     "images": {
       "type": "object",
-      "required": ["zitadel", "zitadelLogin", "nginx", "cerbos", "node"],
+      "required": ["repository", "pullPolicy", "zitadel", "zitadelLogin", "nginx", "cerbos", "node", "postgres"],
       "properties": {
+        "registry": {"type": "string"},
         "mirror": {"type": "string"},
+        "pullSecrets": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]},
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string"},
         "zitadel": {"type": "string", "minLength": 1},
         "zitadelLogin": {"type": "string", "minLength": 1},
         "nginx": {"type": "string", "minLength": 1},
         "cerbos": {"type": "string", "minLength": 1},
-        "node": {"type": "string", "minLength": 1}
+        "node": {"type": "string", "minLength": 1},
+        "postgres": {"type": "string", "minLength": 1}
       }
-    },
-
-    "imagePullSecrets": {
-      "type": "array",
-      "items": {"type": "string", "minLength": 1}
     },
 
     "access": {
       "type": "object",
-      "required": ["scheme", "web", "identity", "expose"],
+      "required": ["webUrl", "identityUrl", "expose"],
       "properties": {
-        "scheme": {"enum": ["http", "https"]},
-        "web": {"$ref": "#/$defs/endpoint"},
-        "identity": {"$ref": "#/$defs/endpoint"},
+        "webUrl": {"$ref": "#/$defs/browserUrl"},
+        "identityUrl": {"$ref": "#/$defs/browserUrl"},
         "expose": {
           "type": "object",
           "required": ["type"],
@@ -119,7 +108,6 @@
           "properties": {
             "name": {"type": "string"},
             "instances": {"type": "integer", "minimum": 1},
-            "image": {"type": "string", "minLength": 1},
             "storage": {"$ref": "#/$defs/volume"},
             "walStorage": {"$ref": "#/$defs/volume"},
             "resources": {"type": "object"},
@@ -247,13 +235,10 @@
   },
 
   "$defs": {
-    "endpoint": {
-      "type": "object",
-      "required": ["host"],
-      "properties": {
-        "host": {"type": "string", "minLength": 1},
-        "port": {"type": "integer", "minimum": 0, "maximum": 65535}
-      }
+    "browserUrl": {
+      "type": "string",
+      "description": "The whole address a browser uses: scheme, host, optional port. No path.",
+      "pattern": "^https?://[^/]+$"
     },
     "volume": {
       "type": "object",

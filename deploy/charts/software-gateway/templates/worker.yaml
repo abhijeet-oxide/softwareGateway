@@ -76,7 +76,7 @@ spec:
       containers:
         - name: worker
           image: {{ include "swgw.image" (dict "ctx" . "name" "worker") }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           args: ["--config=/etc/softwaregateway/config.yaml"]
           ports:
             - name: http

@@ -13,12 +13,8 @@
 #   kubectl -n swgw port-forward svc/zitadel-proxy 8090:80
 
 access:
-  # The addresses a BROWSER uses. With port-forwarding they are localhost, and
-  # the ports must match the port-forwards above - the identity one is stamped
-  # into every token's `iss`, so it has to be the address that really answers.
-  scheme: http
-  web: {host: localhost, port: 8000}
-  identity: {host: localhost, port: 8090}
+  webUrl: http://localhost:8000
+  identityUrl: http://localhost:8090
   expose:
     # ClusterIP only. Nothing outside the cluster can reach this.
     type: none

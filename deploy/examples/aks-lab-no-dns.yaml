@@ -15,20 +15,11 @@ supportContact: platform-team@example.internal
 
 # --------------------------------------------------------------------- access
 access:
-  # `http`, because nothing here terminates TLS. Say so: ZITADEL stamps this
-  # scheme into every token's `iss` and the Coordinator verifies it, so claiming
-  # https gives a stack that comes up green and refuses every sign-in with an
-  # issuer mismatch.
-  scheme: http
 
-  # An IP is a perfectly good host. It is what the browser types and what
+  # An IP is a perfectly good host: it is what the browser types, and what
   # ZITADEL matches the Host header against.
-  web:
-    host: 10.20.30.40
-    port: 80
-  identity:
-    host: 10.20.30.41
-    port: 80
+  webUrl: http://10.20.30.40
+  identityUrl: http://10.20.30.41
 
   expose:
     # One Service per address, each with a private IP on the cluster's subnet.
@@ -55,24 +46,24 @@ access:
 
 # --------------------------------------------------------------------- images
 #
-# Everything through one registry, including the third-party images: `mirror` is
-# a repository that proxies Docker Hub and ghcr.io. The chart refuses to render
-# with `image.registry` set and `mirror` empty, because half-mirrored looks
-# air-gapped right up until the first node without egress.
-image:
-  registry: contoso.azurecr.io
-  repository: software-gateway
-images:
-  mirror: contoso.azurecr.io/docker
-
-# The kubelet's pull credential, on every pod and on the database cluster.
+# Three lines. `registry` is where this product's own images live; `mirror` is a
+# repository that proxies Docker Hub and ghcr.io, and the chart rewrites every
+# third-party image through it. The versions themselves are chart defaults,
+# pinned and tested together - nothing here names one.
+#
+# Setting `registry` without `mirror` is refused: half-mirrored looks air-gapped
+# right up until the first node without egress.
+#
+# The pull credential is the kubelet's, on every pod and on the database cluster.
 # Create it once in the namespace:
 #
 #   kubectl -n <namespace> create secret docker-registry registry-pull \
 #     --docker-server=contoso.azurecr.io \
 #     --docker-username="$SP_ID" --docker-password="$SP_SECRET"
-imagePullSecrets:
-  - registry-pull
+images:
+  registry: contoso.azurecr.io
+  mirror: contoso.azurecr.io/docker
+  pullSecrets: [registry-pull]
 
 # ------------------------------------------------------------------- database
 #
@@ -84,7 +75,6 @@ database:
   cluster:
     name: swgw-db
     instances: 2
-    image: contoso.azurecr.io/docker/cloudnative-pg/postgresql:16.10
     storage: {size: 32Gi, className: managed-csi}
     walStorage: {size: 8Gi, className: managed-csi}
     resources:

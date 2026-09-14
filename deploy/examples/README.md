@@ -36,18 +36,22 @@ catches the misspelled keys before any of that.
 
 ## The three settings that decide everything else
 
-**`access`** is the single source for every browser-facing URL. The identity URL
-is stamped into every token's `iss`, so it must be the address a browser really
-reaches — a hostname or an IP, with or without DNS. `access.expose.type` then
-says how those addresses are published: `ingress`, `route`, `loadBalancer`,
-`nodePort`, or `none` when a reverse proxy you already run points at the `web`
-and `zitadel-proxy` Services.
+**`access.webUrl` and `access.identityUrl`** are the two addresses a browser
+uses, written as whole URLs. Scheme, host and port are read out of them, so
+there is nothing to keep in step. `access.expose.type` says how they are
+published — `none` when a proxy you already run points at the `web` and
+`zitadel-proxy` Services, or `ingress`, `route`, `loadBalancer`, `nodePort`.
 
-**`image.registry` and `images.mirror`** decide whether the deployment reaches
-the internet. Setting the first without the second gives a cluster that pulls
-three images from your registry and five from Docker Hub — which is not an
-air-gapped deployment and is indistinguishable from one until the first node
-without egress, so the chart refuses it.
+**`images.registry` and `images.mirror`** decide whether the deployment reaches
+the internet. `registry` is where this product's own three images live; `mirror`
+is a repository proxying Docker Hub and ghcr.io, and every third-party image is
+rewritten through it. Setting the first without the second gives a cluster that
+pulls three images from you and six from the internet — not an air-gapped
+deployment, and indistinguishable from one until the first node without egress,
+so the chart refuses it.
+
+The image **versions** are chart defaults, pinned and tested together. A values
+file names a registry, never a tag.
 
 **`database.cluster.name`** decides who owns the database. Named, and the
 `database` layer provisions a CloudNativePG cluster and derives `database.host`

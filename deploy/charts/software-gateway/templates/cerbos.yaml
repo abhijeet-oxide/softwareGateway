@@ -73,7 +73,7 @@ spec:
       containers:
         - name: cerbos
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.cerbos) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           args: ["server", "--config=/config/config.yaml"]
           ports:
             - name: http

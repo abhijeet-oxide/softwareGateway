@@ -24,7 +24,7 @@ metadata:
     helm.sh/resource-policy: keep
 spec:
   instances: {{ $p.instances }}
-  imageName: {{ include "swgw.mirroredImage" (dict "ctx" . "image" $p.image) }}
+  imageName: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.postgres) }}
   {{- $pullSecrets := include "swgw.pullSecretNames" . | fromYamlArray }}
   {{- if $pullSecrets }}
   imagePullSecrets:

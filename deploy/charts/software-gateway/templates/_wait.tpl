@@ -21,7 +21,7 @@ reach its identity provider must still load in order to say so.
 {{- define "swgw.waitForTCP" -}}
 - name: wait-for-{{ .name }}
   image: {{ include "swgw.mirroredImage" (dict "ctx" .ctx "image" .ctx.Values.images.node) }}
-  imagePullPolicy: {{ .ctx.Values.image.pullPolicy }}
+  imagePullPolicy: {{ .ctx.Values.images.pullPolicy }}
   command: ["node", "--input-type=module", "-e"]
   args:
     - |
@@ -90,7 +90,7 @@ reach its identity provider must still load in order to say so.
 {{- define "swgw.waitForHTTP" -}}
 - name: wait-for-{{ .name }}
   image: {{ include "swgw.mirroredImage" (dict "ctx" .ctx "image" .ctx.Values.images.node) }}
-  imagePullPolicy: {{ .ctx.Values.image.pullPolicy }}
+  imagePullPolicy: {{ .ctx.Values.images.pullPolicy }}
   command: ["node", "--input-type=module", "-e"]
   args:
     - |
@@ -157,7 +157,7 @@ that does not exist yet is simply an absent file.
 {{- define "swgw.waitForFile" -}}
 - name: wait-for-{{ .name }}
   image: {{ include "swgw.mirroredImage" (dict "ctx" .ctx "image" .ctx.Values.images.node) }}
-  imagePullPolicy: {{ .ctx.Values.image.pullPolicy }}
+  imagePullPolicy: {{ .ctx.Values.images.pullPolicy }}
   command: ["node", "--input-type=module", "-e"]
   args:
     - |

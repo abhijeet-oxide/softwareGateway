@@ -169,7 +169,7 @@ spec:
         # `relation "eventstore.events" does not exist`.
         - name: init-database
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.zitadel) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           args: ["init", "zitadel"]
           env:
             {{- include "swgw.zitadelEnv" . | nindent 12 }}
@@ -178,7 +178,7 @@ spec:
 
         - name: setup
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.zitadel) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           args: ["setup", "--masterkeyFromEnv", "--init-projections=true", "--tlsMode", "disabled"]
           env:
             {{- include "swgw.zitadelEnv" . | nindent 12 }}
@@ -195,7 +195,7 @@ spec:
       containers:
         - name: publish
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.node) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           command: ["node", "/seeder/k8s-state.mjs", "push"]
           env:
             - name: K8S_STATE_SECRET
@@ -252,12 +252,12 @@ spec:
       containers:
         - name: zitadel
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.zitadel) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           # `start`, not `start-from-init`: the Job above owns migrations.
           #
           # `--tlsMode disabled` means ZITADEL itself serves plain HTTP; TLS, if
           # any, terminates at the entry point. It does NOT change the issuer,
-          # which follows access.scheme through ZITADEL_EXTERNALSECURE.
+          # which follows access.identityUrl through ZITADEL_EXTERNALSECURE.
           args: ["start", "--masterkeyFromEnv", "--tlsMode", "disabled"]
           ports:
             - name: http
@@ -316,7 +316,7 @@ spec:
       containers:
         - name: login
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.zitadelLogin) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           ports:
             - name: http
               containerPort: 3000
@@ -339,7 +339,7 @@ spec:
             # ZITADEL answers 404 to a Host it does not recognise as its own
             # external name, and this service reaches it as `zitadel:8080`.
             - name: CUSTOM_REQUEST_HEADERS
-              value: {{ printf "Host:%s,X-Forwarded-Proto:%s" (include "swgw.identityHostHeader" .) .Values.access.scheme | quote }}
+              value: {{ printf "Host:%s,X-Forwarded-Proto:%s" (include "swgw.identityHostHeader" .) (include "swgw.urlScheme" (include "swgw.identityUrl" .)) | quote }}
           readinessProbe:
             httpGet: {path: /ui/v2/login/healthy, port: http}
             periodSeconds: 10
@@ -400,7 +400,7 @@ spec:
       containers:
         - name: proxy
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.nginx) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           # The same entrypoint compose runs: it renders nginx's resolver from
           # /etc/resolv.conf and writes the rule naming who to ask on the
           # Account Not Found page.

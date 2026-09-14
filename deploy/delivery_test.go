@@ -515,16 +515,16 @@ func TestNothingIsPulledFromThePublicInternet(t *testing.T) {
 				t.Fatalf("%v", err)
 			}
 			var v struct {
-				Image struct {
+				Images struct {
 					Registry string `json:"registry"`
-				} `json:"image"`
+				} `json:"images"`
 			}
 			if err := yaml.Unmarshal(values, &v); err != nil {
 				t.Fatalf("parse %s values: %v", instance, err)
 			}
-			registry := v.Image.Registry
+			registry := v.Images.Registry
 			if registry == "" {
-				t.Fatalf("%s sets no image.registry, so this instance pulls this product's "+
+				t.Fatalf("%s sets no images.registry, so this instance pulls this product's "+
 					"own images from wherever their path points", instance)
 			}
 

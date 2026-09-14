@@ -40,11 +40,11 @@ type instanceValues struct {
 	Layers struct {
 		Database *bool `json:"database"`
 	} `json:"layers"`
-	Image struct {
-		Registry string `json:"registry"`
-	} `json:"image"`
-	ImagePullSecrets []string `json:"imagePullSecrets"`
-	Database         struct {
+	Images struct {
+		Registry    string   `json:"registry"`
+		PullSecrets []string `json:"pullSecrets"`
+	} `json:"images"`
+	Database struct {
 		ExistingSecret string `json:"existingSecret"`
 		Cluster        struct {
 			Name *string `json:"name"`
@@ -105,12 +105,12 @@ func RequiredSecrets(root, instance string) ([]Secret, error) {
 		out = append(out, s)
 	}
 
-	for _, name := range v.ImagePullSecrets {
+	for _, name := range v.Images.PullSecrets {
 		add(Secret{
 			Name: name,
 			Kind: "docker-registry",
 			Keys: []string{".dockerconfigjson"},
-			Why:  "imagePullSecrets - the registry the kubelet pulls every image with",
+			Why:  "images.pullSecrets - the registry the kubelet pulls every image with",
 		})
 	}
 
@@ -164,7 +164,7 @@ func RequiredSecrets(root, instance string) ([]Secret, error) {
 			return nil, err
 		}
 		pull := map[string]bool{}
-		for _, name := range v.ImagePullSecrets {
+		for _, name := range v.Images.PullSecrets {
 			pull[name] = true
 		}
 		used, err := referencedCredentials(root)

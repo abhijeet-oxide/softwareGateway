@@ -48,7 +48,7 @@ spec:
       containers:
         - name: seed
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.node) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           command: ["/bin/sh", "-c"]
           args:
             # The middle step is byte for byte what `docker compose run --rm

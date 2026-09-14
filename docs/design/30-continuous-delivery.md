@@ -144,7 +144,7 @@ today.
 
 ### 4.1 Everything comes from it, including the parts nobody remembers
 
-`image.registry` covers this product's three images. `images.mirror` covers the
+`images.registry` covers this product's three images. `images.mirror` covers the
 other five - ZITADEL, its sign-in screens, nginx, Cerbos and the node image two
 init containers use for a few seconds. The CloudNativePG `Cluster` names its
 PostgreSQL image, and the operator's own HelmRelease names the operator's.

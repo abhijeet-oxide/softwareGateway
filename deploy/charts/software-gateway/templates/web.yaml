@@ -76,7 +76,7 @@ spec:
       containers:
         - name: web
           image: {{ include "swgw.image" (dict "ctx" . "name" "web") }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           ports:
             - name: http
               containerPort: 80

@@ -7,11 +7,8 @@ supportContact: https://support.example.com/software-gateway
 # Two hosts, because they are two ORIGINS: the identity one is stamped into every
 # token's `iss` and ZITADEL answers 404 to a Host header it does not recognise.
 access:
-  scheme: https
-  web:
-    host: gateway.example.com
-  identity:
-    host: id.gateway.example.com
+  webUrl: https://gateway.example.com
+  identityUrl: https://id.gateway.example.com
   expose:
     type: ingress
     ingress:
@@ -23,14 +20,12 @@ access:
     annotations:
       cert-manager.io/cluster-issuer: letsencrypt-internal
 
-image:
-  registry: contoso.azurecr.io
 images:
+  registry: contoso.azurecr.io
   mirror: contoso.azurecr.io/docker
 
 database:
   cluster:
-    image: contoso.azurecr.io/docker/cloudnative-pg/postgresql:16.10
     storage: {size: 200Gi, className: managed-csi-premium}
     walStorage: {size: 40Gi, className: managed-csi-premium}
     resources:

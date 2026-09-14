@@ -14,6 +14,12 @@ with no public DNS.
 {{- $full := include "swgw.fullname" . -}}
 {{- $e := .Values.access.expose -}}
 {{- $identity := .Values.identity.enabled -}}
+{{- $webUrl := include "swgw.webUrl" . -}}
+{{- $identityUrl := include "swgw.identityUrl" . -}}
+{{- $webHost := include "swgw.urlHost" $webUrl -}}
+{{- $identityHost := include "swgw.urlHost" $identityUrl -}}
+{{- $webPort := int (include "swgw.urlPort" $webUrl) -}}
+{{- $identityPort := int (include "swgw.urlPort" $identityUrl) -}}
 
 {{- if eq $e.type "ingress" }}
 apiVersion: networking.k8s.io/v1
@@ -38,11 +44,11 @@ spec:
   {{- end }}
   {{- if $e.ingress.tls.enabled }}
   tls:
-    - hosts: [{{ .Values.access.web.host | quote }}]
+    - hosts: [{{ $webHost | quote }}]
       secretName: {{ required "access.expose.ingress.tls.webSecretName is required" $e.ingress.tls.webSecretName }}
   {{- end }}
   rules:
-    - host: {{ .Values.access.web.host | quote }}
+    - host: {{ $webHost | quote }}
       http:
         paths:
           # ONE BACKEND, and the API is not a second one: the Coordinator ships
@@ -72,11 +78,11 @@ spec:
   {{- end }}
   {{- if $e.ingress.tls.enabled }}
   tls:
-    - hosts: [{{ .Values.access.identity.host | quote }}]
+    - hosts: [{{ $identityHost | quote }}]
       secretName: {{ required "access.expose.ingress.tls.identitySecretName is required" $e.ingress.tls.identitySecretName }}
   {{- end }}
   rules:
-    - host: {{ .Values.access.identity.host | quote }}
+    - host: {{ $identityHost | quote }}
       http:
         paths:
           # Always zitadel-proxy, never the two Services behind it: routing
@@ -103,7 +109,7 @@ metadata:
     {{- end }}
   {{- end }}
 spec:
-  host: {{ .Values.access.web.host | quote }}
+  host: {{ $webHost | quote }}
   to: {kind: Service, name: web}
   port: {targetPort: http}
   {{- with $e.route.termination }}
@@ -126,7 +132,7 @@ metadata:
     {{- end }}
   {{- end }}
 spec:
-  host: {{ .Values.access.identity.host | quote }}
+  host: {{ $identityHost | quote }}
   to: {kind: Service, name: zitadel-proxy}
   port: {targetPort: http}
   {{- with $e.route.termination }}
@@ -160,10 +166,10 @@ spec:
   {{- end }}
   ports:
     - name: http
-      port: {{ int (default (include "swgw.defaultPort" .) .Values.access.web.port) }}
+      port: {{ $webPort }}
       targetPort: http
       {{- if not $isLB }}
-      nodePort: {{ int (default .Values.access.web.port $e.nodePort.web) }}
+      nodePort: {{ int (default $webPort $e.nodePort.web) }}
       {{- end }}
   selector:
     {{- include "swgw.selectorLabels" (dict "ctx" . "component" "web") | nindent 4 }}
@@ -188,10 +194,10 @@ spec:
   {{- end }}
   ports:
     - name: http
-      port: {{ int (default (include "swgw.defaultPort" .) .Values.access.identity.port) }}
+      port: {{ $identityPort }}
       targetPort: http
       {{- if not $isLB }}
-      nodePort: {{ int (default .Values.access.identity.port $e.nodePort.identity) }}
+      nodePort: {{ int (default $identityPort $e.nodePort.identity) }}
       {{- end }}
   selector:
     {{- include "swgw.selectorLabels" (dict "ctx" . "component" "zitadel-proxy") | nindent 4 }}

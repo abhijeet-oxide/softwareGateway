@@ -185,6 +185,8 @@ metadata:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-20"
     "helm.sh/hook-delete-policy": before-hook-creation
+imagePullSecrets:
+  - name: {{ .Values.secrets.registryPullSecret.name }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

@@ -30,28 +30,62 @@ order to say so.
 - name: wait-for-{{ .name }}
   image: {{ include "swgw.mirroredImage" (dict "ctx" .ctx "image" .ctx.Values.images.node) }}
   imagePullPolicy: {{ .ctx.Values.image.pullPolicy }}
-  command: ["node", "-e"]
+  command: ["node", "--input-type=module", "-e"]
   args:
     - |
-      const net = require('node:net');
-      const [host, port, budget] = [{{ .host | quote }}, {{ .port }}, {{ .ctx.Values.database.waitTimeoutSeconds }}];
+      import net from 'node:net';
+
+      const [host, port, budget] = [
+        {{ .host | quote }},
+        {{ .port }},
+        {{ .ctx.Values.database.waitTimeoutSeconds }}
+      ];
+
       const deadline = Date.now() + budget * 1000;
+
       const once = () => new Promise(resolve => {
-        const s = net.connect({ host, port });
-        const done = ok => { s.destroy(); resolve(ok); };
-        s.setTimeout(3000);
-        s.on('connect', () => done(true));
-        s.on('error',   () => done(false));
-        s.on('timeout', () => done(false));
+        const socket = net.connect({ host, port });
+
+        let completed = false;
+
+        const done = ok => {
+          if (completed) {
+            return;
+          }
+
+          completed = true;
+          socket.destroy();
+          resolve(ok);
+        };
+
+        socket.setTimeout(3000);
+        socket.once('connect', () => done(true));
+        socket.once('error', () => done(false));
+        socket.once('timeout', () => done(false));
       });
+
       let said = false;
+
       while (Date.now() < deadline) {
-        if (await once()) { console.log(`{{ .name }} is accepting connections at ${host}:${port}`); process.exit(0); }
-        if (!said) { console.log(`waiting for {{ .name }} at ${host}:${port}`); said = true; }
-        await new Promise(r => setTimeout(r, 2000));
+        if (await once()) {
+          console.log(`{{ .name }} is accepting connections at ${host}:${port}`);
+          process.exit(0);
+        }
+
+        if (!said) {
+          console.log(`waiting for {{ .name }} at ${host}:${port}`);
+          said = true;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
-      console.error(`{{ .name }} did not accept a connection at ${host}:${port} within ${budget}s.`);
-      console.error(`This pod has not started its application container, so nothing has failed yet.`);
+
+      console.error(
+        `{{ .name }} did not accept a connection at ${host}:${port} within ${budget}s.`
+      );
+      console.error(
+        `This pod has not started its application container, so nothing has failed yet.`
+      );
       process.exit(1);
   securityContext:
     {{- include "swgw.containerSecurityContext" .ctx | nindent 4 }}
@@ -65,26 +99,53 @@ order to say so.
 - name: wait-for-{{ .name }}
   image: {{ include "swgw.mirroredImage" (dict "ctx" .ctx "image" .ctx.Values.images.node) }}
   imagePullPolicy: {{ .ctx.Values.image.pullPolicy }}
-  command: ["node", "-e"]
+  command: ["node", "--input-type=module", "-e"]
   args:
     - |
-      const [url, budget, soft] = [{{ .url | quote }}, {{ default .ctx.Values.database.waitTimeoutSeconds .timeout }}, {{ default false .soft }}];
+      const [url, budget, soft] = [
+        {{ .url | quote }},
+        {{ default .ctx.Values.database.waitTimeoutSeconds .timeout }},
+        {{ default false .soft }}
+      ];
+
       const deadline = Date.now() + budget * 1000;
       let said = false;
+
       while (Date.now() < deadline) {
         try {
-          const r = await fetch(url, { signal: AbortSignal.timeout(3000) });
-          if (r.ok) { console.log(`{{ .name }} is ready`); process.exit(0); }
-        } catch {}
-        if (!said) { console.log(`waiting for {{ .name }} at ${url}`); said = true; }
-        await new Promise(r => setTimeout(r, 3000));
+          const response = await fetch(url, {
+            signal: AbortSignal.timeout(3000)
+          });
+
+          if (response.ok) {
+            console.log(`{{ .name }} is ready`);
+            process.exit(0);
+          }
+        } catch {
+          // The dependency is not ready yet. Retry until the deadline.
+        }
+
+        if (!said) {
+          console.log(`waiting for {{ .name }} at ${url}`);
+          said = true;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
+
       if (soft) {
-        console.log(`{{ .name }} is not ready after ${budget}s. Starting anyway:`);
-        console.log(`this container is useful without it and says so on the screen.`);
+        console.log(
+          `{{ .name }} is not ready after ${budget}s. Starting anyway:`
+        );
+        console.log(
+          `this container is useful without it and says so on the screen.`
+        );
         process.exit(0);
       }
-      console.error(`{{ .name }} did not become ready at ${url} within ${budget}s.`);
+
+      console.error(
+        `{{ .name }} did not become ready at ${url} within ${budget}s.`
+      );
       process.exit(1);
   securityContext:
     {{- include "swgw.containerSecurityContext" .ctx | nindent 4 }}
@@ -93,34 +154,73 @@ order to say so.
     limits: {memory: 64Mi}
 {{- end -}}
 
-{{/* (dict "ctx" $ "name" "credentials" "path" "/etc/.../worker.json" "soft" true)
-     Mounts nothing itself - the caller gives it the same volumeMounts the
-     application container has, because the thing being waited for IS that
-     mount. A Secret key that does not exist yet is simply an absent file, and
-     the kubelet materialises it when the seeder writes it. */}}
+{{/*
+(dict
+  "ctx" $
+  "name" "credentials"
+  "path" "/etc/.../worker.json"
+  "soft" true
+)
+
+Mounts nothing itself - the caller gives it the same volumeMounts the
+application container has, because the thing being waited for IS that
+mount. A Secret key that does not exist yet is simply an absent file, and
+the kubelet materialises it when the seeder writes it.
+*/}}
 {{- define "swgw.waitForFile" -}}
 - name: wait-for-{{ .name }}
   image: {{ include "swgw.mirroredImage" (dict "ctx" .ctx "image" .ctx.Values.images.node) }}
   imagePullPolicy: {{ .ctx.Values.image.pullPolicy }}
-  command: ["node", "-e"]
+  command: ["node", "--input-type=module", "-e"]
   args:
     - |
-      const fs = require('node:fs');
-      const [path, budget, soft] = [{{ .path | quote }}, {{ default .ctx.Values.database.waitTimeoutSeconds .timeout }}, {{ default false .soft }}];
+      import fs from 'node:fs';
+
+      const [path, budget, soft] = [
+        {{ .path | quote }},
+        {{ default .ctx.Values.database.waitTimeoutSeconds .timeout }},
+        {{ default false .soft }}
+      ];
+
       const deadline = Date.now() + budget * 1000;
       let said = false;
+
       while (Date.now() < deadline) {
-        try { if (fs.statSync(path).size > 0) { console.log(`{{ .name }} is present at ${path}`); process.exit(0); } } catch {}
-        if (!said) { console.log(`waiting for {{ .name }} at ${path} - the seeding Job publishes it`); said = true; }
-        await new Promise(r => setTimeout(r, 3000));
+        try {
+          if (fs.statSync(path).size > 0) {
+            console.log(`{{ .name }} is present at ${path}`);
+            process.exit(0);
+          }
+        } catch {
+          // The projected file does not exist yet. Retry until the deadline.
+        }
+
+        if (!said) {
+          console.log(
+            `waiting for {{ .name }} at ${path} - the seeding Job publishes it`
+          );
+          said = true;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
+
       if (soft) {
-        console.log(`{{ .name }} was not published within ${budget}s. Starting anyway:`);
-        console.log(`this container is useful without it and says so on the screen.`);
+        console.log(
+          `{{ .name }} was not published within ${budget}s. Starting anyway:`
+        );
+        console.log(
+          `this container is useful without it and says so on the screen.`
+        );
         process.exit(0);
       }
-      console.error(`{{ .name }} was not published at ${path} within ${budget}s.`);
-      console.error(`Read the seeding Job's log: kubectl logs -l app.kubernetes.io/component=seed`);
+
+      console.error(
+        `{{ .name }} was not published at ${path} within ${budget}s.`
+      );
+      console.error(
+        `Read the seeding Job's log: kubectl logs -l app.kubernetes.io/component=seed`
+      );
       process.exit(1);
   volumeMounts:
 {{ .mounts | indent 4 }}

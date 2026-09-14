@@ -130,13 +130,51 @@ spec:
       securityContext:
         seccompProfile:
           type: RuntimeDefault
+        runAsNonRoot: true
       initContainers:
-        # The database layer is applied first and Flux waits for it, so this is
-        # normally satisfied at once. It is here for the case Flux cannot cover:
-        # a CloudNativePG failover in progress while this hook runs.
+        # DATABASE READINESS MUST COME FIRST.
+        #
+        # CloudNativePG is deployed by an earlier Flux layer and normally
+        # reaches Ready before this chart installs. During startup, recovery,
+        # or failover, however, PostgreSQL may still be accepting no
+        # connections when this hook begins.
+        #
+        # Init containers execute sequentially, so connectivity must be
+        # verified before attempting ZITADEL initialization.
         {{- include "swgw.waitForTCP" (dict "ctx" . "name" "database" "host" .Values.database.host "port" .Values.database.port) | nindent 8 }}
+
+        # FIRST-INSTALL DATABASE INITIALIZATION.
+        #
+        # After recreating CloudNativePG from scratch the `zitadel` database
+        # contained only the default `public` schema.
+        #
+        # Running `zitadel setup` immediately failed with:
+        #
+        #   relation "eventstore.events" does not exist
+        #   relation "eventstore.events2" does not exist
+        #
+        # because the foundational ZITADEL event-store schema had never been
+        # created.
+        #
+        # `zitadel init` prepares the database structures required by
+        # migrations and is safe to execute on a brand-new installation.
+        - name: init-database
+          image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.zitadel) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - init
+          env:
+            {{- include "swgw.zitadelEnv" . | nindent 12 }}
+          securityContext:
+            {{- include "swgw.containerSecurityContext" . | nindent 12 }}
+
+        # ZITADEL MIGRATIONS.
+        #
+        # Runs after database initialization and applies the migrations
+        # required by the current ZITADEL version.
         - name: setup
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.zitadel) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - setup
             - --masterkeyFromEnv
@@ -154,8 +192,7 @@ spec:
           volumeMounts:
             - {name: state, mountPath: /pat}
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities: {drop: ["ALL"]}
+            {{- include "swgw.containerSecurityContext" . | nindent 12 }}
       containers:
         - name: publish
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.node) }}
@@ -241,9 +278,7 @@ spec:
           resources:
             {{- toYaml .Values.identity.zitadel.resources | nindent 12 }}
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities: {drop: ["ALL"]}
+            {{- include "swgw.containerSecurityContext" . | nindent 12 }}
 ---
 apiVersion: apps/v1
 kind: Deployment

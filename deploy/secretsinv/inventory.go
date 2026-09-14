@@ -68,7 +68,7 @@ func (i Inventory) Has(name string) bool {
 // Load reads the inventory from a repository root.
 func Load(root string) (Inventory, error) {
 	var inv Inventory
-	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(Path)))
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(Path))) // #nosec G304 -- Path is a fixed repository-relative inventory path.
 	if err != nil {
 		return inv, fmt.Errorf("read %s: %w", Path, err)
 	}

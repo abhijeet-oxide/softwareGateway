@@ -128,6 +128,9 @@ seccompProfile:
 {{- define "swgw.containerSecurityContext" -}}
 allowPrivilegeEscalation: false
 readOnlyRootFilesystem: true
+runAsNonRoot: true
+runAsUser: 1000
+runAsGroup: 1000
 capabilities:
   drop: ["ALL"]
 {{- end -}}

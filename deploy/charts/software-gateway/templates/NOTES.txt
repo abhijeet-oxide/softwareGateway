@@ -34,12 +34,11 @@ WHAT A CHANGE COSTS
   a product, a policy    nothing restarts - all three watch their directories
   a person               one Job runs; no pod is touched
   config.yaml, an image  a rolling update with maxUnavailable {{ .Values.rollout.maxUnavailable }}
-{{- if and .Values.identity.enabled (not .Values.identity.sso.issuer) }}
+{{- if and .Values.identity.enabled (not .Values.identity.sso.enabled) }}
 
 SINGLE SIGN-ON IS NOT CONFIGURED. Anybody in config/users/users.yaml signs in
 with the password in that file, which is a local and evaluation arrangement. Set
-identity.sso.issuer, identity.sso.clientId and identity.sso.existingSecret before
-this serves anyone real.
+identity.sso.enabled before this serves anyone real.
 {{- end }}
 {{- end }}
 {{- if .Values.layers.database }}

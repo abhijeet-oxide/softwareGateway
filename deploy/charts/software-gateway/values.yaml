@@ -1,7 +1,36 @@
 # Software Gateway - chart defaults.
 #
-# A deployment states its differences in one values file. Annotated examples
-# for AKS and OpenShift are in deploy/examples/.
+# A deployment states its differences in one values file. Annotated examples for
+# an AKS lab, AKS production, OpenShift and an external reverse proxy are in
+# deploy/examples/.
+#
+# EVERY OPTIONAL FEATURE IS ONE FLAG, and turning one on is the only thing that
+# adds a Secret to create. `task flux:secrets -- <instance>` prints the current
+# list for an instance, derived from its values file.
+#
+#   identity.enabled              deploy ZITADEL          on   - off points at
+#                                                              an identity
+#                                                              provider you run
+#   identity.sso.enabled          sign in through a       off  - needs a Secret
+#                                 corporate directory            (client secret)
+#   layers.database               deploy PostgreSQL       off* - on in the Flux
+#                                                                path
+#   access.expose.type            publish the addresses   none
+#   access.expose.ingress.tls     terminate TLS here      off  - needs two
+#                                   .enabled                     certificate
+#                                                                Secrets
+#   database.cluster.backup       continuous WAL          off  - needs object
+#                                   .enabled              archiving  storage creds
+#   networkPolicy.enabled         fence the coordinator   off
+#   metrics.serviceMonitor        scrape metrics          off
+#     .enabled
+#   secrets.backend               a credentials operator  none - none means the
+#                                                                Secrets already
+#                                                                exist
+#   seed.enabled                  provision people        on
+#
+# Flux notifications are a cluster concern rather than a deployment one: one
+# commented line in deploy/flux/clusters/<cluster>/0-sources/kustomization.yaml.
 
 nameOverride: ""
 fullnameOverride: ""
@@ -237,17 +266,29 @@ cerbos:
 identity:
   enabled: true
 
-  # The 32-byte key ZITADEL encrypts its own secrets with. Not generated here:
-  # a generated key that nothing stores is a database nobody can decrypt after
-  # the next upgrade.
+  # THE TWO VALUES WITH NO SAFE DEFAULT, and you do not have to create either.
+  #
+  # Left as they are, the chart generates them on first install and reads them
+  # back from the cluster on every upgrade, so they never rotate. Read one at any
+  # time with:
+  #
+  #   kubectl -n <namespace> get secret <release>-identity \
+  #     -o jsonpath='{.data.masterkey}' | base64 -d
+  #
+  # `existingSecret` takes them from a Secret you manage instead - a credentials
+  # operator, or your own `kubectl create secret`. `value` is for a laptop.
+  #
+  # KEEP A COPY OF THE MASTER KEY somewhere deleting the namespace cannot reach.
+  # ZITADEL encrypts its own database with it, so a database restored into a
+  # fresh namespace without it is bytes nothing can read.
   masterkey:
     existingSecret: ""
     key: masterkey
-    # Local and evaluation only; the chart refuses a production-shaped install
-    # with this set.
     value: ""
 
-  # ZITADEL's own root account, created at first boot.
+  # ZITADEL's own instance owner, created at first boot. Not the product
+  # administrator - that account comes from config/users/users.yaml. This one is
+  # the way back in if provisioning ever breaks.
   rootPassword:
     existingSecret: ""
     key: rootPassword
@@ -264,10 +305,15 @@ identity:
     password: ""
     existingSecret: ""
 
-  # Single sign-on against a corporate directory. With `issuer` set the sign-in
-  # screen redirects straight to it. The redirect URI to register is
-  # <identity url>/idps/callback, under the "Web" platform.
+  # Single sign-on against a corporate directory. On, the sign-in screen
+  # redirects straight to it and ZITADEL's own form is never shown.
+  #
+  # Needs an app registration in the directory. Its issuer and client id are
+  # values; its client SECRET is a Secret, named below and never written here.
+  # The redirect URI to register is <identity url>/idps/callback, under the
+  # "Web" platform - see docs/entra-app-registration.md.
   sso:
+    enabled: false
     issuer: ""
     clientId: ""
     existingSecret: ""

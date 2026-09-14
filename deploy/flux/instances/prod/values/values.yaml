@@ -44,13 +44,10 @@ database:
         storageKey: {name: swgw-db-backup, key: key}
 
 identity:
-  masterkey:
-    existingSecret: swgw-zitadel
-  rootPassword:
-    existingSecret: swgw-zitadel
   bootstrapAdmin:
     email: platform-team@example.com
   sso:
+    enabled: true
     # Register the application with redirect URI
     # https://id.gateway.example.com/idps/callback, under the "Web" platform -
     # NOT "Single-page application", which refuses the code exchange.

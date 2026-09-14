@@ -24,13 +24,8 @@ access:
     type: none
 
 identity:
-  masterkey:
-    # EXACTLY 32 bytes, and the one value here that must be kept: a ZITADEL
-    # database cannot be decrypted without it. Fine inline for an evaluation;
-    # use `existingSecret` for anything else.
-    value: "0123456789abcdef0123456789abcdef"
-  rootPassword:
-    value: "change-me-before-anybody-signs-in"
+  # Nothing here for the master key: the chart generates it on first install and
+  # reads it back afterwards. `kubectl get secret <release>-identity` has it.
   bootstrapAdmin:
     username: admin
     email: admin@example.com

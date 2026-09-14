@@ -96,12 +96,9 @@ database:
 
 # ------------------------------------------------------------------ identity
 identity:
-  masterkey:
-    existingSecret: swgw-zitadel
-    key: masterkey
-  rootPassword:
-    existingSecret: swgw-zitadel
-    key: rootPassword
+  # masterkey and rootPassword are generated on first install and read back from
+  # the cluster on every upgrade, so neither is yours to create. Point them at
+  # `existingSecret` only to manage them yourself.
   bootstrapAdmin:
     username: admin
     email: platform-team@example.internal

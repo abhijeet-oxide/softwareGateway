@@ -57,12 +57,12 @@ They are `fail`, not warnings: a warning in Helm output is read by nobody.
 
 {{/* The seeder makes this same check and refuses the run. Making it here means
      the pull request fails rather than the Job. */}}
-{{- if and .Values.identity.sso.issuer .Values.identity.bootstrapAdmin.password }}
-{{- fail "\n\nidentity.bootstrapAdmin.password is set while identity.sso.issuer is configured.\n\nThe password shortcut is for local use only. With single sign-on configured the\nadministrator signs in through the directory like everybody else.\n" }}
+{{- if and .Values.identity.sso.enabled .Values.identity.bootstrapAdmin.password }}
+{{- fail "\n\nidentity.bootstrapAdmin.password is set while identity.sso.enabled is true.\n\nThe password shortcut is for local use only. With single sign-on on, the\nadministrator signs in through the directory like everybody else.\n" }}
 {{- end }}
 
-{{- if and .Values.identity.sso.issuer (not .Values.identity.sso.existingSecret) }}
-{{- fail "\n\nidentity.sso.issuer is set but identity.sso.existingSecret is not.\n\nThe client secret is read from a Secret and never from values: a value here is a\ncredential in Git, in the HelmRelease, and in `helm get values`.\n" }}
+{{- if and .Values.identity.sso.enabled (not .Values.identity.sso.existingSecret) }}
+{{- fail "\n\nidentity.sso.enabled is true but identity.sso.existingSecret is not set.\n\nThe client secret is read from a Secret and never from values: a value here is a\ncredential in Git, in the HelmRelease, and in `helm get values`.\n" }}
 {{- end }}
 {{- end }}
 

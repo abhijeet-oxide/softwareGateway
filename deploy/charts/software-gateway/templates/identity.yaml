@@ -18,28 +18,65 @@ Deployments - so no ZITADEL pod is ever created against a schema it cannot use.
 That requires the database to exist BEFORE this release is installed, which is
 why `layers.database` is a separate release.
 */}}
-{{- $inlineIdentity := or (not .Values.identity.masterkey.existingSecret) (not .Values.identity.rootPassword.existingSecret) (and .Values.identity.bootstrapAdmin.password (not .Values.identity.bootstrapAdmin.existingSecret)) -}}
-{{- if $inlineIdentity }}
-{{/* Only when a value is given here rather than named in a Secret. A deployment
-     that points all three at existing Secrets renders no Secret of its own. */}}
+{{/*
+THE TWO ZITADEL VALUES THAT HAVE NO SAFE DEFAULT, and why this Secret is
+generated rather than asked for.
+
+`masterkey` is what ZITADEL encrypts its own database with. `rootPassword` is
+the instance owner's. Neither can be re-derived, so a chart that generated a
+fresh one on every render would produce a database nobody can decrypt after the
+first upgrade.
+
+So: generate ONCE, then read back. `lookup` returns what is already in the
+cluster and the value is reused; only a namespace with no Secret gets a new one.
+`helm.sh/resource-policy: keep` then stops `helm uninstall` taking it with the
+release, because the database outlives the release and the key must outlive it
+too.
+
+ONE THING TO KNOW. `helm template` has no cluster to look in, so it renders a
+fresh random value every time. That is harmless for rendering and for CI, and it
+means `helm template | kubectl apply` is the one way to rotate this key by
+accident. Install and upgrade through Helm or Flux, which have a cluster.
+
+Read the key back at any time:
+
+  kubectl -n <namespace> get secret <release>-identity \
+    -o jsonpath='{.data.masterkey}' | base64 -d
+
+Keep a copy somewhere the namespace's deletion cannot reach. Restoring the
+database into a fresh namespace without it restores bytes nothing can read.
+*/}}
+{{- $identitySecret := printf "%s-identity" $full -}}
+{{- $existing := (lookup "v1" "Secret" .Release.Namespace $identitySecret) -}}
+{{- $held := dict -}}
+{{- if $existing }}{{ $held = $existing.data }}{{ end -}}
+
+{{- $needMasterkey := not .Values.identity.masterkey.existingSecret -}}
+{{- $needRoot := not .Values.identity.rootPassword.existingSecret -}}
+{{- $needAdmin := and .Values.identity.bootstrapAdmin.password (not .Values.identity.bootstrapAdmin.existingSecret) -}}
+
+{{- if or $needMasterkey $needRoot $needAdmin }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ $full }}-identity
+  name: {{ $identitySecret }}
   labels:
     {{- include "swgw.componentLabels" (dict "ctx" . "component" "identity") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
 type: Opaque
-stringData:
-{{- if not .Values.identity.masterkey.existingSecret }}
-  # EXACTLY 32 BYTES. ZITADEL refuses to start otherwise, and says so from
-  # inside a migration failure.
-  masterkey: {{ required "identity.masterkey.value or identity.masterkey.existingSecret is required" .Values.identity.masterkey.value | quote }}
+data:
+{{- if $needMasterkey }}
+  {{- /* EXACTLY 32 BYTES. ZITADEL refuses to start otherwise, and says so from
+         inside a migration failure - so the symptom names neither this setting
+         nor its length. */}}
+  masterkey: {{ .Values.identity.masterkey.value | default (get $held "masterkey" | b64dec) | default (randAlphaNum 32) | b64enc | quote }}
 {{- end }}
-{{- if not .Values.identity.rootPassword.existingSecret }}
-  rootPassword: {{ required "identity.rootPassword.value or identity.rootPassword.existingSecret is required" .Values.identity.rootPassword.value | quote }}
+{{- if $needRoot }}
+  rootPassword: {{ .Values.identity.rootPassword.value | default (get $held "rootPassword" | b64dec) | default (randAlphaNum 24) | b64enc | quote }}
 {{- end }}
-{{- if and .Values.identity.bootstrapAdmin.password (not .Values.identity.bootstrapAdmin.existingSecret) }}
-  adminPassword: {{ .Values.identity.bootstrapAdmin.password | quote }}
+{{- if $needAdmin }}
+  adminPassword: {{ .Values.identity.bootstrapAdmin.password | b64enc | quote }}
 {{- end }}
 ---
 {{- end }}

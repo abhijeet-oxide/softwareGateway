@@ -8,6 +8,7 @@ to `deploy/flux/instances/<name>/values/values.yaml` and edit it, or pass it to
 |---|---|
 | [`minimal.yaml`](minimal.yaml) | an evaluation on a cluster with egress, reached by `kubectl port-forward` |
 | [`aks-lab-no-dns.yaml`](aks-lab-no-dns.yaml) | an internal AKS lab: private registry, private load balancer addresses, no DNS and no certificates |
+| [`reverse-proxy-no-dns.yaml`](reverse-proxy-no-dns.yaml) | your own nginx in front on one private IP with a self-signed certificate — includes the nginx config |
 | [`aks-production.yaml`](aks-production.yaml) | AKS with DNS, TLS, Entra single sign-on, Key Vault credentials and database backups |
 | [`openshift.yaml`](openshift.yaml) | OpenShift: `Route` instead of `Ingress`, and the SCC note that matters |
 | [`existing-database.yaml`](existing-database.yaml) | a managed PostgreSQL service, or a cluster somebody else runs |

@@ -37,8 +37,8 @@ database:
   dsnKey: ""
 
 identity:
-  masterkey: {existingSecret: swgw-zitadel, key: masterkey}
-  rootPassword: {existingSecret: swgw-zitadel, key: rootPassword}
+  # masterkey and rootPassword are generated on first install and read back from
+  # the cluster on every upgrade, so neither is yours to create.
   bootstrapAdmin:
     username: admin
     email: admin@example.com

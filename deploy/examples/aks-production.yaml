@@ -56,12 +56,13 @@ database:
         storageKey: {name: swgw-db-backup, key: key}
 
 identity:
-  masterkey: {existingSecret: swgw-zitadel, key: masterkey}
-  rootPassword: {existingSecret: swgw-zitadel, key: rootPassword}
+  # masterkey and rootPassword are generated on first install and read back from
+  # the cluster on every upgrade, so neither is yours to create.
   bootstrapAdmin:
     username: admin
     email: platform-team@example.com
   sso:
+    enabled: true
     # Register the application in Entra with redirect URI
     # https://id.gateway.example.com/idps/callback, under the "Web" platform -
     # NOT "Single-page application", which refuses the code exchange.

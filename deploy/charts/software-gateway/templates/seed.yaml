@@ -81,18 +81,18 @@ spec:
                   name: {{ default (printf "%s-identity" $full) .Values.identity.bootstrapAdmin.existingSecret }}
                   key: adminPassword
 {{- end }}
-            - {name: SSO_ISSUER, value: {{ .Values.identity.sso.issuer | quote }}}
-            - {name: SSO_CLIENT_ID, value: {{ .Values.identity.sso.clientId | quote }}}
-{{- if .Values.identity.sso.existingSecret }}
+{{- if .Values.identity.sso.enabled }}
+            - {name: SSO_ISSUER, value: {{ required "identity.sso.issuer is required when identity.sso.enabled" .Values.identity.sso.issuer | quote }}}
+            - {name: SSO_CLIENT_ID, value: {{ required "identity.sso.clientId is required when identity.sso.enabled" .Values.identity.sso.clientId | quote }}}
             # NEVER FROM VALUES. A client secret in a values file is a client
             # secret in Git, in the HelmRelease, and in `helm get values`.
             - name: SSO_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.identity.sso.existingSecret }}
+                  name: {{ required "identity.sso.existingSecret is required when identity.sso.enabled" .Values.identity.sso.existingSecret }}
                   key: {{ .Values.identity.sso.clientSecretKey }}
 {{- end }}
-            - {name: SSO_DISPLAY_NAME, value: {{ .Values.identity.sso.displayName | quote }}}
+            - {name: SSO_DISPLAY_NAME, value: {{ ternary .Values.identity.sso.displayName "" .Values.identity.sso.enabled | quote }}}
             - {name: SSO_ALLOW_PASSWORD_LOGIN, value: {{ .Values.identity.sso.allowPasswordLogin | quote }}}
             - {name: LOGIN_REQUIRE_MFA, value: {{ .Values.identity.sso.requireMfa | quote }}}
             - {name: ACCESS_TOKEN_LIFETIME, value: {{ .Values.identity.tokenLifetimes.accessToken | quote }}}

@@ -38,27 +38,50 @@ That values file is the whole of what this deployment differs in. Everything
 else is a chart default — `deploy/charts/software-gateway/values.yaml` lists
 them, and restating one there is a test failure.
 
-The five things a real deployment changes:
+The four things a real deployment changes:
 
 ```yaml
 access:
-  web:      {host: 10.20.30.40, port: 80}   # what a browser types
-  identity: {host: 10.20.30.41, port: 80}
+  web:      {host: 10.20.30.40, port: 80}   # what a browser types for the UI
+  identity: {host: 10.20.30.41, port: 80}   # where it is redirected to sign in
 image:    {registry: registry.example.internal}
 images:   {mirror: registry.example.internal/docker}
 imagePullSecrets: [registry-pull]
-identity:
-  masterkey:    {existingSecret: swgw-zitadel}
-  rootPassword: {existingSecret: swgw-zitadel}
 ```
 
-Turning on single sign-on needs one app registration in the directory:
-[entra-app-registration.md](entra-app-registration.md).
+### The two addresses
 
-`access.scheme` defaults to `http`. Leave it there unless something in front
-really terminates TLS: it is stamped into every token's `iss` and the
-coordinator checks it, so claiming `https` over a plain HTTP entry point is a
-stack that comes up green and refuses every sign-in.
+`access.web.host` is **what somebody types to reach Software Gateway**.
+`access.identity.host` is **where their browser is sent to sign in** — ZITADEL.
+They are two origins, not one host with two paths, for two reasons that both
+bite late:
+
+- ZITADEL stamps `access.identity` into every token's `iss`, and the coordinator
+  refuses a token whose issuer is not the one it was configured with.
+- ZITADEL answers 404 to a Host header it does not recognise as its own.
+
+So both must be the address a browser **really** reaches, character for
+character. A hostname, an IP, with or without a port — no DNS is required. Two
+IPs, or one IP on two ports, are both fine.
+
+`access.scheme` is what the BROWSER speaks to whatever is in front. Leave it
+`http` unless something really terminates TLS: claiming `https` over a plain
+HTTP entry point is a stack that comes up green and refuses every sign-in, and
+the error names ZITADEL three services away from the line that caused it.
+
+### Turning features on
+
+Each is one flag, and each is the only thing that adds a Secret:
+
+| flag | default | what turning it on needs |
+|---|---|---|
+| `identity.sso.enabled` | off | an app registration, and one Secret for its client secret — [entra-app-registration.md](entra-app-registration.md) |
+| `access.expose.ingress.tls.enabled` | off | two certificate Secrets. Not needed when something in front terminates TLS |
+| `database.cluster.backup.enabled` | off | object storage and its credentials |
+| `networkPolicy.enabled` | off | nothing |
+| `metrics.serviceMonitor.enabled` | off | the Prometheus operator |
+| `identity.enabled` | **on** | off points at an identity provider you already run |
+| Flux notifications | off | uncomment one line in `clusters/<cluster>/0-sources/kustomization.yaml`, and a Secret holding the webhook |
 
 Tell the cluster about the instance:
 
@@ -90,14 +113,12 @@ The list comes from your values file, so it cannot go stale:
 task flux:secrets -- myinstance
 ```
 
-It prints something like this. Export the values first so nothing lands in
-shell history, then paste:
+For a private registry and nothing else turned on, that is **one Secret**.
+Export the values first so nothing lands in shell history, then paste:
 
 ```sh
 export REGISTRY_HOST=registry.example.internal
 export REGISTRY_USERNAME=... REGISTRY_TOKEN=...
-export SWGW_ZITADEL_MASTERKEY=$(openssl rand -hex 16)      # EXACTLY 32 characters
-export SWGW_ZITADEL_ROOTPASSWORD=$(openssl rand -base64 24)
 
 kubectl create namespace swgw-lab
 
@@ -105,23 +126,39 @@ kubectl -n swgw-lab create secret docker-registry registry-pull \
   --docker-server="$REGISTRY_HOST" \
   --docker-username="$REGISTRY_USERNAME" \
   --docker-password="$REGISTRY_TOKEN"
-
-kubectl -n swgw-lab create secret generic swgw-zitadel \
-  --from-literal=masterkey="$SWGW_ZITADEL_MASTERKEY" \
-  --from-literal=rootPassword="$SWGW_ZITADEL_ROOTPASSWORD"
 ```
 
-**Keep the master key.** ZITADEL encrypts its own database with it, and a
-database whose key is gone cannot be decrypted by anything.
+Turning a feature on adds to that list, and `task flux:secrets` shows it the
+moment the values file says so. It also prints the credentials declared in
+`config/secrets/secrets.yaml` that no product references yet, separately — those
+are a shape to copy when a product stops being anonymous, and a missing one
+takes **that product** out of service rather than the deployment.
+[`config/secrets/README.md`](../config/secrets/README.md) walks through adding
+one end to end.
 
-Every other credential comes from `config/secrets/secrets.yaml` — the list of
-names and keys the products reference. `task flux:secrets` prints those too. A
-missing one takes **one product** out of service and says which file it looked
-for; it does not stop the deployment.
+### Two credentials you do not create
 
-**The database password is not on this list and never will be.** CloudNativePG
-generates it and publishes the connection as `<cluster>-app`, so it is in no
-values file, no commit and nobody's password manager.
+**ZITADEL's master key and root password.** The chart generates them on first
+install and reads them back from the cluster on every upgrade, so they never
+rotate and there is nothing to type. Read one at any time:
+
+```sh
+kubectl -n swgw-lab get secret swgw-software-gateway-identity \
+  -o jsonpath='{.data.masterkey}' | base64 -d
+```
+
+**Keep a copy of that master key somewhere deleting the namespace cannot
+reach.** ZITADEL encrypts its own database with it, so a database restored into
+a fresh namespace without it is bytes nothing can read. The Secret carries
+`helm.sh/resource-policy: keep`, so `helm uninstall` leaves it — but deleting
+the namespace takes the key and the database together.
+
+Point `identity.masterkey.existingSecret` at a Secret of your own to manage it
+yourself instead.
+
+**The database password.** CloudNativePG generates it and publishes the
+connection as `<cluster>-app`. It is in no values file, no commit and nobody's
+password manager, and nothing rotates it by hand.
 
 ---
 
@@ -210,13 +247,52 @@ anybody making them:
 |---|---|---|
 | `swgw-db-app` | CloudNativePG | the database user, password and a ready-made `uri` |
 | `swgw-software-gateway-state` | the setup Job, then the seeder | ZITADEL's machine token, the sign-in screens' token, the SPA's OIDC client id, the worker fleet's credentials |
-| `swgw-software-gateway-identity` | the chart | only when a ZITADEL value is given inline instead of named in a Secret |
+| `swgw-software-gateway-identity` | the chart, on first install | ZITADEL's master key and root password, generated once and read back on every upgrade |
 
 The `state` Secret is the cluster's replacement for the shared volumes
 `docker-compose.yml` uses. The seeder's ServiceAccount can `get` and `patch`
 exactly that one Secret by name, and nothing long-running uses that account.
 
 ---
+
+## Behind your own reverse proxy
+
+The arrangement most internal labs end up with: one nginx, one private IP, a
+self-signed certificate, and no DNS anywhere.
+
+Set `access.expose.type: none` — the chart then publishes nothing and every
+Service stays ClusterIP. Your nginx reaches `web:80` and `zitadel-proxy:80` by
+name, and its own Service holds the address. `access.web` and `access.identity`
+are what the browser types, so two ports on one IP works:
+
+```yaml
+access:
+  scheme: https                         # what the BROWSER speaks to nginx
+  web:      {host: 10.20.30.40, port: 443}
+  identity: {host: 10.20.30.40, port: 8443}
+  expose:   {type: none}
+```
+
+ZITADEL keeps serving plain HTTP behind nginx; that is a different question from
+the scheme above and does not change the issuer.
+
+Three things the proxy must get right, each of which fails late:
+
+- **`proxy_set_header Host $http_host`**, not `$host`. It preserves the port,
+  and ZITADEL matches on the whole thing.
+- **`proxy_set_header X-Forwarded-Proto https`**, or the sign-in screens build
+  `http://` links behind an `https://` front door.
+- **`proxy_buffer_size 32k`** on the identity server. A privileged user's token
+  carries org-wide roles and does not fit the default header buffers; without it
+  the sign-in returns a 400 the application never sees.
+
+A self-signed certificate is fine. A browser warns once per **origin**, and
+these are two, so a first sign-in accepts the warning twice. Nothing inside the
+cluster sees that certificate — the coordinator fetches ZITADEL's keys over
+plain HTTP at `zitadel:8080`.
+
+The whole thing, including the nginx config:
+[`deploy/examples/reverse-proxy-no-dns.yaml`](../deploy/examples/reverse-proxy-no-dns.yaml).
 
 ## How the pieces reach each other
 

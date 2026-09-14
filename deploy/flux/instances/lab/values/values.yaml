@@ -55,10 +55,8 @@ database:
     synchronousReplicas: 0
 
 identity:
-  masterkey:
-    existingSecret: swgw-zitadel
-  rootPassword:
-    existingSecret: swgw-zitadel
+  # masterkey and rootPassword are generated on first install and read back on
+  # every upgrade, so there is nothing to create. See the chart's values.yaml.
   bootstrapAdmin:
     email: platform-team@example.internal
   # No single sign-on here: everybody in config/users/users.yaml signs in with

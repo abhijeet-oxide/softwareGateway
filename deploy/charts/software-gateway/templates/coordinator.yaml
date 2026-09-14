@@ -51,6 +51,7 @@ spec:
         checksum/system-config: {{ .Files.Get "files/config/config.yaml" | sha256sum }}
         checksum/settings: {{ toYaml .Values.settings | sha256sum }}
     spec:
+      enableServiceLinks: false
       serviceAccountName: {{ include "swgw.fullname" . }}-coordinator
       {{- include "swgw.imagePullSecrets" . | nindent 6 }}
       securityContext:
@@ -90,12 +91,15 @@ spec:
             # and loses everything when the pod is replaced.
             - name: SWGW_DATABASE_DRIVER
               value: postgres
-            {{- include "swgw.dbCredentialEnv" . | nindent 12 }}
             # Assembled by the kubelet from the two variables above, which must
             # be declared before it. See swgw.dbCredentialEnv for why the URL is
             # built here rather than read from a key or composed by a shell.
             - name: SWGW_DATABASE_DSN
-              value: postgres://$(SWGW_DB_USER):$(SWGW_DB_PASSWORD)@{{ .Values.database.host }}:{{ .Values.database.port }}/{{ .Values.database.name }}?sslmode={{ .Values.database.sslMode }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "swgw.dbSecretName" . }}
+                  key: uri
+              # value: postgres://$(SWGW_DB_USER):$(SWGW_DB_PASSWORD)@{{ .Values.database.host }}:{{ .Values.database.port }}/{{ .Values.database.name }}?sslmode={{ .Values.database.sslMode }}
             - name: SWGW_AUTH_ENABLED
               value: {{ .Values.identity.enabled | quote }}
             {{- if .Values.identity.enabled }}
@@ -151,6 +155,8 @@ spec:
             {{- include "swgw.containerSecurityContext" . | nindent 12 }}
           volumeMounts:
             {{- include "swgw.configVolumeMounts" . | nindent 12 }}
+            - name: tmp
+              mountPath: /tmp
 {{- if eq .Values.secrets.backend "azure" }}
             # See templates/secrets-azure.yaml: the CSI driver produces a
             # Secret only while a pod mounts its SecretProviderClass, so the
@@ -161,6 +167,8 @@ spec:
 {{- end }}
       volumes:
         {{- include "swgw.configVolumes" . | nindent 8 }}
+        - name: tmp
+          emptyDir: {}
 {{- if eq .Values.secrets.backend "azure" }}
         - name: azure-secrets
           csi:

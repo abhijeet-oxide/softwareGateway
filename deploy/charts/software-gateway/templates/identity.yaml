@@ -261,6 +261,7 @@ spec:
       labels:
         {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel") | nindent 8 }}
     spec:
+      enableServiceLinks: false
       {{- include "swgw.imagePullSecrets" . | nindent 6 }}
       securityContext:
         seccompProfile:

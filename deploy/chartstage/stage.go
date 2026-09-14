@@ -167,6 +167,8 @@ func StageSchema(root string) error {
 	if err := os.MkdirAll(filepath.Dir(out), 0o750); err != nil {
 		return err
 	}
+	// #nosec G703 -- SchemaCopy is a constant; the only variable is the
+	// repository root the command was pointed at.
 	return os.WriteFile(out, b, 0o600)
 }
 
@@ -215,6 +217,8 @@ func copyFile(from, to string, mode fs.FileMode) error {
 	if mode&0o111 != 0 {
 		perm = 0o755
 	}
+	// #nosec G703 -- both paths come from the Sources manifest, a fixed list of
+	// literals, walked under a directory this package chose.
 	return os.WriteFile(to, b, perm)
 }
 
@@ -258,8 +262,24 @@ func Fingerprint(dir string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// safeSegment is the only shape an instance or a version may take.
+//
+// Both reach these functions from a command-line flag and both are joined into
+// a path that is then WRITTEN to, so "lab" and "../../.github/workflows" are the
+// same kind of input until something says otherwise. This is that something:
+// one path segment, no separators, no dots at the ends.
+var safeSegment = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+func checkSegment(kind, value string) error {
+	if !safeSegment.MatchString(value) || strings.Contains(value, "..") {
+		return fmt.Errorf("%q is not a valid %s name: letters, digits, dot, dash and "+
+			"underscore only, and it must name one directory rather than a path", value, kind)
+	}
+	return nil
+}
+
 // InstanceDir is where a Flux instance's directory lives, relative to the
-// repository root.
+// repository root. The caller has already validated the name with checkSegment.
 func InstanceDir(instance string) string {
 	return path.Join("deploy/flux/instances", instance)
 }
@@ -273,6 +293,9 @@ func InstanceDir(instance string) string {
 // passes and the laptop does not. `task chart:template -- lab` and the CD
 // workflow's render step call this same function.
 func InstanceValues(root, instance string) ([]byte, error) {
+	if err := checkSegment("instance", instance); err != nil {
+		return nil, err
+	}
 	rel := path.Join(InstanceDir(instance), "values", "values.yaml")
 	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel))) // #nosec G304 -- instance is a controlled deployment name.
 	if err != nil {
@@ -305,6 +328,9 @@ func Instances(root string) ([]string, error) {
 // InstanceVersion reports which chart version an instance runs, by reading the
 // one line in its release kustomization that says so.
 func InstanceVersion(root, instance string) (string, error) {
+	if err := checkSegment("instance", instance); err != nil {
+		return "", err
+	}
 	rel := path.Join(InstanceDir(instance), "release", "kustomization.yaml")
 	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel))) // #nosec G304 -- instance is a controlled deployment name.
 	if err != nil {
@@ -328,8 +354,11 @@ var releaseResource = regexp.MustCompile(`(?m)^\s*-\s+\.\./\.\./\.\./software/pa
 // somebody's notes: the pipeline moves a deployment pointer on every merge and a
 // person moves it to roll back, and those must be the same edit.
 func SetInstanceVersion(root, instance, version string) error {
-	if version == "" {
-		return fmt.Errorf("no version given")
+	if err := checkSegment("instance", instance); err != nil {
+		return err
+	}
+	if err := checkSegment("version", version); err != nil {
+		return err
 	}
 	patchDir := filepath.Join(root, filepath.FromSlash(path.Join("deploy/flux/software/patch", version)))
 	if err := os.MkdirAll(patchDir, 0o750); err != nil {
@@ -365,5 +394,7 @@ func SetInstanceVersion(root, instance, version string) error {
 	if updated == string(b) && !strings.Contains(updated, "software/patch/"+version) {
 		return fmt.Errorf("%s does not reference a software/patch/<version> directory", rel)
 	}
+	// #nosec G703 -- instance passed checkSegment, so `file` is the repository
+	// root joined with one validated directory name and two constants.
 	return os.WriteFile(file, []byte(updated), 0o600)
 }

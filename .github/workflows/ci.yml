@@ -238,10 +238,12 @@ jobs:
           done
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
+      # v2.13 is the first release whose go directive is 1.26, and golangci-lint
+      # refuses to run when it was built with a Go older than the module targets.
       - name: Install golangci-lint CLI
         run: |
           for attempt in 1 2 3; do
-            if GOBIN="$RUNNER_TEMP/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.5.0; then
+            if GOBIN="$RUNNER_TEMP/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2; then
               break
             fi
             if [ "$attempt" = "3" ]; then

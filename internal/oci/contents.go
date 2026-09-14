@@ -205,7 +205,7 @@ func readZip(body []byte) ([]File, bool) {
 		if entry.UncompressedSize64 > uint64(maxEntryBytes) {
 			return nil, false
 		}
-		size := int64(entry.UncompressedSize64) //nolint:gosec // bounded above
+		size := int64(entry.UncompressedSize64)
 		expanded += size
 		if expanded > maxExpandedBytes {
 			return nil, false

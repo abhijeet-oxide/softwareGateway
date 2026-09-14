@@ -34,7 +34,7 @@ func TestLivenessAnswersUnderBothNames(t *testing.T) {
 
 	for _, path := range []string{"/healthz", "/livez"} {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
 		if rec.Code != http.StatusOK {
 			t.Errorf("%s: status %d, want 200", path, rec.Code)
 		}
@@ -55,7 +55,7 @@ func TestDegradedIsStillReady(t *testing.T) {
 		return health.Degraded("1 product(s) failed to load")
 	})
 	rec := httptest.NewRecorder()
-	probeServer(reg).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	probeServer(reg).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d, want 200", rec.Code)
@@ -82,7 +82,7 @@ func TestDownRefusesTraffic(t *testing.T) {
 		return health.Down(errors.New("connection refused"))
 	})
 	rec := httptest.NewRecorder()
-	probeServer(reg).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	probeServer(reg).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", nil))
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status %d, want 503", rec.Code)

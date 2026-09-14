@@ -40,16 +40,16 @@ func TestNobodyWithoutRolesReachesAnything(t *testing.T) {
 		"/api/v1/workers",
 		"/api/v1/reports/summary",
 	} {
-		if allowed, _ := attempt(nobody, http.MethodGet, path); allowed {
+		if allowed, _ := attempt(t, nobody, http.MethodGet, path); allowed {
 			t.Errorf("GET %s was served to an account holding no roles", path)
 		}
 	}
-	if allowed, _ := attempt(nobody, http.MethodPost, "/api/v1/transfers"); allowed {
+	if allowed, _ := attempt(t, nobody, http.MethodPost, "/api/v1/transfers"); allowed {
 		t.Error("an account holding no roles could request a transfer")
 	}
 
 	// And it is told something it can act on, rather than a bare refusal.
-	_, detail := attempt(nobody, http.MethodGet, "/api/v1/products")
+	_, detail := attempt(t, nobody, http.MethodGet, "/api/v1/products")
 	if !strings.Contains(detail, "no roles") || !strings.Contains(detail, "administrator") {
 		t.Errorf("the refusal does not tell them what to do: %q", detail)
 	}
@@ -62,7 +62,7 @@ func TestNobodyWithoutRolesReachesAnything(t *testing.T) {
 func TestTheExplainingRoutesAreAlwaysReachable(t *testing.T) {
 	nobody := identity("default", nil, nil)
 	for _, path := range []string{"/api/v1/whoami", "/api/v1/system/version"} {
-		if allowed, detail := attempt(nobody, http.MethodGet, path); !allowed {
+		if allowed, detail := attempt(t, nobody, http.MethodGet, path); !allowed {
 			t.Errorf("GET %s refused an account with no roles: %q", path, detail)
 		}
 	}
@@ -133,7 +133,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			allowed, detail := attempt(c.id, c.method, c.path)
+			allowed, detail := attempt(t, c.id, c.method, c.path)
 			if allowed != c.want {
 				t.Fatalf("%s %s allowed=%v want=%v (%s)", c.method, c.path, allowed, c.want, detail)
 			}
@@ -147,13 +147,13 @@ func TestAnUnknownRouteStillNeedsAPermission(t *testing.T) {
 	nobody := identity("default", nil, nil)
 	reader := identity("default", []string{"org-reader"}, nil)
 
-	if allowed, _ := attempt(nobody, http.MethodGet, "/api/v1/somethingInventedLater"); allowed {
+	if allowed, _ := attempt(t, nobody, http.MethodGet, "/api/v1/somethingInventedLater"); allowed {
 		t.Error("an unknown route was open to an account with no roles")
 	}
-	if allowed, _ := attempt(reader, http.MethodPost, "/api/v1/somethingInventedLater"); allowed {
+	if allowed, _ := attempt(t, reader, http.MethodPost, "/api/v1/somethingInventedLater"); allowed {
 		t.Error("an unknown write was open to a reader")
 	}
-	if allowed, _ := attempt(reader, http.MethodGet, "/api/v1/somethingInventedLater"); !allowed {
+	if allowed, _ := attempt(t, reader, http.MethodGet, "/api/v1/somethingInventedLater"); !allowed {
 		t.Error("an unknown read was refused to a reader, which would break every new route")
 	}
 }
@@ -180,7 +180,8 @@ func TestProductIn(t *testing.T) {
 
 // attempt runs one request through the gate and reports whether it reached the
 // handler, and what it was told if it did not.
-func attempt(id Identity, method, path string) (bool, string) {
+func attempt(t *testing.T, id Identity, method, path string) (bool, string) {
+	t.Helper()
 	reached := false
 	var denied string
 	h := Authorize(nil, func(w http.ResponseWriter, _ *http.Request, detail string) {
@@ -188,7 +189,7 @@ func attempt(id Identity, method, path string) (bool, string) {
 		w.WriteHeader(http.StatusForbidden)
 	})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
 
-	r := httptest.NewRequest(method, path, nil)
+	r := httptest.NewRequestWithContext(t.Context(), method, path, nil)
 	r = r.WithContext(context.WithValue(r.Context(), ctxKeyIdentity{}, id))
 	h.ServeHTTP(httptest.NewRecorder(), r)
 	return reached, denied
@@ -348,7 +349,7 @@ func TestAnAnyScopeRouteTellsTheHandlerWhatItMayTouch(t *testing.T) {
 		permitted = PermittedProducts(r.Context())
 	}))
 
-	r := httptest.NewRequest("POST", "/api/v1/products:discover", nil)
+	r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/v1/products:discover", nil)
 	r = r.WithContext(context.WithValue(r.Context(), ctxKeyIdentity{}, id))
 	h.ServeHTTP(httptest.NewRecorder(), r)
 
@@ -373,7 +374,7 @@ func TestATenantWideCallerIsNotNarrowed(t *testing.T) {
 		narrowed = PermittedProducts(r.Context()) != nil
 	}))
 
-	r := httptest.NewRequest("POST", "/api/v1/products:discover", nil)
+	r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/v1/products:discover", nil)
 	r = r.WithContext(context.WithValue(r.Context(), ctxKeyIdentity{}, id))
 	h.ServeHTTP(httptest.NewRecorder(), r)
 

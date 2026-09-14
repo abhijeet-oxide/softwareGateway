@@ -26,7 +26,7 @@ func TestProbesAnswerWithoutCredentials(t *testing.T) {
 	for _, p := range []string{"/healthz", "/readyz", "/livez", "/metrics"} {
 		reached = false
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), "GET", p, nil))
 		if rec.Code != http.StatusOK || !reached {
 			t.Errorf("%s: status %d, handler reached %v; want 200 and reached", p, rec.Code, reached)
 		}
@@ -34,7 +34,7 @@ func TestProbesAnswerWithoutCredentials(t *testing.T) {
 
 	// Everything else still requires credentials.
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/products", nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/products", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("/api/v1/products: status %d, want 401", rec.Code)
 	}

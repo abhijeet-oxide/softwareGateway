@@ -156,7 +156,7 @@ func TestARefusalNamesThePermissionAndTheProduct(t *testing.T) {
 		OrgRoles: []string{"org-member"},
 		Products: map[string][]string{"software-01": {"product-reader"}},
 	})
-	req := RequiredFor(httptest.NewRequest("POST", "/api/v1/products/software-02:calibrate", nil))
+	req := RequiredFor(httptest.NewRequestWithContext(t.Context(), "POST", "/api/v1/products/software-02:calibrate", nil))
 	got := Refusal(id, req)
 	for _, want := range []string{"Access denied", "product.calibrate", `"software-02"`} {
 		if !containsSub(got, want) {
@@ -169,7 +169,7 @@ func TestARefusalNamesThePermissionAndTheProduct(t *testing.T) {
 // the two have different answers and only one of them is actionable.
 func TestAStrangerIsToldTheyAreNotProvisioned(t *testing.T) {
 	got := Refusal(Identity{Subject: "u6", Method: "oidc"},
-		RequiredFor(httptest.NewRequest("GET", "/api/v1/auditEvents", nil)))
+		RequiredFor(httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/auditEvents", nil)))
 	if !containsSub(got, "not provisioned") {
 		t.Errorf("a stranger was told %q", got)
 	}

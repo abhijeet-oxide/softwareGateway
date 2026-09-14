@@ -234,7 +234,7 @@ tasks:
   # ------------------------------------------------------------------- lint --
 
   lint:
-    desc: Run golangci-lint (requires v2 - a v1 binary rejects the v2 config)
+    desc: Run golangci-lint (v2.13+ - it refuses to run when built with a Go older than go.mod targets)
     cmds:
       - golangci-lint run
 

@@ -344,3 +344,267 @@ Workers         ⏳ Waiting on coordinator
 
 
 Single remaining blocker: ZITADEL advertises http://id-swgw-nprd.example.com while Coordinator requires https://id-swgw-nprd.example.com.
+
+
+## Architecture / Repository Refactor
+Rework the deployment artifacts to follow a GitOps-first structure similar to:
+```
+cnf-gitops/
+├── clusters/
+│   └── <cluster>
+│       ├── 0-sources/
+│       ├── 1-instances/
+│       ├── kustomization.yaml
+│       └── sync.yaml
+│
+├── instances/
+│   └── <instance>
+│       ├── 0-vaultauth/
+│       ├── 1-secrets/
+│       ├── release/
+│       ├── values/
+│       ├── kustomization.yaml
+│       └── namespace.yaml
+│
+└── software/
+    ├── base/
+    ├── patch/
+    └── schema/
+```
+
+
+
+
+
+
+Good idea. Add this as a separate section in the retrospective.
+
+Future Architecture / Repository Refactor
+Goal
+
+Rework the deployment artifacts to follow a GitOps-first structure similar to:
+
+cnf-gitops/
+├── clusters/
+│   └── <cluster>
+│       ├── 0-sources/
+│       ├── 1-instances/
+│       ├── kustomization.yaml
+│       └── sync.yaml
+│
+├── instances/
+│   └── <instance>
+│       ├── 0-vaultauth/
+│       ├── 1-secrets/
+│       ├── release/
+│       ├── values/
+│       ├── kustomization.yaml
+│       └── namespace.yaml
+│
+└── software/
+    ├── base/
+    ├── patch/
+    └── schema/
+
+Problems With Current Layout
+
+The current repository evolved from a Docker Compose based deployment and now supports:
+
+Docker Compose
+Helm
+FluxCD
+AKS
+
+
+However configuration ownership is spread across multiple locations:
+
+templates/
+files/config/
+values.yaml
+compose files
+cluster overlays
+
+
+which makes it increasingly difficult to:
+
+identify source of truth
+onboard new engineers
+support multiple environments
+support multiple tenants/namespaces
+understand ownership boundaries
+Target Design Principles
+1. Single Source Of Truth
+
+All platform configuration should exist once.
+
+Avoid:
+
+Docker-compose version
+Helm version
+Flux version
+
+
+of the same configuration.
+
+Instead:
+
+Common source
+      ↓
+Docker Compose
+Helm
+Flux
+
+
+should consume the same files.
+
+2. Centralized Configuration
+
+Product definitions:
+
+products/
+
+
+Secrets inventory:
+
+secrets/
+
+
+Users:
+
+users/
+
+
+Roles:
+
+access/
+
+
+Identity configuration:
+
+identity/
+
+
+should remain centralized and not be duplicated per deployment mechanism.
+
+3. Docker Compose Must Continue Working
+
+Current local workflows depend heavily on:
+
+docker compose up
+
+
+Future refactoring must preserve:
+
+Local developer experience
+
+
+without requiring:
+
+AKS
+Flux
+Vault
+
+
+for development.
+
+4. Flux Must Use The Same Artifacts
+
+The following should remain true:
+
+Same products.yaml
+Same users.yaml
+Same roles.yaml
+Same secrets inventory
+
+
+used by:
+
+docker compose
+helm install
+flux reconciliation
+
+
+No environment-specific copies of application configuration.
+
+Only deployment-layer differences should vary.
+
+5. Task Runner Must Continue Working
+
+Current task automation should continue to function:
+
+task build
+task test
+task seed
+task deploy
+task compose-up
+
+
+Any new directory structure must not require maintaining separate task definitions for:
+
+Compose
+Helm
+Flux
+
+Desired Ownership Model
+software/
+
+Contains:
+
+Application artifacts
+Charts
+Images
+Common config
+Schemas
+
+instances/
+
+Contains:
+
+Namespace specific values
+Secrets references
+Vault auth
+Environment overrides
+Release definitions
+
+clusters/
+
+Contains:
+
+Flux sync objects
+Sources
+Cluster level configuration
+
+Non-Negotiable Requirements
+Must remain centralized
+
+Configuration should continue to be shared between:
+
+Docker Compose
+Helm
+Flux
+
+
+No duplication.
+
+Must remain deployable locally
+
+The following must continue to work:
+
+docker compose up
+
+
+without requiring:
+
+AKS
+Flux
+Cloud infrastructure
+
+Must remain GitOps friendly
+
+The following must continue to work:
+
+flux bootstrap
+flux reconcile
+
+
+without manual intervention.

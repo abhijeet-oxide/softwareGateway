@@ -14,19 +14,13 @@ spec:
   retryInterval: 1m
   path: ./deploy/flux/instances/lab
   prune: true
-  # Ready means the HelmReleases are Ready, not merely applied.
+  # Ready means every object this applies is Ready - the two HelmReleases
+  # included - not merely that the apply succeeded. `healthChecks` would be
+  # ignored beside it, and naming one would put this instance's namespace in a
+  # second file.
   wait: true
   timeout: 30m
   sourceRef:
     kind: GitRepository
     name: software-gateway
     namespace: flux-system
-  healthChecks:
-    - apiVersion: helm.toolkit.fluxcd.io/v2
-      kind: HelmRelease
-      name: software-gateway-db
-      namespace: swgw-lab
-    - apiVersion: helm.toolkit.fluxcd.io/v2
-      kind: HelmRelease
-      name: software-gateway
-      namespace: swgw-lab

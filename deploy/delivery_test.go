@@ -808,3 +808,128 @@ func sameAsDefault(values, defaults map[string]any, prefix string) []string {
 	sort.Strings(found)
 	return found
 }
+
+// TestEachInstanceNamesItsNamespaceOnce is the other half of the rule that one
+// file holds what a deployment differs in.
+//
+// The namespace is not a Helm value - kustomize stamps it on everything the
+// instance applies, and it renames the Namespace object too - so it lives in
+// `kustomization.yaml` rather than in `values/values.yaml`. Written twice it is
+// a deployment whose Secrets land in one namespace and whose pods start in
+// another, which fails as ImagePullBackOff naming neither.
+//
+// So: exactly one Namespace, named by the transformer, with everything else
+// inside it, and the literal written nowhere else in the directory.
+// scalarEquals reports whether any scalar anywhere in a decoded document is
+// exactly want.
+func scalarEquals(node any, want string) bool {
+	switch v := node.(type) {
+	case string:
+		return v == want
+	case map[string]any:
+		for _, child := range v {
+			if scalarEquals(child, want) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if scalarEquals(child, want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestEachInstanceNamesItsNamespaceOnce(t *testing.T) {
+	kustomize, err := exec.LookPath("kustomize")
+	if err != nil {
+		t.Skip("kustomize is not on PATH; the chart job in CI covers this")
+	}
+	instances, err := chartstage.Instances(repoRoot)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	for _, instance := range instances {
+		t.Run(instance, func(t *testing.T) {
+			dir := filepath.Join(repoRoot, filepath.FromSlash(chartstage.InstanceDir(instance)))
+
+			kfile := filepath.Join(dir, "kustomization.yaml")
+			b, err := os.ReadFile(kfile) // #nosec G304 -- instance passed checkSegment.
+			if err != nil {
+				t.Fatalf("%v", err)
+			}
+			var k struct {
+				Namespace string `json:"namespace"`
+			}
+			if err := yaml.Unmarshal(b, &k); err != nil {
+				t.Fatalf("parse kustomization.yaml: %v", err)
+			}
+			if k.Namespace == "" {
+				t.Fatal("kustomization.yaml sets no namespace, so nothing says where this " +
+					"instance is deployed")
+			}
+
+			out, err := exec.CommandContext(t.Context(), kustomize, "build", dir).CombinedOutput()
+			if err != nil {
+				t.Fatalf("kustomize build: %v\n%s", err, out)
+			}
+			namespaces := 0
+			for _, raw := range strings.Split(string(out), "\n---\n") {
+				var doc map[string]any
+				if err := yaml.Unmarshal([]byte(raw), &doc); err != nil || doc["kind"] == nil {
+					continue
+				}
+				name, _ := nested(doc, "metadata", "name")
+				if kind, _ := doc["kind"].(string); kind == "Namespace" {
+					namespaces++
+					if name != k.Namespace {
+						t.Errorf("the Namespace is called %q but the transformer says %q",
+							name, k.Namespace)
+					}
+					continue
+				}
+				if got, ok := nested(doc, "metadata", "namespace"); ok && got != k.Namespace {
+					t.Errorf("%s %s is in namespace %q, not %q", doc["kind"], name, got, k.Namespace)
+				}
+			}
+			if namespaces != 1 {
+				t.Errorf("%d Namespace objects; an instance is one namespace", namespaces)
+			}
+
+			// And no other file in the instance states it as a VALUE. Compared as
+			// whole scalars rather than as text: `swgw` is a substring of
+			// `swgw-db-backup`, and a test that cried wolf about that would be
+			// turned off within a week.
+			err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+				if err != nil || d.IsDir() || filepath.Base(path) == "kustomization.yaml" {
+					return err
+				}
+				if ext := filepath.Ext(path); ext != ".yaml" && ext != ".yml" {
+					return nil
+				}
+				b, err := os.ReadFile(path) // #nosec G304 -- walked from the instance directory.
+				if err != nil {
+					return err
+				}
+				var doc any
+				if err := yaml.Unmarshal(b, &doc); err != nil {
+					return nil
+				}
+				if scalarEquals(doc, k.Namespace) {
+					rel, _ := filepath.Rel(repoRoot, path)
+					t.Errorf("%s states the namespace %q.\n\n"+
+						"It belongs in kustomization.yaml and nowhere else - kustomize stamps it on\n"+
+						"everything, including the Namespace object's own name.\n",
+						filepath.ToSlash(rel), k.Namespace)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("walk %s: %v", instance, err)
+			}
+		})
+	}
+}

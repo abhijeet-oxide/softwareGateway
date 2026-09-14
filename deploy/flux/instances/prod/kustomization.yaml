@@ -1,7 +1,9 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Everything this instance applies lands here.
+# THE NAMESPACE, and the only place it is written. It renames namespace.yaml and
+# stamps every other object, so `kubectl create namespace` before the first
+# install must use this exact name - the Secrets have to land in it.
 namespace: swgw
 
 resources:
@@ -16,7 +18,7 @@ resources:
 # name. An edit is therefore applied at the next HelmRelease reconciliation
 # (5 minutes), or at once with:
 #
-#   flux -n swgw reconcile helmrelease software-gateway --with-source
+#   flux -n <namespace> reconcile helmrelease software-gateway --with-source
 configMapGenerator:
   - name: software-gateway-values
     files:

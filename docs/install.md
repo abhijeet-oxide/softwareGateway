@@ -29,14 +29,25 @@ created once, by hand, and nothing in Git ever holds a value.
 
 ```sh
 cp -r deploy/flux/instances/lab deploy/flux/instances/myinstance
-$EDITOR deploy/flux/instances/myinstance/values/values.yaml
-$EDITOR deploy/flux/instances/myinstance/namespace.yaml    # the namespace name
-$EDITOR deploy/flux/instances/myinstance/kustomization.yaml # the same name
+$EDITOR deploy/flux/instances/myinstance/kustomization.yaml   # the NAMESPACE
+$EDITOR deploy/flux/instances/myinstance/values/values.yaml   # everything else
 ```
 
-That values file is the whole of what this deployment differs in. Everything
-else is a chart default — `deploy/charts/software-gateway/values.yaml` lists
-them, and restating one there is a test failure.
+**Two files, and the first one is one line.** The namespace is not a Helm value:
+kustomize stamps it on every object this instance applies and renames the
+`Namespace` object itself, so it is written once, in `kustomization.yaml`:
+
+```yaml
+namespace: swgw-lab
+```
+
+Nothing else in the directory may state it — `TestEachInstanceNamesItsNamespaceOnce`
+fails on a second copy, because a namespace written twice is a deployment whose
+Secrets land in one and whose pods start in the other.
+
+`values/values.yaml` is the whole of what else this deployment differs in.
+Everything not in it is a chart default — `deploy/charts/software-gateway/values.yaml`
+lists them, and restating one is a test failure.
 
 The four things a real deployment changes:
 

@@ -87,14 +87,61 @@ sign-in, and the error names ZITADEL three services away from the line that
 caused it. ZITADEL always serves plain HTTP behind the front door; that is a
 different question and does not change the issuer.
 
+**One reverse proxy serves both.** Two DNS names pointing at the same IP is
+ordinary virtual hosting — nginx and Traefik both route on the Host header, and
+that is all this needs. Two IPs are not required and neither is DNS: two ports
+on one address work identically.
+
+```
+             ┌──────────────────────────────┐
+10.20.30.40 ─┤ nginx / Traefik              │
+             │  gateway.lab.internal  ──────┼──▶ web:80
+             │  id.gateway.lab.internal ────┼──▶ zitadel-proxy:80
+             └──────────────────────────────┘
+```
+
+What you cannot do is put them on one name with different paths — ZITADEL has no
+path-prefix mode.
+
 ### Images
 
-`images.registry` is where this product's three images live. `images.mirror` is a
-repository that proxies Docker Hub and ghcr.io; every third-party image is
-rewritten through it, so one line repoints all six.
+`images.registry` is where this product's three images are pushed.
+`images.mirror` is where the six third-party ones were copied to. **The same
+value in both is normal** when one registry holds everything:
+
+```yaml
+images:
+  registry: contoso.azurecr.io
+  mirror: contoso.azurecr.io
+  pullSecrets: [registry-pull]
+```
 
 The image **versions** are chart defaults, pinned and tested together — a values
 file names a registry, never a tag.
+
+To copy them, do not work the paths out by hand:
+
+```sh
+task images:mirror -- myinstance
+```
+
+```
+crane copy ghcr.io/zitadel/zitadel:v4.17.3   contoso.azurecr.io/zitadel/zitadel:v4.17.3
+crane copy nginx:1.27.5-alpine               contoso.azurecr.io/nginx:1.27.5-alpine
+crane copy cerbos/cerbos:0.55.0              contoso.azurecr.io/cerbos/cerbos:0.55.0
+crane copy node:22.23.2-alpine               contoso.azurecr.io/node:22.23.2-alpine
+crane copy ghcr.io/cloudnative-pg/postgresql:16.10 \
+           contoso.azurecr.io/cloudnative-pg/postgresql:16.10
+```
+
+Versions come from the chart and the destination from your `images.mirror`, so
+these are the paths the pods will ask for. `skopeo copy` and `az acr import`
+take the same two arguments in the same order. This product's own three images
+are pushed by the pipeline and are not on the list.
+
+**The PostgreSQL image is the one people forget.** CloudNativePG pulls it again
+on every failover, so a cluster missing that copy does not fail when it is
+deployed — it fails when the primary dies.
 
 ### Turning features on
 

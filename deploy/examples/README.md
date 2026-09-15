@@ -50,8 +50,10 @@ pulls three images from you and six from the internet — not an air-gapped
 deployment, and indistinguishable from one until the first node without egress,
 so the chart refuses it.
 
-The image **versions** are chart defaults, pinned and tested together. A values
-file names a registry, never a tag.
+The same value in both is normal when one registry holds everything. The image
+**versions** are chart defaults, pinned and tested together — a values file names
+a registry, never a tag — and `task images:mirror -- <instance>` prints the exact
+commands that copy them, with the paths the pods will ask for.
 
 **`database.cluster.name`** decides who owns the database. Named, and the
 `database` layer provisions a CloudNativePG cluster and derives `database.host`

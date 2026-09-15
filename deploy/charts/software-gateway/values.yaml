@@ -89,14 +89,18 @@ images:
   repository: software-gateway
   # Empty means .Chart.AppVersion.
   tag: ""
-  # Full upstream references. `mirror` replaces the host, so one line repoints
-  # all six and an empty mirror pulls each from where it actually lives.
+  # Upstream references, written the way a registry names them: a Docker Hub
+  # image is its bare path, and anything published elsewhere carries its host.
+  #
+  # `mirror` replaces that host - or is prefixed when there is none - so the path
+  # under your registry is the one `az acr import`, `crane copy` or `skopeo` give
+  # you by default. `task images:mirror -- <instance>` prints the exact commands.
   zitadel: ghcr.io/zitadel/zitadel:v4.17.3
   zitadelLogin: ghcr.io/zitadel/zitadel-login:v4.17.3
-  nginx: docker.io/library/nginx:1.27.5-alpine
-  cerbos: docker.io/cerbos/cerbos:0.55.0
+  nginx: nginx:1.27.5-alpine
+  cerbos: cerbos/cerbos:0.55.0
   # One utility image, used by the seeder and every wait-for-... init container.
-  node: docker.io/library/node:22.23.2-alpine
+  node: node:22.23.2-alpine
   # Read by the `database` layer, and pulled again on every failover - a cluster
   # that cannot reach it cannot recover.
   postgres: ghcr.io/cloudnative-pg/postgresql:16.10

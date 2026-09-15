@@ -531,6 +531,23 @@ tasks:
     cmds:
       - go run ./deploy/chartstage/cmd/chartstage -secrets {{.INSTANCE}}
 
+  images:mirror:
+    desc: Print the commands that copy the third-party images into your registry
+    summary: |
+      task images:mirror -- lab
+
+      Versions come from the chart and the destination from that instance's
+      images.mirror, so the paths printed are the ones the pods will ask for -
+      which is the thing that is easy to get wrong by hand and shows up as
+      ImagePullBackOff naming a path nobody wrote down.
+
+      This product's own three images are pushed by the pipeline and are not
+      listed.
+    vars:
+      INSTANCE: '{{default "lab" .CLI_ARGS}}'
+    cmds:
+      - go run ./deploy/chartstage/cmd/chartstage -mirror {{.INSTANCE}}
+
   flux:instances:
     desc: List the deployment instances and the chart version each runs
     cmds:

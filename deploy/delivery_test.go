@@ -933,3 +933,48 @@ func TestEachInstanceNamesItsNamespaceOnce(t *testing.T) {
 		})
 	}
 }
+
+// TestMirrorPathsMatchTheChart keeps `task images:mirror` honest.
+//
+// It prints where every third-party image has to be copied to, and the chart
+// decides where it will be pulled from. Those are two implementations of one
+// rule - Go's mirroredPath and the chart's swgw.mirroredImage - and a drift
+// between them is a set of copy commands that produce paths no pod asks for.
+// The symptom is ImagePullBackOff on a registry that visibly has the image.
+func TestMirrorPathsMatchTheChart(t *testing.T) {
+	instances, err := chartstage.Instances(repoRoot)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	for _, instance := range instances {
+		t.Run(instance, func(t *testing.T) {
+			want, mirror, err := chartstage.ImagesToMirror(repoRoot, instance)
+			if err != nil {
+				t.Fatalf("%v", err)
+			}
+			if mirror == "" {
+				t.Skip("this instance pulls from upstream, so nothing is mirrored")
+			}
+
+			values, err := chartstage.InstanceValues(repoRoot, instance)
+			if err != nil {
+				t.Fatalf("%v", err)
+			}
+			// imageRefs renders both layers, which is where all six appear.
+			rendered := map[string]bool{}
+			for _, ref := range imageRefs(t, instance, values) {
+				rendered[ref.image] = true
+			}
+
+			for _, img := range want {
+				if !rendered[img.Destination] {
+					t.Errorf("images.%s is copied to %q, and no pod pulls that.\n"+
+						"\nThe chart's swgw.mirroredImage and chartstage.mirroredPath disagree, so the copy\n"+
+						"commands produce a path nothing asks for - which reads as ImagePullBackOff on a\n"+
+						"registry that visibly has the image.\n", img.Key, img.Destination)
+				}
+			}
+		})
+	}
+}

@@ -12,8 +12,9 @@
 
 supportContact: platform-team@example.internal
 
-# THE TWO ADDRESSES A BROWSER USES. Two names on one private IP, served by the
-# proxy this team already runs; the chart publishes nothing and that proxy is
+# THE TWO ADDRESSES A BROWSER USES. Two DNS names, ONE private IP, one reverse
+# proxy: it routes on the Host header, which is what virtual hosting is. The
+# chart publishes nothing (expose.type defaults to none) and that proxy is
 # pointed at the `web` and `zitadel-proxy` Services.
 #
 # Two names rather than one with paths, because ZITADEL cannot serve under a path
@@ -22,9 +23,14 @@ access:
   webUrl: https://gateway.lab.example.internal
   identityUrl: https://id.gateway.lab.example.internal
 
+# ONE REGISTRY FOR EVERYTHING. `registry` is where this product's own images are
+# pushed; `mirror` is where the third-party ones were copied to. The same value
+# in both is the normal answer when one registry holds the lot.
+#
+#   task images:mirror -- lab    the copy commands, with the exact paths
 images:
   registry: contoso.azurecr.io
-  mirror: contoso.azurecr.io/docker
+  mirror: contoso.azurecr.io
   # Created by hand: `task flux:secrets -- lab` prints the command.
   pullSecrets: [registry-pull]
 
@@ -50,6 +56,13 @@ identity:
   zitadel: {replicas: 1}
   login: {replicas: 1}
   proxy: {replicas: 1}
+
+# The data plane. Stateless, and every worker shares one machine account, so
+# raising this needs nothing else - no token to issue, distribute or rotate.
+# Raise it for throughput on concurrent transfers; a package is not split across
+# workers, so more workers move more packages rather than one package faster.
+worker:
+  replicas: 3
 
 cerbos:
   replicas: 1

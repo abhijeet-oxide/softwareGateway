@@ -1,0 +1,30 @@
+# What CodeQL is pointed at, over and above the query pack named in the
+# workflow.
+#
+# The workflow asks for `security-extended`, which is the whole point of
+# running CodeQL here rather than a linter. This file exists only to say which
+# TREES that pack should not report on, and every entry below is a tree whose
+# contents are inputs to a test rather than code that ships.
+
+name: "software-gateway"
+
+paths-ignore:
+  # Fixtures the compliance checks are RUN AGAINST, including deliberately
+  # broken ones. `bad-config.yaml` holds an empty database password because a
+  # check has to fail on something; an alert saying so is the fixture working.
+  - internal/compliance/baseline/testdata
+  - internal/compliance/render/testdata
+
+  # Test doubles: a fake Artifactory, a mock identity provider, seed data. They
+  # stand in for a real service inside `go test` and are never built into a
+  # binary or served to anybody, so a finding here names no reachable risk -
+  # `fakeregistry` hashes its fake passwords with SHA-256 precisely because it
+  # is a stub and not a password store.
+  #
+  # THIS ONE ONLY BITES THE .mjs FILES UNDER IT. Path filtering happens as the
+  # extractor walks a tree, and Go is extracted by building it: autobuild
+  # compiles every package whatever this file says, so `fakeregistry`'s
+  # findings still arrive and are dismissed against the alert. Kept anyway -
+  # it is the correct statement of scope, and it does cover `test/mockEntra`.
+  # See docs/design/31-code-scanning.md section 3.
+  - test

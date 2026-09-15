@@ -143,6 +143,18 @@ async function writeShared(path, contents, mode = 0o644) {
   }
 }
 
+/* The host of a URL, lowercased, or '' if it does not parse.
+ *
+ * Returned rather than thrown: every caller is asking "is this that provider?",
+ * and an issuer that does not parse is simply not that provider. */
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
 /* Ask the identity provider whether these credentials are real.
  *
  * # Why the seeder does this rather than leaving it to the first sign-in
@@ -185,7 +197,12 @@ async function verifyIdpCredentials(issuer, clientId, clientSecret) {
   });
   // Entra's v2 endpoint requires a scope; an app's own `.default` needs no
   // consent and no permissions, so it tests authentication and nothing else.
-  if (/login\.microsoftonline\.com/.test(base)) body.set('scope', `${clientId}/.default`);
+  //
+  // Matched on the parsed HOST. Searching the whole URL for the name also
+  // matches `https://attacker.example/login.microsoftonline.com` and
+  // `https://login.microsoftonline.com.attacker.example`, which lets whoever
+  // set the issuer decide what this request carries.
+  if (hostOf(base) === 'login.microsoftonline.com') body.set('scope', `${clientId}/.default`);
 
   try {
     const r = await fetch(tokenEndpoint, {

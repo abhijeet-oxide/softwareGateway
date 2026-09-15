@@ -41,6 +41,7 @@ A cloud-native platform that continuously discovers software packages published 
 | 28 | [Software flow](28-software-flow.md) | Automated ingestion, onboarding and promotion end to end |
 | 29 | [JFrog Build Info](29-jfrog-build-info.md) | Publishing a Build Info document to Artifactory after a completed OCI transfer |
 | 30 | [Continuous delivery](30-continuous-delivery.md) | One `config/` for three runtimes, a Helm chart published to JFrog, Flux reconciling two environments, and which changes cost a restart |
+| 31 | [Code scanning](31-code-scanning.md) | Which scanners gate a merge, which trees they are pointed at, and the findings this repository has classified as noise with the proof |
 
 ## Reading order
 

@@ -563,7 +563,7 @@ func (c *XrayClient) StoredChecksums(ctx context.Context, digests []string) (map
 		return nil, errBatchUnsupported
 	}
 
-	terms := make([]string, 0, len(digests))
+	terms := make([]map[string]string, 0, len(digests))
 	wanted := make(map[string]bool, len(digests))
 	for _, d := range digests {
 		hex := checksumOf(d)
@@ -571,7 +571,7 @@ func (c *XrayClient) StoredChecksums(ctx context.Context, digests []string) (map
 			continue
 		}
 		wanted[hex] = true
-		terms = append(terms, fmt.Sprintf(`{"actual_sha256":%s}`, quoteAQL(hex)))
+		terms = append(terms, map[string]string{"actual_sha256": hex})
 	}
 	if len(terms) == 0 {
 		return map[string]bool{}, nil
@@ -589,9 +589,17 @@ func (c *XrayClient) StoredChecksums(ctx context.Context, digests []string) (map
 	// So the ceiling is generous, and hitting it makes the answer inconclusive
 	// rather than wrong: see below.
 	limit := len(terms) * maxPathsPerChecksum
-	query := fmt.Sprintf(
-		`items.find({"repo":%s,"$or":[%s]}).include("actual_sha256").limit(%d)`,
-		quoteAQL(c.repoKey), strings.Join(terms, ","), limit)
+
+	// The criteria are ENCODED, not pasted together. Assembling this object
+	// from quoted fragments puts the repository key and every checksum one
+	// unescaped quote away from changing which rows the query selects, and a
+	// reader has to prove each fragment is escaped to see that it does not.
+	// One json.Marshal of one value is the proof.
+	criteria, err := json.Marshal(map[string]any{"repo": c.repoKey, "$or": terms})
+	if err != nil {
+		return nil, fmt.Errorf("xray: encoding the AQL criteria: %w", err)
+	}
+	query := fmt.Sprintf(`items.find(%s).include("actual_sha256").limit(%d)`, criteria, limit)
 
 	var out struct {
 		Results []struct {
@@ -645,17 +653,6 @@ func (c *XrayClient) fallBackFromAQL(err error) bool {
 		return true
 	}
 	return false
-}
-
-// quoteAQL renders one JSON string for the query body. AQL is JSON-shaped, and
-// a repository name or checksum containing a quote would otherwise end the
-// string it sits in.
-func quoteAQL(s string) string {
-	encoded, err := json.Marshal(s)
-	if err != nil {
-		return `""`
-	}
-	return string(encoded)
 }
 
 // fallBackToV1 records that this platform has no v2 summary endpoint.

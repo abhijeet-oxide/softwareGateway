@@ -335,13 +335,22 @@ The kit is written for React 18 and 19 alike, and for the strictest
 `tsconfig` of the two (`noUncheckedIndexedAccess` included), so it typechecks
 in either repository unchanged.
 
+**Whatever `vite.config.ts` reaches names its file extension.** `vitePluginBrand.ts`
+is imported by the config, so the config's loader resolves it and the three files
+it pulls in - not Vite. Vite's `configLoader: 'native'`, the planned default,
+uses the runtime's own TypeScript support, which guesses no extension and reads
+no directory index; an adopting repository that drops the extensions gets a
+config that does not load. Everything else in the folder is imported by the app
+and is resolved by Vite, so it is written the ordinary way, and the `.ts` in
+`vitePluginBrand.ts`, `antd.ts` and `brand.ts` is the marker for which is which.
+
 ## Adopting it
 
 1. Copy the folder to `src/uikit/`.
 2. Write `src/brand.ts` exporting a `BrandIdentity`.
-3. In `vite.config.ts`: `import brandPlugin from "./src/uikit/vitePluginBrand"`
-   and `import brand from "./src/brand"`, then add `brandPlugin(brand)` to
-   `plugins`.
+3. In `vite.config.ts`: `import brandPlugin from "./src/uikit/vitePluginBrand.ts"`
+   and `import brand from "./src/brand.ts"`, then add `brandPlugin(brand)` to
+   `plugins`, and set `allowImportingTsExtensions` in `tsconfig.json`.
 4. In the entry point: `import "./uikit/styles.css"` and wrap the app in
    `<ThemeProvider>`.
 

@@ -13,8 +13,8 @@
 // color.ts instead.
 
 import { theme as antdTheme, type ThemeConfig } from "antd";
-import { tokens, type Palette } from "./tokens";
-import type { Density, FontScale, Mode } from "./prefs";
+import { tokens, type Palette } from "./tokens.ts";
+import type { Density, FontScale, Mode } from "./prefs.ts";
 
 /**
  * THE ONE PLACE THE TWO HALVES ARE RECONCILED.

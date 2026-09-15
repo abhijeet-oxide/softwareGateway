@@ -40,6 +40,29 @@ env:
   NODE_VERSION: "22"
   PNPM_VERSION: "12.3.4"
 
+  # THE PROXY, FOR THE RUNNER'S OWN FETCHES. cd.yml has passed these into the
+  # image builds since the start and the Dockerfiles set both cases; nothing
+  # ever passed them to the jobs themselves, so every tool that reaches outside
+  # went direct and was refused at the egress:
+  #
+  #   govulncheck: fetching vulnerabilities:
+  #   Get "https://vuln.go.dev/index/modules.json.gz": Forbidden
+  #
+  # Both cases here too, because the tools disagree about which they read - Go
+  # and the runner take the upper, curl takes the lower - and a proxy that half
+  # the pipeline honours is worse than none.
+  #
+  # Unset, they are empty, which every one of these tools reads as "no proxy".
+  # That is right for this repository and for a fork, and it is why the variables
+  # have to be SET on a runner whose image already carries a proxy: an empty
+  # value here overrides the image's, rather than deferring to it.
+  HTTP_PROXY: ${{ vars.HTTP_PROXY }}
+  HTTPS_PROXY: ${{ vars.HTTPS_PROXY }}
+  NO_PROXY: ${{ vars.NO_PROXY }}
+  http_proxy: ${{ vars.HTTP_PROXY }}
+  https_proxy: ${{ vars.HTTPS_PROXY }}
+  no_proxy: ${{ vars.NO_PROXY }}
+
 jobs:
   # WHICH SCANNERS HAVE ANYTHING TO LOOK AT. CodeQL for Go is 6-8 minutes of
   # database build; a pull request that only edits the chart must not pay it.
@@ -107,6 +130,20 @@ jobs:
 
   # CodeQL: the semantic one. It finds the injection and taint bugs a linter
   # cannot, and it is the expensive one, which is why it is gated above.
+  #
+  # THIS IS THE ADVANCED SETUP, AND A REPOSITORY MAY ONLY HAVE ONE. With CodeQL
+  # default setup switched on in Settings -> Code security, the scan runs to
+  # completion, produces its SARIF, and is refused at the upload:
+  #
+  #   Error: Code Scanning could not process the submitted SARIF file:
+  #   CodeQL analyses from advanced configurations cannot be processed when
+  #   the default setup is enabled
+  #
+  # Nothing in this file can fix that, because it is not about this file. Either
+  # switch default setup off there - this workflow says which queries run, which
+  # trees are test input, and which languages a diff is worth scanning, and
+  # default setup says none of it - or delete this job and keep default setup.
+  # Running both is the one option that does not work.
   codeql:
     name: CodeQL (${{ matrix.language }})
     needs: changes
@@ -129,6 +166,21 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      # THE TYPESCRIPT EXTRACTOR SHELLS OUT TO NODE, and a runner is not
+      # required to have one. ubuntu-latest ships it, which is why this was
+      # missing for as long as the scan ran there; on a self-hosted image the
+      # javascript-typescript leg dies in autobuild with a Java stack trace
+      # whose first line is the whole story:
+      #
+      #   Could not start Node.js. It is required for TypeScript extraction.
+      #
+      # The Go leg gets setup-go above for the same reason. Neither is about
+      # building this project - CodeQL needs the toolchain to read the source.
+      - uses: actions/setup-node@v7
+        if: matrix.language == 'javascript-typescript'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - uses: github/codeql-action/init@v4
         with:
@@ -206,6 +258,16 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      # upload-sarif READS THE WORKFLOW RUN it is uploading for. Without this it
+      # scans, validates the SARIF, fingerprints it and then fails on the last
+      # call it makes:
+      #
+      #   Error: Resource not accessible by integration
+      #   - .../rest/actions/workflow-runs#get-a-workflow-run
+      #
+      # which reads as a broken upload rather than a missing permission. The
+      # codeql job has had it from the start; this one was copied without it.
+      actions: read
     steps:
       - uses: actions/checkout@v7
 

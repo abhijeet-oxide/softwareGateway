@@ -73,6 +73,29 @@ env:
   NODE_VERSION: "22"
   PNPM_VERSION: "12.3.4"
 
+  # THE PROXY, FOR THE RUNNER'S OWN FETCHES. cd.yml has passed these into the
+  # image builds since the start and the Dockerfiles set both cases; nothing
+  # ever passed them to the jobs themselves, so every tool that reaches outside
+  # went direct and was refused at the egress:
+  #
+  #   govulncheck: fetching vulnerabilities:
+  #   Get "https://vuln.go.dev/index/modules.json.gz": Forbidden
+  #
+  # Both cases here too, because the tools disagree about which they read - Go
+  # and the runner take the upper, curl takes the lower - and a proxy that half
+  # the pipeline honours is worse than none.
+  #
+  # Unset, they are empty, which every one of these tools reads as "no proxy".
+  # That is right for this repository and for a fork, and it is why the variables
+  # have to be SET on a runner whose image already carries a proxy: an empty
+  # value here overrides the image's, rather than deferring to it.
+  HTTP_PROXY: ${{ vars.HTTP_PROXY }}
+  HTTPS_PROXY: ${{ vars.HTTPS_PROXY }}
+  NO_PROXY: ${{ vars.NO_PROXY }}
+  http_proxy: ${{ vars.HTTP_PROXY }}
+  https_proxy: ${{ vars.HTTPS_PROXY }}
+  no_proxy: ${{ vars.NO_PROXY }}
+
 jobs:
   changes:
     name: What changed
@@ -161,10 +184,29 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      # THE TYPESCRIPT EXTRACTOR SHELLS OUT TO NODE, and a runner is not
+      # required to have one. ubuntu-latest ships it, which is why this was
+      # missing for as long as the scan ran there; on a self-hosted image the
+      # javascript-typescript leg dies in autobuild with a Java stack trace
+      # whose first line is the whole story:
+      #
+      #   Could not start Node.js. It is required for TypeScript extraction.
+      #
+      # The Go leg gets setup-go above for the same reason. Neither is about
+      # building this project - CodeQL needs the toolchain to read the source.
+      - uses: actions/setup-node@v7
+        if: matrix.language == 'javascript-typescript'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
+          # security-extended over the default pack: the default set is tuned
+          # for noise, and this is a product that moves credentials around.
           queries: security-extended
+          # Which trees are test input rather than shipped code. Named in a
+          # file so the list carries its reasons; see the comments there.
           config-file: ./.github/codeql/codeql-config.yml
 
       - uses: github/codeql-action/autobuild@v4
@@ -173,6 +215,10 @@ jobs:
         with:
           category: /language:${{ matrix.language }}
 
+  # The Go vulnerability database, filtered by call graph: govulncheck reports
+  # only the advisories whose vulnerable function this code actually reaches,
+  # so a finding here is a finding to act on rather than a dependency upgrade
+  # to schedule.
   govulncheck:
     name: govulncheck
     needs: changes
@@ -232,6 +278,16 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      # upload-sarif READS THE WORKFLOW RUN it is uploading for. Without this it
+      # scans, validates the SARIF, fingerprints it and then fails on the last
+      # call it makes:
+      #
+      #   Error: Resource not accessible by integration
+      #   - .../rest/actions/workflow-runs#get-a-workflow-run
+      #
+      # which reads as a broken upload rather than a missing permission. The
+      # codeql job has had it from the start; this one was copied without it.
+      actions: read
     steps:
       - uses: actions/checkout@v7
 
@@ -249,8 +305,28 @@ jobs:
           format: sarif
           output: trivy.sarif
           severity: CRITICAL,HIGH
+          # `severity` ALONE DOES NOT FILTER THE SARIF. The action reports
+          # every severity into the SARIF regardless, so the line above shaped
+          # the console output and nothing that reached the Security tab -
+          # which is how 579 low and 259 medium findings arrived under a
+          # setting that says CRITICAL,HIGH. This makes the filter mean what
+          # it reads as.
           limit-severities-for-sarif: true
+          # THE COMPLIANCE FIXTURES ARE NOT THIS DEPLOYMENT'S MANIFESTS.
+          #
+          # They are broken Kubernetes on purpose - `bad-pdb.yaml`,
+          # `bad-security.yaml`, `bad-rbac.yaml` are what the baseline checks
+          # are RUN AGAINST, and each one fails the check it is named for. A
+          # misconfiguration scanner pointed at them reports every defect they
+          # were written to contain: they produced 1007 of this repository's
+          # 1011 Trivy alerts, and 172 of its 173 Trivy criticals and highs,
+          # burying the four that are about an artifact anybody ships.
+          #
+          # The same trees are excluded from CodeQL for the same reason; see
+          # docs/design/31-code-scanning.md section 3.
           skip-dirs: internal/compliance/baseline/testdata,internal/compliance/render/testdata
+          # Reported, not enforced. Trivy's database updates daily and a new
+          # HIGH in a base image is a scheduled upgrade, not a broken branch.
           exit-code: '0'
 
       - uses: github/codeql-action/upload-sarif@v4
@@ -258,6 +334,21 @@ jobs:
           sarif_file: trivy.sarif
           category: trivy
 
+  # THE ALERT INVENTORY, AS A FILE. Every open code scanning alert, from every
+  # tool that publishes one - CodeQL and Trivy both - with a breakdown by tool
+  # and severity in the job summary and the raw JSON as an artifact.
+  #
+  # Why this exists: the Security tab is the only place that number lives, and
+  # reading it needs a browser and a person. A release review, a reviewer
+  # without repository admin, and anything automated all want the list, and a
+  # screenshot of a tab is not a list.
+  #
+  # MANUAL ONLY, and that is the whole design. It reports what the scanners
+  # have already published, so it has nothing to add to a pull request and must
+  # never cost one a minute. A `workflow_dispatch` run is also the full scan -
+  # the `changes` job only narrows the languages for a pull request, and sets
+  # every one of them for a manual run - so dispatching this workflow scans
+  # everything and then exports what the scan found.
   export:
     name: Export alert inventory
     if: >-

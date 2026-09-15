@@ -43,6 +43,7 @@ Settings -> Secrets and variables -> Actions -> Variables.
 |---|---|---|
 | `RUNNER_LABEL` | all three | **The run fails at startup.** Deliberate: the public files fall back to `ubuntu-latest`, and in a repository with an IP allow list that fallback is a 403 dressed up as a scanner failure. |
 | `TOOL_MIRROR` | ci, cd, security | Task, Helm, kustomize, kubeconform, golangci-lint and gitleaks come from github.com and get.helm.sh, as in the public files. Set it to a base URL and each archive is fetched as `<mirror>/<file name>` - the names are already versioned, so the mirror is one flat directory. |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` | all three | **No proxy for anything the runner fetches.** The jobs reach vuln.go.dev, ghcr.io, the npm registry and a handful of release pages directly, and behind an egress policy that is a `Forbidden` per tool. Set them even if the runner image already carries a proxy: each workflow sets both upper and lower case from these, and an unset variable writes an empty one over the image's. |
 | `NPM_REGISTRY` | ci, cd, security | npm's default registry. Set it and `.github/actions/web-toolchain` writes an npmrc that both npm and pnpm read, so pnpm itself and every package come from the one host. |
 | `SECURITY_CODEQL` | security | CodeQL does not run. It needs Advanced Security **and** egress for the bundle. |
 | `SECURITY_DEPENDENCY_REVIEW` | security | Dependency review does not run. Needs Advanced Security and the dependency graph. |
@@ -51,6 +52,28 @@ Settings -> Secrets and variables -> Actions -> Variables.
 | `SECURITY_PNPM_AUDIT` | security | `pnpm audit` does not run. A pull-through registry mirror often does not serve the audit endpoint. |
 | `SECURITY_ALERT_EXPORT` | security | The alert inventory does not run. It needs the code scanning API, and `gh` and `jq` on the runner. |
 | `TRIVY_DB_REPOSITORY`, `TRIVY_JAVA_DB_REPOSITORY`, `GOVULNDB` | security | Upstream. Set them to internal mirrors. |
+
+### CodeQL is a repository setting before it is a workflow
+
+A repository has **either** CodeQL default setup **or** an advanced setup, never
+both. With default setup on in Settings -> Code security, the job in
+`security.yml` runs to completion and is refused at the upload:
+
+```
+Error: Code Scanning could not process the submitted SARIF file:
+CodeQL analyses from advanced configurations cannot be processed when
+the default setup is enabled
+```
+
+Nothing in either copy of the workflow changes that. Switch default setup off to
+keep the workflow - it is the one that names the query pack, the excluded test
+trees and the languages a diff is worth scanning - or keep default setup and
+leave `SECURITY_CODEQL` unset in the enterprise copy, which skips the job
+instead of failing it.
+
+One more thing a self-hosted image needs: CodeQL's Go extractor reports `The
+file program is required on Linux, but does not appear to be installed`. It is a
+diagnostic rather than a failure, and `file` on the image clears it.
 
 ### The one secret
 

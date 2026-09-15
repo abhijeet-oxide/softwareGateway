@@ -160,7 +160,7 @@ different here":
 | `database.cluster.storage.size`, `.walStorage.size` | the data volume and the write-ahead log volume |
 | `database.cluster.backup.enabled` | continuous WAL archiving |
 | `logLevel.coordinator`, `logLevel.worker` | `debug`, `info`, `warn`, `error` |
-| `identity.sso.enabled` | sign in through the corporate directory |
+| `identity.sso.issuer`, `.clientId`, `.existingSecret` | the corporate directory. The chart's values are placeholders; every instance replaces all three |
 | `supportContact` | who somebody is told to ask when they are refused |
 
 Stating one of those at the chart's default is fine and expected. Stating
@@ -174,7 +174,7 @@ Each is one flag, and each is the only thing that adds a Secret:
 
 | flag | default | what turning it on needs |
 |---|---|---|
-| `identity.sso.enabled` | off in the chart, **on in both shipped instances** | an app registration, and one Secret for its client secret — [entra-app-registration.md](entra-app-registration.md) |
+| `identity.sso.enabled` | **on**, against placeholders | an app registration. Replace `identity.sso.issuer`, `.clientId` and `.existingSecret` in your instance's values file, and create one Secret for the client secret — [entra-app-registration.md](entra-app-registration.md). The chart's defaults render but do not work, and `helm install` says so in its notes |
 | `access.expose.ingress.tls.enabled` | off | two certificate Secrets. Not needed when something in front terminates TLS |
 | `database.cluster.backup.enabled` | off | object storage and its credentials |
 | `networkPolicy.enabled` | off | nothing |
@@ -417,7 +417,7 @@ CORS middleware.
 
 | you want to | change |
 |---|---|
-| deploy a new release | nothing — the pipeline moves the pointer on merge |
+| deploy a new release | nothing — the pipeline opens a pointer pull request; merge it |
 | pin or roll back | `task flux:version -- myinstance 1.4.2`, in a pull request |
 | resize, retarget, turn on SSO | `values/values.yaml` |
 | add a product, a person, a policy | `config/` — nothing restarts |
@@ -431,6 +431,34 @@ A values edit is applied at the next reconciliation (5 minutes), or at once:
 ```sh
 flux -n swgw-lab reconcile helmrelease software-gateway --with-source
 ```
+
+---
+
+## Pointing the pipeline at your registry
+
+CD publishes nothing until these four are set, under **Settings → Secrets and
+variables → Actions**. Until they are, it computes the version, writes a summary
+naming what is missing, and tags nothing — so the version stays available for
+the run that does publish it.
+
+| | | |
+|---|---|---|
+| `REGISTRY_HOST` | variable | `contoso.azurecr.io` |
+| `REGISTRY_REPOSITORY` | variable | the repository path inside it |
+| `REGISTRY_USERNAME` | secret | pushes the images and the chart |
+| `REGISTRY_TOKEN` | secret | the same credential Flux and the kubelet pull with |
+
+Optional, all variables: `RUNNER_LABEL` for a self-hosted runner, `GOPROXY` and
+`NPM_REGISTRY` for internal mirrors, `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` for a
+network that needs one.
+
+**Require two checks on `main`: `CI` and `Security`.** Each is an aggregate job
+that always runs and fails if anything beneath it failed, so adding or removing
+a job needs no branch-protection change. Requiring the individual jobs instead
+blocks every pull request that legitimately skipped one.
+
+CD opens the deployment pull request and stops there. It does not merge it and
+does not delete the branch.
 
 ---
 

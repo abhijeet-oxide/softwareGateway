@@ -1,0 +1,265 @@
+# Scanners, kept out of CI on purpose.
+#
+# None of these gate a merge and none of them is fast: CodeQL alone is longer
+# than the whole of CI. Putting them here means a pull request waits on
+# correctness, not on a database build, while the findings still land in the
+# Security tab on every push to main and once a week besides.
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # A weekly run catches advisories published against code nobody has touched.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26"
+  NODE_VERSION: "22"
+  PNPM_VERSION: "12.3.4"
+
+jobs:
+  # WHICH SCANNERS HAVE ANYTHING TO LOOK AT. CodeQL for Go is 6-8 minutes of
+  # database build; a pull request that only edits the chart must not pay it.
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.f.outputs.go }}
+      web: ${{ steps.f.outputs.web }}
+      containers: ${{ steps.f.outputs.containers }}
+      # A JSON array, so a language with nothing to scan costs no runner at all
+      # rather than a job that starts and skips every step.
+      languages: ${{ steps.f.outputs.languages }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: f
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            files="$(git diff --name-only "$BASE"...HEAD)"
+          else
+            files="ALL"
+          fi
+          has() {
+            if [ "$files" = "ALL" ]; then echo true; return; fi
+            if grep -qE "$1" <<<"$files"; then echo true; else echo false; fi
+          }
+
+          go=$(has '^(cmd|internal|pkg|deploy/chartstage|deploy/secretsinv)/|^go\.(mod|sum)$')
+          web=$(has '^web/')
+          actions=$(has '^\.github/')
+
+          langs=""
+          [ "$go" = true ]      && langs="${langs}\"go\","
+          [ "$web" = true ]     && langs="${langs}\"javascript-typescript\","
+          # Workflow analysis: the unpinned action, and the expression
+          # interpolated straight into a `run:` block.
+          [ "$actions" = true ] && langs="${langs}\"actions\","
+
+          {
+            echo "go=$go"
+            echo "web=$web"
+            echo "containers=$(has '^(deploy/build|deploy/web|deploy/certs)/|^go\.(mod|sum)$|^web/pnpm-lock\.yaml$')"
+            echo "languages=[${langs%,}]"
+          } >> "$GITHUB_OUTPUT"
+
+  # CodeQL: the semantic one. It finds the injection and taint bugs a linter
+  # cannot, and it is the expensive one, which is why it is gated above.
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    needs: changes
+    if: needs.changes.outputs.languages != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(needs.changes.outputs.languages) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        if: matrix.language == 'go'
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          # security-extended over the default pack: the default set is tuned
+          # for noise, and this is a product that moves credentials around.
+          queries: security-extended
+
+      - uses: github/codeql-action/autobuild@v4
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
+
+  # The Go vulnerability database, filtered by call graph: govulncheck reports
+  # only the advisories whose vulnerable function this code actually reaches,
+  # so a finding here is a finding to act on rather than a dependency upgrade
+  # to schedule.
+  govulncheck:
+    name: govulncheck
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # The web tier's advisories. pnpm audit rather than npm audit - this project
+  # has no package-lock.json and npm audit would resolve a different tree.
+  #
+  # Advisory data moves independently of this repository, so a new critical in
+  # a transitive dependency must not turn every unrelated pull request red:
+  # the finding is reported, the job is not failed.
+  audit:
+    name: pnpm audit
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Audit
+        working-directory: web
+        run: |
+          pnpm audit --audit-level high --prod | tee "$RUNNER_TEMP/audit.txt" || true
+          {
+            echo "### pnpm audit"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/audit.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Trivy reads the Dockerfiles and the repository tree: base images with known
+  # CVEs, and the misconfigurations (a root user, a missing HEALTHCHECK, a
+  # container with no resource limits) that a Go linter will never see.
+  trivy:
+    name: Trivy
+    needs: changes
+    if: needs.changes.outputs.containers == 'true' || github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: fs
+          scanners: vuln,misconfig,secret
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH
+          # Reported, not enforced. Trivy's database updates daily and a new
+          # HIGH in a base image is a scheduled upgrade, not a broken branch.
+          exit-code: '0'
+
+      - uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
+
+  # A CREDENTIAL IN THE HISTORY IS A CREDENTIAL TO ROTATE, so this one does
+  # fail the build. The rule it enforces is in CLAUDE.md: no credential is ever
+  # a value in this repository; config/secrets/secrets.yaml holds names only.
+  #
+  # The binary rather than gitleaks-action, which requires a paid licence key
+  # for organisation-owned repositories.
+  gitleaks:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The whole history: a secret that was committed and then removed is
+          # still a secret that leaked.
+          fetch-depth: 0
+
+      - name: Scan
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git . --redact --verbose --exit-code 1
+
+  # A dependency that arrives in a pull request is reviewed before it is
+  # merged, not after. Pull requests only - there is no diff to review on a
+  # push to main.
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+          # Copyleft licences would change this product's distribution terms.
+          deny-licenses: AGPL-3.0, GPL-3.0, GPL-2.0
+
+  # The gate. Only the scanners whose findings are actionable on this diff
+  # block a merge; the advisory jobs report and are allowed to be red.
+  security:
+    name: Security
+    if: always()
+    needs: [changes, codeql, gitleaks, dependency-review]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every scanner that ran must have passed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::a security scanner failed - see the Security tab"
+          exit 1
+      - run: echo "Security is green"

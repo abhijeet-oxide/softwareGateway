@@ -1,62 +1,144 @@
+# CI runs ONCE per change and only the jobs the change can break.
+#
+# It used to run three times for one commit - on the branch push, on the pull
+# request, and again on main after the merge - and every job ran every time.
+# Now: pull requests and main only, a new commit cancels the run still going for
+# the old one, and a `changes` job decides which jobs are relevant.
 name: CI
 
 on:
-  push:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  # One run per pull request, one per push to main. Main is never cancelled -
+  # its runs are the record of what is on main - so a queue there drains rather
+  # than being thrown away.
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   GO_VERSION: "1.26"
+  NODE_VERSION: "22"
+  PNPM_VERSION: "12.3.4"
   GODEBUG: http2client=0
 
 jobs:
-  build:
-    name: Application build and tests
-    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
+  # --------------------------------------------------------------- what changed
+  changes:
+    name: What changed
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.f.outputs.go }}
+      web: ${{ steps.f.outputs.web }}
+      deploy: ${{ steps.f.outputs.deploy }}
+      taskfile: ${{ steps.f.outputs.taskfile }}
+      binaries: ${{ steps.f.outputs.binaries }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: f
+        name: Decide which jobs are relevant
+        # Through `env`, not interpolated into the script: a `${{ }}` inside a
+        # `run:` block is a template substitution, so a ref name is shell.
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT" = "pull_request" ]; then
+            base="$BASE"
+          else
+            base="$(git rev-parse HEAD^ 2>/dev/null || true)"
+          fi
+
+          # A workflow change, a first commit, or a base we cannot resolve: run
+          # everything. Guessing narrower is how a change ships untested.
+          if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            files="ALL"
+          else
+            files="$(git diff --name-only "$base" HEAD)"
+          fi
+
+          has() {
+            [ "$files" = "ALL" ] && return 0
+            grep -qE "$1" <<<"$files"
+          }
+
+          # .github always runs everything: a workflow that changed is a workflow
+          # nothing has proved yet.
+          if has '^\.github/'; then
+            files="ALL"
+          fi
+
+          set_out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; echo "$1=$2"; }
+
+          # config/ feeds the Go tests, the chart and the seeder, so it counts
+          # for both.
+          has '(\.go$|^go\.(mod|sum)$|^db/|^config/|^Taskfile\.yml$)' \
+            && set_out go true    || set_out go false
+          has '^web/' \
+            && set_out web true   || set_out web false
+          has '(^deploy/|^config/)' \
+            && set_out deploy true || set_out deploy false
+          has '^Taskfile\.yml$' \
+            && set_out taskfile true || set_out taskfile false
+          # Cross-compiling six targets is slow and only the binaries' own build
+          # can break it.
+          has '(^cmd/|^internal/|^pkg/|^go\.(mod|sum)$)' \
+            && set_out binaries true || set_out binaries false
+
+  # ------------------------------------------------------------------ the code
+  #
+  # BUILD AND TEST ARE TWO JOBS, and nothing embeds the frontend into a binary,
+  # so neither waits on the other. Serially they were the critical path: the
+  # race detector on internal/store's scale tests is minutes on its own, and
+  # the build behind it was minutes of a runner doing nothing.
+  build:
+    name: Build
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.web == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/toolchain
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          task: 'true'
 
-      - name: Install Task CLI
-        run: |
-          for attempt in 1 2 3; do
-            if GOBIN="$RUNNER_TEMP/bin" go install github.com/go-task/task/v3/cmd/task@v3.45.4; then
-              break
-            fi
-            if [ "$attempt" = "3" ]; then
-              exit 1
-            fi
-            echo "Task CLI install failed; retrying ($attempt/3)"
-            sleep 10
-          done
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # pnpm BEFORE node, because setup-node's pnpm cache asks pnpm where its
+      # store is. The other order fails the cache step rather than the build,
+      # which is a confusing way to find out.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
-
-      - name: Install pnpm CLI
-        run: npm install --global pnpm@12.3.4
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Install frontend dependencies
         working-directory: web
         run: pnpm install --frozen-lockfile
+
       - name: Build application
         run: task build
 
       - name: Run Go vet
         run: task vet
-
-      - name: Run automated tests
-        run: task test
 
       - name: Verify built binaries
         run: |
@@ -64,11 +146,103 @@ jobs:
           ./bin/worker --version
           ./bin/transferctl version --client
 
+  test:
+    name: Tests
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          task: 'true'
+
+      - name: Run automated tests
+        run: task test
+
+  lint:
+    name: Go static analysis
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          task: 'true'
+          golangci-lint: 'true'
+
+      - run: task lint
+
+  config:
+    name: Product configuration
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.deploy == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          task: 'true'
+
+      - name: Validate product files
+        run: task validate
+
+      - name: Verify invalid configuration is rejected
+        run: task validate:rejects-broken
+
+  schema:
+    name: Coordinator smoke test
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Start coordinator and verify health endpoints
+        run: |
+          go build -o /tmp/coordinator-ci ./cmd/coordinator
+
+          /tmp/coordinator-ci --config ./config/config.yaml &
+          COORD=$!
+          trap 'kill $COORD 2>/dev/null || true' EXIT
+
+          for i in $(seq 1 40); do
+            if curl -fsS http://localhost:8080/readyz >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.5
+          done
+
+          curl -fsS http://localhost:8080/healthz
+          curl -fsS http://localhost:8080/readyz
+          curl -fsS http://localhost:8080/metrics | grep -q 'softwaregateway_build_info'
+          # Asserts a product was LOADED and serialised, not merely that the
+          # route answers.
+          curl -fsS http://localhost:8080/api/v1/products | grep -q '"productId"'
+          echo "coordinator booted, migrated and served products"
+
   postgres:
     name: PostgreSQL integration tests
-    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    # SQLite does not cover PostgreSQL-specific query behavior.
+    timeout-minutes: 20
+    # SQLite does not cover PostgreSQL-specific query behaviour.
     services:
       postgres:
         image: postgres:16
@@ -84,55 +258,88 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/toolchain
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
-
-      - name: Install Task CLI
-        run: |
-          for attempt in 1 2 3; do
-            if GOBIN="$RUNNER_TEMP/bin" go install github.com/go-task/task/v3/cmd/task@v3.45.4; then
-              break
-            fi
-            if [ "$attempt" = "3" ]; then
-              exit 1
-            fi
-            echo "Task CLI install failed; retrying ($attempt/3)"
-            sleep 10
-          done
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          task: 'true'
 
       - name: Run PostgreSQL test suite
         env:
           TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
         run: task test:postgres
 
-  cross-compile:
-    name: Cross-platform binary build
-    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
+  # ------------------------------------------------------------- the deployment
+  deploy:
+    name: Chart and manifests
+    needs: changes
+    if: needs.changes.outputs.deploy == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/toolchain
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          task: 'true'
+          helm: 'true'
+          kustomize: 'true'
+          kubeconform: 'true'
 
-      - name: Install Task CLI
+      # Helm packages a directory, so stage the shared config into the chart.
+      - name: Stage chart configuration
+        run: task chart:stage
+
+      - name: Lint the chart
+        run: task chart:lint
+
+      # Both layers of every instance, with the one values file Flux puts in a
+      # ConfigMap. The configurations the chart must REFUSE are covered by
+      # TestTheChartRefusesWhatCannotWork, beside the chart, where a renamed
+      # value breaks them in the same commit.
+      - name: Render every instance
         run: |
-          for attempt in 1 2 3; do
-            if GOBIN="$RUNNER_TEMP/bin" go install github.com/go-task/task/v3/cmd/task@v3.45.4; then
-              break
-            fi
-            if [ "$attempt" = "3" ]; then
-              exit 1
-            fi
-            echo "Task CLI install failed; retrying ($attempt/3)"
-            sleep 10
+          set -euo pipefail
+          for instance in $(go run ./deploy/chartstage/cmd/chartstage -instances | awk '{print $1}'); do
+            go run ./deploy/chartstage/cmd/chartstage -values "$instance" > "/tmp/$instance-values.yaml"
+            for layer in database application; do
+              db=false; app=false
+              [ "$layer" = database ] && db=true || app=true
+              helm template swgw deploy/charts/software-gateway \
+                --values "/tmp/$instance-values.yaml" \
+                --set "layers.database=$db" --set "layers.application=$app" \
+                > "/tmp/$instance-$layer.yaml"
+              echo "$instance/$layer: $(grep -c '^kind:' "/tmp/$instance-$layer.yaml") objects"
+            done
           done
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Build every Flux kustomization
+        run: task flux:build
+
+      - name: Validate Kubernetes manifests
+        run: |
+          kubeconform -strict -summary -ignore-missing-schemas \
+            -kubernetes-version 1.29.0 /tmp/lab-application.yaml /tmp/lab-database.yaml
+
+      - name: Deployment invariants
+        run: go test ./deploy/... -count=1
+
+  # --------------------------------------------------------------- portability
+  cross-compile:
+    name: Cross-platform binaries
+    needs: changes
+    # Six targets, and only the binaries' own build can break it. On a pull
+    # request that does not touch them it is four minutes of nothing.
+    if: needs.changes.outputs.binaries == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          task: 'true'
 
       - name: Build Linux, macOS, and Windows binaries
         run: task build:all
@@ -152,42 +359,28 @@ jobs:
               fi
             done
           done
-          if [ "$missing" = "0" ]; then
-            echo "all Windows binaries correctly suffixed"
-          fi
           exit $missing
 
       - uses: actions/upload-artifact@v7
+        if: github.ref == 'refs/heads/main'
         with:
           name: binaries
           path: dist/
           retention-days: 7
 
   portable:
-    name: Taskfile portability validation
-    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
+    name: Taskfile portability
+    needs: changes
+    if: needs.changes.outputs.taskfile == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/toolchain
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
-
-      - name: Install Task CLI
-        run: |
-          for attempt in 1 2 3; do
-            if GOBIN="$RUNNER_TEMP/bin" go install github.com/go-task/task/v3/cmd/task@v3.45.4; then
-              break
-            fi
-            if [ "$attempt" = "3" ]; then
-              exit 1
-            fi
-            echo "Task CLI install failed; retrying ($attempt/3)"
-            sleep 10
-          done
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          task: 'true'
 
       # Run selected tasks with a Windows-like PATH to catch Unix-only commands.
       - name: Validate commands with a restricted PATH
@@ -212,241 +405,20 @@ jobs:
           done
           echo "every task ran with only go, gofmt, git and task on PATH"
 
-  lint:
-    name: Go static analysis
-    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
+  # -------------------------------------------------------------------- the gate
+  ci:
+    # THE ONE REQUIRED CHECK. A skipped job never reports, so making each job
+    # required would block every pull request that legitimately skipped one.
+    # This always runs and fails if anything that DID run failed.
+    name: CI
+    if: always()
+    needs: [changes, build, test, lint, config, schema, postgres, deploy, cross-compile, portable]
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-
-      - name: Install Task CLI
+      - name: Every job that ran must have passed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
-          for attempt in 1 2 3; do
-            if GOBIN="$RUNNER_TEMP/bin" go install github.com/go-task/task/v3/cmd/task@v3.45.4; then
-              break
-            fi
-            if [ "$attempt" = "3" ]; then
-              exit 1
-            fi
-            echo "Task CLI install failed; retrying ($attempt/3)"
-            sleep 10
-          done
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-
-      # v2.13 is the first release whose go directive is 1.26, and golangci-lint
-      # refuses to run when it was built with a Go older than the module targets.
-      - name: Install golangci-lint CLI
-        run: |
-          for attempt in 1 2 3; do
-            if GOBIN="$RUNNER_TEMP/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2; then
-              break
-            fi
-            if [ "$attempt" = "3" ]; then
-              exit 1
-            fi
-            echo "golangci-lint install failed; retrying ($attempt/3)"
-            sleep 10
-          done
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-
-      - name: Run Go static analysis
-        run: task lint
-
-  config:
-    name: Product configuration validation
-    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-
-      - name: Install Task CLI
-        run: |
-          for attempt in 1 2 3; do
-            if GOBIN="$RUNNER_TEMP/bin" go install github.com/go-task/task/v3/cmd/task@v3.45.4; then
-              break
-            fi
-            if [ "$attempt" = "3" ]; then
-              exit 1
-            fi
-            echo "Task CLI install failed; retrying ($attempt/3)"
-            sleep 10
-          done
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-
-      - name: Validate product files
-        run: task validate
-
-      - name: Verify invalid configuration is rejected
-        run: task validate:rejects-broken
-
-  chart:
-    name: Helm and Kubernetes manifest validation
-    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-
-      - name: Install Helm
-        run: |
-          helm_dir="$RUNNER_TEMP/bin"
-          mkdir -p "$helm_dir"
-          curl -fsSL https://get.helm.sh/helm-v3.21.3-linux-amd64.tar.gz \
-            | tar -xz -C "$RUNNER_TEMP" linux-amd64/helm
-          mv "$RUNNER_TEMP/linux-amd64/helm" "$helm_dir/helm"
-          echo "$helm_dir" >> "$GITHUB_PATH"
-          "$helm_dir/helm" version --short
-
-      - name: Install Kustomize
-        run: |
-          mkdir -p "$RUNNER_TEMP/bin"
-          curl -fsSL https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.7.1/kustomize_v5.7.1_linux_amd64.tar.gz \
-            | tar -xz -C "$RUNNER_TEMP/bin" kustomize
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/bin/kustomize" version
-
-      # Helm packages a directory, so stage the shared config into the chart.
-      - name: Stage chart configuration
-        run: go run ./deploy/chartstage/cmd/chartstage
-
-      - name: Lint Helm chart
-        run: |
-          helm lint deploy/charts/software-gateway \
-            --set identity.masterkey.value=0123456789abcdef0123456789abcdef \
-            --set identity.rootPassword.value=lint
-
-      # Render every instance with the one values file Flux will put in a
-      # ConfigMap, both layers, exactly as the two HelmReleases read it.
-      - name: Render every instance
-        run: |
-          set -euo pipefail
-          for instance in $(go run ./deploy/chartstage/cmd/chartstage -instances | awk '{print $1}'); do
-            go run ./deploy/chartstage/cmd/chartstage -values "$instance" > "/tmp/$instance-values.yaml"
-            for layer in database application; do
-              db=false; app=false
-              [ "$layer" = database ] && db=true || app=true
-              helm template swgw deploy/charts/software-gateway \
-                --values "/tmp/$instance-values.yaml" \
-                --set "layers.database=$db" --set "layers.application=$app" \
-                > "/tmp/$instance-$layer.yaml"
-              echo "$instance/$layer: $(grep -c '^kind:' "/tmp/$instance-$layer.yaml") objects"
-            done
-          done
-
-      - name: Build every Flux kustomization
-        run: |
-          set -euo pipefail
-          find deploy/flux -name kustomization.yaml -print0 | while IFS= read -r -d '' k; do
-            d=$(dirname "$k")
-            n=$("$RUNNER_TEMP/bin/kustomize" build "$d" | grep -c '^kind:' || true)
-            echo "$d: $n objects"
-          done
-
-      - name: Validate Kubernetes manifests
-        run: |
-          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
-            | tar -xz -C /tmp kubeconform
-          /tmp/kubeconform -strict -summary -ignore-missing-schemas \
-            -kubernetes-version 1.29.0 /tmp/lab-application.yaml /tmp/lab-database.yaml
-
-      - name: Verify invalid chart configurations are rejected
-        run: |
-          set -euo pipefail
-          fails=0
-          try() {
-            if helm template t deploy/charts/software-gateway "${@:2}" >/dev/null 2>&1; then
-              echo "::error::the chart accepted $1, which cannot work"
-              fails=1
-            else
-              echo "refused: $1"
-            fi
-          }
-          base=(--set identity.masterkey.value=0123456789abcdef0123456789abcdef
-                --set identity.rootPassword.value=r)
-          try "a release that renders neither layer" \
-            "${base[@]}" --set layers.application=false
-          try "a database layer with no cluster to name" \
-            --set layers.application=false --set layers.database=true --set database.cluster.name=
-          try "an external database nobody said where to find" \
-            "${base[@]}" --set database.cluster.name=
-          try "a masterkey that is not 32 bytes" \
-            --set identity.masterkey.value=short --set identity.rootPassword.value=r
-          try "single sign-on with the client secret in values" "${base[@]}" \
-            --set identity.sso.issuer=https://example.com --set identity.sso.clientId=x
-          try "an Ingress routing on an IP literal" "${base[@]}" \
-            --set access.expose.type=ingress --set access.web.host=10.0.0.1
-          try "a node port outside the node port range" "${base[@]}" \
-            --set access.expose.type=nodePort
-          try "a pull secret that no inventory entry produces" "${base[@]}" \
-            --set secrets.backend=vault --set secrets.registryPullSecret.enabled=true \
-            --set secrets.registryPullSecret.from=nothing-declares-this
-          try "an internal registry with no mirror for the third-party images" \
-            "${base[@]}" --set image.registry=registry.example.internal
-          exit $fails
-
-  release:
-    name: Release version calculation
-    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # The algorithm asks which release first contained a commit, which a
-          # shallow clone answers wrongly rather than failing.
-          fetch-depth: 0
-
-      - name: Calculate release version
-        env:
-          CHANNEL: main
-        run: bash .github/scripts/version.sh
-
-  schema:
-    name: Coordinator smoke test
-    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-
-      - name: Start coordinator and verify health endpoints
-        run: |
-          go build -o /tmp/coordinator-ci ./cmd/coordinator
-
-          /tmp/coordinator-ci --config ./config/config.yaml &
-          COORD=$!
-          trap 'kill $COORD 2>/dev/null || true' EXIT
-
-          for i in $(seq 1 40); do
-            if curl -fsS http://localhost:8080/readyz >/dev/null 2>&1; then
-              break
-            fi
-            sleep 0.5
-          done
-
-          curl -fsS http://localhost:8080/healthz
-          curl -fsS http://localhost:8080/readyz
-          curl -fsS http://localhost:8080/metrics | grep -q 'softwaregateway_build_info'
-          # Asserts a product was actually LOADED and serialised, not merely
-          # that the route answers. The old assertion looked for 'reference',
-          # a field this response no longer carries, so it could not pass on
-          # any input - the endpoint returns name/productId/sources/targets.
-          curl -fsS http://localhost:8080/api/v1/products | grep -q '"productId"'
-          echo "coordinator booted, migrated and served products"
+          echo "::error::a CI job failed or was cancelled"
+          exit 1
+      - run: echo "CI is green"

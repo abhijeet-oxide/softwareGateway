@@ -39,6 +39,15 @@ WHAT A CHANGE COSTS
 SINGLE SIGN-ON IS NOT CONFIGURED. Anybody in config/users/users.yaml signs in
 with the password in that file, which is a local and evaluation arrangement. Set
 identity.sso.enabled before this serves anyone real.
+{{- else if and .Values.identity.enabled (regexMatch "example\\.(com|internal|org)" .Values.identity.sso.issuer) }}
+
+SINGLE SIGN-ON IS STILL ON ITS PLACEHOLDERS. identity.sso.issuer is
+{{ .Values.identity.sso.issuer }}, which is not a directory, so the sign-in
+screen redirects to nothing. Replace issuer, clientId and existingSecret in this
+instance's values file, and create the Secret:
+
+  kubectl -n {{ .Release.Namespace }} create secret generic {{ .Values.identity.sso.existingSecret }} \
+    --from-literal={{ .Values.identity.sso.clientSecretKey }}=<the client secret>
 {{- end }}
 {{- end }}
 {{- if .Values.layers.database }}

@@ -1,0 +1,91 @@
+name: Toolchain
+description: >-
+  Go, and whichever of Task, Helm, kustomize, kubeconform and golangci-lint the
+  job asks for. Released binaries rather than `go install`, because compiling
+  golangci-lint from source costs about two minutes per job and this is eight
+  jobs.
+
+inputs:
+  go-version:
+    description: The Go toolchain
+    required: true
+  task:
+    description: Install the Task CLI
+    default: 'false'
+  helm:
+    default: 'false'
+  kustomize:
+    default: 'false'
+  kubeconform:
+    default: 'false'
+  golangci-lint:
+    description: >-
+      Install golangci-lint. It refuses to run when built with a Go older than
+      go.mod targets, so this version and GO_VERSION move together.
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v7
+      with:
+        go-version: ${{ inputs.go-version }}
+        cache: true
+
+    - name: Install tools
+      shell: bash
+      env:
+        TASK_VERSION: "3.45.4"
+        HELM_VERSION: "3.21.3"
+        KUSTOMIZE_VERSION: "5.7.1"
+        KUBECONFORM_VERSION: "0.6.7"
+        GOLANGCI_VERSION: "2.13.2"
+      run: |
+        set -euo pipefail
+        bin="$RUNNER_TEMP/bin"
+        mkdir -p "$bin"
+        echo "$bin" >> "$GITHUB_PATH"
+
+        # Three attempts each: a registry hiccup must not fail a build, and a
+        # download that is genuinely gone must not retry forever.
+        fetch() {
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 2 --retry-delay 2 "$1" -o "$2"; then
+              return 0
+            fi
+            echo "download failed ($attempt/3): $1"
+            sleep 5
+          done
+          echo "::error::could not download $1"
+          return 1
+        }
+
+        if [ "${{ inputs.task }}" = "true" ]; then
+          fetch "https://github.com/go-task/task/releases/download/v${TASK_VERSION}/task_linux_amd64.tar.gz" /tmp/task.tgz
+          tar -xzf /tmp/task.tgz -C "$bin" task
+        fi
+
+        if [ "${{ inputs.helm }}" = "true" ]; then
+          fetch "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" /tmp/helm.tgz
+          tar -xzf /tmp/helm.tgz -C /tmp linux-amd64/helm
+          mv /tmp/linux-amd64/helm "$bin/helm"
+        fi
+
+        if [ "${{ inputs.kustomize }}" = "true" ]; then
+          fetch "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" /tmp/kustomize.tgz
+          tar -xzf /tmp/kustomize.tgz -C "$bin" kustomize
+        fi
+
+        if [ "${{ inputs.kubeconform }}" = "true" ]; then
+          fetch "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" /tmp/kubeconform.tgz
+          tar -xzf /tmp/kubeconform.tgz -C "$bin" kubeconform
+        fi
+
+        if [ "${{ inputs.golangci-lint }}" = "true" ]; then
+          fetch "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_VERSION}/golangci-lint-${GOLANGCI_VERSION}-linux-amd64.tar.gz" /tmp/lint.tgz
+          tar -xzf /tmp/lint.tgz -C /tmp "golangci-lint-${GOLANGCI_VERSION}-linux-amd64/golangci-lint"
+          mv "/tmp/golangci-lint-${GOLANGCI_VERSION}-linux-amd64/golangci-lint" "$bin/golangci-lint"
+        fi
+
+        chmod +x "$bin"/* 2>/dev/null || true
+        ls "$bin"

@@ -1,5 +1,5 @@
 # CD builds and publishes one versioned chart and its images. Flux deploys the
-# chart after this workflow updates the environment pointer in Git.
+# chart after the pointer PR this workflow opens is merged by a person.
 name: CD
 
 on:
@@ -25,8 +25,8 @@ permissions:
 env:
   GO_VERSION: "1.26"
   GODEBUG: http2client=0
-  # The registry this product publishes to. Set these three repository
-  # variables to point the pipeline at your own Artifactory, ACR or Harbor.
+  # The registry this product publishes to. Set these repository variables to
+  # point the pipeline at your own Artifactory, ACR or Harbor.
   REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
   REGISTRY_URL: https://${{ vars.REGISTRY_HOST }}
   REGISTRY_REPOSITORY: ${{ vars.REGISTRY_REPOSITORY }}
@@ -37,11 +37,13 @@ jobs:
     name: Decide the version
     # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 10
     outputs:
       chart_version: ${{ steps.v.outputs.chart_version }}
       image_version: ${{ steps.v.outputs.image_version }}
       images_changed: ${{ steps.v.outputs.images_changed }}
       should_release: ${{ steps.v.outputs.should_release }}
+      configured: ${{ steps.registry.outputs.configured }}
       tag: ${{ steps.v.outputs.tag }}
       instance: ${{ steps.env.outputs.name }}
     steps:
@@ -51,11 +53,42 @@ jobs:
           fetch-depth: 0
 
       - id: env
+        env:
+          REF: ${{ github.ref_name }}
         run: |
-          case "${{ github.ref_name }}" in
+          case "$REF" in
             main) echo "name=lab" >> "$GITHUB_OUTPUT" ;;
             *)    echo "::error::CD runs on main only"; exit 1 ;;
           esac
+
+      # A FORK, OR A REPOSITORY NOBODY HAS POINTED AT A REGISTRY YET, has no
+      # REGISTRY_* variables. Publishing then fails inside docker/login-action
+      # with "Username and password required", which reads like a broken
+      # pipeline rather than an unconfigured one. Detect it here and skip the
+      # publishing jobs with an explanation instead.
+      - id: registry
+        env:
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          missing=()
+          [ -n "${REGISTRY_HOST:-}" ]       || missing+=("vars.REGISTRY_HOST")
+          [ -n "${REGISTRY_REPOSITORY:-}" ] || missing+=("vars.REGISTRY_REPOSITORY")
+          [ -n "${REGISTRY_USERNAME:-}" ]   || missing+=("secrets.REGISTRY_USERNAME")
+          [ -n "${REGISTRY_TOKEN:-}" ]      || missing+=("secrets.REGISTRY_TOKEN")
+          if [ ${#missing[@]} -eq 0 ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "configured=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Publishing skipped - no registry configured"
+            echo
+            echo "CD computed the version but published nothing. Set these in"
+            echo "**Settings -> Secrets and variables -> Actions** and re-run:"
+            echo
+            for m in "${missing[@]}"; do echo "- \`${m}\`"; done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - id: v
         env:
@@ -67,13 +100,19 @@ jobs:
       # cancelled matrix sibling) must never leave this version un-tagged -
       # otherwise the next run recomputes the exact same version from git
       # tags alone and collides with the image this run already pushed.
+      #
+      # Nothing is published when the registry is unconfigured, so nothing is
+      # reserved either: the version stays available for the run that does.
       - name: Reserve the release tag
-        if: steps.v.outputs.should_release == 'true'
+        if: steps.v.outputs.should_release == 'true' && steps.registry.outputs.configured == 'true'
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+          CHART_VERSION: ${{ steps.v.outputs.chart_version }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.v.outputs.tag }}" -m "${{ steps.v.outputs.chart_version }}"
-          git push origin "${{ steps.v.outputs.tag }}"
+          git tag -a "$TAG" -m "$CHART_VERSION"
+          git push origin "$TAG"
 
   # ----------------------------------------------------------------- 2. images
   #
@@ -81,9 +120,13 @@ jobs:
   images:
     name: ${{ matrix.component }} image
     needs: version
-    if: needs.version.outputs.should_release == 'true' && needs.version.outputs.images_changed == 'true'
+    if: >-
+      needs.version.outputs.should_release == 'true'
+      && needs.version.outputs.configured == 'true'
+      && needs.version.outputs.images_changed == 'true'
     # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 45
     strategy:
       fail-fast: true
       matrix:
@@ -135,10 +178,13 @@ jobs:
 
       # Image tags are immutable; fail on collisions instead of overwriting.
       - name: The tag must not already exist
+        env:
+          COMPONENT: ${{ matrix.component }}
+          IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
         run: |
           registry="${REGISTRY_URL#https://}"
           registry="${registry#http://}"
-          ref="${registry}/${REGISTRY_REPOSITORY}/software-gateway-${{ matrix.component }}:${{ needs.version.outputs.image_version }}"
+          ref="${registry}/${REGISTRY_REPOSITORY}/software-gateway-${COMPONENT}:${IMAGE_VERSION}"
           if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
             echo "::error::$ref already exists. An image tag is written once."
             echo "::error::This means a release tag was deleted and recreated, or two runs raced."
@@ -153,6 +199,11 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: ${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_REPOSITORY }}/software-gateway-${{ matrix.component }}:${{ needs.version.outputs.image_version }}
+          # A layer cache in the registry, keyed per component. The Go and pnpm
+          # dependency layers are the expensive ones and they change rarely, so
+          # a release that touches one package rebuilds one layer.
+          cache-from: type=registry,ref=${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_REPOSITORY }}/software-gateway-${{ matrix.component }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_REPOSITORY }}/software-gateway-${{ matrix.component }}:buildcache,mode=max
           build-args: |
             VERSION=${{ needs.version.outputs.image_version }}
             COMMIT=${{ github.sha }}
@@ -171,28 +222,24 @@ jobs:
     name: Package and publish the chart
     needs: [version, images]
     # Run even when the images job is skipped for a configuration-only release.
-    if: always() && needs.version.result == 'success' && needs.version.outputs.should_release == 'true' && (needs.images.result == 'success' || needs.images.result == 'skipped')
+    if: >-
+      always()
+      && needs.version.result == 'success'
+      && needs.version.outputs.should_release == 'true'
+      && needs.version.outputs.configured == 'true'
+      && (needs.images.result == 'success' || needs.images.result == 'skipped')
     # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
     outputs:
       chart_version: ${{ needs.version.outputs.chart_version }}
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/toolchain
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
-
-      - name: Install Helm
-        run: |
-          helm_dir="$RUNNER_TEMP/bin"
-          mkdir -p "$helm_dir"
-          curl -fsSL https://get.helm.sh/helm-v3.21.3-linux-amd64.tar.gz \
-            | tar -xz -C "$RUNNER_TEMP" linux-amd64/helm
-          mv "$RUNNER_TEMP/linux-amd64/helm" "$helm_dir/helm"
-          echo "$helm_dir" >> "$GITHUB_PATH"
-          "$helm_dir/helm" version --short
+          helm: 'true'
 
       # Helm packages a directory, so stage the shared config into the chart.
       - name: Stage config/ into the chart
@@ -211,55 +258,75 @@ jobs:
         run: |
           set -euo pipefail
           for instance in $(go run ./deploy/chartstage/cmd/chartstage -instances | awk '{print $1}'); do
-            go run ./deploy/chartstage/cmd/chartstage -values "$instance" > "/tmp/$instance-values.yaml"
+            go run ./deploy/chartstage/cmd/chartstage -values "$instance" > "$RUNNER_TEMP/$instance-values.yaml"
             for layer in database application; do
               db=false; app=false
               [ "$layer" = database ] && db=true || app=true
               helm template swgw deploy/charts/software-gateway \
-                --values "/tmp/$instance-values.yaml" \
+                --values "$RUNNER_TEMP/$instance-values.yaml" \
                 --set "layers.database=$db" --set "layers.application=$app" \
-                > "/tmp/$instance-$layer.yaml"
-              echo "$instance/$layer: $(grep -c '^kind:' "/tmp/$instance-$layer.yaml") objects"
+                > "$RUNNER_TEMP/$instance-$layer.yaml"
+              echo "$instance/$layer: $(grep -c '^kind:' "$RUNNER_TEMP/$instance-$layer.yaml") objects"
             done
           done
 
       - name: Package
+        env:
+          CHART_VERSION: ${{ needs.version.outputs.chart_version }}
+          IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
         run: |
           helm package deploy/charts/software-gateway \
-            --version "${{ needs.version.outputs.chart_version }}" \
-            --app-version "${{ needs.version.outputs.image_version }}" \
-            --destination /tmp/chart
-          ls -l /tmp/chart
+            --version "$CHART_VERSION" \
+            --app-version "$IMAGE_VERSION" \
+            --destination "$RUNNER_TEMP/chart"
+          ls -l "$RUNNER_TEMP/chart"
 
       - name: Publish
+        env:
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          CHART_VERSION: ${{ needs.version.outputs.chart_version }}
         run: |
           registry="${REGISTRY_URL#https://}"
           registry="${registry#http://}"
-          helm registry login "$registry" \
-            --username "${{ secrets.REGISTRY_USERNAME }}" \
-            --password "${{ secrets.REGISTRY_TOKEN }}"
-          helm push "/tmp/chart/software-gateway-${{ needs.version.outputs.chart_version }}.tgz" \
+          # On stdin, so the token never appears in a process listing.
+          helm registry login "$registry" --username "$REGISTRY_USERNAME" --password-stdin <<<"$REGISTRY_TOKEN"
+          helm push "$RUNNER_TEMP/chart/software-gateway-${CHART_VERSION}.tgz" \
             "oci://${registry}/${REGISTRY_REPOSITORY}"
 
   # ---------------------------------------------------------------- 4. promote
   #
-  # Deployment is a Git pointer update; Flux performs the cluster reconciliation.
+  # Deployment is a Git pointer update; Flux performs the cluster reconciliation
+  # once a person merges the PR this job opens.
   promote:
     name: Point ${{ needs.version.outputs.instance }} at it
     needs: [version, chart]
-    if: always() && needs.version.result == 'success' && needs.version.outputs.should_release == 'true' && needs.chart.result == 'success'
+    if: >-
+      always()
+      && needs.version.result == 'success'
+      && needs.version.outputs.should_release == 'true'
+      && needs.chart.result == 'success'
     # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # main is rule-protected ("Changes must be made through a pull
-      # request"), so the pointer update goes out on a side branch and merges
-      # in through a PR instead of a direct push.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # main is rule-protected ("Changes must be made through a pull request"),
+      # so the pointer update goes out on a side branch and a person merges it.
+      # This job neither merges the PR nor deletes the branch afterwards: both
+      # are forbidden by policy here, and the token has no permission for
+      # either.
       - name: Move the pointer
+        id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INSTANCE: ${{ needs.version.outputs.instance }}
@@ -278,6 +345,15 @@ jobs:
           go run ./deploy/chartstage/cmd/chartstage -instance "$INSTANCE" -set-version "$CHART_VERSION"
           file="deploy/flux/instances/${INSTANCE}/release/kustomization.yaml"
 
+          # NOTHING TO SAY. chartstage is idempotent, so a re-run against a
+          # version the instance already points at leaves the tree clean. An
+          # empty commit and an empty PR are noise a reviewer has to read.
+          if git diff --quiet -- deploy/flux; then
+            echo "opened=false" >> "$GITHUB_OUTPUT"
+            echo "${INSTANCE} already points at ${CHART_VERSION}; no PR opened"
+            exit 0
+          fi
+
           if [ "$IMAGES_CHANGED" = "true" ]; then
             image_note="New images were built and pushed for this release (tag \`${IMAGE_VERSION}\`)."
           else
@@ -288,7 +364,7 @@ jobs:
           ## What this PR does
           Points **${INSTANCE}** at release **${CHART_VERSION}** (previously \`${previous_version}\`).
 
-          This repoints \`${file}\` at \`deploy/flux/software/patch/${CHART_VERSION}\`. [Flux](https://fluxcd.io/) picks up the change and applies it to the cluster automatically - no manual deployment step is needed.
+          This repoints \`${file}\` at \`deploy/flux/software/patch/${CHART_VERSION}\`. [Flux](https://fluxcd.io/) picks up the change once this PR is merged and applies it to the cluster - no manual deployment step is needed.
 
           | | |
           |---|---|
@@ -301,7 +377,7 @@ jobs:
 
           ${image_note}
 
-          Opened automatically by the CD pipeline; no cluster credential was used to produce it.
+          Opened automatically by the CD pipeline; no cluster credential was used to produce it. **A person merges this** - the pipeline does not, and does not delete the branch.
           EOF
           )
 
@@ -321,36 +397,30 @@ jobs:
             --title "deploy(${INSTANCE}): ${previous_version} -> ${CHART_VERSION}" \
             --body "$body")
 
-          # Auto-merge needs a repo setting this token cannot flip, so poll for
-          # mergeability ourselves instead: the ruleset (status checks on this
-          # PR) is never satisfied the instant it opens.
-          for _ in $(seq 1 120); do
-            state="$(gh pr view "$pr_url" --json mergeStateStatus --jq .mergeStateStatus)"
-            case "$state" in
-              CLEAN|HAS_HOOKS)
-                gh pr merge "$pr_url" --squash --delete-branch
-                exit 0
-                ;;
-              BEHIND|BLOCKED|UNKNOWN)
-                sleep 15
-                ;;
-              *)
-                echo "::error::PR $pr_url is '$state' and cannot become mergeable automatically"
-                exit 1
-                ;;
-            esac
-          done
-          echo "::error::PR $pr_url did not become mergeable in time"
-          exit 1
+          echo "opened=true" >> "$GITHUB_OUTPUT"
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
 
       - name: Summary
+        env:
+          OPENED: ${{ steps.pr.outputs.opened }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          INSTANCE: ${{ needs.version.outputs.instance }}
+          CHART_VERSION: ${{ needs.version.outputs.chart_version }}
+          IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
         run: |
           {
-            echo "### Deployed to ${{ needs.version.outputs.instance }}"
+            echo "### Released ${CHART_VERSION}"
             echo
-            echo "- chart \`${{ needs.version.outputs.chart_version }}\`"
-            echo "- images \`${{ needs.version.outputs.image_version }}\`"
-            echo "- pointer \`deploy/flux/instances/${{ needs.version.outputs.instance }}/release/kustomization.yaml\`"
+            echo "- chart \`${CHART_VERSION}\`"
+            echo "- images \`${IMAGE_VERSION}\`"
+            if [ "$OPENED" = "true" ]; then
+              echo "- pointer PR for **${INSTANCE}**: ${PR_URL}"
+              echo
+              echo "Merge that PR to deploy. Flux applies it within a minute."
+            else
+              echo
+              echo "${INSTANCE} already pointed at this version; no PR was opened."
+            fi
             echo
-            echo "Flux applies it within a minute. Nothing here touched a cluster."
+            echo "Nothing here touched a cluster."
           } >> "$GITHUB_STEP_SUMMARY"

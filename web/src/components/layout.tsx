@@ -653,7 +653,7 @@ export function SavedBreakdown({
       open={open}
       onOpenChange={setOpen}
       title="Already at the destination"
-      styles={{ body: { maxHeight: 420, overflow: 'auto' } }}
+      styles={{ content: { maxHeight: 420, overflow: 'auto' } }}
       content={
         <Space
           direction="vertical"

@@ -1,3 +1,9 @@
+# MAJORS ARRIVE ALONE. Grouping everything into one pull request per ecosystem
+# is what let TypeScript 7, antd 6 and vite 8 land together: three unrelated
+# breaking changes in one red build, and no way to bisect them.
+#
+# So patches and minors are grouped - they are the boring ones and one pull
+# request a week is right for them - and every major gets its own.
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -6,12 +12,33 @@ updates:
     groups:
       go:
         patterns: ["*"]
+        update-types: [minor, patch]
+
   - package-ecosystem: npm
     directory: /web
     schedule: {interval: weekly}
     groups:
       web:
         patterns: ["*"]
+        update-types: [minor, patch]
+
+  # Pinned by SHA or tag in the workflows; an unmaintained action is a supply
+  # chain risk whether or not it has a CVE.
   - package-ecosystem: github-actions
     directory: /
-    schedule: {interval: monthly}
+    schedule: {interval: weekly}
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # Base images. deploy/build holds the Dockerfiles the pipeline builds from,
+  # and a base image with a known CVE is the finding Trivy reports first.
+  - package-ecosystem: docker
+    directories:
+      - /deploy/build
+    schedule: {interval: weekly}
+    groups:
+      images:
+        patterns: ["*"]
+        update-types: [minor, patch]

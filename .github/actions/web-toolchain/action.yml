@@ -1,11 +1,11 @@
 name: Web toolchain
 description: >-
-  Node, pnpm and a warm pnpm store. pnpm arrives through npm rather than
-  pnpm/action-setup: the organisation admits actions from GitHub, from the
-  enterprise and from verified Marketplace publishers only, and a third-party
-  setup action is none of those. Installing it here also keeps one rule for the
-  package manager - deploy/build/Dockerfile.web installs pnpm exactly this way,
-  and for the same reasons.
+  Node, pnpm, an npm registry that may need a credential, and a warm pnpm store.
+  pnpm arrives through npm rather than pnpm/action-setup: the organisation
+  admits actions from GitHub, from the enterprise and from verified Marketplace
+  publishers only, and a third-party setup action is none of those. Installing
+  it here also keeps one rule for the package manager - deploy/build/Dockerfile.web
+  installs pnpm exactly this way, and for the same reasons.
 
 inputs:
   node-version:
@@ -21,9 +21,16 @@ inputs:
     default: web/pnpm-lock.yaml
   registry:
     description: >-
-      An npm registry to install pnpm from. Empty leaves the runner's own npm
-      configuration in charge, which is what a self-hosted runner behind a
-      proxy already has right.
+      The npm registry pnpm and every package come from. Empty leaves the
+      runner's own npm configuration in charge, which is what a self-hosted
+      runner behind a proxy already has right.
+    default: ''
+  token:
+    description: >-
+      A credential for that registry, from `secrets`, never a literal. Empty
+      reads it anonymously. Requires `registry`: a token alone would be written
+      against whatever registry the runner happens to default to, which is how
+      a credential for an internal host ends up in a request to a public one.
     default: ''
 
 runs:
@@ -36,22 +43,84 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
 
+    # ONE FILE, READ BY BOTH TOOLS AND BY EVERY LATER STEP. npm installs pnpm
+    # from it and pnpm installs the packages from it, so the registry is
+    # configured once rather than passed as a flag to each command that might
+    # need it - and `pnpm install` in the job's own steps is one of those.
+    - name: Configure the npm registry
+      shell: bash
+      env:
+        NPM_REGISTRY: ${{ inputs.registry }}
+        NPM_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "${NPM_REGISTRY:-}" ]; then
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            echo "::error::a registry token was given with no registry. Pass both, or neither."
+            exit 1
+          fi
+          echo "no registry configured; the runner's own npm configuration stands"
+          exit 0
+        fi
+
+        # Masked before it can be written anywhere. A secret passed through
+        # `secrets.*` is masked already; one that reached this input any other
+        # way is not, and the redaction is what makes that survivable.
+        if [ -n "${NPM_TOKEN:-}" ]; then
+          echo "::add-mask::$NPM_TOKEN"
+        fi
+
+        # The auth key is the registry URL with its scheme removed and exactly
+        # one trailing slash - npm's own "nerf dart". The trailing slash is not
+        # cosmetic: `//host/api/npm/npm:_authToken` does not match a registry
+        # configured as `https://host/api/npm/npm/`, and the failure is a 401
+        # on every package rather than anything about the token being wrong.
+        key="${NPM_REGISTRY%/}/"
+        key="${key#http://}"
+        key="${key#https://}"
+        key="//$key"
+
+        # RUNNER_TEMP, not the home directory. A self-hosted runner's HOME
+        # outlives the job, so an ~/.npmrc written here would hand this
+        # credential to every later job on that machine, including other
+        # repositories'. The runner clears RUNNER_TEMP between jobs.
+        #
+        # Named apart from cd.yml's `$RUNNER_TEMP/npmrc`, which is the file it
+        # mounts into the web image build as a secret. Two credential files
+        # with one name is a swap nothing reports.
+        npmrc="$RUNNER_TEMP/npmrc-web-toolchain"
+        umask 077
+        {
+          echo "registry=$NPM_REGISTRY"
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            echo "${key}:_authToken=$NPM_TOKEN"
+            echo "always-auth=true"
+          fi
+        } > "$npmrc"
+
+        # Both tools read this, so the setting outlives this action and covers
+        # the `pnpm install` the calling job runs for itself.
+        echo "NPM_CONFIG_USERCONFIG=$npmrc" >> "$GITHUB_ENV"
+
+        if [ -n "${NPM_TOKEN:-}" ]; then
+          echo "registry $NPM_REGISTRY, authenticated as $key"
+        else
+          echo "registry $NPM_REGISTRY, anonymous"
+        fi
+
     # corepack is the other way to do this and it is the wrong one here: it
     # resolves pnpm against registry.npmjs.org directly, honouring neither the
     # configured registry nor the proxy variables, so behind a proxy it times
-    # out before a single dependency is fetched. npm honours both.
+    # out before a single dependency is fetched. npm honours both - and reads
+    # the file written above, which is why no --registry flag appears here.
     - name: Install pnpm
       shell: bash
       env:
         PNPM_VERSION: ${{ inputs.pnpm-version }}
-        NPM_REGISTRY: ${{ inputs.registry }}
       run: |
         set -euo pipefail
-        if [ -n "$NPM_REGISTRY" ]; then
-          npm install --global --registry="$NPM_REGISTRY" "pnpm@$PNPM_VERSION"
-        else
-          npm install --global "pnpm@$PNPM_VERSION"
-        fi
+        npm install --global "pnpm@$PNPM_VERSION"
         pnpm --version
 
     - name: Locate the pnpm store

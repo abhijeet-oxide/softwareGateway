@@ -130,7 +130,7 @@ task images:mirror -- myinstance
 
 ```
 crane copy ghcr.io/zitadel/zitadel:v4.17.3   contoso.azurecr.io/zitadel/zitadel:v4.17.3
-crane copy nginx:1.27.5-alpine               contoso.azurecr.io/nginx:1.27.5-alpine
+crane copy nginx:1.31.5-alpine               contoso.azurecr.io/nginx:1.31.5-alpine
 crane copy cerbos/cerbos:0.55.0              contoso.azurecr.io/cerbos/cerbos:0.55.0
 crane copy node:22.23.2-alpine               contoso.azurecr.io/node:22.23.2-alpine
 crane copy ghcr.io/cloudnative-pg/postgresql:16.10 \

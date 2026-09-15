@@ -65,7 +65,7 @@ runs:
           echo "::error::a module mirror token was given with no username. Pass both, or neither."
           exit 1
         fi
-        echo "::add-mask::$GO_TOKEN"
+        echo "::add-mask::$GOPROXY_TOKEN"
 
         # Every host the Go fetches could reach, from the URLs already
         # configured. GOPROXY is a list separated by "," or "|"; `direct` and
@@ -95,8 +95,8 @@ runs:
           esac
           {
             echo "machine $host"
-            echo "  login $GO_USERNAME"
-            echo "  password $GO_TOKEN"
+            echo "  login $GOPROXY_USERNAME"
+            echo "  password $GOPROXY_TOKEN"
           } >> "$netrc"
           wrote="$wrote $host"
         done

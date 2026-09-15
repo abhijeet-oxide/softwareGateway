@@ -1330,3 +1330,189 @@ func TestEveryBuildArgIsAKeyValue(t *testing.T) {
 		t.Fatal("found no build-args blocks - either the image builds moved, or this test is looking in the wrong place")
 	}
 }
+
+// TestNoRunBlockReadsAnUnguardedVariable catches the rename that leaves one
+// reference behind.
+//
+// Every script here opens `set -euo pipefail`, so `-u` turns a name nothing
+// ever set into an immediate failure:
+//
+//	.../ec5c6093-....sh: line 11: GO_TOKEN: unbound variable
+//	Error: Process completed with exit code 1.
+//
+// That is what a half-finished rename looks like from the outside, and it is
+// invisible here: the YAML is valid, actionlint is silent, and shellcheck says
+// nothing either unless every optional check is on, because an ALL_CAPS name is
+// usually an environment variable and usually fine.
+//
+// The rule is deliberately loose. A variable that the script assigns, that the
+// step declares in `env`, or that the runner always provides is fine. Anything
+// else must appear in guarded form - `${NAME:-}` - AT LEAST ONCE: a name the
+// script is prepared to find empty is a name somebody thought about, and a bare
+// use after that guard is control flow this test has no business reading. A
+// name that appears only bare is the typo.
+func TestNoRunBlockReadsAnUnguardedVariable(t *testing.T) {
+	// Always present in a step's environment, whatever the workflow says.
+	provided := regexp.MustCompile(`^(GITHUB|RUNNER|ACTIONS)_|^(HOME|PATH|CI|TMPDIR|PWD|SHELL|USER|LANG)$`)
+	reference := regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
+	singleQuoted := regexp.MustCompile(`(?s)'[^']*'`)
+	// Start of line, or after a `;`, `&&` or `||` - `db=false; app=false` is two.
+	assignment := regexp.MustCompile(`(?m)(?:^|[;&|]\s*)\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=`)
+	// `for x in ...` and `read x` bind a name without an `=` in sight.
+	bound := regexp.MustCompile(`(?m)\b(?:for|read(?:\s+-\w+)*)\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
+
+	var files []string
+	for _, pattern := range []string{
+		filepath.Join(repoRoot, ".github", "workflows", "*"),
+		filepath.Join(repoRoot, ".github", "actions", "*", "action.yml"),
+	} {
+		found, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatalf("glob %s: %v", pattern, err)
+		}
+		files = append(files, found...)
+	}
+
+	var checked int
+	for _, path := range files {
+		name := filepath.Base(path)
+		if filepath.Ext(name) == ".md" {
+			continue
+		}
+		b, err := os.ReadFile(path) // #nosec G304 -- path comes from the globs above.
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		var doc any
+		if err := yaml.Unmarshal(b, &doc); err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+
+		var walk func(any)
+		walk = func(node any) {
+			switch n := node.(type) {
+			case map[string]any:
+				script, ok := n["run"].(string)
+				if !ok || !strings.Contains(script, "set -") || !strings.Contains(script, "u") {
+					for _, value := range n {
+						walk(value)
+					}
+					return
+				}
+				checked++
+
+				safe := map[string]bool{}
+				for _, re := range []*regexp.Regexp{assignment, bound} {
+					for _, m := range re.FindAllStringSubmatch(script, -1) {
+						safe[m[1]] = true
+					}
+				}
+				if env, ok := n["env"].(map[string]any); ok {
+					for key := range env {
+						safe[key] = true
+					}
+				}
+				// A `$name` inside single quotes is not the shell's - the jq programs
+				// here are full of them - so those spans are removed before scanning.
+				for _, ref := range reference.FindAllStringSubmatch(singleQuoted.ReplaceAllString(script, " "), -1) {
+					v := ref[1]
+					if safe[v] || provided.MatchString(v) {
+						continue
+					}
+					if strings.Contains(script, "${"+v+":-") || strings.Contains(script, "${"+v+"-") {
+						continue // guarded somewhere; a later bare use is control flow
+					}
+					t.Errorf("%s: a `run` block reads $%s, which nothing sets.\n"+
+						"\nUnder `set -u` that is not an empty string, it is the end of the job. Either the\n"+
+						"name is a typo or a rename that missed this line; if it really comes from the\n"+
+						"environment, write it once as ${%s:-} so the script says it may be absent.\n",
+						name, v, v)
+				}
+				for _, value := range n {
+					walk(value)
+				}
+			case []any:
+				for _, item := range n {
+					walk(item)
+				}
+			}
+		}
+		walk(doc)
+	}
+
+	if checked == 0 {
+		t.Fatal("found no `set -u` run blocks - either they moved, or this test is looking in the wrong place")
+	}
+}
+
+// TestEveryBaseImagePinAgrees keeps the upstream images at one version each.
+//
+// They are written down in four places that cannot import from one another: the
+// Dockerfiles that build on them, docker-compose.yml's build arguments and its
+// own services, and the chart's `images` block, which is what an operator
+// mirrors into their registry. Nothing made them move together, and they did
+// not: `golang:1.26.5` stayed in the Dockerfiles while CI's GO_VERSION floated
+// to the current 1.26.x, and the images shipped ten findings against a standard
+// library that had been patched twice.
+//
+// Comments are skipped, so a line naming a version this repository has LEFT -
+// the one in Dockerfile.web explaining why curl is gone - is documentation
+// rather than a pin.
+func TestEveryBaseImagePinAgrees(t *testing.T) {
+	sources := []string{
+		filepath.Join(repoRoot, "deploy", "build", "Dockerfile.coordinator"),
+		filepath.Join(repoRoot, "deploy", "build", "Dockerfile.worker"),
+		filepath.Join(repoRoot, "deploy", "build", "Dockerfile.transferctl"),
+		filepath.Join(repoRoot, "deploy", "build", "Dockerfile.web"),
+		filepath.Join(repoRoot, "docker-compose.yml"),
+		filepath.Join(repoRoot, "deploy", "charts", "software-gateway", "values.yaml"),
+	}
+	pins := map[string]*regexp.Regexp{
+		"golang": regexp.MustCompile(`\bgolang:(\d+\.\d+(?:\.\d+)?)`),
+		"nginx":  regexp.MustCompile(`\bnginx:(\d+\.\d+\.\d+-alpine)`),
+		"node":   regexp.MustCompile(`\bnode:(\d+\.\d+\.\d+-alpine)`),
+	}
+
+	// image -> version -> the places that say so.
+	seen := map[string]map[string][]string{}
+	for _, path := range sources {
+		b, err := os.ReadFile(path) // #nosec G304 -- the fixed list above.
+		if err != nil {
+			t.Fatalf("read %s: %v", filepath.Base(path), err)
+		}
+		rel, _ := filepath.Rel(repoRoot, path)
+		for i, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				continue
+			}
+			for image, re := range pins {
+				for _, m := range re.FindAllStringSubmatch(line, -1) {
+					if seen[image] == nil {
+						seen[image] = map[string][]string{}
+					}
+					where := fmt.Sprintf("%s:%d", filepath.ToSlash(rel), i+1)
+					seen[image][m[1]] = append(seen[image][m[1]], where)
+				}
+			}
+		}
+	}
+
+	if len(seen) == 0 {
+		t.Fatal("found no base image pins - either the Dockerfiles moved, or this test is looking in the wrong place")
+	}
+	for image, versions := range seen {
+		if len(versions) == 1 {
+			continue
+		}
+		var lines []string
+		for v, places := range versions {
+			sort.Strings(places)
+			lines = append(lines, fmt.Sprintf("  %s: %s", v, strings.Join(places, ", ")))
+		}
+		sort.Strings(lines)
+		t.Errorf("%s is pinned at %d different versions:\n%s\n"+
+			"\nThese files cannot import from one another, so a bump has to touch all of them.\n"+
+			"A build that is one patch behind is a build shipping findings that are already fixed.\n",
+			image, len(versions), strings.Join(lines, "\n"))
+	}
+}

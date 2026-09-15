@@ -245,7 +245,7 @@ defines ([14](14-deployment-and-development.md)). `Dockerfile.web` carries one
 anyway, because docker compose does use it.
 
 `DS-0002` is real and is NOT a one-line fix, which is why it is recorded here
-rather than quietly patched. The web image is `nginx:1.27.5-alpine` with no
+rather than quietly patched. The web image is `nginx:1.31.5-alpine` with no
 `USER`, and it has none because it binds port 80: a port below 1024 needs root
 or `CAP_NET_BIND_SERVICE`. Making it non-root means moving the listener to
 8080, which touches `deploy/web/nginx.conf`, the writable paths nginx needs
@@ -254,6 +254,44 @@ chart's container port and Service `targetPort`, and the compose file - or
 replacing the base with `nginxinc/nginx-unprivileged`, which makes the same
 choices upstream. Either is a real change to how the tier is served and wants
 testing against a running stack, not a green scanner.
+
+### 5.9 The base images, and the 49 findings against a program nothing runs
+
+A registry scan of release 0.1.7 put 108 critical and high findings against the
+web image and 14 against the coordinator. Almost none of them were about code
+this repository wrote.
+
+**49 of the web image's came from `curl`**, which nothing here installs. It is
+part of `nginx:*-alpine`, and `nginx:1.27.5-alpine` carried `curl 8.12.1-r1`.
+The healthcheck in `Dockerfile.web` uses busybox `wget`; the entrypoint is
+`/bin/sh`. Nothing in the image needs curl, so the image no longer has it:
+`apk del curl libcurl`. Of the 71 packages in that base, none requires `curl`,
+and `libcurl` is required only by `curl` - checked against the image's own
+`/lib/apk/db/installed`, by package name and by the `so:libcurl.so.4` a linked
+binary would record, because a scanner's report is not a dependency graph.
+
+That removes the finding class rather than the findings. An air-gapped delivery
+product that ships a general-purpose HTTP client in its web tier has given
+anything that reaches that container a way to call out; the CVE count is the
+symptom.
+
+**10 of the coordinator's came from the Go standard library**, because
+`GO_IMAGE` was pinned at `golang:1.26.5` and the fix was in `1.26.6`. CI's
+`GO_VERSION` is `1.26`, which floats to the current patch, so the pipeline had
+been testing on a Go the images were not built with for as long as the pin sat
+still. Both are now `1.26.8`.
+
+The remaining module findings - `golang.org/x/text`, `oras.land/oras-go/v2` -
+were already fixed in `go.mod` when the scan ran: 0.1.7 was built from older
+source. `golang.org/x/crypto` is in the module graph and in no binary's import
+path, which is what Xray's own contextual analysis says when it marks it *Not
+Applicable*.
+
+**What would change our mind about removing curl:** a healthcheck or entrypoint
+that needs it. Neither does, and `wget` covers what this tier checks. The
+version pins are kept in step by
+`TestEveryBaseImagePinAgrees` - four files name these images and none can
+import from another, which is how one of them stayed two patches behind.
 
 ## 6. How a finding is dismissed
 

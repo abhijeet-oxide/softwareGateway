@@ -314,7 +314,7 @@ services:
   # the sign-in screens. See deploy/zitadel/nginx.conf for why that is a
   # requirement and not a preference.
   zitadel-proxy:
-    image: ${NGINX_IMAGE:-nginx:1.27.5-alpine}
+    image: ${NGINX_IMAGE:-nginx:1.31.5-alpine}
     restart: unless-stopped
     depends_on:
       zitadel:
@@ -396,7 +396,7 @@ services:
       context: .
       dockerfile: deploy/build/Dockerfile.coordinator
       args:
-        GO_IMAGE: ${GO_IMAGE:-golang:1.26.5}
+        GO_IMAGE: ${GO_IMAGE:-golang:1.26.8}
         RUNTIME_IMAGE: ${RUNTIME_IMAGE:-gcr.io/distroless/static-debian12:nonroot}
         # A build container inherits NOTHING from the host, so a corporate
         # proxy must be handed to it explicitly or every fetch times out.
@@ -505,7 +505,7 @@ services:
       context: .
       dockerfile: deploy/build/Dockerfile.worker
       args:
-        GO_IMAGE: ${GO_IMAGE:-golang:1.26.5}
+        GO_IMAGE: ${GO_IMAGE:-golang:1.26.8}
         RUNTIME_IMAGE: ${RUNTIME_IMAGE:-gcr.io/distroless/static-debian12:nonroot}
         # A build container inherits NOTHING from the host, so a corporate
         # proxy must be handed to it explicitly or every fetch times out.
@@ -608,7 +608,7 @@ services:
       dockerfile: deploy/build/Dockerfile.web
       args:
         NODE_IMAGE: ${NODE_IMAGE:-node:22.23.2-alpine}
-        NGINX_IMAGE: ${NGINX_IMAGE:-nginx:1.27.5-alpine}
+        NGINX_IMAGE: ${NGINX_IMAGE:-nginx:1.31.5-alpine}
         # A build container inherits NOTHING from the host, so a corporate
         # proxy must be handed to it explicitly or every fetch times out.
         HTTP_PROXY: ${HTTP_PROXY:-}

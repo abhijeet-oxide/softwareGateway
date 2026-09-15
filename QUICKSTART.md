@@ -430,7 +430,7 @@ Every image is a variable with a pinned default, and nothing is tagged
 | **ZITADEL** | `v4.17.3` | **GHCR only, not on Docker Hub** |
 | Cerbos | `0.55.0` | Docker Hub |
 | Node (seeder, web build) | `22.23.2-alpine` | Docker Hub |
-| nginx (web runtime) | `1.27.5-alpine` | Docker Hub |
+| nginx (web runtime) | `1.31.5-alpine` | Docker Hub |
 | Go (build) | `1.25.14` | Docker Hub |
 | distroless (Go runtime) | `static-debian12:nonroot` | gcr.io |
 
@@ -444,9 +444,9 @@ CERBOS_IMAGE=artifactory.corp/dockerhub/cerbos/cerbos:0.55.0
 POSTGRES_IMAGE=artifactory.corp/dockerhub/postgres:16.15-alpine
 SEEDER_IMAGE=artifactory.corp/dockerhub/node:22.23.2-alpine
 # build-time bases
-GO_IMAGE=artifactory.corp/dockerhub/golang:1.25.14
+GO_IMAGE=artifactory.corp/dockerhub/golang:1.26.8
 NODE_IMAGE=artifactory.corp/dockerhub/node:22.23.2-alpine
-NGINX_IMAGE=artifactory.corp/dockerhub/nginx:1.27.5-alpine
+NGINX_IMAGE=artifactory.corp/dockerhub/nginx:1.31.5-alpine
 RUNTIME_IMAGE=artifactory.corp/gcr/distroless/static-debian12:nonroot
 ```
 

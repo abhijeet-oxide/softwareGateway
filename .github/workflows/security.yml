@@ -22,6 +22,19 @@ concurrency:
 permissions:
   contents: read
 
+# EVERY JOB HONOURS RUNNER_LABEL, exactly as ci.yml and cd.yml do. This file
+# had `ubuntu-latest` written into all nine of them, which is not a preference
+# for hosted runners so much as an omission, and on a repository whose owner
+# has an IP allow list it is fatal: a hosted runner's address is not on the
+# list, so `actions/checkout` never gets as far as the code.
+#
+#   remote: The repository owner has an IP allow list enabled, and
+#   20.115.146.233 is not permitted to access this repository.
+#   fatal: unable to access 'https://github.com/.../': ... error: 403
+#
+# The scanners then reported as failed, having scanned nothing. With the
+# variable unset - a fork, this repository - the fallback is what it always
+# was, so nothing changes for anybody who does not set it.
 env:
   GO_VERSION: "1.26"
   NODE_VERSION: "22"
@@ -32,7 +45,7 @@ jobs:
   # database build; a pull request that only edits the chart must not pay it.
   changes:
     name: What changed
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       go: ${{ steps.f.outputs.go }}
@@ -98,7 +111,7 @@ jobs:
     name: CodeQL (${{ matrix.language }})
     needs: changes
     if: needs.changes.outputs.languages != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -141,7 +154,7 @@ jobs:
     name: govulncheck
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -161,7 +174,7 @@ jobs:
     name: pnpm audit
     needs: changes
     if: needs.changes.outputs.web == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -188,7 +201,7 @@ jobs:
     name: Trivy
     needs: changes
     if: needs.changes.outputs.containers == 'true' || github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -253,7 +266,7 @@ jobs:
     # language that had nothing to build must not stop the export of the rest.
     if: always() && github.event_name == 'workflow_dispatch'
     needs: [codeql, trivy]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -355,7 +368,7 @@ jobs:
   # for organisation-owned repositories.
   gitleaks:
     name: Secret scan
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -391,7 +404,7 @@ jobs:
   dependency-review:
     name: Dependency review
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -409,7 +422,7 @@ jobs:
     name: Security
     if: always()
     needs: [changes, codeql, gitleaks, dependency-review]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Every scanner that ran must have passed

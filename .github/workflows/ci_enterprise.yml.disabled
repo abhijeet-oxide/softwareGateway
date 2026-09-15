@@ -1,0 +1,456 @@
+# ci.yml, for a repository that cannot reach the public internet.
+#
+# NOT RUN FROM THIS REPOSITORY. GitHub reads `.yml` and `.yaml` under
+# .github/workflows/ and nothing else, so the `.disabled` suffix keeps this file
+# inert here. In the enterprise repository it is copied over `ci.yml` and the
+# suffix dropped. See .github/workflows/README.md.
+#
+# ------------------------------------------------------------------ deviations
+#
+# 1. NO HOSTED-RUNNER FALLBACK. `runs-on` is RUNNER_LABEL with no
+#    `|| 'ubuntu-latest'`. A hosted runner's address is not on the repository
+#    owner's IP allow list and fails in `actions/checkout` with a 403 before it
+#    reads a line of code. Unset, RUNNER_LABEL fails the run at startup with
+#    "invalid value for 'runs-on'", which at least names the setting.
+#
+# 2. THE TOOLCHAIN COMES FROM A MIRROR. `.github/actions/toolchain` fetches Task,
+#    Helm, kustomize, kubeconform and golangci-lint from github.com and
+#    get.helm.sh. TOOL_MIRROR points that at an internal host; unset, it is
+#    upstream exactly as in the public file.
+#
+# 3. NPM COMES FROM THE CONFIGURED REGISTRY. pnpm itself is installed with npm
+#    (see .github/actions/web-toolchain), so NPM_REGISTRY decides where both the
+#    package manager and the packages come from - one host to allow, not two.
+#
+# ------------------------------------------------------------------- variables
+#
+#   RUNNER_LABEL   required. The in-network self-hosted runner.
+#   TOOL_MIRROR    optional. Base URL for released binaries, flat by file name.
+#   NPM_REGISTRY   optional. The npm registry or pull-through mirror.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run per pull request, one per push to main.
+  #
+  # A pull request cancels its own superseded run: pushing a fix abandons the
+  # run for the commit nobody is going to merge.
+  #
+  # Main does not, so a run that has STARTED always finishes. It is still not
+  # one run per commit: only one run per group may be pending, so five merges
+  # in a minute leave the newest queued and cancel the four behind it. That is
+  # the trade, and it is the right one here - those four would each re-prove a
+  # tree that the fifth supersedes before any of them finished.
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GO_VERSION: "1.26"
+  NODE_VERSION: "22"
+  PNPM_VERSION: "12.3.4"
+  GODEBUG: http2client=0
+
+jobs:
+  # --------------------------------------------------------------- what changed
+  changes:
+    name: What changed
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.f.outputs.go }}
+      web: ${{ steps.f.outputs.web }}
+      deploy: ${{ steps.f.outputs.deploy }}
+      taskfile: ${{ steps.f.outputs.taskfile }}
+      binaries: ${{ steps.f.outputs.binaries }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: f
+        name: Decide which jobs are relevant
+        # Through `env`, not interpolated into the script: a `${{ }}` inside a
+        # `run:` block is a template substitution, so a ref name is shell.
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT" = "pull_request" ]; then
+            base="$BASE"
+          else
+            base="$(git rev-parse HEAD^ 2>/dev/null || true)"
+          fi
+
+          # A workflow change, a first commit, or a base we cannot resolve: run
+          # everything. Guessing narrower is how a change ships untested.
+          if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            files="ALL"
+          else
+            files="$(git diff --name-only "$base" HEAD)"
+          fi
+
+          has() {
+            [ "$files" = "ALL" ] && return 0
+            grep -qE "$1" <<<"$files"
+          }
+
+          # .github always runs everything: a workflow that changed is a workflow
+          # nothing has proved yet.
+          if has '^\.github/'; then
+            files="ALL"
+          fi
+
+          set_out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; echo "$1=$2"; }
+
+          # config/ feeds the Go tests, the chart and the seeder, so it counts
+          # for both.
+          has '(\.go$|^go\.(mod|sum)$|^db/|^config/|^Taskfile\.yml$)' \
+            && set_out go true    || set_out go false
+          has '^web/' \
+            && set_out web true   || set_out web false
+          has '(^deploy/|^config/)' \
+            && set_out deploy true || set_out deploy false
+          has '^Taskfile\.yml$' \
+            && set_out taskfile true || set_out taskfile false
+          # Cross-compiling six targets is slow and only the binaries' own build
+          # can break it.
+          has '(^cmd/|^internal/|^pkg/|^go\.(mod|sum)$)' \
+            && set_out binaries true || set_out binaries false
+
+  # ------------------------------------------------------------------ the code
+  #
+  # BUILD AND TEST ARE TWO JOBS, and nothing embeds the frontend into a binary,
+  # so neither waits on the other. Serially they were the critical path: the
+  # race detector on internal/store's scale tests is minutes on its own, and
+  # the build behind it was minutes of a runner doing nothing.
+  build:
+    name: Build
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.web == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          task: 'true'
+          mirror: ${{ vars.TOOL_MIRROR }}
+
+      - uses: ./.github/actions/web-toolchain
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          registry: ${{ vars.NPM_REGISTRY }}
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Build application
+        run: task build
+
+      - name: Run Go vet
+        run: task vet
+
+      - name: Verify built binaries
+        run: |
+          ./bin/coordinator --version
+          ./bin/worker --version
+          ./bin/transferctl version --client
+
+  test:
+    name: Tests
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          task: 'true'
+          mirror: ${{ vars.TOOL_MIRROR }}
+
+      - name: Run automated tests
+        run: task test
+
+  lint:
+    name: Go static analysis
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          task: 'true'
+          golangci-lint: 'true'
+          mirror: ${{ vars.TOOL_MIRROR }}
+
+      - run: task lint
+
+  config:
+    name: Product configuration
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.deploy == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          task: 'true'
+          mirror: ${{ vars.TOOL_MIRROR }}
+
+      - name: Validate product files
+        run: task validate
+
+      - name: Verify invalid configuration is rejected
+        run: task validate:rejects-broken
+
+  schema:
+    name: Coordinator smoke test
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          mirror: ${{ vars.TOOL_MIRROR }}
+
+      - name: Start coordinator and verify health endpoints
+        run: |
+          go build -o /tmp/coordinator-ci ./cmd/coordinator
+
+          /tmp/coordinator-ci --config ./config/config.yaml &
+          COORD=$!
+          trap 'kill $COORD 2>/dev/null || true' EXIT
+
+          for i in $(seq 1 40); do
+            if curl -fsS http://localhost:8080/readyz >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.5
+          done
+
+          curl -fsS http://localhost:8080/healthz
+          curl -fsS http://localhost:8080/readyz
+          curl -fsS http://localhost:8080/metrics | grep -q 'softwaregateway_build_info'
+          # Asserts a product was LOADED and serialised, not merely that the
+          # route answers.
+          curl -fsS http://localhost:8080/api/v1/products | grep -q '"productId"'
+          echo "coordinator booted, migrated and served products"
+
+  postgres:
+    name: PostgreSQL integration tests
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 20
+    # SQLite does not cover PostgreSQL-specific query behaviour.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          task: 'true'
+          mirror: ${{ vars.TOOL_MIRROR }}
+
+      - name: Run PostgreSQL test suite
+        env:
+          TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+        run: task test:postgres
+
+  # ------------------------------------------------------------- the deployment
+  deploy:
+    name: Chart and manifests
+    needs: changes
+    if: needs.changes.outputs.deploy == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          task: 'true'
+          helm: 'true'
+          kustomize: 'true'
+          kubeconform: 'true'
+          mirror: ${{ vars.TOOL_MIRROR }}
+
+      # Helm packages a directory, so stage the shared config into the chart.
+      - name: Stage chart configuration
+        run: task chart:stage
+
+      - name: Lint the chart
+        run: task chart:lint
+
+      # Both layers of every instance, with the one values file Flux puts in a
+      # ConfigMap. The configurations the chart must REFUSE are covered by
+      # TestTheChartRefusesWhatCannotWork, beside the chart, where a renamed
+      # value breaks them in the same commit.
+      - name: Render every instance
+        run: |
+          set -euo pipefail
+          for instance in $(go run ./deploy/chartstage/cmd/chartstage -instances | awk '{print $1}'); do
+            go run ./deploy/chartstage/cmd/chartstage -values "$instance" > "/tmp/$instance-values.yaml"
+            for layer in database application; do
+              db=false; app=false
+              [ "$layer" = database ] && db=true || app=true
+              helm template swgw deploy/charts/software-gateway \
+                --values "/tmp/$instance-values.yaml" \
+                --set "layers.database=$db" --set "layers.application=$app" \
+                > "/tmp/$instance-$layer.yaml"
+              echo "$instance/$layer: $(grep -c '^kind:' "/tmp/$instance-$layer.yaml") objects"
+            done
+          done
+
+      - name: Build every Flux kustomization
+        run: task flux:build
+
+      - name: Validate Kubernetes manifests
+        run: |
+          kubeconform -strict -summary -ignore-missing-schemas \
+            -kubernetes-version 1.29.0 /tmp/lab-application.yaml /tmp/lab-database.yaml
+
+      - name: Deployment invariants
+        run: go test ./deploy/... -count=1
+
+  # --------------------------------------------------------------- portability
+  cross-compile:
+    name: Cross-platform binaries
+    needs: changes
+    # Six targets, and only the binaries' own build can break it. On a pull
+    # request that does not touch them it is four minutes of nothing.
+    if: needs.changes.outputs.binaries == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          task: 'true'
+          mirror: ${{ vars.TOOL_MIRROR }}
+
+      - name: Build Linux, macOS, and Windows binaries
+        run: task build:all
+
+      - name: Verify Windows binary extensions
+        run: |
+          missing=0
+          for arch in amd64 arm64; do
+            for bin in coordinator worker transferctl; do
+              if [ ! -f "dist/windows-$arch/$bin.exe" ]; then
+                echo "::error::dist/windows-$arch/$bin.exe is missing"
+                missing=1
+              fi
+              if [ -f "dist/windows-$arch/$bin" ]; then
+                echo "::error::dist/windows-$arch/$bin has no .exe suffix"
+                missing=1
+              fi
+            done
+          done
+          exit $missing
+
+      - uses: actions/upload-artifact@v7
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: binaries
+          path: dist/
+          retention-days: 7
+
+  portable:
+    name: Taskfile portability
+    needs: changes
+    if: needs.changes.outputs.taskfile == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          task: 'true'
+          mirror: ${{ vars.TOOL_MIRROR }}
+
+      # Run selected tasks with a Windows-like PATH to catch Unix-only commands.
+      - name: Validate commands with a restricted PATH
+        run: |
+          mkdir -p /tmp/winpath
+          for t in go gofmt git task; do
+            ln -sf "$(command -v $t)" "/tmp/winpath/$t"
+          done
+
+          for t in build:backend vet validate; do
+            echo "--- task $t"
+            if ! env -i \
+                 PATH=/tmp/winpath \
+                 HOME="$HOME" \
+                 GOCACHE="$(go env GOCACHE)" \
+                 GOMODCACHE="$(go env GOMODCACHE)" \
+                 task "$t"; then
+              echo "::error::task $t needs a command Windows does not have."
+              echo "::error::Gate it with 'platforms:' or use a template function."
+              exit 1
+            fi
+          done
+          echo "every task ran with only go, gofmt, git and task on PATH"
+
+  # -------------------------------------------------------------------- the gate
+  ci:
+    # THE ONE REQUIRED CHECK. A skipped job never reports, so making each job
+    # required would block every pull request that legitimately skipped one.
+    # This always runs and fails if anything that DID run failed.
+    name: CI
+    if: always()
+    needs: [changes, build, test, lint, config, schema, postgres, deploy, cross-compile, portable]
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 5
+    steps:
+      - name: Every job that ran must have passed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::a CI job failed or was cancelled"
+          exit 1
+      - run: echo "CI is green"

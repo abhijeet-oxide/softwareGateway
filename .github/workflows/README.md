@@ -1,0 +1,75 @@
+# Two sets of pipelines
+
+`ci.yml`, `cd.yml` and `security.yml` are the pipelines. They run here and they
+run in a fork, and they are the ones to edit.
+
+`*_enterprise.yml.disabled` is the same pipeline written for a repository that
+cannot reach the public internet. Nothing runs them from this repository: GitHub
+reads `.yml` and `.yaml` under this directory and ignores every other extension,
+so the suffix is what keeps them inert.
+
+## What they are for
+
+The enterprise copy of this repository is not a different product, it is the
+same product in a network that says no to more things:
+
+- **The repository owner has an IP allow list.** A GitHub-hosted runner is not
+  on it, so `actions/checkout` fails with `403` before a job reads a line of
+  code. Every job must land on the in-network self-hosted runner.
+- **Actions are allow-listed.** GitHub's own, the enterprise's own, verified
+  Marketplace publishers, and a named list. A third-party setup action is
+  refused before the job starts (docs/design/30 section 12.10).
+- **Egress is restricted.** A scanner that downloads its database, a toolchain
+  fetched from a release page, and a package manager installed from npm are
+  three separate things that can be blocked independently.
+- **Advanced Security may not be on.** CodeQL, SARIF upload, dependency review
+  and the code scanning API all need it.
+
+The public files carry none of that, because none of it is true here and a
+pipeline full of switches nobody sets is a pipeline nobody can read.
+
+## Using one
+
+In the enterprise repository:
+
+```sh
+cp .github/workflows/security_enterprise.yml.disabled .github/workflows/security.yml
+```
+
+Then set the repository variables the file's header lists, under
+Settings -> Secrets and variables -> Actions -> Variables.
+
+| Variable | Used by | What happens when it is unset |
+|---|---|---|
+| `RUNNER_LABEL` | all three | **The run fails at startup.** Deliberate: the public files fall back to `ubuntu-latest`, and in a repository with an IP allow list that fallback is a 403 dressed up as a scanner failure. |
+| `TOOL_MIRROR` | ci, cd, security | Task, Helm, kustomize, kubeconform, golangci-lint and gitleaks come from github.com and get.helm.sh, as in the public files. Set it to a base URL and each archive is fetched as `<mirror>/<file name>` - the names are already versioned, so the mirror is one flat directory. |
+| `NPM_REGISTRY` | ci, cd, security | npm's default registry. |
+| `SECURITY_CODEQL` | security | CodeQL does not run. It needs Advanced Security **and** egress for the bundle. |
+| `SECURITY_DEPENDENCY_REVIEW` | security | Dependency review does not run. Needs Advanced Security and the dependency graph. |
+| `SECURITY_TRIVY` | security | Trivy does not run. Its database comes from ghcr.io. |
+| `SECURITY_GOVULNCHECK` | security | govulncheck does not run. Needs the module proxy and vuln.go.dev. |
+| `SECURITY_PNPM_AUDIT` | security | `pnpm audit` does not run. A pull-through registry mirror often does not serve the audit endpoint. |
+| `SECURITY_ALERT_EXPORT` | security | The alert inventory does not run. It needs the code scanning API, and `gh` and `jq` on the runner. |
+| `TRIVY_DB_REPOSITORY`, `TRIVY_JAVA_DB_REPOSITORY`, `GOVULNDB` | security | Upstream. Set them to internal mirrors. |
+
+Every `SECURITY_*` variable is off unless it is exactly `true`. Off rather than
+on, because a scanner that cannot reach its database does not report "nothing
+found" - it fails, and a Security check that is red for a blocked egress is a
+check everybody learns to scroll past.
+
+**The secret scan is not one of them.** It reads the git history and asks no
+service anything, it enforces the rule the rest of this repository rests on, and
+a credential in the history is a credential to rotate whatever the network
+policy says. It always runs and it always fails the build.
+
+## Keeping them in step
+
+`TestEnterpriseWorkflowsTrackTheirOriginals` in `deploy/delivery_test.go` fails
+when a job is added to a public pipeline and not to its enterprise copy. It
+compares the set of jobs and nothing else: what the jobs do is exactly what the
+two files are allowed to disagree about.
+
+A copy is a poor mechanism and it is the honest one here - the two networks
+disagree about too much for one file with switches. If a deviation turns out to
+be something the public file can carry unset, move it there and delete it from
+the copy.

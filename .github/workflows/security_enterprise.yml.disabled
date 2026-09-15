@@ -1,0 +1,419 @@
+# security.yml, for a repository that cannot reach the public internet.
+#
+# NOT RUN FROM THIS REPOSITORY. GitHub reads `.yml` and `.yaml` under
+# .github/workflows/ and nothing else, so the `.disabled` suffix keeps this
+# file inert here. In the enterprise repository it is copied over `security.yml`
+# and the suffix dropped. See .github/workflows/README.md.
+#
+# ------------------------------------------------------------------ deviations
+#
+# 1. NO HOSTED-RUNNER FALLBACK. `runs-on` is RUNNER_LABEL with no `||
+#    'ubuntu-latest'`. A hosted runner's address is not on the repository
+#    owner's IP allow list, so it fails in `actions/checkout` with a 403 having
+#    scanned nothing, and reports as a scanner failure rather than as a
+#    misconfiguration. Unset, RUNNER_LABEL now fails the run at startup with
+#    "invalid value for 'runs-on'", which names the setting.
+#
+# 2. EVERY SCANNER THAT REACHES OUTSIDE IS OFF UNTIL TURNED ON. One repository
+#    variable each, listed below, and absent means off. They are off rather
+#    than on because a scanner that cannot download its database does not
+#    report "no findings" - it fails, and a red Security check that is really a
+#    blocked egress teaches everybody to ignore the check.
+#
+#      SECURITY_CODEQL              CodeQL. Needs GitHub Advanced Security on
+#                                   the repository AND the runner able to fetch
+#                                   the CodeQL bundle. Both, not either.
+#      SECURITY_DEPENDENCY_REVIEW   Needs Advanced Security and the dependency
+#                                   graph enabled.
+#      SECURITY_TRIVY               Needs the vulnerability database, pulled
+#                                   from ghcr.io, and the SARIF upload needs
+#                                   Advanced Security.
+#      SECURITY_GOVULNCHECK         Needs the Go module proxy and vuln.go.dev.
+#      SECURITY_PNPM_AUDIT          Needs an npm registry that serves the audit
+#                                   endpoint. A pull-through mirror often does
+#                                   not.
+#      SECURITY_ALERT_EXPORT        Reads the code scanning alerts API, so it
+#                                   needs Advanced Security, and it needs `gh`
+#                                   and `jq` ON THE RUNNER - a self-hosted image
+#                                   frequently has neither.
+#
+# 3. THE SECRET SCAN IS NOT OPTIONAL and still fails the build. It is the one
+#    check here that gates a merge, it reads the git history and nothing else,
+#    and a credential in the history is a credential to rotate whatever the
+#    network policy is. Its binary comes from TOOL_MIRROR when that is set.
+#
+# 4. NOTHING HERE ASSUMES A TOOL IS PREINSTALLED. Where the public file leans on
+#    what ubuntu-latest happens to ship, this one checks and says what is
+#    missing.
+#
+# ------------------------------------------------------------------- variables
+#
+#   RUNNER_LABEL   required. The in-network self-hosted runner.
+#   TOOL_MIRROR    optional. Base URL for released binaries, flat by file name.
+#   NPM_REGISTRY   optional. Passed to the web toolchain.
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26"
+  NODE_VERSION: "22"
+  PNPM_VERSION: "12.3.4"
+
+jobs:
+  changes:
+    name: What changed
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.f.outputs.go }}
+      web: ${{ steps.f.outputs.web }}
+      containers: ${{ steps.f.outputs.containers }}
+      # A JSON array, so a language with nothing to scan costs no runner at all
+      # rather than a job that starts and skips every step.
+      languages: ${{ steps.f.outputs.languages }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: f
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            files="$(git diff --name-only "$BASE"...HEAD)"
+          else
+            files="ALL"
+          fi
+          has() {
+            if [ "$files" = "ALL" ]; then echo true; return; fi
+            if grep -qE "$1" <<<"$files"; then echo true; else echo false; fi
+          }
+
+          go=$(has '^(cmd|internal|pkg|deploy/chartstage|deploy/secretsinv)/|^go\.(mod|sum)$')
+          web=$(has '^web/')
+          actions=$(has '^\.github/')
+
+          # WHAT THE JAVASCRIPT EXTRACTOR READS IS NOT JUST web/. The ZITADEL
+          # seeders under deploy/ and the mock provider under test/ are .mjs
+          # and are analysed with it - the host-matching bug fixed in
+          # bootstrap.mjs was a CodeQL finding in exactly that tree. Gating the
+          # language on `^web/` meant a pull request touching only those files
+          # got no JavaScript scan while the run still reported green.
+          #
+          # Kept SEPARATE from `web`, which still means web/ alone: `web` also
+          # gates pnpm audit, and auditing web/pnpm-lock.yaml because a seeder
+          # changed is a job with nothing to do.
+          js=$(has '^web/|\.(mjs|cjs|js|jsx|ts|tsx)$')
+
+          langs=""
+          [ "$go" = true ]      && langs="${langs}\"go\","
+          [ "$js" = true ]      && langs="${langs}\"javascript-typescript\","
+          # Workflow analysis: the unpinned action, and the expression
+          # interpolated straight into a `run:` block.
+          [ "$actions" = true ] && langs="${langs}\"actions\","
+
+          {
+            echo "go=$go"
+            echo "web=$web"
+            echo "containers=$(has '^(deploy/build|deploy/web|deploy/certs)/|^go\.(mod|sum)$|^web/pnpm-lock\.yaml$')"
+            echo "languages=[${langs%,}]"
+          } >> "$GITHUB_OUTPUT"
+
+  # CodeQL: the semantic one. It finds the injection and taint bugs a linter
+  # cannot, and it is the expensive one, which is why it is gated above.
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    needs: changes
+    if: vars.SECURITY_CODEQL == 'true' && needs.changes.outputs.languages != '[]'
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(needs.changes.outputs.languages) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        if: matrix.language == 'go'
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - uses: github/codeql-action/autobuild@v4
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
+
+  govulncheck:
+    name: govulncheck
+    needs: changes
+    if: vars.SECURITY_GOVULNCHECK == 'true' && needs.changes.outputs.go == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      # GOPROXY is whatever the runner is configured with; `@latest` still
+      # resolves through it. The vulnerability database is a second fetch, from
+      # vuln.go.dev, and GOVULNDB points that at a mirror when there is one.
+      - env:
+          GOVULNDB: ${{ vars.GOVULNDB }}
+        run: |
+          set -euo pipefail
+          if [ -n "$GOVULNDB" ]; then export GOVULNDB; fi
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  audit:
+    name: pnpm audit
+    needs: changes
+    if: vars.SECURITY_PNPM_AUDIT == 'true' && needs.changes.outputs.web == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/web-toolchain
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          registry: ${{ vars.NPM_REGISTRY }}
+      - name: Audit
+        working-directory: web
+        run: |
+          pnpm audit --audit-level high --prod | tee "$RUNNER_TEMP/audit.txt" || true
+          {
+            echo "### pnpm audit"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/audit.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  trivy:
+    name: Trivy
+    needs: changes
+    if: >-
+      vars.SECURITY_TRIVY == 'true'
+      && (needs.changes.outputs.containers == 'true' || github.event_name != 'pull_request')
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          # Where the vulnerability and misconfiguration databases come from.
+          # Unset, these are ghcr.io, which is the fetch that fails on a runner
+          # with no egress - and it fails as "Trivy found a problem" rather than
+          # as "Trivy could not start".
+          TRIVY_DB_REPOSITORY: ${{ vars.TRIVY_DB_REPOSITORY }}
+          TRIVY_JAVA_DB_REPOSITORY: ${{ vars.TRIVY_JAVA_DB_REPOSITORY }}
+        with:
+          scan-type: fs
+          scanners: vuln,misconfig,secret
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
+          skip-dirs: internal/compliance/baseline/testdata,internal/compliance/render/testdata
+          exit-code: '0'
+
+      - uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
+
+  export:
+    name: Export alert inventory
+    if: >-
+      always() && vars.SECURITY_ALERT_EXPORT == 'true'
+      && github.event_name == 'workflow_dispatch'
+    needs: [codeql, trivy]
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: read
+    steps:
+      # ubuntu-latest ships both; a self-hosted image is not required to. Said
+      # here, once, rather than as `gh: command not found` in the middle of a
+      # loop that is also retrying an API call.
+      - name: The runner must have gh and jq
+        run: |
+          set -euo pipefail
+          missing=
+          for tool in gh jq; do
+            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::this job needs$missing on the runner. Install them on the"
+            echo "::error::RUNNER_LABEL image, or unset SECURITY_ALERT_EXPORT."
+            exit 1
+          fi
+
+      - name: Collect open alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          read_ok=false
+          for attempt in $(seq 1 10); do
+            if gh api --paginate \
+                 "repos/$REPO/code-scanning/alerts?state=open&per_page=100" \
+                 --jq '.[]' > alerts.jsonl; then
+              read_ok=true
+              break
+            fi
+            echo "code scanning alerts not queryable yet (attempt $attempt/10)"
+            sleep 5
+          done
+
+          if [ "$read_ok" != true ]; then
+            echo "::error::could not read code scanning alerts after 10 attempts; check that this job still has security-events read"
+            exit 1
+          fi
+          jq -s '.' alerts.jsonl > alerts.json
+
+          total=$(wc -l < alerts.jsonl | tr -d ' ')
+
+          rows () {
+            jq -s -r --arg by "$1" '
+              def rank: {"critical":0,"high":1,"medium":2,"low":3}[.] // 4;
+              def key: if $by == "rule"
+                       then [.tool, .sev, .rule] else [.tool, .sev] end;
+              map({ tool: .tool.name,
+                    sev:  (.rule.security_severity_level // .rule.severity // "unknown"),
+                    rule: .rule.id })
+              | group_by(key)
+              | map(.[0] + {n: length})
+              | sort_by([(.sev | rank), -.n, .tool])
+              | .[]
+              | if $by == "rule"
+                then "| \(.tool) | \(.sev) | `\(.rule)` | \(.n) |"
+                else "| \(.tool) | \(.sev) | \(.n) |" end
+            ' alerts.jsonl
+          }
+
+          {
+            echo "### Open code scanning alerts: $total"
+            echo
+            echo "| Tool | Severity | Alerts |"
+            echo "|---|---|---:|"
+            rows tool
+            echo
+            echo "<details><summary>By rule</summary>"
+            echo
+            echo "| Tool | Severity | Rule | Alerts |"
+            echo "|---|---|---|---:|"
+            rows rule
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: code-scanning-alerts
+          path: alerts.json
+          if-no-files-found: error
+
+  # THE ONE THAT ALWAYS RUNS. It reads the git history, downloads one binary and
+  # asks no service anything, so there is no network policy under which it is
+  # reasonable to skip it - and it is the check that enforces the rule the rest
+  # of this repository is built on: no credential is ever a value here.
+  gitleaks:
+    name: Secret scan
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Scan
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          TOOL_MIRROR: ${{ vars.TOOL_MIRROR }}
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          if [ -n "${TOOL_MIRROR:-}" ]; then
+            url="${TOOL_MIRROR%/}/${archive}"
+          fi
+          # Named separately from the scan: a mirror that is missing the archive
+          # and a repository that has a secret in it are different incidents,
+          # and `curl | tar` reports them as the same broken pipe.
+          if ! curl -fsSL --retry 3 "$url" -o "$RUNNER_TEMP/$archive"; then
+            echo "::error::could not download gitleaks from $url."
+            echo "::error::Set TOOL_MIRROR to a host this runner can reach."
+            exit 1
+          fi
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git . --redact --verbose --exit-code 1
+
+  dependency-review:
+    name: Dependency review
+    if: vars.SECURITY_DEPENDENCY_REVIEW == 'true' && github.event_name == 'pull_request'
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high
+          deny-licenses: AGPL-3.0, GPL-3.0, GPL-2.0
+
+  # The gate, unchanged in substance: a scanner that ran and failed blocks the
+  # merge. A scanner switched off above reports `skipped`, which is neither
+  # failure nor cancellation, so turning one off narrows what is checked and
+  # never turns the gate green over a real finding.
+  security:
+    name: Security
+    if: always()
+    needs: [changes, codeql, gitleaks, dependency-review]
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 5
+    steps:
+      - name: Every scanner that ran must have passed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::a security scanner failed - see the Security tab"
+          exit 1
+      - run: echo "Security is green"

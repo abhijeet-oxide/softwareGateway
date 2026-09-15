@@ -773,12 +773,49 @@ the last release?" and the job was gated on it; what decides whether to build is
 "does this artifact exist?", and only the registry knows that. So the job now
 always runs when there is a release, and a step asks:
 
-| In the registry | Source changed | What happens |
+| In the registry | Its recorded inputs | What happens |
 |---|---|---|
-| no | yes | build - the ordinary release |
-| **no** | **no** | **build** - the retry above, which used to be skipped |
-| yes | no | skip - the reuse this design is built around |
-| yes | yes | fail - a tag is written once, and something is wrong |
+| no | - | build |
+| yes | match this commit | skip - these exact bits are published |
+| yes | differ | **fail** - one tag, two images |
+| yes | none recorded | skip - published before the label existed |
+
+#### The inputs digest, and the question existence cannot answer
+
+"Is it in the registry?" is not enough, and the gap is the one that hurts: a tag
+can hold bits built from source that has since moved, and its presence says
+nothing about whether building again would produce the same thing. Reuse it and
+the release ships an image that predates the change; rebuild it blindly and the
+same tag means two images.
+
+So every image carries a digest of the git trees behind its component's inputs
+(`deploy/release`), recorded as a label at build time and read back from the
+registry on the next run. It changes when, and only when, that content does -
+which is what makes the table above decidable rather than a guess.
+
+`deploy/release` is also where the component list lives, with the paths each is
+built from. `internal/` appears under both Go binaries, because a change there
+really does change both.
+
+Two honest limits:
+
+- **The bases are pinned by tag, not by digest.** `golang:1.26.8` can be rebuilt
+  upstream under the same name, so one inputs digest means the same SOURCE, not
+  provably the same bits. Pinning bases by digest is what would close that, and
+  is a trade this repository has not made: it would mean a base security fix
+  needs a deliberate bump rather than arriving on the next build.
+- **All images share one version.** A release moves every image to the new tag,
+  including ones whose content did not change - deliberately, because one
+  version per release is what a person deploys and asks about. The inputs digest
+  stops the unchanged ones being REBUILT, not retagged.
+
+#### A hand-started run cuts a release
+
+`workflow_dispatch` means somebody opened this workflow and asked for a release,
+so `create_release` defaults to on and that run takes a new version, a new tag,
+and rebuilds and republishes every image whatever the registry holds. Working
+out what a manual run "probably" meant is how a person asks for a release and is
+told nothing changed. Clearing the box runs the pipeline without publishing one.
 
 The job is cheap when there is nothing to do: it checks out, asks the registry,
 and stops. `rebuild_images` on a manual dispatch overrides all four rows and

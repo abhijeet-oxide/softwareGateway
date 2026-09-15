@@ -140,9 +140,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The default docker-container driver, deliberately. The `docker` driver
+      # builds through the runner's own daemon, whose image store cannot export
+      # a cache: the registry cache below failed the release with "cache export
+      # is not supported by the docker driver". The alternative fix - the
+      # daemon's containerd image store - is a change to every runner host,
+      # including hosts this repository does not own, to buy a local image the
+      # job never uses. Nothing here reads the image back out of the daemon;
+      # it is pushed, and the next step talks to the registry.
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
-        with:
-          driver: docker
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:

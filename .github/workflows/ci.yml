@@ -124,18 +124,10 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           task: 'true'
 
-      # pnpm BEFORE node, because setup-node's pnpm cache asks pnpm where its
-      # store is. The other order fails the cache step rather than the build,
-      # which is a confusing way to find out.
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - uses: actions/setup-node@v7
+      - uses: ./.github/actions/web-toolchain
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+          pnpm-version: ${{ env.PNPM_VERSION }}
 
       - name: Install frontend dependencies
         working-directory: web

@@ -45,6 +45,13 @@ set -euo pipefail
 CHANNEL="${CHANNEL:?CHANNEL must be main or lab}"
 RUN="${GITHUB_RUN_NUMBER:-0}"
 
+# A HAND-STARTED RUN CUTS A RELEASE. Not a variation on the push path: somebody
+# opened this workflow and asked for one, so there is a new version, a new tag,
+# and every image is rebuilt and republished under it whatever the registry
+# already holds. The alternative - working out what a manual run "probably"
+# meant - is how a person asks for a release and gets told nothing changed.
+FORCE_RELEASE="${FORCE_RELEASE:-false}"
+
 # ANYTHING AN IMAGE IS BUILT FROM. Adding a path here is how a new input starts
 # triggering rebuilds; forgetting one is how a code change ships inside an old
 # image, so deploy/deploy_test.go asserts this list against the Dockerfiles'
@@ -128,7 +135,7 @@ esac
 # open a pointer PR for content that is byte-for-byte what is already running.
 # An explicit `Release:` trailer always wins - somebody asked for one.
 should_release="true"
-if [ -n "$last" ]; then
+if [ -n "$last" ] && [ "$FORCE_RELEASE" != "true" ]; then
   release_rev="$(git log -1 --format=%H -- "${RELEASE_PATHS[@]}" || true)"
   if [ -n "$release_rev" ] \
      && git tag --contains "$release_rev" --list 'v[0-9]*.[0-9]*.[0-9]*' | grep -qxF "$last"; then
@@ -152,7 +159,7 @@ code_rev="$(git log -1 --format=%H -- "${CODE_PATHS[@]}" || true)"
 # --- 3. the release that first shipped it -------------------------------------
 containing="$(git tag --contains "$code_rev" --list 'v[0-9]*' --sort=v:refname | head -1 || true)"
 
-if [ "$should_release" = "false" ] || [ -n "$containing" ]; then
+if [ "$FORCE_RELEASE" != "true" ] && { [ "$should_release" = "false" ] || [ -n "$containing" ]; }; then
   image_version="${containing:-$last}"
   image_version="${image_version#v}"
   images_changed="false"

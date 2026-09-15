@@ -49,13 +49,14 @@ on:
           it was good. Artifacts are copied, never moved.
         type: string
         default: ''
-      rebuild_images:
+      create_release:
         description: >-
-          Rebuild the images even if this version is already in the registry,
-          and overwrite what is there. Tags are written once by design, so this
-          is the one door out of that and it is deliberately manual.
+          Cut a release: a new version, a new git tag, and every image rebuilt
+          and republished under it whatever the registry already holds. This is
+          what a hand-started run is for, so it is on by default; clear it to
+          run the pipeline without publishing a release.
         type: boolean
-        default: false
+        default: true
 
 # Queue releases per branch so version calculation and publishing cannot race.
 concurrency:
@@ -69,12 +70,6 @@ permissions:
 env:
   GO_VERSION: "1.26"
 
-  # WHAT A RELEASE CONSISTS OF. The `images` matrix names the same components
-  # and the Dockerfile each is built from; this is the list the Build Info job
-  # resolves against the registry, and TestTheReleaseImageListMatchesTheBuildMatrix
-  # fails when they stop agreeing. A component missing here is a component
-  # missing from every release description, which is the failure nobody sees.
-  RELEASE_IMAGES: coordinator,worker,web
 
   # WHERE GO MODULES COME FROM, for the jobs themselves - the Dockerfiles have
   # taken these as build arguments from the start and the workflows never set
@@ -135,6 +130,10 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL }}
     timeout-minutes: 10
     outputs:
+      # The components, as the images job's matrix. Read from deploy/release so
+      # the matrix, the Build Info and the change detection cannot disagree
+      # about what this product is.
+      components: ${{ steps.components.outputs.matrix }}
       chart_version: ${{ steps.v.outputs.chart_version }}
       image_version: ${{ steps.v.outputs.image_version }}
       images_changed: ${{ steps.v.outputs.images_changed }}
@@ -189,6 +188,7 @@ jobs:
       - id: v
         env:
           CHANNEL: ${{ github.ref_name }}
+          FORCE_RELEASE: ${{ inputs.create_release }}
         run: bash .github/scripts/version.sh
 
       # Reserve the version now, before anything is built or pushed. Image
@@ -199,6 +199,13 @@ jobs:
       #
       # Nothing is published when the registry is unconfigured, so nothing is
       # reserved either: the version stays available for the run that does.
+      - name: What this product consists of
+        id: components
+        run: |
+          set -euo pipefail
+          echo "matrix=$(go run ./deploy/release/cmd/release matrix)" >> "$GITHUB_OUTPUT"
+          go run ./deploy/release/cmd/release inputs
+
       - name: Reserve the release tag
         if: steps.v.outputs.should_release == 'true' && steps.registry.outputs.configured == 'true'
         env:
@@ -235,13 +242,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        include:
-          - component: coordinator
-            dockerfile: deploy/build/Dockerfile.coordinator
-          - component: worker
-            dockerfile: deploy/build/Dockerfile.worker
-          - component: web
-            dockerfile: deploy/build/Dockerfile.web
+        include: ${{ fromJSON(needs.version.outputs.components) }}
     steps:
       - uses: actions/checkout@v7
 
@@ -324,7 +325,7 @@ jobs:
           COMPONENT: ${{ matrix.component }}
           IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
           IMAGES_CHANGED: ${{ needs.version.outputs.images_changed }}
-          REBUILD: ${{ inputs.rebuild_images }}
+          FORCED: ${{ inputs.create_release }}
         run: |
           set -euo pipefail
           registry="${REGISTRY_URL#https://}"
@@ -332,32 +333,55 @@ jobs:
           ref="${registry}/${REGISTRY_REPOSITORY}/software-gateway-${COMPONENT}:${IMAGE_VERSION}"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
+          # WHAT THIS IMAGE WOULD BE BUILT FROM. A digest of the git trees behind
+          # this component's inputs, which moves when and only when that content
+          # does. Recorded on the image below, so a later run can ask the
+          # registry the question that actually matters.
+          want="$(go run ./deploy/release/cmd/release digest "$COMPONENT")"
+          echo "inputs=$want" >> "$GITHUB_OUTPUT"
+
           present=false
+          have=
           if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
             present=true
+            # buildx reads the label out of the image config itself. No jq: a
+            # self-hosted runner is not required to have it, and this decision
+            # must not depend on what happens to be installed.
+            have="$(docker buildx imagetools inspect \
+                      --format '{{ index .Image.Config.Labels "io.softwaregateway.inputs" }}' \
+                      "$ref" 2>/dev/null || true)"
+            # A template that matches nothing prints `<no value>`.
+            case "$have" in '<no value>'|'<nil>') have= ;; esac
           fi
 
-          if [ "${REBUILD:-false}" = "true" ]; then
+          if [ "${FORCED:-false}" = "true" ]; then
             build=true
-            if [ "$present" = true ]; then
-              echo "::warning::$ref exists and will be OVERWRITTEN: rebuild_images was ticked."
-              echo "::warning::Anything already running this tag gets different bits on its next pull."
-              note="rebuilt by hand, overwriting what was published"
-            else
-              note="rebuilt by hand"
-            fi
+            note="release cut by hand; rebuilt and republished"
+            [ "$present" = true ] && echo "::warning::$ref is being overwritten: this run was started by hand to cut a release."
           elif [ "$present" = false ]; then
-            # Covers the retry above: the tag is reserved, the image is not there.
+            # The tag is reserved and the image is not there - a previous run
+            # failed after tagging. Build it, whatever git thinks changed.
             build=true
             note="not in the registry"
+          elif [ -n "$have" ] && [ "$have" = "$want" ]; then
+            # The published bits came from exactly this source. Nothing a
+            # rebuild could change, so nothing is rebuilt.
+            build=false
+            note="published from these inputs already; reusing it"
+          elif [ -n "$have" ]; then
+            echo "::error::$ref was built from inputs $have and this commit would build $want."
+            echo "::error::One tag cannot mean two different images. Either the tag was published"
+            echo "::error::from source that has since moved, or a release tag was recreated."
+            echo "::error::Dispatch this workflow to cut a new release, which republishes it."
+            exit 1
           elif [ "$IMAGES_CHANGED" = "true" ]; then
             echo "::error::$ref already exists and this run means to build it. An image tag is written once."
-            echo "::error::A release tag was deleted and recreated, or two runs raced."
-            echo "::error::To replace it deliberately, dispatch this workflow with rebuild_images ticked."
+            echo "::error::Dispatch this workflow to cut a new release, which republishes it."
             exit 1
           else
+            # Published before this label existed: nothing to compare against.
             build=false
-            note="already published; reusing it"
+            note="already published, from unrecorded inputs; reusing it"
           fi
 
           echo "build=$build" >> "$GITHUB_OUTPUT"
@@ -398,6 +422,15 @@ jobs:
           # Mount credentials into builds; build arguments remain visible in image history.
           secret-files: ${{ matrix.component == 'web' && format('npmrc={0}/npmrc', runner.temp) || format('netrc={0}/netrc', runner.temp) }}
           provenance: false
+          # WHAT IT WAS BUILT FROM, carried by the image itself. This is the
+          # only thing that lets a later run tell "this tag exists" from "this
+          # tag holds these bits", which is the difference between reusing an
+          # image correctly and shipping one that predates the change.
+          labels: |
+            io.softwaregateway.inputs=${{ steps.plan.outputs.inputs }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.version.outputs.image_version }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
       # A SIGNED STATEMENT OF WHERE THIS IMAGE CAME FROM. in-toto/SLSA
       # provenance, signed through Sigstore with the job's own OIDC identity, so
@@ -540,7 +573,6 @@ jobs:
           go run ./deploy/buildinfo/cmd/buildinfo \
             -name "${{ vars.BUILD_INFO_NAME || 'software-gateway' }}" \
             -number "$CHART_VERSION" \
-            -images "${{ env.RELEASE_IMAGES }}" \
             -image-version "$IMAGE_VERSION" \
             -chart-version "$CHART_VERSION" \
             -registry "$REGISTRY_HOST" \

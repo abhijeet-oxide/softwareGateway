@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/abhijeet-oxide/softwareGateway/deploy/chartstage"
+	"github.com/abhijeet-oxide/softwareGateway/deploy/release"
 	"github.com/abhijeet-oxide/softwareGateway/deploy/secretsinv"
 )
 
@@ -1544,65 +1545,54 @@ func TestEveryBaseImagePinAgrees(t *testing.T) {
 	}
 }
 
-// TestTheReleaseImageListMatchesTheBuildMatrix keeps one answer to "what is in
-// a release".
+// TestTheComponentListIsTheOnlyOne replaces the list cd.yml used to restate.
 //
-// cd.yml says it twice and has to: the `images` matrix pairs each component
-// with the Dockerfile it builds from, and RELEASE_IMAGES is the flat list the
-// Build Info job resolves against the registry. They describe the same thing
-// and nothing makes them agree.
+// What a release consists of is a fact about this repository - a Dockerfile per
+// image and a deployment that runs it - so deploy/release holds it and the
+// workflow reads it: the matrix is an expression over that output, not a list of
+// its own. This test fails if somebody writes the components back into the
+// workflow, which is how the two would drift again.
 //
-// The failure is silent in the direction that matters. Add a fourth image to
-// the matrix and forget the list, and every release is built correctly and
-// then described as if that component did not exist - a Build Info that looks
-// complete, an Xray scan that covers three artifacts of four, and a promotion
-// that leaves one behind.
-func TestTheReleaseImageListMatchesTheBuildMatrix(t *testing.T) {
+// It also holds the list to its word: a component naming a Dockerfile or an
+// input path that is not there produces a matrix row that cannot build, and a
+// change-detection path that matches nothing and therefore never rebuilds.
+func TestTheComponentListIsTheOnlyOne(t *testing.T) {
+	comps := release.Components()
+	if len(comps) == 0 {
+		t.Fatal("this product publishes no images, which cannot be right")
+	}
+
+	for _, c := range comps {
+		if _, err := os.Stat(filepath.Join(repoRoot, c.Dockerfile)); err != nil {
+			t.Errorf("component %q builds from %s, which does not exist", c.Name, c.Dockerfile)
+		}
+		if len(c.Inputs) == 0 {
+			t.Errorf("component %q declares no inputs, so nothing can decide whether it changed", c.Name)
+		}
+		for _, in := range c.Inputs {
+			if _, err := os.Stat(filepath.Join(repoRoot, in)); err != nil {
+				t.Errorf("component %q reads %s, which does not exist.\n"+
+					"\nAn input path that matches nothing never reports a change, so that image is\n"+
+					"never rebuilt and a release ships the last one that was.\n", c.Name, in)
+			}
+		}
+	}
+
 	for _, name := range []string{"cd.yml", "cd_enterprise.yml.disabled"} {
-		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(repoRoot, ".github", "workflows", name)
-			b, err := os.ReadFile(path) // #nosec G304 -- the fixed names above.
-			if err != nil {
-				t.Fatalf("read %s: %v", name, err)
+		b, err := os.ReadFile(filepath.Join(repoRoot, ".github", "workflows", name)) // #nosec G304 -- fixed names.
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		text := string(b)
+		if !strings.Contains(text, "fromJSON(needs.version.outputs.components)") {
+			t.Errorf("%s does not read its matrix from deploy/release.\n"+
+				"\nA second copy of the component list is a second answer to what a release is,\n"+
+				"and the one that goes stale is whichever nobody is looking at.\n", name)
+		}
+		for _, c := range comps {
+			if strings.Contains(text, "- component: "+c.Name) {
+				t.Errorf("%s spells out component %q; the matrix comes from deploy/release now", name, c.Name)
 			}
-			var wf struct {
-				Env  map[string]string `json:"env"`
-				Jobs map[string]struct {
-					Strategy struct {
-						Matrix struct {
-							Include []map[string]string `json:"include"`
-						} `json:"matrix"`
-					} `json:"strategy"`
-				} `json:"jobs"`
-			}
-			if err := yaml.Unmarshal(b, &wf); err != nil {
-				t.Fatalf("parse %s: %v", name, err)
-			}
-
-			var matrix []string
-			for _, entry := range wf.Jobs["images"].Strategy.Matrix.Include {
-				if c := entry["component"]; c != "" {
-					matrix = append(matrix, c)
-				}
-			}
-			if len(matrix) == 0 {
-				t.Fatalf("%s: found no components in the images matrix", name)
-			}
-
-			declared := strings.Split(wf.Env["RELEASE_IMAGES"], ",")
-			for i := range declared {
-				declared[i] = strings.TrimSpace(declared[i])
-			}
-			sort.Strings(matrix)
-			sort.Strings(declared)
-
-			if !slices.Equal(matrix, declared) {
-				t.Errorf("%s: the images matrix builds %v and RELEASE_IMAGES says %v.\n"+
-					"\nA release is described by RELEASE_IMAGES and built by the matrix. When they\n"+
-					"disagree, the pipeline ships an artifact that no release mentions, or promises\n"+
-					"one it never built - and the Build Info looks complete either way.\n",
-					name, matrix, declared)
-			}
-		})
+		}
 	}
 }

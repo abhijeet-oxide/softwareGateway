@@ -15,10 +15,11 @@ type Manifest struct {
 	Layers []Blob
 }
 
-// Blob is one addressable piece of an artifact.
+// Blob is one addressable piece of an artifact. Its digest and nothing else:
+// Artifactory's artifact record is keyed on the sha256, and a size carried here
+// would be a field read from every manifest and put nowhere.
 type Blob struct {
 	Digest string
-	Size   int64
 }
 
 // Resolver reads a manifest from a registry. An interface because the useful

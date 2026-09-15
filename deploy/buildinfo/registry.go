@@ -76,11 +76,9 @@ func (r *Registry) Manifest(ctx context.Context, ref string) (Manifest, error) {
 	var doc struct {
 		Config struct {
 			Digest string `json:"digest"`
-			Size   int64  `json:"size"`
 		} `json:"config"`
 		Layers []struct {
 			Digest string `json:"digest"`
-			Size   int64  `json:"size"`
 		} `json:"layers"`
 	}
 	if err := json.Unmarshal(body, &doc); err != nil {
@@ -93,9 +91,9 @@ func (r *Registry) Manifest(ctx context.Context, ref string) (Manifest, error) {
 	if m.Digest == "" {
 		return Manifest{}, fmt.Errorf("registry returned no Docker-Content-Digest for %s", ref)
 	}
-	m.Config = Blob{Digest: doc.Config.Digest, Size: doc.Config.Size}
+	m.Config = Blob{Digest: doc.Config.Digest}
 	for _, l := range doc.Layers {
-		m.Layers = append(m.Layers, Blob{Digest: l.Digest, Size: l.Size})
+		m.Layers = append(m.Layers, Blob{Digest: l.Digest})
 	}
 	return m, nil
 }

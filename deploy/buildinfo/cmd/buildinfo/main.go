@@ -42,6 +42,7 @@ func run() error {
 	// Credentials and context from the environment.
 	var (
 		base      = os.Getenv("BUILD_INFO_URL")
+		project   = os.Getenv("BUILD_INFO_PROJECT")
 		user      = os.Getenv("REGISTRY_USERNAME")
 		token     = os.Getenv("REGISTRY_TOKEN")
 		revision  = os.Getenv("GITHUB_SHA")
@@ -103,7 +104,7 @@ func run() error {
 		return nil
 	}
 
-	client := &buildinfo.Client{BaseURL: base, Username: user, Token: token}
+	client := &buildinfo.Client{BaseURL: base, Project: project, Username: user, Token: token}
 	if err := client.Publish(ctx, bi); err != nil {
 		return err
 	}

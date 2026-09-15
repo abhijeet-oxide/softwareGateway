@@ -547,6 +547,11 @@ jobs:
           # The Artifactory ROOT, including /artifactory - not the registry
           # host. They are usually the same machine and never the same URL.
           BUILD_INFO_URL: ${{ vars.BUILD_INFO_URL }}
+          # The JFrog project key, when the repositories belong to one - the
+          # prefix on a repository named like `<key>-oci-stage`. Without it the
+          # build is accepted and filed in the global scope, where the project's
+          # own people do not see it.
+          BUILD_INFO_PROJECT: ${{ vars.BUILD_INFO_PROJECT }}
           IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
           CHART_VERSION: ${{ needs.version.outputs.chart_version }}
           # Promotion is a decision, not a step: empty unless somebody asks for

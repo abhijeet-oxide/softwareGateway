@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"time"
 )
@@ -14,7 +15,15 @@ import (
 // Client talks to one Artifactory.
 type Client struct {
 	// BaseURL is the Artifactory root, e.g. https://artifacts.example.internal/artifactory
-	BaseURL  string
+	BaseURL string
+	// Project is the JFrog project key, when the repositories belong to one.
+	//
+	// IT IS NOT COSMETIC. A build published without it lands in the global
+	// scope: it does not appear under the project everything else is in, and a
+	// credential scoped to that project may be refused outright. A repository
+	// named like `<key>-oci-stage` is the sign that there is one - that prefix
+	// is the project key.
+	Project  string
 	Username string
 	Token    string
 	HTTP     *http.Client
@@ -29,7 +38,11 @@ func (c *Client) do(ctx context.Context, method, path string, body any) error {
 		}
 		buf = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimSuffix(c.BaseURL, "/")+path, buf)
+	url := strings.TrimSuffix(c.BaseURL, "/") + path
+	if c.Project != "" {
+		url += "?project=" + neturl.QueryEscape(c.Project)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, buf)
 	if err != nil {
 		return err
 	}
@@ -62,8 +75,9 @@ func (c *Client) do(ctx context.Context, method, path string, body any) error {
 			"Publishing Build Info needs deploy and read permission on the build, which is "+
 			"separate from permission to push the images.\n%s", method, path, res.Status, detail)
 	case http.StatusNotFound:
-		return fmt.Errorf("%s %s: %s - check BUILD_INFO_URL names the Artifactory root, "+
-			"including /artifactory.\n%s", method, path, res.Status, detail)
+		return fmt.Errorf("%s %s: %s - check BUILD_INFO_URL names the Artifactory ROOT, "+
+			"including /artifactory and nothing after it, and that BUILD_INFO_PROJECT "+
+			"names the project if the repositories belong to one.\n%s", method, path, res.Status, detail)
 	default:
 		return fmt.Errorf("%s %s: %s\n%s", method, path, res.Status, detail)
 	}

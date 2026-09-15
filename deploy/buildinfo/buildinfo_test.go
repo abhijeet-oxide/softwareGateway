@@ -217,3 +217,42 @@ func TestPromotionNeedsSomewhereToGo(t *testing.T) {
 		t.Error("a promotion with no target must not be sent")
 	}
 }
+
+// TestTheProjectKeyTravelsWithEveryCall guards the setting whose absence is
+// silent. A build published without its project key is accepted and stored in
+// the global scope: it does not appear under the project the repositories
+// belong to, and nothing in the response says so.
+func TestTheProjectKeyTravelsWithEveryCall(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path+"?"+r.URL.RawQuery)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := &buildinfo.Client{BaseURL: srv.URL, Project: "apm0047661", Username: "ci", Token: "tok", HTTP: srv.Client()}
+	if err := c.Publish(t.Context(), &buildinfo.BuildInfo{Name: "n", Number: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Promote(t.Context(), "n", "1", buildinfo.Promotion{TargetRepo: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range seen {
+		if !strings.Contains(got, "project=apm0047661") {
+			t.Errorf("%s carries no project key", got)
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("expected a publish and a promotion, saw %d calls", len(seen))
+	}
+
+	// And with no project configured, no stray parameter.
+	seen = nil
+	c.Project = ""
+	if err := c.Publish(t.Context(), &buildinfo.BuildInfo{Name: "n", Number: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(seen[0], "project=") {
+		t.Errorf("an unset project must not be sent at all; got %s", seen[0])
+	}
+}

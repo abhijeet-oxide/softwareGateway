@@ -95,7 +95,8 @@ image into a release repository claims it as this product's output.
 | Variable | Effect when unset |
 |---|---|
 | `BUILD_INFO` | The job does not run. Nothing else changes. |
-| `BUILD_INFO_URL` | Required when `BUILD_INFO` is set: the Artifactory **root**, including `/artifactory`. It is usually the same machine as the registry and never the same URL, which is the mistake the 404 message names. |
+| `BUILD_INFO_URL` | Required when `BUILD_INFO` is set: the Artifactory **root**, including `/artifactory` and nothing after it. It is usually the same machine as the registry and never the same URL - the registry host has no `/artifactory` and the API paths are appended here, so `.../artifactory/api/build` is what gets called. That mistake is what the 404 message names. |
+| `BUILD_INFO_PROJECT` | The build is filed in Artifactory's **global** scope. That is accepted silently and is usually wrong: a repository named `<key>-oci-stage` belongs to project `<key>`, the build should be filed there too, and a credential scoped to the project may be refused without it. |
 | `BUILD_INFO_NAME` | `software-gateway`. The Build Info name, stable across releases; the number is the chart version, so a retry updates one record instead of opening a second. |
 | `BUILD_ATTESTATION` | No provenance is signed. |
 | `BUILD_ATTESTATION_IN_REGISTRY` | Attestations stay in GitHub rather than being pushed as OCI referrers. |

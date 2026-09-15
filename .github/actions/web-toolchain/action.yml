@@ -1,0 +1,66 @@
+name: Web toolchain
+description: >-
+  Node, pnpm and a warm pnpm store. pnpm arrives through npm rather than
+  pnpm/action-setup: the organisation admits actions from GitHub, from the
+  enterprise and from verified Marketplace publishers only, and a third-party
+  setup action is none of those. Installing it here also keeps one rule for the
+  package manager - deploy/build/Dockerfile.web installs pnpm exactly this way,
+  and for the same reasons.
+
+inputs:
+  node-version:
+    description: The Node toolchain
+    required: true
+  pnpm-version:
+    description: >-
+      The pnpm release. It must track deploy/build/Dockerfile.web's
+      PNPM_VERSION, or a lockfile CI accepts is one the image build rejects.
+    required: true
+  lockfile:
+    description: The lockfile whose hash keys the store cache
+    default: web/pnpm-lock.yaml
+  registry:
+    description: >-
+      An npm registry to install pnpm from. Empty leaves the runner's own npm
+      configuration in charge, which is what a self-hosted runner behind a
+      proxy already has right.
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # Node first, and without setup-node's `cache: pnpm`. That mode shells out
+    # to `pnpm store path` while resolving the cache, so it needs a pnpm that
+    # does not exist yet; the store is cached below instead, once there is one.
+    - uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    # corepack is the other way to do this and it is the wrong one here: it
+    # resolves pnpm against registry.npmjs.org directly, honouring neither the
+    # configured registry nor the proxy variables, so behind a proxy it times
+    # out before a single dependency is fetched. npm honours both.
+    - name: Install pnpm
+      shell: bash
+      env:
+        PNPM_VERSION: ${{ inputs.pnpm-version }}
+        NPM_REGISTRY: ${{ inputs.registry }}
+      run: |
+        set -euo pipefail
+        if [ -n "$NPM_REGISTRY" ]; then
+          npm install --global --registry="$NPM_REGISTRY" "pnpm@$PNPM_VERSION"
+        else
+          npm install --global "pnpm@$PNPM_VERSION"
+        fi
+        pnpm --version
+
+    - name: Locate the pnpm store
+      id: store
+      shell: bash
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@v4
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: ${{ runner.os }}-pnpm-store-${{ hashFiles(inputs.lockfile) }}
+        restore-keys: ${{ runner.os }}-pnpm-store-

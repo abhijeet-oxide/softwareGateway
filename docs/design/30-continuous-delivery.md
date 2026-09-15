@@ -752,6 +752,66 @@ CodeQL gets `security-events: write` in its job only; CD gets `contents: write`
 for the tag and `pull-requests: write` for the pointer PR. No workflow uses
 `pull_request_target`, so nothing from a fork runs with a writable token.
 
+### 12.10 Which actions a workflow may use
+
+The organisation running this pipeline admits an action only if it is created
+by GitHub, owned by the enterprise, published by a verified Marketplace
+creator, or named in an allowlist an administrator keeps. Everything else is
+refused before the job starts, and the run fails with the policy text rather
+than with anything about the build. `pnpm/action-setup` is in none of those
+categories, and that is what stopped CI:
+
+```
+The action pnpm/action-setup@0977fd9 is not allowed in this repository
+because all actions must be from a repository owned by your enterprise,
+created by GitHub, verified in the GitHub Marketplace, or match one of
+the patterns: ...
+```
+
+So pnpm is installed here instead, by
+[`.github/actions/web-toolchain/`](../../.github/actions/web-toolchain/), from
+npm - which is how `Dockerfile.web` has always installed it, and for a reason
+that is not about policy at all: corepack resolves the package manager against
+`registry.npmjs.org` directly, honouring neither the configured registry nor
+the proxy variables, so behind a proxy it times out before a single dependency
+is fetched. One rule now covers CI and the image build.
+
+Two smaller consequences. `actions/setup-node`'s `cache: pnpm` mode shells out
+to `pnpm store path` while resolving the cache, so it cannot run before pnpm
+exists - the store is cached explicitly, with `actions/cache`, once there is a
+pnpm to ask. And the pnpm version is passed in from the workflow so that CI and
+`Dockerfile.web` can be seen to agree; they must, or a lockfile CI accepts is
+one the image build rejects.
+
+The alternative was to ask an administrator to add `pnpm/action-setup@*` to the
+allowlist. It would have worked and it was not worth it: the allowlist is a
+security control shared by every repository in the organisation, a request
+against it outlives the person who made it, and this saves four lines of YAML.
+What would change our mind is a setup action that does something we cannot do
+in four lines - a multi-platform toolchain, or a signature to verify.
+
+### 12.11 The builder that can export a cache
+
+`docker/setup-buildx-action` is left on its default `docker-container` driver.
+It was pinned to `driver: docker` - the runner's own daemon - and a release
+failed on the registry layer cache (§12.5):
+
+```
+cache export is not supported by the docker driver
+```
+
+The daemon's image store is not a BuildKit one and has nowhere to write a cache
+manifest. The documented alternative is to turn on the daemon's containerd
+image store, which is a change to every runner host - including hosts this
+repository does not own - and it buys a local image in the daemon that this job
+never looks at: the image is pushed, and the step after it asks the registry.
+The container driver is the cheaper half of the same choice.
+
+What would change our mind is a job that has to `docker run` what it just
+built. That one wants the image in the local daemon, and it should load it
+deliberately rather than by driver, because a release must not depend on the
+runner it landed on.
+
 ## 13. Files
 
 - [`deploy/charts/software-gateway/`](../../deploy/charts/software-gateway/) - the chart, and its README
@@ -767,5 +827,6 @@ for the tag and `pull-requests: write` for the pointer PR. No workflow uses
 - [`.github/workflows/cd.yml`](../../.github/workflows/cd.yml) - build, publish, open the pointer PR
 - [`.github/workflows/security.yml`](../../.github/workflows/security.yml) - the scanners
 - [`.github/actions/toolchain/`](../../.github/actions/toolchain/) - one place that installs Go and the CLIs
+- [`.github/actions/web-toolchain/`](../../.github/actions/web-toolchain/) - Node, pnpm and the pnpm store cache
 - [`.gitleaks.toml`](../../.gitleaks.toml) - what is allowed to look like a credential
 - [`.github/dependabot.yml`](../../.github/dependabot.yml) - grouped minors, majors one at a time

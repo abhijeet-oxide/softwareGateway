@@ -165,14 +165,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
-        with:
-          version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@v7
+      - uses: ./.github/actions/web-toolchain
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+          pnpm-version: ${{ env.PNPM_VERSION }}
       - name: Audit
         working-directory: web
         run: |

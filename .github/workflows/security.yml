@@ -231,6 +231,17 @@ jobs:
   # A dependency that arrives in a pull request is reviewed before it is
   # merged, not after. Pull requests only - there is no diff to review on a
   # push to main.
+  #
+  # NEEDS DEPENDENCY GRAPH ON for the repository, under Settings -> Code
+  # security. Without it this job fails with "Dependency review is not
+  # supported on this repository", which is a setting nobody has turned on
+  # rather than anything wrong with the diff - and the message says so.
+  #
+  # No `comment-summary-in-pr`: posting it needs `pull-requests: write`, and a
+  # run triggered by Dependabot gets a read-only token whatever this file asks
+  # for. Most pull requests here are Dependabot's, so the comment would fail on
+  # exactly the ones a finding is most likely to appear in. The findings are in
+  # the job summary and the check annotation either way.
   dependency-review:
     name: Dependency review
     if: github.event_name == 'pull_request'
@@ -238,13 +249,11 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      pull-requests: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
-          comment-summary-in-pr: on-failure
           # Copyleft licences would change this product's distribution terms.
           deny-licenses: AGPL-3.0, GPL-3.0, GPL-2.0
 

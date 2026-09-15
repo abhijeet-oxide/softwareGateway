@@ -128,7 +128,7 @@ runs:
       shell: bash
       run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
-    - uses: actions/cache@v4
+    - uses: actions/cache@v5
       with:
         path: ${{ steps.store.outputs.path }}
         key: ${{ runner.os }}-pnpm-store-${{ hashFiles(inputs.lockfile) }}

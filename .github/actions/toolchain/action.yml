@@ -23,6 +23,14 @@ inputs:
       Install golangci-lint. It refuses to run when built with a Go older than
       go.mod targets, so this version and GO_VERSION move together.
     default: 'false'
+  mirror:
+    description: >-
+      A base URL to take the released binaries from instead of github.com and
+      get.helm.sh, for a runner with no route to either. Each archive is
+      fetched as <mirror>/<filename> - the file names below are already
+      versioned and distinct, so the mirror is a flat directory. Empty, the
+      default, fetches from upstream exactly as before.
+    default: ''
 
 runs:
   using: composite
@@ -40,6 +48,7 @@ runs:
         KUSTOMIZE_VERSION: "5.7.1"
         KUBECONFORM_VERSION: "0.6.7"
         GOLANGCI_VERSION: "2.13.2"
+        MIRROR: ${{ inputs.mirror }}
       run: |
         set -euo pipefail
         bin="$RUNNER_TEMP/bin"
@@ -48,15 +57,23 @@ runs:
 
         # Three attempts each: a registry hiccup must not fail a build, and a
         # download that is genuinely gone must not retry forever.
+        #
+        # With MIRROR set, only the host and path change - the file name, the
+        # retries and the failure message are the same, so a mirror that is
+        # missing an archive reports the same way a bad version does.
         fetch() {
+          url="$1"
+          if [ -n "${MIRROR:-}" ]; then
+            url="${MIRROR%/}/$(basename "$1")"
+          fi
           for attempt in 1 2 3; do
-            if curl -fsSL --retry 2 --retry-delay 2 "$1" -o "$2"; then
+            if curl -fsSL --retry 2 --retry-delay 2 "$url" -o "$2"; then
               return 0
             fi
-            echo "download failed ($attempt/3): $1"
+            echo "download failed ($attempt/3): $url"
             sleep 5
           done
-          echo "::error::could not download $1"
+          echo "::error::could not download $url"
           return 1
         }
 

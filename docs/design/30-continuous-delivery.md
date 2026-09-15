@@ -812,6 +812,52 @@ built. That one wants the image in the local daemon, and it should load it
 deliberately rather than by driver, because a release must not depend on the
 runner it landed on.
 
+### 12.12 The same pipeline in a network that says no
+
+This repository is mirrored into an enterprise GitHub organisation, and the
+mirror is not a different product - it is the same one under a network policy
+that refuses four separate things:
+
+- **An IP allow list on the repository owner.** A GitHub-hosted runner's address
+  is not on it, so `actions/checkout` fails with `403` before a job reads a line
+  of code. This is what broke the security workflow: its nine jobs had
+  `ubuntu-latest` written into them rather than `RUNNER_LABEL`, which was an
+  omission next to `ci.yml` and `cd.yml` rather than a decision, and it reported
+  as "a security scanner failed" when nothing had scanned anything. They now
+  read the variable like everything else, which is the whole fix in the shared
+  file.
+- **An action allow list** (section 12.10).
+- **Restricted egress.** A scanner's database, a released binary and a package
+  manager installed from npm are three fetches that block independently.
+- **Advanced Security that may not be licensed**, without which CodeQL, SARIF
+  upload, dependency review and the code scanning API all fail.
+
+The shared files carry only the first, because `RUNNER_LABEL` is already how
+every other job picks a runner and an unset variable changes nothing. The rest
+lives in `*_enterprise.yml.disabled` beside them: the same pipelines, each
+externally-dependent scanner behind a repository variable that is off unless it
+is set, and no hosted-runner fallback at all. GitHub reads `.yml` and `.yaml`
+under `.github/workflows/` and nothing else, so the suffix is what keeps them
+from running here.
+
+Off rather than on is the deliberate half. A scanner that cannot reach its
+database does not report "nothing found" - it fails, and a Security check that
+is red because egress is blocked is a check everybody learns to scroll past.
+What stays on unconditionally is the secret scan: it reads the git history and
+asks no service anything, and a credential in the history is a credential to
+rotate under any network policy.
+
+The alternative was one set of files with a switch per deviation. It was
+rejected on what it does to the file everybody reads: nine `if:` conditions on
+variables nobody here sets, in a pipeline whose readers are mostly trying to
+find out why their pull request is red. `TestEnterpriseWorkflowsTrackTheirOriginals`
+pays the copy's real cost - a job added to a pipeline and not to its copy - by
+comparing the two job sets and nothing else.
+
+What would change our mind is the deviations converging. If the enterprise copy
+ends up differing only in variables the public file could carry unset, it should
+become one file, and the copy should be deleted rather than left to rot.
+
 ## 13. Files
 
 - [`deploy/charts/software-gateway/`](../../deploy/charts/software-gateway/) - the chart, and its README
@@ -826,6 +872,7 @@ runner it landed on.
 - [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) - correctness, on every pull request
 - [`.github/workflows/cd.yml`](../../.github/workflows/cd.yml) - build, publish, open the pointer PR
 - [`.github/workflows/security.yml`](../../.github/workflows/security.yml) - the scanners
+- [`.github/workflows/README.md`](../../.github/workflows/README.md) - the two sets, and the variables the enterprise one reads
 - [`.github/actions/toolchain/`](../../.github/actions/toolchain/) - one place that installs Go and the CLIs
 - [`.github/actions/web-toolchain/`](../../.github/actions/web-toolchain/) - Node, pnpm and the pnpm store cache
 - [`.gitleaks.toml`](../../.gitleaks.toml) - what is allowed to look like a credential

@@ -1103,3 +1103,85 @@ func TestTheChartRefusesWhatCannotWork(t *testing.T) {
 		})
 	}
 }
+
+// TestEnterpriseWorkflowsTrackTheirOriginals is the cost of keeping a second
+// copy of each pipeline, made cheap enough to be worth paying.
+//
+// .github/workflows/*_enterprise.yml.disabled are the same pipelines written
+// for a network with an IP allow list, allow-listed actions and no egress; the
+// README beside them says why one file with switches was not the answer. The
+// failure a copy has is silent: a job is added to ci.yml, nobody opens the copy
+// for a year, and the enterprise repository has been running a pipeline that
+// never built the thing the job was added to check.
+//
+// Job NAMES only. What a job runs on, what it is gated by, and which of its
+// steps fetch from a mirror are exactly what the two files exist to disagree
+// about; that a job is there at all is not.
+func TestEnterpriseWorkflowsTrackTheirOriginals(t *testing.T) {
+	const suffix = "_enterprise.yml.disabled"
+
+	dir := filepath.Join(repoRoot, ".github", "workflows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read the workflows directory: %v", err)
+	}
+
+	jobs := func(path string) []string {
+		b, err := os.ReadFile(path) // #nosec G304 -- path is built from the workflow directory.
+		if err != nil {
+			t.Fatalf("read %s: %v", filepath.Base(path), err)
+		}
+		var wf struct {
+			Jobs map[string]struct{} `json:"jobs"`
+		}
+		if err := yaml.Unmarshal(b, &wf); err != nil {
+			t.Fatalf("parse %s: %v", filepath.Base(path), err)
+		}
+		out := make([]string, 0, len(wf.Jobs))
+		for name := range wf.Jobs {
+			out = append(out, name)
+		}
+		sort.Strings(out)
+		return out
+	}
+
+	var checked int
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), suffix) {
+			continue
+		}
+		public := strings.TrimSuffix(e.Name(), suffix) + ".yml"
+		if _, err := os.Stat(filepath.Join(dir, public)); err != nil {
+			t.Errorf("%s has no %s to track.\n"+
+				"\nEither the pipeline was renamed and its enterprise copy was not, or the copy\n"+
+				"outlived the pipeline and is now the only place its jobs are written down.\n",
+				e.Name(), public)
+			continue
+		}
+		checked++
+
+		want, got := jobs(filepath.Join(dir, public)), jobs(filepath.Join(dir, e.Name()))
+		for _, name := range want {
+			if !slices.Contains(got, name) {
+				t.Errorf("%s has the job %q and %s does not.\n"+
+					"\nAdd it to the copy, or - if it cannot work in that network - keep it there\n"+
+					"disabled by a repository variable, the way the security copy does, so the\n"+
+					"reason is written down where the next person looks.\n",
+					public, name, e.Name())
+			}
+		}
+		for _, name := range got {
+			if !slices.Contains(want, name) {
+				t.Errorf("%s has the job %q and %s does not.\n"+
+					"\nA job in the enterprise copy alone is a job nothing here tests. Either it\n"+
+					"belongs in the pipeline both networks run, or it was left behind by a rename.\n",
+					e.Name(), name, public)
+			}
+		}
+	}
+
+	if checked == 0 {
+		t.Fatalf("found no *%s beside the workflows - either they were deleted, or "+
+			"this test is looking in the wrong place", suffix)
+	}
+}

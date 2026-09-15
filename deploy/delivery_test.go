@@ -1261,3 +1261,72 @@ func TestNoWorkflowEnvKeyDiffersOnlyByCase(t *testing.T) {
 		t.Fatal("found no workflows to check - either they moved, or this test is looking in the wrong place")
 	}
 }
+
+// TestEveryBuildArgIsAKeyValue catches a comment written inside a build-args
+// block, which is not a comment at all.
+//
+// `build-args: |` is a literal scalar: every line inside it is data, and
+// docker/build-push-action reads each one as KEY=VALUE. A `#` line there does
+// not disappear the way it does everywhere else in the file - it is handed to
+// the builder as an argument, and neither a YAML parser nor actionlint says a
+// word, because both see a perfectly good string.
+func TestEveryBuildArgIsAKeyValue(t *testing.T) {
+	dir := filepath.Join(repoRoot, ".github", "workflows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read the workflows directory: %v", err)
+	}
+
+	var checked int
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) == ".md" {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name())) // #nosec G304 -- from the workflow directory.
+		if err != nil {
+			t.Fatalf("read %s: %v", e.Name(), err)
+		}
+		var doc any
+		if err := yaml.Unmarshal(b, &doc); err != nil {
+			t.Fatalf("parse %s: %v", e.Name(), err)
+		}
+
+		var walk func(any)
+		walk = func(node any) {
+			switch n := node.(type) {
+			case map[string]any:
+				for key, value := range n {
+					if key == "build-args" {
+						block, ok := value.(string)
+						if !ok {
+							continue
+						}
+						checked++
+						for _, line := range strings.Split(block, "\n") {
+							line = strings.TrimSpace(line)
+							if line == "" {
+								continue
+							}
+							if !strings.Contains(line, "=") {
+								t.Errorf("%s: build-args carries %q, which is not KEY=VALUE.\n"+
+									"\nEverything inside `build-args: |` is data. A comment there is passed to the\n"+
+									"builder as an argument; put it on the line above `build-args:`, where the\n"+
+									"YAML parser will treat it as one.\n", e.Name(), line)
+							}
+						}
+					}
+					walk(value)
+				}
+			case []any:
+				for _, item := range n {
+					walk(item)
+				}
+			}
+		}
+		walk(doc)
+	}
+
+	if checked == 0 {
+		t.Fatal("found no build-args blocks - either the image builds moved, or this test is looking in the wrong place")
+	}
+}

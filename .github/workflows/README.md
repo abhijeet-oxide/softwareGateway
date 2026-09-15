@@ -44,6 +44,7 @@ Settings -> Secrets and variables -> Actions -> Variables.
 | `RUNNER_LABEL` | all three | **The run fails at startup.** Deliberate: the public files fall back to `ubuntu-latest`, and in a repository with an IP allow list that fallback is a 403 dressed up as a scanner failure. |
 | `TOOL_MIRROR` | ci, cd, security | Task, Helm, kustomize, kubeconform, golangci-lint and gitleaks come from github.com and get.helm.sh, as in the public files. Set it to a base URL and each archive is fetched as `<mirror>/<file name>` - the names are already versioned, so the mirror is one flat directory. |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` | all three | **No proxy for anything the runner fetches.** The jobs reach vuln.go.dev, ghcr.io, the npm registry and a handful of release pages directly, and behind an egress policy that is a `Forbidden` per tool. Set them even if the runner image already carries a proxy: each workflow sets both upper and lower case from these, and an unset variable writes an empty one over the image's. |
+| `GOPROXY`, `GOSUMDB` | all three | Go's own defaults (`proxy.golang.org`, `sum.golang.org`). Set `GOPROXY` to an internal module mirror. `GOSUMDB` is the next thing to fail: `go run <module>@latest`, which is how govulncheck is installed, resolves a module `go.sum` has never seen and verifies it against the checksum database - set it to `off` if the mirror is trusted and does not proxy `sum.golang.org`. |
 | `NPM_REGISTRY` | ci, cd, security | npm's default registry. Set it and `.github/actions/web-toolchain` writes an npmrc that both npm and pnpm read, so pnpm itself and every package come from the one host. |
 | `SECURITY_CODEQL` | security | CodeQL does not run. It needs Advanced Security **and** egress for the bundle. |
 | `SECURITY_DEPENDENCY_REVIEW` | security | Dependency review does not run. Needs Advanced Security and the dependency graph. |
@@ -52,7 +53,7 @@ Settings -> Secrets and variables -> Actions -> Variables.
 | `SECURITY_PNPM_AUDIT` | security | `pnpm audit` does not run. A pull-through registry mirror often does not serve the audit endpoint. |
 | `SECURITY_ALERT_EXPORT` | security | The alert inventory does not run. It needs the code scanning API, and `gh` and `jq` on the runner. |
 | `TRIVY_DB_REPOSITORY`, `TRIVY_JAVA_DB_REPOSITORY` | security | Upstream (ghcr.io). Set them to internal mirrors. |
-| `GOVULNDB` | security, **and the shared `security.yml`** | Upstream (`vuln.go.dev`). govulncheck makes two fetches and only the first uses GOPROXY: the tool is a module, the database behind it is a plain request to that host. A policy that mirrors Go modules and not that host fails the second while the first succeeds. |
+| `GOVULNDB` | security, **and the shared `security.yml`** | Upstream (`vuln.go.dev`). **`GOPROXY` does not cover this.** govulncheck makes two fetches: the tool is a Go module and comes through `GOPROXY`, but the vulnerability database behind it is a plain HTTPS request to `vuln.go.dev`, which no module mirror serves. Point this at a mirror of that database, allow the host, or leave govulncheck off. |
 
 ### CodeQL is a repository setting before it is a workflow
 

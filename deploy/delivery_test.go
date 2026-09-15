@@ -757,6 +757,13 @@ var instanceDials = []string{
 	"identity.login.replicas",
 	"identity.proxy.replicas",
 	"identity.sso.enabled",
+	// The chart's values for these three are PLACEHOLDERS that exist so
+	// `sso.enabled: true` renders at all. Matching one is not agreement with a
+	// default - it is an instance that has not been pointed at a directory yet,
+	// and the line has to stay visible for the person who will.
+	"identity.sso.issuer",
+	"identity.sso.clientId",
+	"identity.sso.existingSecret",
 	"identity.bootstrapAdmin.username",
 	"database.cluster.instances",
 	"database.cluster.storage.size",
@@ -1020,6 +1027,78 @@ func TestMirrorPathsMatchTheChart(t *testing.T) {
 						"commands produce a path nothing asks for - which reads as ImagePullBackOff on a\n"+
 						"registry that visibly has the image.\n", img.Key, img.Destination)
 				}
+			}
+		})
+	}
+}
+
+// refusals are configurations the chart must not render.
+//
+// EACH ONE COMES UP GREEN AND DOES NOT WORK, which is the only kind worth
+// failing a render for. They lived in a shell loop in ci.yml until three of
+// them silently stopped testing anything: the values they set were renamed,
+// `helm template` then succeeded for the wrong reason, and the loop reported
+// "the chart accepted X" - correctly, but three releases too late.
+//
+// Beside the chart they cannot drift. A renamed value breaks this test in the
+// same commit that renames it.
+var refusals = []struct {
+	what string
+	set  []string
+}{
+	{"a release that renders neither layer", []string{
+		"layers.application=false"}},
+	{"a database layer with no cluster to name", []string{
+		"layers.application=false", "layers.database=true", "database.cluster.name="}},
+	{"an external database nobody said where to find", []string{
+		"database.cluster.name="}},
+	{"a masterkey that is not 32 bytes", []string{
+		"identity.masterkey.value=short"}},
+	// The chart ships placeholders so that `sso.enabled: true` renders, but an
+	// operator who CLEARS one has said something different from leaving it
+	// alone, and gets told rather than a seed Job that never starts.
+	{"single sign-on with the client secret cleared", []string{
+		"identity.sso.existingSecret="}},
+	{"single sign-on with the issuer cleared", []string{
+		"identity.sso.issuer="}},
+	{"the bootstrap password shortcut with single sign-on on", []string{
+		"identity.bootstrapAdmin.password=hunter2"}},
+	{"an Ingress routing on an IP literal", []string{
+		"access.expose.type=ingress", "access.webUrl=http://10.0.0.1"}},
+	{"a browser URL with a path on it", []string{
+		"access.webUrl=http://gateway.example.com/ui"}},
+	{"a node port outside the node port range", []string{
+		"access.expose.type=nodePort"}},
+	{"a pull secret that no inventory entry produces", []string{
+		"secrets.backend=vault", "secrets.registryPullSecret.enabled=true",
+		"secrets.registryPullSecret.from=nothing-declares-this"}},
+	{"an internal registry with no mirror for the third-party images", []string{
+		"images.registry=registry.example.internal"}},
+}
+
+// TestTheChartRefusesWhatCannotWork renders each of the above and requires the
+// render to fail.
+func TestTheChartRefusesWhatCannotWork(t *testing.T) {
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm is not on PATH; the chart job in CI covers this")
+	}
+	chart := filepath.Join(repoRoot, "deploy", "charts", "software-gateway")
+	if _, err := os.Stat(filepath.Join(chart, "files", "config", "config.yaml")); err != nil {
+		t.Skip("the chart is not staged; run `task chart:stage`")
+	}
+
+	for _, r := range refusals {
+		t.Run(r.what, func(t *testing.T) {
+			args := []string{"template", "t", chart}
+			for _, s := range r.set {
+				args = append(args, "--set", s)
+			}
+			out, err := exec.CommandContext(t.Context(), helm, args...).CombinedOutput()
+			if err == nil {
+				t.Errorf("the chart accepted %s.\n\n%s\n"+
+					"\nEither a validation rule was lost, or the values this case sets were renamed\n"+
+					"and it is no longer testing what its name says.\n", r.what, out)
 			}
 		})
 	}

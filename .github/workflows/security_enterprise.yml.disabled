@@ -81,9 +81,12 @@ env:
   #   govulncheck: fetching vulnerabilities:
   #   Get "https://vuln.go.dev/index/modules.json.gz": Forbidden
   #
-  # Both cases here too, because the tools disagree about which they read - Go
-  # and the runner take the upper, curl takes the lower - and a proxy that half
-  # the pipeline honours is worse than none.
+  # UPPER CASE ONLY, and not for style: a workflow's `env` keys are compared
+  # case-insensitively, so `HTTP_PROXY` and `http_proxy` in one block are one
+  # key and GitHub refuses the file with "'http_proxy' is already defined".
+  # Nothing is lost - Go reads either case, and so do npm, pnpm and the runner.
+  # curl prefers the lower case and accepts the upper for everything but plain
+  # `http://`, which no URL in these workflows is.
   #
   # Unset, they are empty, which every one of these tools reads as "no proxy".
   # That is right for this repository and for a fork, and it is why the variables
@@ -92,9 +95,6 @@ env:
   HTTP_PROXY: ${{ vars.HTTP_PROXY }}
   HTTPS_PROXY: ${{ vars.HTTPS_PROXY }}
   NO_PROXY: ${{ vars.NO_PROXY }}
-  http_proxy: ${{ vars.HTTP_PROXY }}
-  https_proxy: ${{ vars.HTTPS_PROXY }}
-  no_proxy: ${{ vars.NO_PROXY }}
 
 jobs:
   changes:

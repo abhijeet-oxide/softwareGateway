@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"bytes"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -1183,5 +1184,80 @@ func TestEnterpriseWorkflowsTrackTheirOriginals(t *testing.T) {
 	if checked == 0 {
 		t.Fatalf("found no *%s beside the workflows - either they were deleted, or "+
 			"this test is looking in the wrong place", suffix)
+	}
+}
+
+// TestNoWorkflowEnvKeyDiffersOnlyByCase catches the mistake that a YAML parser
+// will not: GitHub compares a workflow's `env` keys case-insensitively, so
+// HTTP_PROXY and http_proxy in one block are ONE key, and the whole file is
+// refused before any job starts.
+//
+//	The workflow is not valid. .github/workflows/ci.yml (Line: 56, Col: 3):
+//	'http_proxy' is already defined
+//
+// It is worth a test because every local check passes: the YAML is valid, the
+// keys are distinct strings, and the two spellings are exactly what the
+// Dockerfiles here set - deploy/build/Dockerfile.coordinator sets both cases on
+// purpose, which is where the habit comes from. Only GitHub rejects it, and only
+// once the file is pushed.
+//
+// Every `env` block, at any depth: the workflow's own, a job's, and a step's.
+func TestNoWorkflowEnvKeyDiffersOnlyByCase(t *testing.T) {
+	dir := filepath.Join(repoRoot, ".github", "workflows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read the workflows directory: %v", err)
+	}
+
+	var checked int
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || filepath.Ext(name) == ".md" {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, name)) // #nosec G304 -- from the workflow directory.
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		var doc any
+		if err := yaml.Unmarshal(b, &doc); err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		checked++
+
+		var walk func(node any, where string)
+		walk = func(node any, where string) {
+			switch n := node.(type) {
+			case map[string]any:
+				for key, value := range n {
+					if key == "env" {
+						if block, ok := value.(map[string]any); ok {
+							seen := map[string]string{}
+							for envKey := range block {
+								folded := strings.ToLower(envKey)
+								if first, clash := seen[folded]; clash {
+									t.Errorf("%s: the env at %s sets both %q and %q.\n"+
+										"\nGitHub folds env keys to one case, so that is one key twice and it refuses\n"+
+										"the workflow. Keep the upper case: Go, npm, pnpm and the runner read either,\n"+
+										"and curl reads the upper for everything but a plain http:// URL.\n",
+										name, where, first, envKey)
+								}
+								seen[folded] = envKey
+							}
+						}
+					}
+					walk(value, where+"."+key)
+				}
+			case []any:
+				for i, item := range n {
+					walk(item, fmt.Sprintf("%s[%d]", where, i))
+				}
+			}
+		}
+		walk(doc, name)
+	}
+
+	if checked == 0 {
+		t.Fatal("found no workflows to check - either they moved, or this test is looking in the wrong place")
 	}
 }

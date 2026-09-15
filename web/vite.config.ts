@@ -1,8 +1,17 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import Icons from 'unplugin-icons/vite'
-import brandPlugin from './src/uikit/vitePluginBrand'
-import brand from './src/brand'
+// The extensions are load-bearing, here and in everything this file reaches.
+// Vite's `configLoader: 'native'` hands the config to the runtime's own TypeScript
+// support instead of bundling it first, and that resolver does no extension
+// guessing and no directory indexes: `./src/brand` is simply not found. It is
+// the planned default, and the current loader already warns about every
+// specifier that would break under it, so the config's own module graph -
+// vitePluginBrand, brand, and the uikit files those two reach - spells its
+// imports out. The app's other 60-odd imports are resolved by Vite and need
+// nothing.
+import brandPlugin from './src/uikit/vitePluginBrand.ts'
+import brand from './src/brand.ts'
 
 // The Coordinator installs no CORS middleware, so the browser must reach the
 // API on its own origin. In development that means proxying rather than

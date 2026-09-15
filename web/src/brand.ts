@@ -1,4 +1,4 @@
-import type { BrandIdentity } from "./uikit";
+import type { BrandIdentity } from "./uikit/index.ts";
 
 // WHO THIS DEPLOYMENT IS. The one file that says "Software Gateway".
 //

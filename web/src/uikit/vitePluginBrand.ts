@@ -1,7 +1,7 @@
 import type { Plugin } from "vite";
-import { ACTIVE_PRESET, renderRootCss } from "./tokens";
-import { resolvePalette } from "./antd";
-import { documentTitle, faviconHref, type BrandIdentity } from "./brand";
+import { ACTIVE_PRESET, renderRootCss } from "./tokens.ts";
+import { resolvePalette } from "./antd.ts";
+import { documentTitle, faviconHref, type BrandIdentity } from "./brand.ts";
 
 // Build-time theming.
 //
@@ -15,7 +15,7 @@ import { documentTitle, faviconHref, type BrandIdentity } from "./brand";
 // It takes the brand as an ARGUMENT rather than importing it, so this file
 // stays identical between tools:
 //
-//   import brand from "./src/brand";
+//   import brand from "./src/brand.ts";
 //   plugins: [react(), brandPlugin(brand)]
 //
 // Runs for `vite dev` and `vite build` alike.

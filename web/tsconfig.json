@@ -6,7 +6,10 @@
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "bundler",
-    "allowImportingTsExtensions": false,
+    // For the files Vite's native config loader reads, which resolve no
+    // extension of their own (see vite.config.ts). Safe only because nothing
+    // here is emitted - TypeScript requires noEmit for it.
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "moduleDetection": "force",

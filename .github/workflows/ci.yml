@@ -120,7 +120,7 @@ jobs:
       # pnpm BEFORE node, because setup-node's pnpm cache asks pnpm where its
       # store is. The other order fails the cache step rather than the build,
       # which is a confusing way to find out.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
 

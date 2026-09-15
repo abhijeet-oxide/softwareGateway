@@ -43,7 +43,7 @@ Settings -> Secrets and variables -> Actions -> Variables.
 |---|---|---|
 | `RUNNER_LABEL` | all three | **The run fails at startup.** Deliberate: the public files fall back to `ubuntu-latest`, and in a repository with an IP allow list that fallback is a 403 dressed up as a scanner failure. |
 | `TOOL_MIRROR` | ci, cd, security | Task, Helm, kustomize, kubeconform, golangci-lint and gitleaks come from github.com and get.helm.sh, as in the public files. Set it to a base URL and each archive is fetched as `<mirror>/<file name>` - the names are already versioned, so the mirror is one flat directory. |
-| `NPM_REGISTRY` | ci, cd, security | npm's default registry. |
+| `NPM_REGISTRY` | ci, cd, security | npm's default registry. Set it and `.github/actions/web-toolchain` writes an npmrc that both npm and pnpm read, so pnpm itself and every package come from the one host. |
 | `SECURITY_CODEQL` | security | CodeQL does not run. It needs Advanced Security **and** egress for the bundle. |
 | `SECURITY_DEPENDENCY_REVIEW` | security | Dependency review does not run. Needs Advanced Security and the dependency graph. |
 | `SECURITY_TRIVY` | security | Trivy does not run. Its database comes from ghcr.io. |
@@ -51,6 +51,20 @@ Settings -> Secrets and variables -> Actions -> Variables.
 | `SECURITY_PNPM_AUDIT` | security | `pnpm audit` does not run. A pull-through registry mirror often does not serve the audit endpoint. |
 | `SECURITY_ALERT_EXPORT` | security | The alert inventory does not run. It needs the code scanning API, and `gh` and `jq` on the runner. |
 | `TRIVY_DB_REPOSITORY`, `TRIVY_JAVA_DB_REPOSITORY`, `GOVULNDB` | security | Upstream. Set them to internal mirrors. |
+
+### The one secret
+
+`REGISTRY_TOKEN`, under Settings -> Secrets and variables -> Actions ->
+Secrets. `cd.yml` already reads it for the image build; the enterprise copies of
+`ci.yml` and `security.yml` pass it to the web toolchain as well, for a registry
+that will not serve packages anonymously. Unset, the registry is read
+anonymously and nothing else changes.
+
+It is written to `$RUNNER_TEMP`, mode 0600, and never to a home directory: a
+self-hosted runner's `HOME` outlives the job, and an `~/.npmrc` there would hand
+the credential to every later job on that machine. Passing a token without
+`NPM_REGISTRY` fails the step rather than writing the credential against
+whatever registry the runner defaults to.
 
 Every `SECURITY_*` variable is off unless it is exactly `true`. Off rather than
 on, because a scanner that cannot reach its database does not report "nothing

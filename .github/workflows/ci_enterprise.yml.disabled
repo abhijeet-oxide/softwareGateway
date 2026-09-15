@@ -153,6 +153,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           registry: ${{ vars.NPM_REGISTRY }}
+          token: ${{ secrets.REGISTRY_TOKEN }}
 
       - name: Install frontend dependencies
         working-directory: web

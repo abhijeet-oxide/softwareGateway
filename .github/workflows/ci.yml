@@ -33,6 +33,29 @@ env:
   GO_VERSION: "1.26"
   NODE_VERSION: "22"
   PNPM_VERSION: "12.3.4"
+
+  # THE PROXY, FOR THE RUNNER'S OWN FETCHES. cd.yml has passed these into the
+  # image builds since the start and the Dockerfiles set both cases; nothing
+  # ever passed them to the jobs themselves, so every tool that reaches outside
+  # went direct and was refused at the egress:
+  #
+  #   govulncheck: fetching vulnerabilities:
+  #   Get "https://vuln.go.dev/index/modules.json.gz": Forbidden
+  #
+  # Both cases here too, because the tools disagree about which they read - Go
+  # and the runner take the upper, curl takes the lower - and a proxy that half
+  # the pipeline honours is worse than none.
+  #
+  # Unset, they are empty, which every one of these tools reads as "no proxy".
+  # That is right for this repository and for a fork, and it is why the variables
+  # have to be SET on a runner whose image already carries a proxy: an empty
+  # value here overrides the image's, rather than deferring to it.
+  HTTP_PROXY: ${{ vars.HTTP_PROXY }}
+  HTTPS_PROXY: ${{ vars.HTTPS_PROXY }}
+  NO_PROXY: ${{ vars.NO_PROXY }}
+  http_proxy: ${{ vars.HTTP_PROXY }}
+  https_proxy: ${{ vars.HTTPS_PROXY }}
+  no_proxy: ${{ vars.NO_PROXY }}
   GODEBUG: http2client=0
 
 jobs:

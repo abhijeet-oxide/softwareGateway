@@ -25,6 +25,21 @@ permissions:
 env:
   GO_VERSION: "1.26"
   GODEBUG: http2client=0
+  # THE PROXY, FOR THE RUNNER'S OWN FETCHES - not only for the image builds,
+  # which have had it as build arguments all along (see the `images` job). A
+  # release also downloads Helm and kustomize and talks to the registry from the
+  # runner itself, and none of that was going through it.
+  #
+  # Both cases, because the tools disagree about which they read, exactly as the
+  # Dockerfiles already set both. Unset, they are empty and every tool reads that
+  # as "no proxy" - so on a runner whose image carries a proxy, these variables
+  # must be SET rather than left to the image: an empty value here overrides it.
+  HTTP_PROXY: ${{ vars.HTTP_PROXY }}
+  HTTPS_PROXY: ${{ vars.HTTPS_PROXY }}
+  NO_PROXY: ${{ vars.NO_PROXY }}
+  http_proxy: ${{ vars.HTTP_PROXY }}
+  https_proxy: ${{ vars.HTTPS_PROXY }}
+  no_proxy: ${{ vars.NO_PROXY }}
   # The registry this product publishes to. Set these repository variables to
   # point the pipeline at your own Artifactory, ACR or Harbor.
   REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}

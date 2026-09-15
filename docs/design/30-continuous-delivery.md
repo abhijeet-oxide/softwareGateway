@@ -668,6 +668,15 @@ required check that will never report again.
   rebuilds one layer rather than re-resolving every module.
 - **`timeout-minutes` on every job.** A hung job used to hold a runner for six
   hours.
+- **Build and test are two jobs.** Nothing embeds the frontend into a binary, so
+  neither waits on the other. Run serially they were the critical path: the race
+  detector on `internal/store`'s scale tests is minutes on its own, and the
+  build behind it was minutes of a runner doing nothing.
+
+The remaining long pole is that race-detector run. `-race` is what makes
+`internal/store` minutes rather than seconds, and it stays on: those tests seed
+a hundred and fifty thousand job rows on purpose, and the concurrency bugs they
+exist to find are exactly what the detector sees and an assertion does not.
 
 ### 12.6 The scanners are not in CI
 

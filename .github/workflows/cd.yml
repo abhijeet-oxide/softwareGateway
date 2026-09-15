@@ -13,6 +13,14 @@ on:
       - '**/*.md'
   workflow_dispatch:
     inputs:
+      promote_to:
+        description: >-
+          Promote the published build to this Artifactory repository. Empty
+          publishes without promoting, which is the default: a build is
+          published because it was built, and promoted because somebody decided
+          it was good. Artifacts are copied, never moved.
+        type: string
+        default: ''
       rebuild_images:
         description: >-
           Rebuild the images even if this version is already in the registry,
@@ -32,6 +40,13 @@ permissions:
 
 env:
   GO_VERSION: "1.26"
+
+  # WHAT A RELEASE CONSISTS OF. The `images` matrix names the same components
+  # and the Dockerfile each is built from; this is the list the Build Info job
+  # resolves against the registry, and TestTheReleaseImageListMatchesTheBuildMatrix
+  # fails when they stop agreeing. A component missing here is a component
+  # missing from every release description, which is the failure nobody sees.
+  RELEASE_IMAGES: coordinator,worker,web
 
   # WHERE GO MODULES COME FROM, for the jobs themselves - the Dockerfiles have
   # taken these as build arguments from the start and the workflows never set
@@ -173,6 +188,11 @@ jobs:
   images:
     name: ${{ matrix.component }} image
     needs: version
+    permissions:
+      contents: read
+      # Both only for actions/attest-build-provenance, and unused without it.
+      id-token: write
+      attestations: write
     # `images_changed` is NOT a condition here any more - it is one input to the
     # decision the `plan` step below makes against the registry. Gating the job
     # on it is what let a failed build become a published chart pointing at
@@ -317,6 +337,7 @@ jobs:
           echo "- \`$ref\` - $note" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        id: build
         if: steps.plan.outputs.build == 'true'
         with:
           context: .
@@ -349,6 +370,27 @@ jobs:
           # Mount credentials into builds; build arguments remain visible in image history.
           secret-files: ${{ matrix.component == 'web' && format('npmrc={0}/npmrc', runner.temp) || format('netrc={0}/netrc', runner.temp) }}
           provenance: false
+
+      # A SIGNED STATEMENT OF WHERE THIS IMAGE CAME FROM. in-toto/SLSA
+      # provenance, signed through Sigstore with the job's own OIDC identity, so
+      # there is no key to hold: `gh attestation verify oci://<ref>` answers
+      # which workflow, which commit and which runner built a digest, from
+      # outside this repository and without trusting it.
+      #
+      # On the digest rather than the tag, because a tag is a pointer and the
+      # statement has to be about the bits.
+      #
+      # Off unless BUILD_ATTESTATION is set: it needs `id-token: write`, which
+      # is a permission worth granting deliberately.
+      - uses: actions/attest-build-provenance@v3
+        if: steps.plan.outputs.build == 'true' && vars.BUILD_ATTESTATION == 'true'
+        with:
+          subject-name: ${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_REPOSITORY }}/software-gateway-${{ matrix.component }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          # The attestation lives in GitHub by default. Pushing it to the
+          # registry as an OCI referrer needs the registry to serve the
+          # referrers API, which not every Artifactory version does.
+          push-to-registry: ${{ vars.BUILD_ATTESTATION_IN_REGISTRY == 'true' }}
 
   # ------------------------------------------------------------------ 3. chart
   chart:
@@ -426,6 +468,69 @@ jobs:
           helm registry login "$registry" --username "$REGISTRY_USERNAME" --password-stdin <<<"$REGISTRY_TOKEN"
           helm push "$RUNNER_TEMP/chart/software-gateway-${CHART_VERSION}.tgz" \
             "oci://${registry}/${REGISTRY_REPOSITORY}"
+
+  # ------------------------------------------------ 3.5 the release, as a build
+  #
+  # THE RELEASE AS ONE OBJECT, in the view an organisation already uses to ask
+  # what shipped: JFrog's Builds. Everything else this pipeline produces is
+  # addressed one artifact at a time - three images and a chart, four tags in a
+  # registry, related only by a version number somebody has to know to type.
+  #
+  # IT DESCRIBES EVERY COMPONENT, NOT THE ONES THIS RUN BUILT. The images job
+  # rebuilds nothing that is already published (§12.9.1), and a configuration-
+  # only release builds nothing at all - so a Build Info assembled from what
+  # this run did would describe an empty release, or worse, a partial one that
+  # reads as complete. It is assembled from the registry instead: every
+  # component at its published version, resolved to a digest, or the job fails
+  # naming the component that is missing.
+  #
+  # Off unless BUILD_INFO is set, and it needs nothing this pipeline does not
+  # already have - the registry credential deploys the images and publishes the
+  # build.
+  build-info:
+    name: Publish the release build
+    needs: [version, images, chart]
+    if: >-
+      always()
+      && vars.BUILD_INFO == 'true'
+      && needs.chart.result == 'success'
+      && needs.version.outputs.configured == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Publish
+        env:
+          # The one credential, doing what it already does for the push.
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          # The Artifactory ROOT, including /artifactory - not the registry
+          # host. They are usually the same machine and never the same URL.
+          BUILD_INFO_URL: ${{ vars.BUILD_INFO_URL }}
+          IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
+          CHART_VERSION: ${{ needs.version.outputs.chart_version }}
+          # Promotion is a decision, not a step: empty unless somebody asks for
+          # it on a manual dispatch, and a copy rather than a move either way.
+          PROMOTE_TO: ${{ inputs.promote_to }}
+        run: |
+          set -euo pipefail
+          go run ./deploy/buildinfo/cmd/buildinfo \
+            -name "${{ vars.BUILD_INFO_NAME || 'software-gateway' }}" \
+            -number "$CHART_VERSION" \
+            -images "${{ env.RELEASE_IMAGES }}" \
+            -image-version "$IMAGE_VERSION" \
+            -chart-version "$CHART_VERSION" \
+            -registry "$REGISTRY_HOST" \
+            -repository "$REGISTRY_REPOSITORY" \
+            -promote-to "${PROMOTE_TO:-}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------- 4. promote
   #

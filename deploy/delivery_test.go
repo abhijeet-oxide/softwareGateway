@@ -1543,3 +1543,66 @@ func TestEveryBaseImagePinAgrees(t *testing.T) {
 			image, len(versions), strings.Join(lines, "\n"))
 	}
 }
+
+// TestTheReleaseImageListMatchesTheBuildMatrix keeps one answer to "what is in
+// a release".
+//
+// cd.yml says it twice and has to: the `images` matrix pairs each component
+// with the Dockerfile it builds from, and RELEASE_IMAGES is the flat list the
+// Build Info job resolves against the registry. They describe the same thing
+// and nothing makes them agree.
+//
+// The failure is silent in the direction that matters. Add a fourth image to
+// the matrix and forget the list, and every release is built correctly and
+// then described as if that component did not exist - a Build Info that looks
+// complete, an Xray scan that covers three artifacts of four, and a promotion
+// that leaves one behind.
+func TestTheReleaseImageListMatchesTheBuildMatrix(t *testing.T) {
+	for _, name := range []string{"cd.yml", "cd_enterprise.yml.disabled"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(repoRoot, ".github", "workflows", name)
+			b, err := os.ReadFile(path) // #nosec G304 -- the fixed names above.
+			if err != nil {
+				t.Fatalf("read %s: %v", name, err)
+			}
+			var wf struct {
+				Env  map[string]string `json:"env"`
+				Jobs map[string]struct {
+					Strategy struct {
+						Matrix struct {
+							Include []map[string]string `json:"include"`
+						} `json:"matrix"`
+					} `json:"strategy"`
+				} `json:"jobs"`
+			}
+			if err := yaml.Unmarshal(b, &wf); err != nil {
+				t.Fatalf("parse %s: %v", name, err)
+			}
+
+			var matrix []string
+			for _, entry := range wf.Jobs["images"].Strategy.Matrix.Include {
+				if c := entry["component"]; c != "" {
+					matrix = append(matrix, c)
+				}
+			}
+			if len(matrix) == 0 {
+				t.Fatalf("%s: found no components in the images matrix", name)
+			}
+
+			declared := strings.Split(wf.Env["RELEASE_IMAGES"], ",")
+			for i := range declared {
+				declared[i] = strings.TrimSpace(declared[i])
+			}
+			sort.Strings(matrix)
+			sort.Strings(declared)
+
+			if !slices.Equal(matrix, declared) {
+				t.Errorf("%s: the images matrix builds %v and RELEASE_IMAGES says %v.\n"+
+					"\nA release is described by RELEASE_IMAGES and built by the matrix. When they\n"+
+					"disagree, the pipeline ships an artifact that no release mentions, or promises\n"+
+					"one it never built - and the Build Info looks complete either way.\n",
+					name, matrix, declared)
+			}
+		})
+	}
+}

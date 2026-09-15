@@ -40,6 +40,22 @@ on:
       - 'docs/**'
       - '**/*.md'
   workflow_dispatch:
+    inputs:
+      promote_to:
+        description: >-
+          Promote the published build to this Artifactory repository. Empty
+          publishes without promoting, which is the default: a build is
+          published because it was built, and promoted because somebody decided
+          it was good. Artifacts are copied, never moved.
+        type: string
+        default: ''
+      rebuild_images:
+        description: >-
+          Rebuild the images even if this version is already in the registry,
+          and overwrite what is there. Tags are written once by design, so this
+          is the one door out of that and it is deliberately manual.
+        type: boolean
+        default: false
 
 # Queue releases per branch so version calculation and publishing cannot race.
 concurrency:
@@ -52,6 +68,13 @@ permissions:
 
 env:
   GO_VERSION: "1.26"
+
+  # WHAT A RELEASE CONSISTS OF. The `images` matrix names the same components
+  # and the Dockerfile each is built from; this is the list the Build Info job
+  # resolves against the registry, and TestTheReleaseImageListMatchesTheBuildMatrix
+  # fails when they stop agreeing. A component missing here is a component
+  # missing from every release description, which is the failure nobody sees.
+  RELEASE_IMAGES: coordinator,worker,web
 
   # WHERE GO MODULES COME FROM, for the jobs themselves - the Dockerfiles have
   # taken these as build arguments from the start and the workflows never set
@@ -193,10 +216,19 @@ jobs:
   images:
     name: ${{ matrix.component }} image
     needs: version
+    permissions:
+      contents: read
+      # Both only for actions/attest-build-provenance, and unused without it.
+      id-token: write
+      attestations: write
+    # `images_changed` is NOT a condition here any more - it is one input to the
+    # decision the `plan` step below makes against the registry. Gating the job
+    # on it is what let a failed build become a published chart pointing at
+    # images that were never pushed; see that step. The job is cheap when there
+    # is nothing to do: it checks out, asks the registry, and stops.
     if: >-
       needs.version.outputs.should_release == 'true'
       && needs.version.outputs.configured == 'true'
-      && needs.version.outputs.images_changed == 'true'
     # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL }}
     timeout-minutes: 45
@@ -213,15 +245,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The default docker-container driver, deliberately. The `docker` driver
-      # builds through the runner's own daemon, whose image store cannot export
-      # a cache: the registry cache below failed the release with "cache export
-      # is not supported by the docker driver". The alternative fix - the
-      # daemon's containerd image store - is a change to every runner host,
-      # including hosts this repository does not own, to buy a local image the
-      # job never uses. Nothing here reads the image back out of the daemon;
-      # it is pushed, and the next step talks to the registry.
+      # WHICH BUILDER, AND WHY IT IS A VARIABLE.
+      #
+      # `docker-container` is the default and the better one: it is a real
+      # BuildKit, so the registry layer cache below works. The `docker` driver
+      # builds through the runner's own daemon and cannot export a cache at all
+      # - "cache export is not supported by the docker driver".
+      #
+      # But it cannot be the only option. A self-hosted runner that is ITSELF a
+      # container usually cannot start a privileged one, and the builder dies
+      # before it builds anything:
+      #
+      #   failed to create shim task: OCI runtime create failed: runc create
+      #   failed: ... error mounting "sysfs" to rootfs at "/sys": operation not
+      #   permitted
+      #
+      # On such a runner set BUILDX_DRIVER to `docker`, and the cache is dropped
+      # with it below rather than failing the release.
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        with:
+          driver: ${{ vars.BUILDX_DRIVER || 'docker-container' }}
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -255,23 +298,75 @@ jobs:
             password ${REGISTRY_TOKEN}
           EOF
 
-      # Image tags are immutable; fail on collisions instead of overwriting.
-      - name: The tag must not already exist
+      # THE REGISTRY DECIDES WHETHER THIS IMAGE IS BUILT, not git.
+      #
+      # `images_changed` answers "did the source move since the last release?",
+      # and the job used to be gated on that alone. The question that matters is
+      # "does this artifact exist?", and the two come apart the moment a build
+      # fails:
+      #
+      #   1. Code changes. The version job RESERVES tag v0.1.8 before anything
+      #      is built, on purpose, so a later failure cannot free the version.
+      #   2. This job fails - a builder that will not boot, a registry blip.
+      #      No image is pushed.
+      #   3. The run is retried with no new commits. The commit that last
+      #      touched the code is now CONTAINED IN v0.1.8, so version.sh reports
+      #      images_changed=false and image_version=0.1.8, the job is skipped,
+      #      and the chart is published pointing at images that were never
+      #      pushed. Green pipeline, broken release.
+      #
+      # So the gate is the registry. Missing means build it, whatever git
+      # thinks; present with changed source means a collision worth failing on;
+      # present with unchanged source is the reuse this design is built around.
+      - name: Build this image, or reuse what is published
+        id: plan
         env:
           COMPONENT: ${{ matrix.component }}
           IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
+          IMAGES_CHANGED: ${{ needs.version.outputs.images_changed }}
+          REBUILD: ${{ inputs.rebuild_images }}
         run: |
+          set -euo pipefail
           registry="${REGISTRY_URL#https://}"
           registry="${registry#http://}"
           ref="${registry}/${REGISTRY_REPOSITORY}/software-gateway-${COMPONENT}:${IMAGE_VERSION}"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+          present=false
           if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
-            echo "::error::$ref already exists. An image tag is written once."
-            echo "::error::This means a release tag was deleted and recreated, or two runs raced."
-            exit 1
+            present=true
           fi
-          echo "$ref is free"
+
+          if [ "${REBUILD:-false}" = "true" ]; then
+            build=true
+            if [ "$present" = true ]; then
+              echo "::warning::$ref exists and will be OVERWRITTEN: rebuild_images was ticked."
+              echo "::warning::Anything already running this tag gets different bits on its next pull."
+              note="rebuilt by hand, overwriting what was published"
+            else
+              note="rebuilt by hand"
+            fi
+          elif [ "$present" = false ]; then
+            # Covers the retry above: the tag is reserved, the image is not there.
+            build=true
+            note="not in the registry"
+          elif [ "$IMAGES_CHANGED" = "true" ]; then
+            echo "::error::$ref already exists and this run means to build it. An image tag is written once."
+            echo "::error::A release tag was deleted and recreated, or two runs raced."
+            echo "::error::To replace it deliberately, dispatch this workflow with rebuild_images ticked."
+            exit 1
+          else
+            build=false
+            note="already published; reusing it"
+          fi
+
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "$ref: $note"
+          echo "- \`$ref\` - $note" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        id: build
+        if: steps.plan.outputs.build == 'true'
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -282,7 +377,10 @@ jobs:
           # dependency layers are the expensive ones and they change rarely, so
           # a release that touches one package rebuilds one layer.
           cache-from: type=registry,ref=${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_REPOSITORY }}/software-gateway-${{ matrix.component }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_REPOSITORY }}/software-gateway-${{ matrix.component }}:buildcache,mode=max
+          # Empty on the `docker` driver, which cannot export one. Written as a
+          # value rather than guarded with an `if:`, because a build that
+          # silently skips is worse than one that silently does not cache.
+          cache-to: ${{ vars.BUILDX_DRIVER == 'docker' && '' || format('type=registry,ref={0}/{1}/software-gateway-{2}:buildcache,mode=max', env.REGISTRY_HOST, env.REGISTRY_REPOSITORY, matrix.component) }}
           # GOPROXY and GOSUMDB come from this workflow's env, so their defaults
           # live in one place. GOSUMDB was never passed at all, though every
           # Dockerfile here declares the ARG: an image built against a mirror that
@@ -300,6 +398,27 @@ jobs:
           # Mount credentials into builds; build arguments remain visible in image history.
           secret-files: ${{ matrix.component == 'web' && format('npmrc={0}/npmrc', runner.temp) || format('netrc={0}/netrc', runner.temp) }}
           provenance: false
+
+      # A SIGNED STATEMENT OF WHERE THIS IMAGE CAME FROM. in-toto/SLSA
+      # provenance, signed through Sigstore with the job's own OIDC identity, so
+      # there is no key to hold: `gh attestation verify oci://<ref>` answers
+      # which workflow, which commit and which runner built a digest, from
+      # outside this repository and without trusting it.
+      #
+      # On the digest rather than the tag, because a tag is a pointer and the
+      # statement has to be about the bits.
+      #
+      # Off unless BUILD_ATTESTATION is set: it needs `id-token: write`, which
+      # is a permission worth granting deliberately.
+      - uses: actions/attest-build-provenance@v3
+        if: steps.plan.outputs.build == 'true' && vars.BUILD_ATTESTATION == 'true'
+        with:
+          subject-name: ${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_REPOSITORY }}/software-gateway-${{ matrix.component }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          # The attestation lives in GitHub by default. Pushing it to the
+          # registry as an OCI referrer needs the registry to serve the
+          # referrers API, which not every Artifactory version does.
+          push-to-registry: ${{ vars.BUILD_ATTESTATION_IN_REGISTRY == 'true' }}
 
   # ------------------------------------------------------------------ 3. chart
   chart:
@@ -378,6 +497,56 @@ jobs:
           helm registry login "$registry" --username "$REGISTRY_USERNAME" --password-stdin <<<"$REGISTRY_TOKEN"
           helm push "$RUNNER_TEMP/chart/software-gateway-${CHART_VERSION}.tgz" \
             "oci://${registry}/${REGISTRY_REPOSITORY}"
+
+  # ---------------------------------------------------------------- 4. promote
+  #
+  # Deployment is a Git pointer update; Flux performs the cluster reconciliation
+  # once a person merges the PR this job opens.
+  build-info:
+    name: Publish the release build
+    needs: [version, images, chart]
+    if: >-
+      always()
+      && vars.BUILD_INFO == 'true'
+      && needs.chart.result == 'success'
+      && needs.version.outputs.configured == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          mirror: ${{ vars.TOOL_MIRROR }}
+
+      - name: Publish
+        env:
+          # The one credential, doing what it already does for the push.
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          # The Artifactory ROOT, including /artifactory - not the registry
+          # host. They are usually the same machine and never the same URL.
+          BUILD_INFO_URL: ${{ vars.BUILD_INFO_URL }}
+          IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
+          CHART_VERSION: ${{ needs.version.outputs.chart_version }}
+          # Promotion is a decision, not a step: empty unless somebody asks for
+          # it on a manual dispatch, and a copy rather than a move either way.
+          PROMOTE_TO: ${{ inputs.promote_to }}
+        run: |
+          set -euo pipefail
+          go run ./deploy/buildinfo/cmd/buildinfo \
+            -name "${{ vars.BUILD_INFO_NAME || 'software-gateway' }}" \
+            -number "$CHART_VERSION" \
+            -images "${{ env.RELEASE_IMAGES }}" \
+            -image-version "$IMAGE_VERSION" \
+            -chart-version "$CHART_VERSION" \
+            -registry "$REGISTRY_HOST" \
+            -repository "$REGISTRY_REPOSITORY" \
+            -promote-to "${PROMOTE_TO:-}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------- 4. promote
   #

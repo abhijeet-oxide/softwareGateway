@@ -752,6 +752,63 @@ CodeQL gets `security-events: write` in its job only; CD gets `contents: write`
 for the tag and `pull-requests: write` for the pointer PR. No workflow uses
 `pull_request_target`, so nothing from a fork runs with a writable token.
 
+### 12.9.1 The registry decides what is built, not git
+
+`version.sh` reserves the release tag BEFORE anything is built (§3), on purpose:
+a later failure must not free the version for a second run to reuse. That
+reservation and `images_changed` together had a hole, and it published broken
+releases quietly:
+
+1. Code changes. `v0.1.8` is tagged. The images job starts.
+2. The build fails - a builder that will not boot, a registry that blinks.
+   Nothing is pushed.
+3. The run is retried with no new commits. The commit that last touched the
+   code is now *contained in* `v0.1.8`, so `version.sh` reports
+   `images_changed=false` and `image_version=0.1.8`, the images job is skipped
+   as a configuration-only release, and the chart is published pointing at
+   images that were never pushed. Every check green.
+
+The mistake is the question. `images_changed` answers "did the source move since
+the last release?" and the job was gated on it; what decides whether to build is
+"does this artifact exist?", and only the registry knows that. So the job now
+always runs when there is a release, and a step asks:
+
+| In the registry | Source changed | What happens |
+|---|---|---|
+| no | yes | build - the ordinary release |
+| **no** | **no** | **build** - the retry above, which used to be skipped |
+| yes | no | skip - the reuse this design is built around |
+| yes | yes | fail - a tag is written once, and something is wrong |
+
+The job is cheap when there is nothing to do: it checks out, asks the registry,
+and stops. `rebuild_images` on a manual dispatch overrides all four rows and
+overwrites what is published - the one door out of the immutability rule, and a
+loud one: it warns, into the log and the summary, that anything already running
+that tag gets different bits on its next pull.
+
+What would change our mind is a registry that cannot be queried cheaply. The
+check is one `imagetools inspect` per component against a tag that usually
+exists; if that ever costs real time, the answer is to cache the result in the
+version job, not to go back to guessing from git.
+
+### 12.9.2 The builder cannot be a container everywhere
+
+`docker/setup-buildx-action` takes `BUILDX_DRIVER`, defaulting to
+`docker-container`. That default is the better builder - a real BuildKit, so the
+registry layer cache works, which the `docker` driver cannot do at all.
+
+It is a variable because a self-hosted runner that is itself a container usually
+cannot start a privileged one:
+
+```
+failed to create shim task: OCI runtime create failed: runc create failed:
+... error mounting "sysfs" to rootfs at "/sys": operation not permitted
+```
+
+Set `BUILDX_DRIVER=docker` there. `cache-to` is emptied with it, because a cache
+export the driver does not support fails the build rather than skipping the
+cache. A release that is slower is a release; one that does not run is not.
+
 ### 12.10 Which actions a workflow may use
 
 The organisation running this pipeline admits an action only if it is created
@@ -871,6 +928,7 @@ become one file, and the copy should be deleted rather than left to rot.
 - [`.github/scripts/version.sh`](../../.github/scripts/version.sh) - the version
 - [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) - correctness, on every pull request
 - [`.github/workflows/cd.yml`](../../.github/workflows/cd.yml) - build, publish, open the pointer PR
+- [`deploy/buildinfo/`](../../deploy/buildinfo/) - the release as one Build Info; see [32](32-release-build-info.md)
 - [`.github/workflows/security.yml`](../../.github/workflows/security.yml) - the scanners
 - [`.github/workflows/README.md`](../../.github/workflows/README.md) - the two sets, and the variables the enterprise one reads
 - [`.github/actions/toolchain/`](../../.github/actions/toolchain/) - one place that installs Go and the CLIs

@@ -1352,14 +1352,30 @@ func TestEveryBuildArgIsAKeyValue(t *testing.T) {
 // use after that guard is control flow this test has no business reading. A
 // name that appears only bare is the typo.
 func TestNoRunBlockReadsAnUnguardedVariable(t *testing.T) {
-	// Always present in a step's environment, whatever the workflow says.
+	// Always present in a step's environment, whatever the file says.
 	provided := regexp.MustCompile(`^(GITHUB|RUNNER|ACTIONS)_|^(HOME|PATH|CI|TMPDIR|PWD|SHELL|USER|LANG)$`)
 	reference := regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
-	singleQuoted := regexp.MustCompile(`(?s)'[^']*'`)
 	// Start of line, or after a `;`, `&&` or `||` - `db=false; app=false` is two.
 	assignment := regexp.MustCompile(`(?m)(?:^|[;&|]\s*)\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=`)
 	// `for x in ...` and `read x` bind a name without an `=` in sight.
 	bound := regexp.MustCompile(`(?m)\b(?:for|read(?:\s+-\w+)*)\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
+	singleQuoted := regexp.MustCompile(`(?s)'[^']*'`)
+
+	envKeys := func(node any) []string {
+		m, ok := node.(map[string]any)
+		if !ok {
+			return nil
+		}
+		env, ok := m["env"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		var out []string
+		for key := range env {
+			out = append(out, key)
+		}
+		return out
+	}
 
 	var files []string
 	for _, pattern := range []string{
@@ -1383,61 +1399,72 @@ func TestNoRunBlockReadsAnUnguardedVariable(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
-		var doc any
+		var doc map[string]any
 		if err := yaml.Unmarshal(b, &doc); err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
 
-		var walk func(any)
-		walk = func(node any) {
-			switch n := node.(type) {
-			case map[string]any:
-				script, ok := n["run"].(string)
-				if !ok || !strings.Contains(script, "set -") || !strings.Contains(script, "u") {
-					for _, value := range n {
-						walk(value)
-					}
-					return
-				}
-				checked++
+		// A step sees its own env, its job's, and the whole file's. Scope is why
+		// this walks the document instead of grepping it: $REGISTRY_URL is set
+		// once at the top of cd.yml and read in a step eight jobs down.
+		check := func(step any, inherited []string) {
+			m, ok := step.(map[string]any)
+			if !ok {
+				return
+			}
+			script, ok := m["run"].(string)
+			if !ok || !strings.Contains(script, "set -") || !strings.Contains(script, "u") {
+				return
+			}
+			checked++
 
-				safe := map[string]bool{}
-				for _, re := range []*regexp.Regexp{assignment, bound} {
-					for _, m := range re.FindAllStringSubmatch(script, -1) {
-						safe[m[1]] = true
-					}
+			safe := map[string]bool{}
+			for _, key := range append(inherited, envKeys(m)...) {
+				safe[key] = true
+			}
+			for _, re := range []*regexp.Regexp{assignment, bound} {
+				for _, mm := range re.FindAllStringSubmatch(script, -1) {
+					safe[mm[1]] = true
 				}
-				if env, ok := n["env"].(map[string]any); ok {
-					for key := range env {
-						safe[key] = true
-					}
+			}
+			// A `$name` inside single quotes is not the shell's - the jq programs
+			// here are full of them - so those spans are removed before scanning.
+			for _, ref := range reference.FindAllStringSubmatch(singleQuoted.ReplaceAllString(script, " "), -1) {
+				v := ref[1]
+				if safe[v] || provided.MatchString(v) {
+					continue
 				}
-				// A `$name` inside single quotes is not the shell's - the jq programs
-				// here are full of them - so those spans are removed before scanning.
-				for _, ref := range reference.FindAllStringSubmatch(singleQuoted.ReplaceAllString(script, " "), -1) {
-					v := ref[1]
-					if safe[v] || provided.MatchString(v) {
-						continue
-					}
-					if strings.Contains(script, "${"+v+":-") || strings.Contains(script, "${"+v+"-") {
-						continue // guarded somewhere; a later bare use is control flow
-					}
-					t.Errorf("%s: a `run` block reads $%s, which nothing sets.\n"+
-						"\nUnder `set -u` that is not an empty string, it is the end of the job. Either the\n"+
-						"name is a typo or a rename that missed this line; if it really comes from the\n"+
-						"environment, write it once as ${%s:-} so the script says it may be absent.\n",
-						name, v, v)
+				if strings.Contains(script, "${"+v+":-") || strings.Contains(script, "${"+v+"-") {
+					continue // guarded somewhere; a later bare use is control flow
 				}
-				for _, value := range n {
-					walk(value)
+				t.Errorf("%s: a `run` block reads $%s, which nothing sets.\n"+
+					"\nUnder `set -u` that is not an empty string, it is the end of the job. Nothing\n"+
+					"declares it in the step, the job or the file, so either the name is a typo or a\n"+
+					"rename that missed this line; if it really comes from the environment, write it\n"+
+					"once as ${%s:-} so the script says it may be absent.\n", name, v, v)
+			}
+		}
+
+		fileEnv := envKeys(doc)
+		if jobs, ok := doc["jobs"].(map[string]any); ok { // a workflow
+			for _, job := range jobs {
+				j, ok := job.(map[string]any)
+				if !ok {
+					continue
 				}
-			case []any:
-				for _, item := range n {
-					walk(item)
+				scope := append(append([]string{}, fileEnv...), envKeys(j)...)
+				steps, _ := j["steps"].([]any)
+				for _, step := range steps {
+					check(step, scope)
 				}
 			}
 		}
-		walk(doc)
+		if runs, ok := doc["runs"].(map[string]any); ok { // a composite action
+			steps, _ := runs["steps"].([]any)
+			for _, step := range steps {
+				check(step, fileEnv)
+			}
+		}
 	}
 
 	if checked == 0 {
@@ -1514,5 +1541,68 @@ func TestEveryBaseImagePinAgrees(t *testing.T) {
 			"\nThese files cannot import from one another, so a bump has to touch all of them.\n"+
 			"A build that is one patch behind is a build shipping findings that are already fixed.\n",
 			image, len(versions), strings.Join(lines, "\n"))
+	}
+}
+
+// TestTheReleaseImageListMatchesTheBuildMatrix keeps one answer to "what is in
+// a release".
+//
+// cd.yml says it twice and has to: the `images` matrix pairs each component
+// with the Dockerfile it builds from, and RELEASE_IMAGES is the flat list the
+// Build Info job resolves against the registry. They describe the same thing
+// and nothing makes them agree.
+//
+// The failure is silent in the direction that matters. Add a fourth image to
+// the matrix and forget the list, and every release is built correctly and
+// then described as if that component did not exist - a Build Info that looks
+// complete, an Xray scan that covers three artifacts of four, and a promotion
+// that leaves one behind.
+func TestTheReleaseImageListMatchesTheBuildMatrix(t *testing.T) {
+	for _, name := range []string{"cd.yml", "cd_enterprise.yml.disabled"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(repoRoot, ".github", "workflows", name)
+			b, err := os.ReadFile(path) // #nosec G304 -- the fixed names above.
+			if err != nil {
+				t.Fatalf("read %s: %v", name, err)
+			}
+			var wf struct {
+				Env  map[string]string `json:"env"`
+				Jobs map[string]struct {
+					Strategy struct {
+						Matrix struct {
+							Include []map[string]string `json:"include"`
+						} `json:"matrix"`
+					} `json:"strategy"`
+				} `json:"jobs"`
+			}
+			if err := yaml.Unmarshal(b, &wf); err != nil {
+				t.Fatalf("parse %s: %v", name, err)
+			}
+
+			var matrix []string
+			for _, entry := range wf.Jobs["images"].Strategy.Matrix.Include {
+				if c := entry["component"]; c != "" {
+					matrix = append(matrix, c)
+				}
+			}
+			if len(matrix) == 0 {
+				t.Fatalf("%s: found no components in the images matrix", name)
+			}
+
+			declared := strings.Split(wf.Env["RELEASE_IMAGES"], ",")
+			for i := range declared {
+				declared[i] = strings.TrimSpace(declared[i])
+			}
+			sort.Strings(matrix)
+			sort.Strings(declared)
+
+			if !slices.Equal(matrix, declared) {
+				t.Errorf("%s: the images matrix builds %v and RELEASE_IMAGES says %v.\n"+
+					"\nA release is described by RELEASE_IMAGES and built by the matrix. When they\n"+
+					"disagree, the pipeline ships an artifact that no release mentions, or promises\n"+
+					"one it never built - and the Build Info looks complete either way.\n",
+					name, matrix, declared)
+			}
+		})
 	}
 }

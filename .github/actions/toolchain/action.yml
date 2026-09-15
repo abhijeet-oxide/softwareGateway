@@ -18,6 +18,12 @@ inputs:
     default: 'false'
   kubeconform:
     default: 'false'
+  jfrog-cli:
+    description: >-
+      Install the JFrog CLI (`jf`), which collects and publishes build info and
+      promotes a build. A bare binary rather than an archive, and behind a
+      redirect, which is why it is fetched separately below.
+    default: 'false'
   golangci-lint:
     description: >-
       Install golangci-lint. It refuses to run when built with a Go older than
@@ -120,6 +126,7 @@ runs:
         KUSTOMIZE_VERSION: "5.7.1"
         KUBECONFORM_VERSION: "0.6.7"
         GOLANGCI_VERSION: "2.13.2"
+        JFROG_CLI_VERSION: "2.125.0"
         MIRROR: ${{ inputs.mirror }}
       run: |
         set -euo pipefail
@@ -168,6 +175,15 @@ runs:
         if [ "${{ inputs.kubeconform }}" = "true" ]; then
           fetch "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" /tmp/kubeconform.tgz
           tar -xzf /tmp/kubeconform.tgz -C "$bin" kubeconform
+        fi
+
+        # Not an archive: releases.jfrog.io serves the executable itself, from
+        # behind a 302. fetch() already follows redirects; what differs is that
+        # there is nothing to untar.
+        if [ "${{ inputs.jfrog-cli }}" = "true" ]; then
+          fetch "https://releases.jfrog.io/artifactory/jfrog-cli/v2-jf/${JFROG_CLI_VERSION}/jfrog-cli-linux-amd64/jf" "$bin/jf"
+          chmod +x "$bin/jf"
+          "$bin/jf" --version
         fi
 
         if [ "${{ inputs.golangci-lint }}" = "true" ]; then

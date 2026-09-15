@@ -965,7 +965,7 @@ become one file, and the copy should be deleted rather than left to rot.
 - [`.github/scripts/version.sh`](../../.github/scripts/version.sh) - the version
 - [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) - correctness, on every pull request
 - [`.github/workflows/cd.yml`](../../.github/workflows/cd.yml) - build, publish, open the pointer PR
-- [`deploy/buildinfo/`](../../deploy/buildinfo/) - the release as one Build Info; see [32](32-release-build-info.md)
+- [`deploy/release/`](../../deploy/release/) - the components, their inputs, and the release as one Build Info; see [32](32-release-build-info.md)
 - [`.github/workflows/security.yml`](../../.github/workflows/security.yml) - the scanners
 - [`.github/workflows/README.md`](../../.github/workflows/README.md) - the two sets, and the variables the enterprise one reads
 - [`.github/actions/toolchain/`](../../.github/actions/toolchain/) - one place that installs Go and the CLIs

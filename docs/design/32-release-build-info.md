@@ -8,12 +8,19 @@ components it moved. This document is about **this pipeline describing itself** 
 what CD published, so a release of this product can be found, promoted and
 scanned the way everything else in the organisation is.
 
-Same Artifactory API, different subject, no shared code. `deploy/buildinfo/` does
-not import `internal/`, and `internal/` does not import it; a change to one is
-not a change to the other. They are separate on purpose: the product's version
-runs on a Coordinator against a registry it was configured with, retries through
-an outbox, and must never fail a transfer. This one runs once, in a job, and
-failing the release is exactly what it should do when it cannot describe it.
+Same Artifactory API, different subject, no shared code. They are separate on
+purpose: the product's version runs on a Coordinator against a registry it was
+configured with, retries through an outbox, and must never fail a transfer. This
+one runs once, in a job, and failing the release is exactly what it should do
+when it cannot describe it.
+
+It is also built differently, and deliberately. The product implements the API
+itself because it runs inside a Go binary a customer deploys, where a second
+executable is not something to require. CD is a pipeline: the JFrog CLI is
+there, JFrog supports it, it tracks the Build Info schema as that changes, and
+the two awkward parts - a module per image with its layers, and promotion - are
+one verb each. Re-implementing that in this repository was work whose only
+product was a second thing to keep correct.
 
 ## 2. What it is for
 
@@ -40,14 +47,18 @@ two images where the product has three, looking complete to anybody reading it.
 
 So the document is assembled from **the registry**, not from the run:
 
-1. `RELEASE_IMAGES` names the components. The `images` matrix builds them;
-   `TestTheReleaseImageListMatchesTheBuildMatrix` fails when the two disagree.
+1. `deploy/release` names the components. The `images` matrix builds them and
+   the build attaches them, from that one list.
 2. Each is resolved at the release's image version, the chart at the chart
    version - which differ, because a configuration-only release moves the chart
    and leaves the images alone.
-3. **All of them resolve or nothing is published.** A component the registry does
-   not have fails the job, naming it. `TestAReleaseIsEveryComponentOrNothing`
-   removes each component in turn and requires the publication to fail.
+3. **Every one is attached with `jf rt build-docker-create`**, which records an
+   image ALREADY in the registry by its digest rather than pushing it. That is
+   the verb that makes this possible: `jf` otherwise collects build info from
+   the pushes it performs, and this pipeline deliberately does not push what is
+   already published.
+4. **All of them resolve or nothing is published.** A component the registry
+   does not have fails the job, naming it.
 
 That last point is the whole design in one line. A Build Info that omits an
 artifact is not a smaller truth, it is a false one: the omitted component is
@@ -95,7 +106,8 @@ image into a release repository claims it as this product's output.
 | Variable | Effect when unset |
 |---|---|
 | `BUILD_INFO` | The job does not run. Nothing else changes. |
-| `BUILD_INFO_URL` | Required when `BUILD_INFO` is set: the Artifactory **root**, including `/artifactory`. It is usually the same machine as the registry and never the same URL, which is the mistake the 404 message names. |
+| `BUILD_INFO_URL` | Derived as `https://<REGISTRY_HOST>/artifactory`, which is where Artifactory is on a path-routed instance. Set it only for an instance that serves its registry on a different hostname than its API. |
+| `BUILD_INFO_PROJECT` | The build is filed in Artifactory's **global** scope. That is accepted silently and is usually wrong: a repository named `<key>-oci-stage` belongs to project `<key>`, the build should be filed there too, and a credential scoped to the project may be refused without it. |
 | `BUILD_INFO_NAME` | `software-gateway`. The Build Info name, stable across releases; the number is the chart version, so a retry updates one record instead of opening a second. |
 | `BUILD_ATTESTATION` | No provenance is signed. |
 | `BUILD_ATTESTATION_IN_REGISTRY` | Attestations stay in GitHub rather than being pushed as OCI referrers. |
@@ -121,6 +133,6 @@ push images - a 403 here says so rather than printing the status.
 
 ## 8. Files
 
-- [`deploy/buildinfo/`](../../deploy/buildinfo/) - the model, the registry read, the Artifactory client
-- [`deploy/buildinfo/cmd/buildinfo/`](../../deploy/buildinfo/cmd/buildinfo/) - the command CD runs
 - [`.github/workflows/cd.yml`](../../.github/workflows/cd.yml) - the `build-info` job and the attestation step
+- [`.github/actions/toolchain/`](../../.github/actions/toolchain/) - installs `jf`, mirror-able like every other tool here
+- [`deploy/release/`](../../deploy/release/) - the component list the build is assembled from

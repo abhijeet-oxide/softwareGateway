@@ -452,6 +452,11 @@ Optional, all variables: `RUNNER_LABEL` for a self-hosted runner, `GOPROXY` and
 `NPM_REGISTRY` for internal mirrors, `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` for a
 network that needs one.
 
+**Turn on Dependency graph**, under Settings → Code security. The dependency
+review job fails without it — not on anything in the diff, but with
+`Dependency review is not supported on this repository`. Dependabot alerts and
+updates need it too.
+
 **Require two checks on `main`: `CI` and `Security`.** Each is an aggregate job
 that always runs and fails if anything beneath it failed, so adding or removing
 a job needs no branch-protection change. Requiring the individual jobs instead

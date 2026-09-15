@@ -617,8 +617,14 @@ trust.
 
 The second half is `concurrency`. A pull request keys on its number and sets
 `cancel-in-progress`, so pushing a fix abandons the run for the commit nobody
-is going to merge. `main` keys on the ref and does **not** cancel, because a
-cancelled run there is a commit with no result.
+is going to merge. `main` keys on the ref and does **not** cancel, so a run
+that has started always finishes.
+
+That is still not one run per commit on `main`. Only one run per concurrency
+group may be *pending*, so five merges in a minute leave the newest queued and
+cancel the four behind it. It is the right trade here - each of those four
+would re-prove a tree the fifth supersedes before any of them finished - but it
+does mean a `main` commit can carry no CI result of its own.
 
 ### 12.3 Running only what the change can break
 

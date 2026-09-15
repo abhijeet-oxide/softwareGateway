@@ -16,9 +16,16 @@ permissions:
   contents: read
 
 concurrency:
-  # One run per pull request, one per push to main. Main is never cancelled -
-  # its runs are the record of what is on main - so a queue there drains rather
-  # than being thrown away.
+  # One run per pull request, one per push to main.
+  #
+  # A pull request cancels its own superseded run: pushing a fix abandons the
+  # run for the commit nobody is going to merge.
+  #
+  # Main does not, so a run that has STARTED always finishes. It is still not
+  # one run per commit: only one run per group may be pending, so five merges
+  # in a minute leave the newest queued and cancel the four behind it. That is
+  # the trade, and it is the right one here - those four would each re-prove a
+  # tree that the fifth supersedes before any of them finished.
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 

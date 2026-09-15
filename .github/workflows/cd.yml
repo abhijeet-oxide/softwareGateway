@@ -24,6 +24,24 @@ permissions:
 
 env:
   GO_VERSION: "1.26"
+
+  # WHERE GO MODULES COME FROM, for the jobs themselves - the Dockerfiles have
+  # taken these as build arguments from the start and the workflows never set
+  # them, so every `go` command on a runner went to proxy.golang.org whatever an
+  # internal mirror was configured for.
+  #
+  # GOSUMDB travels with GOPROXY because it is the next thing to fail: with a
+  # complete go.sum nothing is looked up, but `go run <module>@latest` - which
+  # is how govulncheck is installed - resolves a module that go.sum has never
+  # seen and verifies it against the checksum database. A mirror that proxies
+  # modules and not `sum.golang.org` fails there. Set GOSUMDB to `off` if the
+  # mirror is trusted and does not serve it.
+  #
+  # The defaults are Go's own, so an unset variable is the behaviour Go would
+  # have had anyway. Set the VARIABLES rather than editing these lines: a
+  # company's mirror does not belong in this repository (CLAUDE.md).
+  GOPROXY: ${{ vars.GOPROXY || 'https://proxy.golang.org,direct' }}
+  GOSUMDB: ${{ vars.GOSUMDB || 'sum.golang.org' }}
   GODEBUG: http2client=0
   # THE PROXY, FOR THE RUNNER'S OWN FETCHES - not only for the image builds,
   # which have had it as build arguments all along (see the `images` job). A
@@ -227,6 +245,10 @@ jobs:
           # a release that touches one package rebuilds one layer.
           cache-from: type=registry,ref=${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_REPOSITORY }}/software-gateway-${{ matrix.component }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_REPOSITORY }}/software-gateway-${{ matrix.component }}:buildcache,mode=max
+          # GOPROXY and GOSUMDB come from this workflow's env, so their defaults
+          # live in one place. GOSUMDB was never passed at all, though every
+          # Dockerfile here declares the ARG: an image built against a mirror that
+          # does not serve the checksum database had no way to be told so.
           build-args: |
             VERSION=${{ needs.version.outputs.image_version }}
             COMMIT=${{ github.sha }}
@@ -234,7 +256,8 @@ jobs:
             HTTP_PROXY=${{ vars.HTTP_PROXY }}
             HTTPS_PROXY=${{ vars.HTTPS_PROXY }}
             NO_PROXY=${{ vars.NO_PROXY }}
-            GOPROXY=${{ vars.GOPROXY || 'https://proxy.golang.org,direct' }}
+            GOPROXY=${{ env.GOPROXY }}
+            GOSUMDB=${{ env.GOSUMDB }}
             NPM_REGISTRY=${{ vars.NPM_REGISTRY || 'https://registry.npmjs.org/' }}
           # Mount credentials into builds; build arguments remain visible in image history.
           secret-files: ${{ matrix.component == 'web' && format('npmrc={0}/npmrc', runner.temp) || format('netrc={0}/netrc', runner.temp) }}

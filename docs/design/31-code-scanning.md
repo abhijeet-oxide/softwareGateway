@@ -38,7 +38,39 @@ actionable on the diff in front of you can turn a pull request red. Trivy's
 database and the npm advisory feed move on their own schedule, and a new CVE
 published overnight must not fail a pull request that touches the chart.
 
-## 2.1 When each one runs
+## 2.1 What the tab actually held
+
+Measured, not estimated: run 34945379719 dispatched the full scan and exported
+every open alert.
+
+| | Alerts | of which critical or high |
+|---|---:|---:|
+| Trivy, on `internal/compliance/*/testdata` | 1007 | 172 |
+| CodeQL | 60 | 20 |
+| Trivy, on everything else | 4 | 1 |
+| **Total** | **1071** | **193** |
+
+**Ninety-four per cent of this repository's security backlog was the compliance
+fixtures.** `bad-pdb.yaml` alone produced 255 alerts. They are broken
+Kubernetes on purpose - each one fails the baseline check it is named for - so
+a misconfiguration scanner pointed at them reports, correctly and at HIGH,
+every defect they were written to contain. The four alerts about an artifact
+anybody ships were sitting underneath that.
+
+Two settings caused it, both now corrected in the `trivy` job:
+
+- **Trivy was not told to skip them.** CodeQL was; Trivy was not, and it is the
+  misconfiguration scanner, so it had far more to say about them.
+- **`severity: CRITICAL,HIGH` was not filtering the SARIF.** trivy-action
+  writes every severity into the SARIF whatever `severity` says, unless
+  `limit-severities-for-sarif` is set. That is where 579 low and 259 medium
+  findings came from under a setting that reads as neither.
+
+**What would change our mind:** the fixtures moving somewhere that ships, or a
+scanner gaining a check that is worth running against them. Neither is true
+today, and the count that matters is the one that is about deployed artifacts.
+
+## 2.2 When each one runs
 
 A pull request pays for the languages it changed; everything else pays for all
 of them.
@@ -70,9 +102,10 @@ put a database build on every chart edit to re-report it.
 
 ## 3. What is scanned, and what is not
 
-`.github/codeql/codeql-config.yml` excludes two kinds of tree. Neither is
-shipped, and both would otherwise report findings that are the file working as
-intended:
+Two kinds of tree are excluded, from **both** scanners - CodeQL in
+`.github/codeql/codeql-config.yml`, Trivy through `skip-dirs` in its job.
+Neither is shipped, and both would otherwise report findings that are the file
+working as intended:
 
 - **Compliance fixtures** (`internal/compliance/baseline/testdata`). The
   baseline checks are run against these. `bad-config.yaml` holds a Secret with
@@ -197,6 +230,31 @@ against it. An attacker controlling `error` can make sign-in fail, not succeed.
 server, then writes the API server's response to disk. That is what in-cluster
 authentication is. The "untrusted" source is the kubelet.
 
+### 5.8 The four Trivy findings that are about shipped artifacts
+
+With the fixtures skipped, this is the whole of what Trivy has to say:
+
+| Severity | Rule | Where | Status |
+|---|---|---|---|
+| high | `DS-0002` image user should not be root | `Dockerfile.web` | **real, open** - see below |
+| low | `DS-0026` no HEALTHCHECK | `Dockerfile.coordinator`, `.worker`, `.transferctl` | noise here |
+
+`DS-0026` is noise in this deployment because Kubernetes ignores a Docker
+`HEALTHCHECK` entirely - liveness and readiness come from the probes the chart
+defines ([14](14-deployment-and-development.md)). `Dockerfile.web` carries one
+anyway, because docker compose does use it.
+
+`DS-0002` is real and is NOT a one-line fix, which is why it is recorded here
+rather than quietly patched. The web image is `nginx:1.27.5-alpine` with no
+`USER`, and it has none because it binds port 80: a port below 1024 needs root
+or `CAP_NET_BIND_SERVICE`. Making it non-root means moving the listener to
+8080, which touches `deploy/web/nginx.conf`, the writable paths nginx needs
+(`/var/cache/nginx`, the pid file), the `HEALTHCHECK` URLs in this file, the
+chart's container port and Service `targetPort`, and the compose file - or
+replacing the base with `nginxinc/nginx-unprivileged`, which makes the same
+choices upstream. Either is a real change to how the tier is served and wants
+testing against a running stack, not a green scanner.
+
 ## 6. How a finding is dismissed
 
 In the Security tab, with a reason, against the alert. Not with a suppression
@@ -224,7 +282,7 @@ and as `alerts.json` in an artifact.
 It is **manual only**, and that is the design rather than an oversight. It
 reports what the scanners have already published, so it has nothing to add to a
 pull request and must never cost one a minute. `workflow_dispatch` is also the
-trigger that scans everything (section 2.1), so one dispatch does the full scan
+trigger that scans everything (section 2.2), so one dispatch does the full scan
 and then exports its result.
 
 Two details worth keeping:

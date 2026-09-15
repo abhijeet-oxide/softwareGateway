@@ -207,6 +207,26 @@ jobs:
           format: sarif
           output: trivy.sarif
           severity: CRITICAL,HIGH
+          # `severity` ALONE DOES NOT FILTER THE SARIF. The action reports
+          # every severity into the SARIF regardless, so the line above shaped
+          # the console output and nothing that reached the Security tab -
+          # which is how 579 low and 259 medium findings arrived under a
+          # setting that says CRITICAL,HIGH. This makes the filter mean what
+          # it reads as.
+          limit-severities-for-sarif: true
+          # THE COMPLIANCE FIXTURES ARE NOT THIS DEPLOYMENT'S MANIFESTS.
+          #
+          # They are broken Kubernetes on purpose - `bad-pdb.yaml`,
+          # `bad-security.yaml`, `bad-rbac.yaml` are what the baseline checks
+          # are RUN AGAINST, and each one fails the check it is named for. A
+          # misconfiguration scanner pointed at them reports every defect they
+          # were written to contain: they produced 1007 of this repository's
+          # 1011 Trivy alerts, and 172 of its 173 Trivy criticals and highs,
+          # burying the four that are about an artifact anybody ships.
+          #
+          # The same trees are excluded from CodeQL for the same reason; see
+          # docs/design/31-code-scanning.md section 3.
+          skip-dirs: internal/compliance/baseline/testdata,internal/compliance/render/testdata
           # Reported, not enforced. Trivy's database updates daily and a new
           # HIGH in a base image is a scheduled upgrade, not a broken branch.
           exit-code: '0'

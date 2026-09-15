@@ -69,12 +69,6 @@ permissions:
 env:
   GO_VERSION: "1.26"
 
-  # WHAT A RELEASE CONSISTS OF. The `images` matrix names the same components
-  # and the Dockerfile each is built from; this is the list the Build Info job
-  # resolves against the registry, and TestTheReleaseImageListMatchesTheBuildMatrix
-  # fails when they stop agreeing. A component missing here is a component
-  # missing from every release description, which is the failure nobody sees.
-  RELEASE_IMAGES: coordinator,worker,web
 
   # WHERE GO MODULES COME FROM, for the jobs themselves - the Dockerfiles have
   # taken these as build arguments from the start and the workflows never set
@@ -135,6 +129,10 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL }}
     timeout-minutes: 10
     outputs:
+      # The components, as the images job's matrix. Read from deploy/release so
+      # the matrix, the Build Info and the change detection cannot disagree
+      # about what this product is.
+      components: ${{ steps.components.outputs.matrix }}
       chart_version: ${{ steps.v.outputs.chart_version }}
       image_version: ${{ steps.v.outputs.image_version }}
       images_changed: ${{ steps.v.outputs.images_changed }}
@@ -199,6 +197,13 @@ jobs:
       #
       # Nothing is published when the registry is unconfigured, so nothing is
       # reserved either: the version stays available for the run that does.
+      - name: What this product consists of
+        id: components
+        run: |
+          set -euo pipefail
+          echo "matrix=$(go run ./deploy/release/cmd/release matrix)" >> "$GITHUB_OUTPUT"
+          go run ./deploy/release/cmd/release inputs
+
       - name: Reserve the release tag
         if: steps.v.outputs.should_release == 'true' && steps.registry.outputs.configured == 'true'
         env:
@@ -235,13 +240,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        include:
-          - component: coordinator
-            dockerfile: deploy/build/Dockerfile.coordinator
-          - component: worker
-            dockerfile: deploy/build/Dockerfile.worker
-          - component: web
-            dockerfile: deploy/build/Dockerfile.web
+        include: ${{ fromJSON(needs.version.outputs.components) }}
     steps:
       - uses: actions/checkout@v7
 
@@ -540,7 +539,6 @@ jobs:
           go run ./deploy/buildinfo/cmd/buildinfo \
             -name "${{ vars.BUILD_INFO_NAME || 'software-gateway' }}" \
             -number "$CHART_VERSION" \
-            -images "${{ env.RELEASE_IMAGES }}" \
             -image-version "$IMAGE_VERSION" \
             -chart-version "$CHART_VERSION" \
             -registry "$REGISTRY_HOST" \

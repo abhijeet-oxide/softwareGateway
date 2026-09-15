@@ -12,10 +12,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/deploy/buildinfo"
+	"github.com/abhijeet-oxide/softwareGateway/deploy/release"
 )
 
 func main() {
@@ -29,7 +29,6 @@ func run() error {
 	var (
 		name         = flag.String("name", "software-gateway", "Build Info name, stable across releases")
 		number       = flag.String("number", "", "Build Info number; the chart version")
-		images       = flag.String("images", "", "comma-separated component names, all at -image-version")
 		imageVersion = flag.String("image-version", "", "the tag every image carries")
 		chartName    = flag.String("chart", "software-gateway", "the chart's repository path")
 		chartVersion = flag.String("chart-version", "", "the chart's version")
@@ -65,9 +64,6 @@ func run() error {
 			return fmt.Errorf("%s is required", flagName)
 		}
 	}
-	if *images == "" {
-		return fmt.Errorf("-images is required: a release with no images is not this product")
-	}
 	if !*dryRun && (base == "" || token == "") {
 		return fmt.Errorf("BUILD_INFO_URL and REGISTRY_TOKEN are required to publish; " +
 			"pass -dry-run to see the document without one")
@@ -78,7 +74,11 @@ func run() error {
 		Registry: *registry, Repository: *repository,
 		Revision: revision, URL: repoURL, BuildURL: buildURL, Principal: principal,
 	}
-	comps := buildinfo.Components(split(*images), *imageVersion, *chartName, *chartVersion)
+	// The components come from deploy/release, not from a flag: what this
+	// product consists of is a fact about the repository, and a release that
+	// describes a different set than the one CD built is the failure this whole
+	// tool exists to prevent.
+	comps := buildinfo.Components(release.Names(), *imageVersion, *chartName, *chartVersion)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -126,14 +126,4 @@ func run() error {
 		fmt.Printf("promoted %s/%s to %s\n", bi.Name, bi.Number, *promoteTo)
 	}
 	return nil
-}
-
-func split(s string) []string {
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }

@@ -11,6 +11,10 @@
 # Under Flux, `layers` is set by deploy/flux/software/base; clearing
 # `database.cluster.name` here is what says the database layer has nothing to do.
 
+# Objects are named <this>-<component>: swgw-coordinator, swgw-worker, swgw-web.
+# Without it they are <release>-<chart>-<component>.
+fullnameOverride: swgw
+
 database:
   # Empty means: this deployment provisions nothing, so it cannot derive the two
   # settings below and they must be stated.

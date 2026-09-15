@@ -24,6 +24,8 @@ For a self-contained `helm install`, turn both on and install twice: once with
 ## What a deployment states
 
 ```yaml
+fullnameOverride: swgw          # swgw-coordinator, not swgw-software-gateway-coordinator
+
 access:
   webUrl:      https://gateway.example.internal
   identityUrl: https://id.example.internal

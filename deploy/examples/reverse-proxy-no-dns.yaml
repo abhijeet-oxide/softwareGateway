@@ -19,6 +19,10 @@
 #
 # The nginx that serves them is at the bottom of this file.
 
+# Objects are named <this>-<component>: swgw-coordinator, swgw-worker, swgw-web.
+# Without it they are <release>-<chart>-<component>.
+fullnameOverride: swgw
+
 supportContact: platform-team@example.internal
 
 access:
@@ -124,3 +128,8 @@ cerbos:
 # again. Nothing inside the cluster is affected - the coordinator fetches
 # ZITADEL's keys over plain HTTP at `zitadel:8080` and never sees this
 # certificate.
+
+# debug | info | warn | error
+logLevel:
+  coordinator: debug
+  worker: debug

@@ -52,12 +52,15 @@ lists them, and restating one is a test failure.
 The four things a real deployment changes:
 
 ```yaml
+fullnameOverride: swgw                # swgw-coordinator, swgw-worker, swgw-web
+
 access:
   webUrl:      https://gateway.lab.example.internal
   identityUrl: https://id.gateway.lab.example.internal
+
 images:
   registry: registry.example.internal
-  mirror:   registry.example.internal/docker
+  mirror:   registry.example.internal
   pullSecrets: [registry-pull]
 ```
 
@@ -143,13 +146,35 @@ are pushed by the pipeline and are not on the list.
 on every failover, so a cluster missing that copy does not fail when it is
 deployed — it fails when the primary dies.
 
+### The dials
+
+Everything an operator is expected to turn lives in the instance file, at its
+current value, so the file answers "what can I change" as well as "what is
+different here":
+
+| | |
+|---|---|
+| `fullnameOverride` | the prefix on every object name — `swgw` gives `swgw-coordinator` rather than `swgw-software-gateway-coordinator` |
+| `coordinator.replicas`, `worker.replicas`, `web.replicas`, `cerbos.replicas` | capacity. A package is not split across workers, so more workers move more packages at once |
+| `database.cluster.instances` | two can fail over; three can lose one and keep a quorum |
+| `database.cluster.storage.size`, `.walStorage.size` | the data volume and the write-ahead log volume |
+| `database.cluster.backup.enabled` | continuous WAL archiving |
+| `logLevel.coordinator`, `logLevel.worker` | `debug`, `info`, `warn`, `error` |
+| `identity.sso.enabled` | sign in through the corporate directory |
+| `supportContact` | who somebody is told to ask when they are refused |
+
+Stating one of those at the chart's default is fine and expected. Stating
+anything **else** at the default is a test failure — a resource request or a
+probe threshold pinned at today's value is a decision nobody made, and it
+diverges silently the day the chart moves.
+
 ### Turning features on
 
 Each is one flag, and each is the only thing that adds a Secret:
 
 | flag | default | what turning it on needs |
 |---|---|---|
-| `identity.sso.enabled` | off | an app registration, and one Secret for its client secret — [entra-app-registration.md](entra-app-registration.md) |
+| `identity.sso.enabled` | off in the chart, **on in both shipped instances** | an app registration, and one Secret for its client secret — [entra-app-registration.md](entra-app-registration.md) |
 | `access.expose.ingress.tls.enabled` | off | two certificate Secrets. Not needed when something in front terminates TLS |
 | `database.cluster.backup.enabled` | off | object storage and its credentials |
 | `networkPolicy.enabled` | off | nothing |

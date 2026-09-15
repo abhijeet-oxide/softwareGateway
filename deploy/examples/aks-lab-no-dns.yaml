@@ -10,6 +10,10 @@
 # Copy this to deploy/flux/instances/<name>/values/values.yaml and edit the
 # addresses, the registry and the storage class.
 
+# Objects are named <this>-<component>: swgw-coordinator, swgw-worker, swgw-web.
+# Without it they are <release>-<chart>-<component>.
+fullnameOverride: swgw
+
 tenant: default
 supportContact: platform-team@example.internal
 
@@ -107,5 +111,7 @@ worker: {replicas: 2}
 web: {replicas: 2}
 cerbos: {replicas: 1}
 
-settings:
-  SWGW_OBSERVABILITY_LOG_LEVEL: debug
+# debug | info | warn | error
+logLevel:
+  coordinator: debug
+  worker: debug

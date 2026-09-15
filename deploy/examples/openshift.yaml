@@ -13,6 +13,10 @@
 # Everything else in the chart already runs non-root with a read-only root
 # filesystem and every capability dropped.
 
+# Objects are named <this>-<component>: swgw-coordinator, swgw-worker, swgw-web.
+# Without it they are <release>-<chart>-<component>.
+fullnameOverride: swgw
+
 tenant: default
 supportContact: platform-team@example.com
 

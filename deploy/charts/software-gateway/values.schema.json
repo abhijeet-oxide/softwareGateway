@@ -220,6 +220,13 @@
     },
 
     "metrics": {"type": "object"},
+    "logLevel": {
+      "type": "object",
+      "properties": {
+        "coordinator": {"enum": ["", "debug", "info", "warn", "error"]},
+        "worker": {"enum": ["", "debug", "info", "warn", "error"]}
+      }
+    },
     "settings": {"type": "object", "additionalProperties": {"type": ["string", "number", "boolean"]}},
     "coordinatorExtraEnv": {"type": "array"},
     "workerExtraEnv": {"type": "array"},

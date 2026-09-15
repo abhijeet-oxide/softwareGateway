@@ -85,6 +85,10 @@ spec:
               containerPort: 8080
           env:
             {{- include "swgw.commonEnv" . | nindent 12 }}
+            {{- with (index .Values.logLevel "coordinator") }}
+            - name: SWGW_OBSERVABILITY_LOG_LEVEL
+              value: {{ . | quote }}
+            {{- end }}
             # The driver as well as the DSN: it defaults to sqlite, so a DSN on
             # its own gives a Coordinator that opens a local file and loses it
             # with the pod.

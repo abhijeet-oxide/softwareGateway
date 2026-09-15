@@ -1,72 +1,146 @@
 # yaml-language-server: $schema=../../../software/schema/values.schema.json
 #
-# LAB - only what differs from the chart's defaults.
+# LAB - everything this deployment differs in, and nothing else.
 #
-# Every key not here is a chart default: `helm show values software-gateway`, or
-# deploy/charts/software-gateway/values.yaml with the reasoning attached.
-# Restating a default is a test failure, so this file answers one question -
-# what is different here.
+# Any key not here is a chart default, listed with its reasoning in
+# deploy/charts/software-gateway/values.yaml. Restating one is a test failure,
+# so this file answers exactly one question: what is different here.
 #
-# The namespace is NOT here. It is a kustomize concern, written once in
+# The NAMESPACE is not here - it is a kustomize concern, written once in
 # ../../kustomization.yaml.
 
-supportContact: platform-team@example.internal
+# ------------------------------------------------------------------- naming
+# Objects are named <this>-<component>: swgw-coordinator, swgw-worker, swgw-web.
+# Without it they are <release>-<chart>-<component>, which is long and says the
+# chart's name twice.
+fullnameOverride: swgw
 
-# THE TWO ADDRESSES A BROWSER USES. Two DNS names, ONE private IP, one reverse
-# proxy: it routes on the Host header, which is what virtual hosting is. The
-# chart publishes nothing (expose.type defaults to none) and that proxy is
-# pointed at the `web` and `zitadel-proxy` Services.
+# ---------------------------------------------------------------- addresses
 #
-# Two names rather than one with paths, because ZITADEL cannot serve under a path
-# prefix and its address is stamped into every token's `iss`.
+# The two addresses a BROWSER uses. Two DNS names on ONE private IP, served by
+# the reverse proxy this team runs: it routes on the Host header, which is what
+# virtual hosting is. The chart publishes nothing - `access.expose.type` defaults
+# to `none` - and that proxy is pointed at the `web` and `zitadel-proxy` Services.
+#
+# Two names rather than one with paths, because ZITADEL has no path-prefix mode
+# and its address is stamped into every token's `iss`.
+#
+# The scheme is what the BROWSER speaks to the proxy. ZITADEL always serves plain
+# HTTP behind it, which is a different question.
 access:
   webUrl: https://gateway.lab.example.internal
   identityUrl: https://id.gateway.lab.example.internal
 
+# Who the UI and the sign-in screens name when somebody is refused. An address,
+# a service desk, a page - somewhere that answers.
+supportContact: platform-team@example.internal
+
+# ------------------------------------------------------------------- images
+#
 # ONE REGISTRY FOR EVERYTHING. `registry` is where this product's own images are
 # pushed; `mirror` is where the third-party ones were copied to. The same value
 # in both is the normal answer when one registry holds the lot.
 #
 #   task images:mirror -- lab    the copy commands, with the exact paths
+#
+# The versions are chart defaults, pinned and tested together. Nothing here names
+# a tag.
 images:
   registry: contoso.azurecr.io
   mirror: contoso.azurecr.io
   # Created by hand: `task flux:secrets -- lab` prints the command.
   pullSecrets: [registry-pull]
 
-database:
-  cluster:
-    instances: 2
-    storage: {size: 32Gi, className: managed-csi}
-    walStorage: {size: 8Gi, className: managed-csi}
-    resources:
-      requests: {cpu: 500m, memory: 1Gi}
-      limits: {memory: 2Gi}
-    # With two instances a synchronous standby is the whole fleet, and a lab can
-    # afford to lose the last few seconds.
-    synchronousReplicas: 0
-
-identity:
-  # masterkey and rootPassword are generated on first install and read back on
-  # every upgrade, so there is nothing to create.
-  bootstrapAdmin:
-    email: platform-team@example.internal
-  # No single sign-on here: everybody in config/users/users.yaml signs in with
-  # the password that file carries.
-  zitadel: {replicas: 1}
-  login: {replicas: 1}
-  proxy: {replicas: 1}
+# ----------------------------------------------------------------- capacity
+#
+# The control plane. One replica holds the leader lock; the rest serve reads, so
+# two is what keeps the API up through a node drain.
+coordinator:
+  replicas: 2
 
 # The data plane. Stateless, and every worker shares one machine account, so
 # raising this needs nothing else - no token to issue, distribute or rotate.
-# Raise it for throughput on concurrent transfers; a package is not split across
-# workers, so more workers move more packages rather than one package faster.
+#
+# A package is not split across workers, so more workers move more packages at
+# once rather than one package faster.
 worker:
   replicas: 3
+
+web:
+  replicas: 2
 
 cerbos:
   replicas: 1
 
-# A lab is a place to read logs.
-settings:
-  SWGW_OBSERVABILITY_LOG_LEVEL: debug
+# ----------------------------------------------------------------- database
+#
+# PostgreSQL in this namespace, run by the CloudNativePG operator. Its password
+# is generated by the operator and published as <cluster>-app; there is nothing
+# here to create and nothing to rotate.
+database:
+  cluster:
+    instances: 2
+
+    # THE DATA. Grows with the number of packages recorded, not with the bytes
+    # transferred - artifact bytes never enter the database. Resizing later is a
+    # CloudNativePG operation, not a redeploy, but it is not instant.
+    storage:
+      size: 32Gi
+      className: managed-csi
+
+    # THE WRITE-AHEAD LOG, on its own volume. Nothing to do with backups: every
+    # write is journalled here before it reaches the data files, and a large
+    # transfer writes WAL faster than it is recycled. On one volume that burst
+    # fills the disk the data is on, and a PostgreSQL that cannot write WAL stops
+    # accepting writes. Set size to "" to keep it on the data volume.
+    walStorage:
+      size: 8Gi
+      className: managed-csi
+
+    resources:
+      requests: {cpu: 500m, memory: 1Gi}
+      limits: {memory: 2Gi}
+
+    # With two instances a synchronous standby is the whole fleet, and a lab can
+    # afford to lose the last few seconds of a transfer log.
+    synchronousReplicas: 0
+
+    # CONTINUOUS WAL ARCHIVING, off in a lab. Replication is not a backup: it
+    # replicates a DROP TABLE faithfully and immediately. Turning this on needs
+    # object storage and a credential - see instances/prod.
+    backup:
+      enabled: false
+
+# ----------------------------------------------------------------- identity
+identity:
+  # masterkey and rootPassword are generated on first install and read back from
+  # the cluster on every upgrade, so neither is yours to create.
+  bootstrapAdmin:
+    username: admin
+    email: platform-team@example.internal
+
+  # Sign in through the corporate directory. Register the application with
+  # redirect URI https://id.gateway.lab.example.internal/idps/callback under the
+  # "Web" platform - NOT "Single-page application", which refuses the code
+  # exchange after the password has been typed.
+  #
+  # The client SECRET is never here: `task flux:secrets -- lab` prints the
+  # command that creates it.
+  sso:
+    enabled: true
+    issuer: https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0
+    clientId: "00000000-0000-0000-0000-000000000000"
+    existingSecret: swgw-sso
+    # Keeps ZITADEL's own password box available, which is the way back in while
+    # the directory path is still being proven.
+    allowPasswordLogin: true
+
+  zitadel: {replicas: 1}
+  login: {replicas: 1}
+  proxy: {replicas: 1}
+
+# ------------------------------------------------------------------ logging
+# debug | info | warn | error. Empty leaves config/config.yaml's `info`.
+logLevel:
+  coordinator: debug
+  worker: debug

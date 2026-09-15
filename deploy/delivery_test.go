@@ -2,7 +2,6 @@ package deploy
 
 import (
 	"bytes"
-	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -736,16 +735,46 @@ func TestEveryInstanceReadsOneValuesFile(t *testing.T) {
 	}
 }
 
+// instanceDials are the settings an instance may state even when the value is
+// the chart's default.
+//
+// They are the knobs an operator is EXPECTED to turn, and for those, seeing the
+// current value in the instance file is the point - somebody sizing a lab reads
+// `worker: {replicas: 2}` and changes the 2. Hiding them because they happen to
+// match the chart today would make the file answer "what is different" at the
+// cost of answering "what can I change", and the second question is the one
+// somebody has at 09:00 on their first day.
+//
+// Everything NOT on this list must differ, which is where the rule below earns
+// its place: a resource request or a probe threshold pinned at today's default
+// is a decision nobody made, and it diverges silently the day the chart moves.
+var instanceDials = []string{
+	"coordinator.replicas",
+	"worker.replicas",
+	"web.replicas",
+	"cerbos.replicas",
+	"identity.zitadel.replicas",
+	"identity.login.replicas",
+	"identity.proxy.replicas",
+	"identity.sso.enabled",
+	"identity.bootstrapAdmin.username",
+	"database.cluster.instances",
+	"database.cluster.storage.size",
+	"database.cluster.walStorage.size",
+	"database.cluster.synchronousReplicas",
+	"database.cluster.backup.enabled",
+	"logLevel.coordinator",
+	"logLevel.worker",
+}
+
 // TestNoInstanceRestatesAChartDefault keeps one rule true: the chart holds every
-// default, and an instance's values file holds only what differs.
+// default, and an instance's values file holds what differs plus the dials.
 //
-// A restated default is not harmless. It reads as a decision somebody made for
-// this deployment, so the next person changing the chart's default changes it
-// everywhere except the places that silently pinned the old one - and the
-// divergence is invisible until something behaves differently in one namespace.
-//
-// It also makes the file answer the only question worth asking of it: what is
-// different here.
+// A restated default that is not a dial is not harmless. It reads as a decision
+// somebody made for this deployment, so the next person changing the chart's
+// default changes it everywhere except the places that silently pinned the old
+// one - and the divergence is invisible until something behaves differently in
+// one namespace.
 func TestNoInstanceRestatesAChartDefault(t *testing.T) {
 	var defaults map[string]any
 	b, err := os.ReadFile(filepath.Join(repoRoot, "deploy", "charts", "software-gateway", "values.yaml"))
@@ -772,20 +801,29 @@ func TestNoInstanceRestatesAChartDefault(t *testing.T) {
 				t.Fatalf("parse values: %v", err)
 			}
 			for _, restated := range sameAsDefault(values, defaults, "") {
-				t.Errorf("%s states %s, which is already the chart's default.\n"+
-					"\nDelete the line. If this deployment genuinely depends on that value rather than\n"+
-					"on whatever the chart says, the chart's default is the thing to change.\n",
-					instance, restated)
+				if slices.Contains(instanceDials, restated.path) {
+					continue
+				}
+				t.Errorf("%s states %s: %v, which is already the chart's default.\n"+
+					"\nDelete the line. If it is a knob an operator is meant to turn, add it to\n"+
+					"instanceDials in this test and say so - that list is the difference between a\n"+
+					"value somebody chose and one nobody did.\n",
+					instance, restated.path, restated.value)
 			}
 		})
 	}
 }
 
+type restatement struct {
+	path  string
+	value any
+}
+
 // sameAsDefault returns the dotted paths an instance sets to the value the chart
 // already has. Maps are walked; anything else is compared whole, because a list
 // that happens to equal the default is still a restatement.
-func sameAsDefault(values, defaults map[string]any, prefix string) []string {
-	var found []string
+func sameAsDefault(values, defaults map[string]any, prefix string) []restatement {
+	var found []restatement
 	for key, got := range values {
 		want, ok := defaults[key]
 		if !ok {
@@ -802,10 +840,10 @@ func sameAsDefault(values, defaults map[string]any, prefix string) []string {
 			continue
 		}
 		if reflect.DeepEqual(got, want) {
-			found = append(found, fmt.Sprintf("%s: %v", path, got))
+			found = append(found, restatement{path: path, value: got})
 		}
 	}
-	sort.Strings(found)
+	sort.Slice(found, func(i, j int) bool { return found[i].path < found[j].path })
 	return found
 }
 
@@ -820,14 +858,22 @@ func sameAsDefault(values, defaults map[string]any, prefix string) []string {
 //
 // So: exactly one Namespace, named by the transformer, with everything else
 // inside it, and the literal written nowhere else in the directory.
+// namespaceLookalikes are keys whose value may equal the namespace without
+// being one. An object-name prefix that matches the namespace is ordinary -
+// `fullnameOverride: swgw` in namespace `swgw` is what most deployments write.
+var namespaceLookalikes = []string{"nameOverride", "fullnameOverride"}
+
 // scalarEquals reports whether any scalar anywhere in a decoded document is
-// exactly want.
+// exactly want, ignoring the keys above.
 func scalarEquals(node any, want string) bool {
 	switch v := node.(type) {
 	case string:
 		return v == want
 	case map[string]any:
-		for _, child := range v {
+		for key, child := range v {
+			if slices.Contains(namespaceLookalikes, key) {
+				continue
+			}
 			if scalarEquals(child, want) {
 				return true
 			}

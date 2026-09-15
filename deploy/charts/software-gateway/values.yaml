@@ -341,8 +341,13 @@ identity:
     password: ""
     existingSecret: ""
 
-  # Single sign-on against a corporate directory. On, the sign-in screen
+  # SINGLE SIGN-ON against a corporate directory. On, the sign-in screen
   # redirects straight to it and ZITADEL's own form is never shown.
+  #
+  # OFF HERE AND ON IN EVERY SHIPPED INSTANCE. A chart whose defaults do not
+  # render is a broken chart, and `enabled: true` has no sensible default issuer
+  # or client id to render with - so the default is the local and evaluation
+  # arrangement, and deploy/flux/instances/* turn it on.
   #
   # Needs an app registration in the directory. Its issuer and client id are
   # values; its client SECRET is a Secret, named below and never written here.
@@ -464,14 +469,30 @@ metrics:
     interval: 30s
     labels: {}
 
+# ------------------------------------------------------------------- logging
+#
+# How much each plane says. Empty leaves config/config.yaml's own value, which
+# is `info`.
+#
+#   debug   every decision, including the ones that went the usual way. Loud.
+#   info    what happened: transfers, discoveries, provisioning
+#   warn    what was survived: a retry, a degraded product, a lease taken back
+#   error   what was not
+logLevel:
+  coordinator: ""
+  worker: ""
+
 # ------------------------------------------------------------ configuration
 #
 # config/config.yaml is mounted verbatim - the same file `task run` reads and
-# docker-compose.yml mounts. Cluster differences are stated here as SWGW_
-# overrides, which is the layering the loader already performs. An unknown
-# SWGW_ variable is refused at startup, so a typo is a failed rollout.
+# docker-compose.yml mounts. Anything else a cluster needs to differ in is
+# stated here as a SWGW_ override, which is the layering the loader already
+# performs: a variable is SWGW_ plus the config path with dots as underscores.
+#
+# An unknown SWGW_ variable is REFUSED at startup rather than ignored, so a typo
+# here is a failed rollout and not a setting that silently did not apply.
 settings: {}
-#  SWGW_OBSERVABILITY_LOG_LEVEL: debug
+#  SWGW_COORDINATOR_SCHEDULER_TICKINTERVAL: 5s
 
 coordinatorExtraEnv: []
 workerExtraEnv: []

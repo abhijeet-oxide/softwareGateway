@@ -83,6 +83,10 @@ spec:
               containerPort: 8081
           env:
             {{- include "swgw.commonEnv" . | nindent 12 }}
+            {{- with (index .Values.logLevel "worker") }}
+            - name: SWGW_OBSERVABILITY_LOG_LEVEL
+              value: {{ . | quote }}
+            {{- end }}
             - name: SWGW_WORKER_COORDINATORENDPOINT
               value: http://controller:8080
             - name: SWGW_WORKER_NAME

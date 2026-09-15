@@ -415,7 +415,7 @@ jobs:
       #
       # Off unless BUILD_ATTESTATION is set: it needs `id-token: write`, which
       # is a permission worth granting deliberately.
-      - uses: actions/attest-build-provenance@v3
+      - uses: actions/attest-build-provenance@v4
         if: steps.plan.outputs.build == 'true' && vars.BUILD_ATTESTATION == 'true'
         with:
           subject-name: ${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_REPOSITORY }}/software-gateway-${{ matrix.component }}

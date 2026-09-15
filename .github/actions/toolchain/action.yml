@@ -40,6 +40,78 @@ runs:
         go-version: ${{ inputs.go-version }}
         cache: true
 
+    # GO HAS NO CREDENTIAL SETTING, and that is the whole reason this step
+    # exists. GOPROXY_USERNAME and GOPROXY_TOKEN are read from the environment
+    # rather than taken as inputs, because that is where GOPROXY itself is set:
+    # one block per workflow configures the module network, instead of a pair
+    # of lines repeated at every one of this action's call sites.
+    # A module mirror that wants a credential gets it from a netrc and from
+    # nothing else, so pointing GOPROXY at an authenticated Artifactory without
+    # one fails every fetch with a 401 that names no setting to change.
+    #
+    # The alternative is credentials in the GOPROXY URL itself. It works and it
+    # leaks: that URL is printed by `go env`, quoted back in module errors, and
+    # inherited by every child process.
+    - name: Authenticate the module mirror
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [ -z "${GOPROXY_TOKEN:-}" ]; then
+          echo "no module mirror credential; Go fetches anonymously"
+          exit 0
+        fi
+        if [ -z "${GOPROXY_USERNAME:-}" ]; then
+          echo "::error::a module mirror token was given with no username. Pass both, or neither."
+          exit 1
+        fi
+        echo "::add-mask::$GO_TOKEN"
+
+        # Every host the Go fetches could reach, from the URLs already
+        # configured. GOPROXY is a list separated by "," or "|"; `direct` and
+        # `off` are not URLs, and GOSUMDB is a name that may carry one after a
+        # `+`. Credentials already embedded in a URL are stripped before the
+        # host is read.
+        hosts=$(printf '%s\n' "${GOPROXY:-}" "${GOSUMDB:-}" "${GOVULNDB:-}" \
+          | tr ',|+' '\n\n\n' \
+          | sed -n 's#^[[:space:]]*https\{0,1\}://##p' \
+          | sed 's#[?/].*##; s#^[^@]*@##' \
+          | sort -u)
+
+        # A CREDENTIAL FOR AN INTERNAL MIRROR IS NEVER WRITTEN FOR A PUBLIC
+        # HOST. With GOPROXY left at its default this step would otherwise put
+        # the organisation's token in a netrc for proxy.golang.org, and Go
+        # would send it there.
+        netrc="$RUNNER_TEMP/netrc-toolchain"
+        umask 077
+        : > "$netrc"
+        wrote=
+        for host in $hosts; do
+          case "$host" in
+            proxy.golang.org|sum.golang.org|vuln.go.dev|*.googleapis.com|goproxy.io)
+              echo "skipping $host: a public host gets no credential"
+              continue
+              ;;
+          esac
+          {
+            echo "machine $host"
+            echo "  login $GO_USERNAME"
+            echo "  password $GO_TOKEN"
+          } >> "$netrc"
+          wrote="$wrote $host"
+        done
+
+        if [ -z "$wrote" ]; then
+          rm -f "$netrc"
+          echo "no private host among GOPROXY, GOSUMDB and GOVULNDB; nothing to authenticate"
+          exit 0
+        fi
+
+        # NETRC, not ~/.netrc: Go reads this variable first, and a self-hosted
+        # runner's home directory outlives the job.
+        echo "NETRC=$netrc" >> "$GITHUB_ENV"
+        echo "authenticated as $GOPROXY_USERNAME for:$wrote"
+
     - name: Install tools
       shell: bash
       env:

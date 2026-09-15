@@ -1444,3 +1444,75 @@ func TestNoRunBlockReadsAnUnguardedVariable(t *testing.T) {
 		t.Fatal("found no `set -u` run blocks - either they moved, or this test is looking in the wrong place")
 	}
 }
+
+// TestEveryBaseImagePinAgrees keeps the upstream images at one version each.
+//
+// They are written down in four places that cannot import from one another: the
+// Dockerfiles that build on them, docker-compose.yml's build arguments and its
+// own services, and the chart's `images` block, which is what an operator
+// mirrors into their registry. Nothing made them move together, and they did
+// not: `golang:1.26.5` stayed in the Dockerfiles while CI's GO_VERSION floated
+// to the current 1.26.x, and the images shipped ten findings against a standard
+// library that had been patched twice.
+//
+// Comments are skipped, so a line naming a version this repository has LEFT -
+// the one in Dockerfile.web explaining why curl is gone - is documentation
+// rather than a pin.
+func TestEveryBaseImagePinAgrees(t *testing.T) {
+	sources := []string{
+		filepath.Join(repoRoot, "deploy", "build", "Dockerfile.coordinator"),
+		filepath.Join(repoRoot, "deploy", "build", "Dockerfile.worker"),
+		filepath.Join(repoRoot, "deploy", "build", "Dockerfile.transferctl"),
+		filepath.Join(repoRoot, "deploy", "build", "Dockerfile.web"),
+		filepath.Join(repoRoot, "docker-compose.yml"),
+		filepath.Join(repoRoot, "deploy", "charts", "software-gateway", "values.yaml"),
+	}
+	pins := map[string]*regexp.Regexp{
+		"golang": regexp.MustCompile(`\bgolang:(\d+\.\d+(?:\.\d+)?)`),
+		"nginx":  regexp.MustCompile(`\bnginx:(\d+\.\d+\.\d+-alpine)`),
+		"node":   regexp.MustCompile(`\bnode:(\d+\.\d+\.\d+-alpine)`),
+	}
+
+	// image -> version -> the places that say so.
+	seen := map[string]map[string][]string{}
+	for _, path := range sources {
+		b, err := os.ReadFile(path) // #nosec G304 -- the fixed list above.
+		if err != nil {
+			t.Fatalf("read %s: %v", filepath.Base(path), err)
+		}
+		rel, _ := filepath.Rel(repoRoot, path)
+		for i, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				continue
+			}
+			for image, re := range pins {
+				for _, m := range re.FindAllStringSubmatch(line, -1) {
+					if seen[image] == nil {
+						seen[image] = map[string][]string{}
+					}
+					where := fmt.Sprintf("%s:%d", filepath.ToSlash(rel), i+1)
+					seen[image][m[1]] = append(seen[image][m[1]], where)
+				}
+			}
+		}
+	}
+
+	if len(seen) == 0 {
+		t.Fatal("found no base image pins - either the Dockerfiles moved, or this test is looking in the wrong place")
+	}
+	for image, versions := range seen {
+		if len(versions) == 1 {
+			continue
+		}
+		var lines []string
+		for v, places := range versions {
+			sort.Strings(places)
+			lines = append(lines, fmt.Sprintf("  %s: %s", v, strings.Join(places, ", ")))
+		}
+		sort.Strings(lines)
+		t.Errorf("%s is pinned at %d different versions:\n%s\n"+
+			"\nThese files cannot import from one another, so a bump has to touch all of them.\n"+
+			"A build that is one patch behind is a build shipping findings that are already fixed.\n",
+			image, len(versions), strings.Join(lines, "\n"))
+	}
+}

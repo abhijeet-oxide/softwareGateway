@@ -6,12 +6,12 @@
 # require Go 1.25, which raised the module's floor. Recorded in docs/design/16.
 
 # Pinned, and overridable so an internal registry or pull-through proxy can be
-# used: docker compose build --build-arg GO_IMAGE=registry.corp/golang:1.26.5
+# used: docker compose build --build-arg GO_IMAGE=registry.corp/golang:1.26.8
 # Base images: declared here, above every FROM, because an ARG used in a
 # FROM must be in the global scope - one declared inside a stage is
 # invisible to the next FROM and fails with "base name should not be blank".
 # All are overridable for an internal registry or pull-through proxy.
-ARG GO_IMAGE=golang:1.26.5
+ARG GO_IMAGE=golang:1.26.8
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 
 # Helm, fetched in its own stage and copied into the runtime image.

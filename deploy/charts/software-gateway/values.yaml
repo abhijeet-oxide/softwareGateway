@@ -97,7 +97,7 @@ images:
   # you by default. `task images:mirror -- <instance>` prints the exact commands.
   zitadel: ghcr.io/zitadel/zitadel:v4.17.3
   zitadelLogin: ghcr.io/zitadel/zitadel-login:v4.17.3
-  nginx: nginx:1.27.5-alpine
+  nginx: nginx:1.31.5-alpine
   cerbos: cerbos/cerbos:0.55.0
   # One utility image, used by the seeder and every wait-for-... init container.
   node: node:22.23.2-alpine

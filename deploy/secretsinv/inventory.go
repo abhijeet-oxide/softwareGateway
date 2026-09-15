@@ -30,7 +30,7 @@ const Path = "config/secrets/secrets.yaml"
 
 // Entry is one credential: what it is called, what it contains, and where the
 // backend should look for it. `Path` is a LEAF - the root is a per-environment
-// value (secrets.vault.pathPrefix, secrets.azure.keyvaultName), because lab and
+// value (secrets.vault.pathPrefix, secrets.azureKeyVault.name), because lab and
 // production read from different mounts and this file is shared by both.
 type Entry struct {
 	Name        string   `json:"name"`

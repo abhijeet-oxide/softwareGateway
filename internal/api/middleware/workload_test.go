@@ -30,7 +30,7 @@ func TestWorkerPlaneIsTheWorkerRoutesAndNothingElse(t *testing.T) {
 		{http.MethodGet, "/healthz", false},
 	}
 	for _, c := range cases {
-		r := httptest.NewRequest(c.method, c.path, nil)
+		r := httptest.NewRequestWithContext(t.Context(), c.method, c.path, nil)
 		if got := WorkerPlane(r); got != c.want {
 			t.Errorf("WorkerPlane(%s %s) = %v, want %v", c.method, c.path, got, c.want)
 		}
@@ -101,7 +101,7 @@ func TestConfine(t *testing.T) {
 				w.WriteHeader(http.StatusForbidden)
 			})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
 
-			r := httptest.NewRequest(c.method, c.path, nil)
+			r := httptest.NewRequestWithContext(t.Context(), c.method, c.path, nil)
 			r = r.WithContext(context.WithValue(r.Context(), ctxKeyIdentity{}, c.id))
 			h.ServeHTTP(httptest.NewRecorder(), r)
 

@@ -1,9 +1,8 @@
+{{- if .Values.layers.application }}
 {{- if .Values.networkPolicy.enabled }}
 {{/*
-THE ONLY CONTROL IN FRONT OF THE COORDINATOR'S API that does not depend on a
-token being checked. Off by default, because a policy naming the wrong
-namespace is an outage and a cluster whose CNI does not enforce them is a false
-sense of safety - both worse than the honest absence.
+The only control in front of the Coordinator's API that does not depend on a
+token being checked.
 */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -50,15 +49,9 @@ spec:
       ports:
         - {port: 3592, protocol: TCP}
         - {port: 3593, protocol: TCP}
-{{/* NO POLICY FOR THE DATABASE, and that is deliberate.
-
-     The CloudNativePG Cluster is not this chart's - it is applied by the layer
-     before it - and its pods need traffic this chart knows nothing about:
-     streaming replication between instances, the operator's own connections,
-     and the instance manager's probes. A NetworkPolicy written here would fence
-     pods this release does not own, using labels it does not set, and the way
-     you would find out it was wrong is a failover that does not complete.
-
-     It belongs beside the Cluster, in deploy/environments/<env>/database, where
-     whoever changes the topology can see it. */}}
+{{/* NO POLICY FOR THE DATABASE, deliberately. Its pods need traffic this chart
+     knows nothing about - streaming replication, the operator's connections,
+     the instance manager's probes - and the way you would find out a policy
+     here was wrong is a failover that does not complete. */}}
+{{- end }}
 {{- end }}

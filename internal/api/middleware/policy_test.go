@@ -113,7 +113,7 @@ var routePolicies = []struct {
 
 func TestEveryRouteAsksForSomethingSpecific(t *testing.T) {
 	for _, c := range routePolicies {
-		got := PolicyFor(httptest.NewRequest(c.method, c.path, nil))
+		got := PolicyFor(httptest.NewRequestWithContext(t.Context(), c.method, c.path, nil))
 		if got.Kind != c.kind || got.Action != c.action {
 			t.Errorf("%s %s -> %s/%s, want %s/%s",
 				c.method, c.path, got.Kind, got.Action, c.kind, c.action)
@@ -124,11 +124,11 @@ func TestEveryRouteAsksForSomethingSpecific(t *testing.T) {
 // The product is carried through to the policy, because the whole product tier
 // turns on R.attr.product.
 func TestAProductScopedRouteCarriesItsProduct(t *testing.T) {
-	got := PolicyFor(httptest.NewRequest("GET", "/api/v1/products/software-01/packages", nil))
+	got := PolicyFor(httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/products/software-01/packages", nil))
 	if got.Product != "software-01" {
 		t.Errorf("product = %q, want software-01", got.Product)
 	}
-	got = PolicyFor(httptest.NewRequest("GET", "/api/v1/auditEvents", nil))
+	got = PolicyFor(httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/auditEvents", nil))
 	if got.Product != "" {
 		t.Errorf("an estate route carried a product: %q", got.Product)
 	}
@@ -137,11 +137,11 @@ func TestAProductScopedRouteCarriesItsProduct(t *testing.T) {
 // A route nobody mapped is refused rather than waved through, and a write on
 // one is refused to everybody - which is the failure that gets it mapped.
 func TestAnUnmappedRouteAsksSomethingNobodyCanAnswer(t *testing.T) {
-	read := PolicyFor(httptest.NewRequest("GET", "/api/v1/inventedLater", nil))
+	read := PolicyFor(httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/inventedLater", nil))
 	if read.Kind != "system" || read.Action != "view" {
 		t.Errorf("unmapped read -> %s/%s", read.Kind, read.Action)
 	}
-	write := PolicyFor(httptest.NewRequest("POST", "/api/v1/inventedLater", nil))
+	write := PolicyFor(httptest.NewRequestWithContext(t.Context(), "POST", "/api/v1/inventedLater", nil))
 	if write.Action != "write" {
 		t.Errorf("unmapped write -> %s/%s, want an action no policy grants", write.Kind, write.Action)
 	}
@@ -233,9 +233,9 @@ func TestPolicyDecisionsAgainstCerbos(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			allowed, detail := attemptWith(engine, c.id, c.method, c.path)
+			allowed, detail := attemptWith(t, engine, c.id, c.method, c.path)
 			if allowed != c.want {
-				res := PolicyFor(httptest.NewRequest(c.method, c.path, nil))
+				res := PolicyFor(httptest.NewRequestWithContext(t.Context(), c.method, c.path, nil))
 				t.Fatalf("%s %s (%s/%s) allowed=%v want=%v %s",
 					c.method, c.path, res.Kind, res.Action, allowed, c.want, detail)
 			}
@@ -247,7 +247,7 @@ func TestPolicyDecisionsAgainstCerbos(t *testing.T) {
 func TestAnUnreachablePolicyEngineRefuses(t *testing.T) {
 	// A port nothing is listening on, so Check returns a transport error.
 	engine := authz.NewCerbos("http://127.0.0.1:1")
-	allowed, detail := attemptWith(engine,
+	allowed, detail := attemptWith(t, engine,
 		identity("default", []string{"org-admin"}, nil), "GET", "/api/v1/products")
 	if allowed {
 		t.Fatal("a request was served while the policy engine was unreachable")
@@ -257,7 +257,8 @@ func TestAnUnreachablePolicyEngineRefuses(t *testing.T) {
 	}
 }
 
-func attemptWith(engine authz.Engine, id Identity, method, path string) (bool, string) {
+func attemptWith(t *testing.T, engine authz.Engine, id Identity, method, path string) (bool, string) {
+	t.Helper()
 	reached := false
 	var denied string
 	h := Authorize(engine, func(w http.ResponseWriter, _ *http.Request, detail string) {
@@ -265,7 +266,7 @@ func attemptWith(engine authz.Engine, id Identity, method, path string) (bool, s
 		w.WriteHeader(http.StatusForbidden)
 	})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
 
-	r := httptest.NewRequest(method, path, nil)
+	r := httptest.NewRequestWithContext(t.Context(), method, path, nil)
 	r = r.WithContext(context.WithValue(r.Context(), ctxKeyIdentity{}, id))
 	h.ServeHTTP(httptest.NewRecorder(), r)
 	return reached, denied

@@ -1,0 +1,17 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: software-gateway
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: https://github.com/abhijeet-oxide/softwareGateway
+  ref:
+    branch: main
+  secretRef:
+    name: software-gateway-git
+  # Only the deployment tree. Application code changes reach a cluster as a new
+  # chart version, never as a Git reconciliation.
+  ignore: |
+    /*
+    !/deploy/flux

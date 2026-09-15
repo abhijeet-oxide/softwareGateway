@@ -1,0 +1,34 @@
+name: Bug report
+description: Something does not work the way it says it does
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what happened, and what you expected instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options:
+        - task run
+        - docker compose
+        - a cluster (Helm or Flux)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The chart version, or the commit.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >-
+        The relevant lines, not the whole file. For a cluster, the pod's log and
+        `kubectl describe` are usually both needed.
+      render: shell

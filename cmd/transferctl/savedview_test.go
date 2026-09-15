@@ -104,7 +104,7 @@ func TestNothingSavedIsADash(t *testing.T) {
 func TestTheListSaysWhereEachTransferGoes(t *testing.T) {
 	resp := listWith(transferFixture{
 		id: "9bc63dc2-1111-2222-3333-444444444444", state: "RUNNING",
-		sourceName: "near", targetName: "att-stage",
+		sourceName: "near", targetName: "edge-stage",
 		source:  "cfx-5000-product-orb-docker.swdp-us.support.nokia.com/orbs/cfx-5000-k8s",
 		target:  "artifact.it.example.com/artifacts-oci-stage",
 		planned: "1024", transferred: "0", saved: "0",
@@ -116,7 +116,7 @@ func TestTheListSaysWhereEachTransferGoes(t *testing.T) {
 	}
 	out := buf.String()
 
-	for _, want := range []string{"FROM", "TO", "near", "att-stage"} {
+	for _, want := range []string{"FROM", "TO", "near", "edge-stage"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the listing does not carry %q:\n%s", want, out)
 		}
@@ -137,7 +137,7 @@ func TestDescribeAgreesWithTheListingAboutTheName(t *testing.T) {
 	transfer := listWith(transferFixture{
 		id: "9bc63dc2-1111-2222-3333-444444444444", state: "RUNNING",
 		tag: "orb_25.7_mp2604_2131", displayTag: "25.7_mp2604_2131",
-		sourceName: "near", targetName: "att-stage",
+		sourceName: "near", targetName: "edge-stage",
 		planned: "68440000000", transferred: "0",
 		skipped: "34400000000", saved: "34400000000",
 	}).Transfers[0]

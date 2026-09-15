@@ -83,7 +83,7 @@ func TestRequireRefusesWhenEngineSaysNo(t *testing.T) {
 	h := Require(denyAll{}, func(*http.Request) Resource { return Resource{Kind: "k"} }, "view")(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/x", nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), "GET", "/x", nil))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}
@@ -96,7 +96,7 @@ func TestRequireFailsClosedWhenEngineIsDown(t *testing.T) {
 			t.Fatal("handler must not run when the policy engine is unreachable")
 		}))
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/x", nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), "GET", "/x", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rec.Code)
 	}
@@ -119,7 +119,7 @@ func TestAuthenticateRefusesMissingToken(t *testing.T) {
 	h := Authenticate(Options{Verifier: v})(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Fatal("must not run") }))
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/x", nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), "GET", "/x", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
@@ -133,7 +133,7 @@ func TestAuthenticateDisabledYieldsAnonymous(t *testing.T) {
 	h := Authenticate(Options{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = FromContext(r.Context())
 	}))
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), "GET", "/x", nil))
 	if seen.Subject != "anonymous" || seen.Authenticated() {
 		t.Fatalf("identity = %+v, want unauthenticated anonymous", seen)
 	}
@@ -144,7 +144,7 @@ func TestBearerTokenParsing(t *testing.T) {
 		"Bearer abc": "abc", "bearer abc": "abc", "BEARER  abc ": "abc",
 		"Basic abc": "", "": "", "Bearer": "",
 	} {
-		r := httptest.NewRequest("GET", "/", nil)
+		r := httptest.NewRequestWithContext(t.Context(), "GET", "/", nil)
 		if header != "" {
 			r.Header.Set("Authorization", header)
 		}

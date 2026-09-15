@@ -349,6 +349,10 @@ func (c *Cerbos) post(ctx context.Context, body []byte) (cerbosResp, error) {
 	var decoded cerbosResp
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	// #nosec G704 -- c.Addr is the policy decision point's address from this
+	// deployment's own configuration (SWGW_AUTH_CERBOSADDR). Nothing a caller
+	// sends reaches the URL: the subject, the resource and the action are the
+	// JSON body.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.Addr+"/api/check/resources", bytes.NewReader(body))
 	if err != nil {
@@ -356,7 +360,7 @@ func (c *Cerbos) post(ctx context.Context, body []byte) (cerbosResp, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.http().Do(req)
+	resp, err := c.http().Do(req) // #nosec G704 -- see the request above.
 	if err != nil {
 		// NEVER fail open. An unreachable policy engine means we cannot know
 		// whether this is allowed, and "cannot know" is not "yes".

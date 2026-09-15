@@ -57,7 +57,7 @@ func TestBothEndsAreNamed(t *testing.T) {
 	}
 	out := buf.String()
 
-	for _, want := range []string{"near", "att-stage", "orbs/cfx-5000-k8s:orb_25.7"} {
+	for _, want := range []string{"near", "edge-stage", "orbs/cfx-5000-k8s:orb_25.7"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the header does not carry %q:\n%s", want, out)
 		}
@@ -180,7 +180,7 @@ func mixedReport() *v1.CompareResponse {
 			Label: "near", Reference: "orbs/cfx-5000-k8s:orb_25.7_mp2604_2131",
 		},
 		B: v1.CompareEnd{
-			Label:     "att-stage",
+			Label:     "edge-stage",
 			Reference: "artifacts-oci-stage/orbs/cfx-5000-k8s:orb_25.7_mp2604_2131",
 		},
 		Rows: []v1.CompareRow{

@@ -1,0 +1,136 @@
+# yaml-language-server: $schema=../../../software/schema/values.schema.json
+#
+# PRODUCTION - everything this deployment differs in, and the dials an operator
+# turns. The namespace is in ../../kustomization.yaml.
+
+fullnameOverride: swgw
+
+# ---------------------------------------------------------------- addresses
+# Two DNS names, one ingress controller, certificates from cert-manager. Two
+# names rather than one with paths, because ZITADEL has no path-prefix mode.
+access:
+  webUrl: https://gateway.example.com
+  identityUrl: https://id.gateway.example.com
+  expose:
+    type: ingress
+    ingress:
+      className: nginx
+      tls:
+        enabled: true
+        webSecretName: gateway-tls
+        identitySecretName: id-gateway-tls
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-internal
+
+supportContact: https://support.example.com/software-gateway
+
+# ------------------------------------------------------------------- images
+images:
+  registry: contoso.azurecr.io
+  mirror: contoso.azurecr.io
+
+# ----------------------------------------------------------------- capacity
+coordinator:
+  replicas: 3
+  resources:
+    requests: {cpu: 500m, memory: 512Mi}
+    limits: {memory: 1Gi}
+  podDisruptionBudget: {minAvailable: 2}
+  # ScheduleAnyway, not DoNotSchedule: a zone outage must degrade the spread
+  # rather than stop scheduling.
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels: {app: coordinator}
+
+worker:
+  replicas: 6
+  resources:
+    requests: {memory: 512Mi}
+    limits: {memory: 1Gi}
+  podDisruptionBudget: {minAvailable: 2}
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels: {app: worker}
+
+web:
+  replicas: 3
+  podDisruptionBudget: {minAvailable: 2}
+
+cerbos:
+  replicas: 2
+
+# ----------------------------------------------------------------- database
+database:
+  cluster:
+    # Three: two can fail over, three can lose one instance and still have a
+    # quorum - the difference between a failover and a decision somebody makes
+    # at night.
+    instances: 3
+    storage: {size: 200Gi, className: managed-csi-premium}
+    walStorage: {size: 40Gi, className: managed-csi-premium}
+    resources:
+      requests: {cpu: "2", memory: 4Gi}
+      limits: {memory: 8Gi}
+    # A commit is on two instances before the client is told it committed, so a
+    # primary failure loses nothing. One network round trip per commit.
+    synchronousReplicas: 1
+    # Continuous WAL archiving: point-in-time recovery to any second in the
+    # window. Replication is not a backup - it replicates a DROP TABLE faithfully
+    # and immediately.
+    backup:
+      enabled: true
+      destinationPath: https://contosobackups.blob.core.windows.net/swgw/
+      retentionPolicy: 90d
+      azureCredentials:
+        storageAccount: {name: swgw-db-backup, key: account}
+        storageKey: {name: swgw-db-backup, key: key}
+
+# ----------------------------------------------------------------- identity
+identity:
+  bootstrapAdmin:
+    username: admin
+    email: platform-team@example.com
+  sso:
+    enabled: true
+    # Redirect URI to register: https://id.gateway.example.com/idps/callback,
+    # under the "Web" platform - NOT "Single-page application".
+    issuer: https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0
+    clientId: "00000000-0000-0000-0000-000000000000"
+    existingSecret: swgw-sso
+    requireMfa: true
+  # How long removing somebody takes to bite: tokens are verified offline, so a
+  # removal stops the RENEWAL rather than the session.
+  tokenLifetimes:
+    accessToken: 5m
+
+# ------------------------------------------------------------------ logging
+logLevel:
+  coordinator: info
+  worker: info
+
+# ------------------------------------------------------------------ security
+#
+# The Vault Secrets Operator turns every entry in config/secrets/secrets.yaml
+# into a Kubernetes Secret. Its VaultAuth is in 0-secrets/.
+secrets:
+  backend: vault
+  vault:
+    pathPrefix: softwaregateway/prod
+  registryPullSecret:
+    enabled: true
+
+networkPolicy:
+  enabled: true
+  # Everything else reaching the coordinator is denied. `monitoring` is
+  # Prometheus; add whatever namespace runs transferctl.
+  allowFromNamespaces: [monitoring]
+
+metrics:
+  serviceMonitor:
+    enabled: true

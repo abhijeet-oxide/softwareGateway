@@ -1,10 +1,8 @@
+{{- if .Values.layers.application }}
 {{/*
-The policy decision point.
-
-It is in this chart rather than beside it because config/access holds BOTH the
-role names and the policies that decide what a role may do, and splitting them
-across two charts would put one subject in two release cadences - which is the
-arrangement docs/design/27 was written to end.
+The policy decision point. It is in this chart rather than beside it because
+config/access holds both the role names and the policies that decide what a role
+may do, and splitting them would put one subject in two release cadences.
 */}}
 apiVersion: v1
 kind: ServiceAccount
@@ -52,10 +50,10 @@ spec:
         {{- include "swgw.componentLabels" (dict "ctx" . "component" "cerbos") | nindent 8 }}
       annotations:
         # The PDP's own configuration needs a restart. The POLICIES do not -
-        # storage.disk.watchForChanges is on, which is what makes them
-        # reviewable in a pull request and live without a rollout.
+        # storage.disk.watchForChanges is on.
         checksum/cerbos-config: {{ .Files.Get "files/cerbos/config.yaml" | sha256sum }}
     spec:
+      enableServiceLinks: false
       serviceAccountName: {{ include "swgw.fullname" . }}-cerbos
       {{- include "swgw.imagePullSecrets" . | nindent 6 }}
       securityContext:
@@ -70,13 +68,12 @@ spec:
       {{- with .Values.cerbos.affinity }}
       affinity: {{- toYaml . | nindent 8 }}
       {{- end }}
-      # NO init container. Cerbos reads its policies from a mounted ConfigMap and
-      # talks to nothing, so it has no dependency to wait for - which is why it
-      # is the one workload here without one.
+      # No init container: Cerbos reads its policies from a mounted ConfigMap and
+      # talks to nothing.
       containers:
         - name: cerbos
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.cerbos) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           args: ["server", "--config=/config/config.yaml"]
           ports:
             - name: http
@@ -99,9 +96,9 @@ spec:
             - name: config
               mountPath: /config
               readOnly: true
-            # NOT a subPath mount: a subPath does not receive ConfigMap
-            # updates, and an unwatched policy directory is the whole feature
-            # switched off without a symptom.
+            # NOT a subPath mount: a subPath does not receive ConfigMap updates,
+            # and an unwatched policy directory is the feature switched off
+            # without a symptom.
             - name: policies
               mountPath: /policies
               readOnly: true
@@ -116,3 +113,4 @@ spec:
             name: {{ include "swgw.fullname" . }}-policies
         - name: tmp
           emptyDir: {}
+{{- end }}

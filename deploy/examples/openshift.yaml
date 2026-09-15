@@ -1,0 +1,65 @@
+# yaml-language-server: $schema=../charts/software-gateway/values.schema.json
+#
+# OPENSHIFT: Routes instead of Ingress, and the cluster's own image registry
+# mirrored through an ImageContentSourcePolicy or a private Quay.
+#
+# One thing to know before installing. OpenShift's `restricted-v2` SCC assigns
+# every pod a random high UID, and the two nginx tiers in this chart bind port 80
+# and write at container start - so either run this namespace under the
+# `nonroot-v2` SCC, or grant it explicitly:
+#
+#   oc adm policy add-scc-to-user nonroot-v2 -z default -n swgw
+#
+# Everything else in the chart already runs non-root with a read-only root
+# filesystem and every capability dropped.
+
+# Objects are named <this>-<component>: swgw-coordinator, swgw-worker, swgw-web.
+# Without it they are <release>-<chart>-<component>.
+fullnameOverride: swgw
+
+tenant: default
+supportContact: platform-team@example.com
+
+access:
+  # Hosts on the cluster's wildcard apps domain, so no DNS record is needed.
+  webUrl: https://swgw.apps.ocp.example.com
+  identityUrl: https://id-swgw.apps.ocp.example.com
+  expose:
+    type: route
+    route:
+      # The router terminates TLS with its own wildcard certificate and speaks
+      # plain HTTP to the Services. `passthrough` and `reencrypt` are the other
+      # two; leave it empty for a Route with no TLS at all.
+      termination: edge
+
+images:
+  registry: quay.example.com
+  mirror: quay.example.com/docker
+
+  pullSecrets: [registry-pull]
+
+database:
+  cluster:
+    name: swgw-db
+    instances: 3
+    storage: {size: 100Gi, className: ocs-storagecluster-ceph-rbd}
+    walStorage: {size: 20Gi, className: ocs-storagecluster-ceph-rbd}
+    synchronousReplicas: 1
+
+identity:
+  # masterkey and rootPassword are generated on first install and read back from
+  # the cluster on every upgrade, so neither is yours to create.
+  bootstrapAdmin:
+    username: admin
+    email: platform-team@example.com
+
+secrets:
+  backend: vault
+  vault:
+    authRef: vault-auth
+    mount: kv
+    pathPrefix: softwaregateway/ocp
+
+coordinator: {replicas: 3}
+worker: {replicas: 4}
+web: {replicas: 3}

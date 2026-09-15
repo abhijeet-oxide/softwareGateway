@@ -2,34 +2,26 @@
 ORDERED STARTUP, WITHOUT A CRASH LOOP.
 
 Kubernetes has no `depends_on`, and the usual answer - let the pod start, fail,
-and be restarted until its dependency appears - is the behaviour this is here to
-remove. A pod in CrashLoopBackOff looks identical whether it is waiting for its
-database or genuinely broken, so it trains everybody to ignore the one state
-that should never be ignored.
+and be restarted until its dependency appears - is what this removes. A pod in
+CrashLoopBackOff looks identical whether it is waiting for its database or
+genuinely broken, so it trains everybody to ignore the one state that should
+never be ignored. A pod in `Init:0/1` reads as "not started yet", logs what it is
+waiting for, and keeps the application container's restart count at zero.
 
-An init container waiting on a condition is the opposite. The pod sits in
-`Init:0/1`, which reads as "not started yet" rather than "failing", it logs one
-line saying what it is waiting for, and the container it gates has not run at
-all - so its restart count stays zero and means something.
+  swgw.waitForTCP    a port answers          (the database)
+  swgw.waitForHTTP   an endpoint is ready    (the coordinator, ZITADEL)
+  swgw.waitForFile   a projected key exists  (what the seeder publishes)
 
-Three waits, and they cover every dependency in this release:
-
-  swgw.waitForTCP       a port answers          (the database)
-  swgw.waitForHTTP      an endpoint is ready    (the coordinator, ZITADEL)
-  swgw.waitForFile      a projected key exists  (what the seeder publishes)
-
-Each takes a deadline. Passing it is a FAILURE for a hard dependency - the pod
-reports `Init:Error` and says which one, which is a truthful and actionable
-state - and for a soft dependency the wait gives up and lets the container
-start, because a UI that cannot reach its identity provider must still load in
-order to say so.
+Each takes a deadline. Passing it fails a hard dependency - `Init:Error`, naming
+which - and for a soft one the container starts anyway, because a UI that cannot
+reach its identity provider must still load in order to say so.
 */}}
 
 {{/* (dict "ctx" $ "name" "database" "host" "..." "port" "5432") */}}
 {{- define "swgw.waitForTCP" -}}
 - name: wait-for-{{ .name }}
   image: {{ include "swgw.mirroredImage" (dict "ctx" .ctx "image" .ctx.Values.images.node) }}
-  imagePullPolicy: {{ .ctx.Values.image.pullPolicy }}
+  imagePullPolicy: {{ .ctx.Values.images.pullPolicy }}
   command: ["node", "--input-type=module", "-e"]
   args:
     - |
@@ -98,7 +90,7 @@ order to say so.
 {{- define "swgw.waitForHTTP" -}}
 - name: wait-for-{{ .name }}
   image: {{ include "swgw.mirroredImage" (dict "ctx" .ctx "image" .ctx.Values.images.node) }}
-  imagePullPolicy: {{ .ctx.Values.image.pullPolicy }}
+  imagePullPolicy: {{ .ctx.Values.images.pullPolicy }}
   command: ["node", "--input-type=module", "-e"]
   args:
     - |
@@ -155,22 +147,17 @@ order to say so.
 {{- end -}}
 
 {{/*
-(dict
-  "ctx" $
-  "name" "credentials"
-  "path" "/etc/.../worker.json"
-  "soft" true
-)
+(dict "ctx" $ "name" "credentials" "path" "/etc/.../worker.json" "soft" true
+      "mounts" "- name: ...")
 
-Mounts nothing itself - the caller gives it the same volumeMounts the
-application container has, because the thing being waited for IS that
-mount. A Secret key that does not exist yet is simply an absent file, and
-the kubelet materialises it when the seeder writes it.
+Mounts nothing itself: the caller gives it the same volumeMounts the application
+container has, because the thing being waited for IS that mount. A Secret key
+that does not exist yet is simply an absent file.
 */}}
 {{- define "swgw.waitForFile" -}}
 - name: wait-for-{{ .name }}
   image: {{ include "swgw.mirroredImage" (dict "ctx" .ctx "image" .ctx.Values.images.node) }}
-  imagePullPolicy: {{ .ctx.Values.image.pullPolicy }}
+  imagePullPolicy: {{ .ctx.Values.images.pullPolicy }}
   command: ["node", "--input-type=module", "-e"]
   args:
     - |

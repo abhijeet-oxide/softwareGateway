@@ -1,0 +1,5 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Production trails lab deliberately: this is the version lab has been running.
+resources:
+  - ../../../software/patch/0.1.0

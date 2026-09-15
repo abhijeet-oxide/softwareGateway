@@ -8,6 +8,13 @@ schemas are [anchore-5.22-openapi.yaml](anchore-5.22-openapi.yaml), which is the
 final authority. The design argument is
 [21 - Security Posture](../design/21-security-posture.md) §12-14.
 
+That specification is 729 kB. Two files exist so nobody has to read it whole:
+[anchore-api-navigator.md](anchore-api-navigator.md) maps it to the endpoints
+this integration uses, and
+[anchore-image-vulnerabilities-response.json](anchore-image-vulnerabilities-response.json)
+is the shape of the one response that matters, with every value replaced by what
+belongs there.
+
 ---
 
 ## 1. What it is for

@@ -1,59 +1,89 @@
-{{- if .Values.identity.enabled }}
+{{- if and .Values.layers.application .Values.identity.enabled }}
 {{- $full := include "swgw.fullname" . -}}
 {{- $db := include "swgw.dbSecretName" . -}}
 {{/*
 ZITADEL, its sign-in screens, and the nginx that makes them one origin.
 
-WHY ALL THREE. Since v3 the login UI is a separate Next.js service; deploying
-the core alone gives an identity provider that redirects to a login page which
-does not exist and answers `{"code":5,"message":"Not Found"}`. And the two must
-share an ORIGIN, because the core's redirect to the login screen is relative,
-the login screen's redirect back is absolute from ZITADEL's own external URL,
-and every other part of this stack already agrees on one address for it.
+WHY ALL THREE. Since v3 the login UI is a separate Next.js service; the core
+alone redirects to a page that does not exist. The two must share an ORIGIN
+because the core's redirect to the login screen is relative and the login
+screen's redirect back is absolute from ZITADEL's own external URL.
 
-WHY A SETUP JOB, AND WHY IT IS A HOOK. `zitadel start` refuses an unmigrated
-database, and a ZITADEL upgrade needs `zitadel setup` to run before the new
-binary serves. Running it from the Deployment would have every replica racing
-for the same migration lock.
+WHY THE SETUP JOB IS A HOOK. `zitadel start` refuses an unmigrated database, and
+an upgrade needs `zitadel setup` before the new binary serves. Running it from
+the Deployment would have every replica race for the migration lock. As a
+pre-install/pre-upgrade hook, Helm waits for it and only then applies the
+Deployments - so no ZITADEL pod is ever created against a schema it cannot use.
 
-So it is a Helm pre-install/pre-upgrade hook: Helm applies it, WAITS for it to
-complete, and only then applies the Deployments. The schema is migrated before
-a single ZITADEL pod is created, so none of them ever starts against a database
-it cannot use.
-
-That is possible only because the database is applied by an earlier Flux layer
-(deploy/environments/<env>/database) and already exists when this chart is
-installed. A pre-install hook in a chart that also deploys its own database
-deadlocks - the hook waits for a Postgres that Helm has not created yet - which
-is why the database does not live here.
+That requires the database to exist BEFORE this release is installed, which is
+why `layers.database` is a separate release.
 */}}
+{{/*
+THE TWO ZITADEL VALUES THAT HAVE NO SAFE DEFAULT, and why this Secret is
+generated rather than asked for.
+
+`masterkey` is what ZITADEL encrypts its own database with. `rootPassword` is
+the instance owner's. Neither can be re-derived, so a chart that generated a
+fresh one on every render would produce a database nobody can decrypt after the
+first upgrade.
+
+So: generate ONCE, then read back. `lookup` returns what is already in the
+cluster and the value is reused; only a namespace with no Secret gets a new one.
+`helm.sh/resource-policy: keep` then stops `helm uninstall` taking it with the
+release, because the database outlives the release and the key must outlive it
+too.
+
+ONE THING TO KNOW. `helm template` has no cluster to look in, so it renders a
+fresh random value every time. That is harmless for rendering and for CI, and it
+means `helm template | kubectl apply` is the one way to rotate this key by
+accident. Install and upgrade through Helm or Flux, which have a cluster.
+
+Read the key back at any time:
+
+  kubectl -n <namespace> get secret <release>-identity \
+    -o jsonpath='{.data.masterkey}' | base64 -d
+
+Keep a copy somewhere the namespace's deletion cannot reach. Restoring the
+database into a fresh namespace without it restores bytes nothing can read.
+*/}}
+{{- $identitySecret := printf "%s-identity" $full -}}
+{{- $existing := (lookup "v1" "Secret" .Release.Namespace $identitySecret) -}}
+{{- $held := dict -}}
+{{- if $existing }}{{ $held = $existing.data }}{{ end -}}
+
+{{- $needMasterkey := not .Values.identity.masterkey.existingSecret -}}
+{{- $needRoot := not .Values.identity.rootPassword.existingSecret -}}
+{{- $needAdmin := and .Values.identity.bootstrapAdmin.password (not .Values.identity.bootstrapAdmin.existingSecret) -}}
+
+{{- if or $needMasterkey $needRoot $needAdmin }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ $full }}-identity
+  name: {{ $identitySecret }}
   labels:
     {{- include "swgw.componentLabels" (dict "ctx" . "component" "identity") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
 type: Opaque
-stringData:
-{{- if not .Values.identity.masterkey.existingSecret }}
-  # EXACTLY 32 BYTES. ZITADEL refuses to start otherwise and says so from
-  # inside a migration failure, so count before changing it. This chart does
-  # NOT generate one: a generated key that nothing stores is a database nobody
-  # can decrypt after the next upgrade.
-  masterkey: {{ required "identity.masterkey.value or identity.masterkey.existingSecret is required" .Values.identity.masterkey.value | quote }}
+data:
+{{- if $needMasterkey }}
+  {{- /* EXACTLY 32 BYTES. ZITADEL refuses to start otherwise, and says so from
+         inside a migration failure - so the symptom names neither this setting
+         nor its length. */}}
+  masterkey: {{ .Values.identity.masterkey.value | default (get $held "masterkey" | b64dec) | default (randAlphaNum 32) | b64enc | quote }}
 {{- end }}
-{{- if not .Values.identity.rootPassword.existingSecret }}
-  rootPassword: {{ required "identity.rootPassword.value or identity.rootPassword.existingSecret is required" .Values.identity.rootPassword.value | quote }}
+{{- if $needRoot }}
+  rootPassword: {{ .Values.identity.rootPassword.value | default (get $held "rootPassword" | b64dec) | default (randAlphaNum 24) | b64enc | quote }}
 {{- end }}
-{{- if and .Values.identity.bootstrapAdmin.password (not .Values.identity.bootstrapAdmin.existingSecret) }}
-  adminPassword: {{ .Values.identity.bootstrapAdmin.password | quote }}
+{{- if $needAdmin }}
+  adminPassword: {{ .Values.identity.bootstrapAdmin.password | b64enc | quote }}
 {{- end }}
 ---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
-  # NOT release-prefixed: deploy/zitadel/nginx.conf proxies to `zitadel:8080`
-  # and the login service reaches it by the same name. See _helpers.tpl.
+  # NOT release-prefixed: deploy/zitadel/nginx.conf proxies to `zitadel:8080`.
   name: zitadel
   labels:
     {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel") | nindent 4 }}
@@ -63,9 +93,8 @@ spec:
     - name: http
       port: 8080
       targetPort: http
-      # ZITADEL's API is gRPC-Web and HTTP/2 over the same port. AKS's
-      # application routing add-on and most ingress controllers need to be told;
-      # this name is what several of them key off.
+      # ZITADEL's API is gRPC-Web and HTTP/2 over the same port, and several
+      # ingress controllers key their backend protocol off this name.
       appProtocol: kubernetes.io/h2c
   selector:
     {{- include "swgw.selectorLabels" (dict "ctx" . "component" "zitadel") | nindent 4 }}
@@ -103,19 +132,13 @@ spec:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  # NAMED FOR WHAT IT MIGRATES TO. A new ZITADEL image is a new Job; the same
-  # image twice is the same Job and Kubernetes leaves the completed one alone.
+  # NAMED FOR WHAT IT MIGRATES TO: a new ZITADEL image is a new Job.
   name: {{ printf "%s-zitadel-setup-%s" $full (.Values.images.zitadel | sha256sum | trunc 8) | trunc 63 | trimSuffix "-" }}
   labels:
     {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-setup") | nindent 4 }}
   annotations:
-    # THE ORDERING PRIMITIVE. Helm runs hooks in weight order, waits for each to
-    # succeed, and only then applies the release's own resources.
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-10"
-    # The previous run is deleted just before this one is created, so `kubectl
-    # get jobs` shows the migration that is running rather than a history of
-    # them - and a failed one is left in place to be read.
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   backoffLimit: 6
@@ -125,6 +148,7 @@ spec:
       labels:
         {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-setup") | nindent 8 }}
     spec:
+      enableServiceLinks: false
       {{- include "swgw.imagePullSecrets" . | nindent 6 }}
       restartPolicy: Never
       serviceAccountName: {{ $full }}-seeder
@@ -133,84 +157,35 @@ spec:
           type: RuntimeDefault
         runAsNonRoot: true
       initContainers:
-        # DATABASE READINESS MUST COME FIRST.
-        #
-        # CloudNativePG is deployed by an earlier Flux layer and normally
-        # reaches Ready before this chart installs. During startup, recovery,
-        # or failover, however, PostgreSQL may still be accepting no
-        # connections when this hook begins.
-        #
-        # Init containers execute sequentially, so connectivity must be
-        # verified before attempting ZITADEL initialization.
-        {{- include "swgw.waitForTCP" (dict "ctx" . "name" "database" "host" .Values.database.host "port" .Values.database.port) | nindent 8 }}
+        # The database is normally Ready before this release installs, but it
+        # may be recovering or failing over.
+        {{- include "swgw.waitForTCP" (dict "ctx" . "name" "database" "host" (include "swgw.dbHost" .) "port" .Values.database.port) | nindent 8 }}
 
-        # FIRST-INSTALL DATABASE INITIALIZATION.
-        #
-        # After recreating CloudNativePG from scratch the `zitadel` database
-        # contained only the default `public` schema.
-        #
-        # Running `zitadel setup` immediately failed with:
-        #
-        #   relation "eventstore.events" does not exist
-        #   relation "eventstore.events2" does not exist
-        #
-        # because the foundational ZITADEL event-store schema had never been
-        # created.
-        #
-        # CloudNativePG has already created the `zitadel` database and assigned
-        # ownership to the non-superuser `swgw` role. Therefore this Job runs
-        # `zitadel init schema` rather than the full `zitadel init`.
-        #
-        # The schema-only command creates ZITADEL's foundational schemas and
-        # tables without attempting CREATE ROLE, CREATE DATABASE, or GRANT,
-        # operations that require PostgreSQL administrative privileges.
-        #
-        # Running the full `zitadel init` previously failed with:
-        #
-        #   permission denied to create database (SQLSTATE 42501)
-        #
-        # After schema bootstrap completes, the setup container below performs
-        # migrations and creates the first ZITADEL instance.
-        # CloudNativePG already creates the database and owner account.
-        #
-        # We therefore initialize only ZITADEL's internal schemas and tables.
-        #
-        # `init database` and the top-level `init` provisioning flow require
-        # PostgreSQL privileges to create databases and users. The CNPG
-        # application account intentionally does not have those permissions.
-        #
-        # `init zitadel` assumes the database and user already exist and
-        # bootstraps only the internal ZITADEL objects.
+        # `init zitadel`, not the full `init`. The database and its owner
+        # already exist; `init database` would attempt CREATE DATABASE and
+        # CREATE ROLE, which the application account cannot do and which fail as
+        # `permission denied to create database (SQLSTATE 42501)`. Skipping this
+        # step entirely fails later, inside setup, as
+        # `relation "eventstore.events" does not exist`.
         - name: init-database
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.zitadel) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args:
-            - init
-            - zitadel
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args: ["init", "zitadel"]
           env:
             {{- include "swgw.zitadelEnv" . | nindent 12 }}
           securityContext:
             {{- include "swgw.containerSecurityContext" . | nindent 12 }}
 
-        # ZITADEL MIGRATIONS.
-        #
-        # Runs after database initialization and applies the migrations
-        # required by the current ZITADEL version.
         - name: setup
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.zitadel) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args:
-            - setup
-            - --masterkeyFromEnv
-            - --init-projections=true
-            - --tlsMode
-            - disabled
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args: ["setup", "--masterkeyFromEnv", "--init-projections=true", "--tlsMode", "disabled"]
           env:
             {{- include "swgw.zitadelEnv" . | nindent 12 }}
-            # The machine account and its token, created with the first
-            # instance and never again. It is the ONLY write credential in the
-            # stack, and no long-running service ever sees it: the container
-            # below moves it into a Secret and the Job ends.
+            # The machine account and its token, created with the first instance
+            # and never again. It is the only write credential in the stack, and
+            # no long-running service sees it: the container below moves it into
+            # a Secret and the Job ends.
             - name: ZITADEL_FIRSTINSTANCE_PATPATH
               value: /pat/pat.txt
           volumeMounts:
@@ -220,13 +195,13 @@ spec:
       containers:
         - name: publish
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.node) }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           command: ["node", "/seeder/k8s-state.mjs", "push"]
           env:
             - name: K8S_STATE_SECRET
               value: {{ $full }}-state
-            # node's fetch verifies the API server against the service
-            # account's own CA. Without this it fails with a self-signed
-            # certificate error against an endpoint it is meant to trust.
+            # node's fetch verifies the API server against the service account's
+            # own CA; without this it reports a self-signed certificate.
             - name: NODE_EXTRA_CA_CERTS
               value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
           volumeMounts:
@@ -261,25 +236,28 @@ spec:
       labels:
         {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel") | nindent 8 }}
     spec:
+      # REQUIRED, not hygiene. The `zitadel` Service makes Kubernetes inject
+      # ZITADEL_PORT=tcp://10.x.x.x:8080, which ZITADEL reads as its own `Port`
+      # setting and rejects with `'Port' cannot parse value as 'uint16'`.
       enableServiceLinks: false
       {{- include "swgw.imagePullSecrets" . | nindent 6 }}
       securityContext:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
-        # The schema is already migrated - the setup hook ran to completion
-        # before Helm applied this Deployment. This covers the connection
-        # itself, so a pod created during a CloudNativePG failover waits for the
-        # new primary instead of exiting and being restarted.
-        {{- include "swgw.waitForTCP" (dict "ctx" . "name" "database" "host" .Values.database.host "port" .Values.database.port) | nindent 8 }}
+        # The schema is already migrated: the setup hook ran to completion before
+        # Helm applied this. This covers the connection itself, so a pod created
+        # during a failover waits for the new primary instead of exiting.
+        {{- include "swgw.waitForTCP" (dict "ctx" . "name" "database" "host" (include "swgw.dbHost" .) "port" .Values.database.port) | nindent 8 }}
       containers:
         - name: zitadel
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.zitadel) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          # `start`, not `start-from-init`. The Job above owns migrations; this
-          # process refuses an unmigrated database and restarts until the Job
-          # has finished, which is how the two are ordered without an ordering
-          # primitive.
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          # `start`, not `start-from-init`: the Job above owns migrations.
+          #
+          # `--tlsMode disabled` means ZITADEL itself serves plain HTTP; TLS, if
+          # any, terminates at the entry point. It does NOT change the issuer,
+          # which follows access.identityUrl through ZITADEL_EXTERNALSECURE.
           args: ["start", "--masterkeyFromEnv", "--tlsMode", "disabled"]
           ports:
             - name: http
@@ -297,7 +275,6 @@ spec:
           startupProbe:
             httpGet: {path: /debug/ready, port: http}
             periodSeconds: 5
-            # Generous: this waits out the setup Job on a first install.
             failureThreshold: 120
           resources:
             {{- toYaml .Values.identity.zitadel.resources | nindent 12 }}
@@ -323,50 +300,46 @@ spec:
       labels:
         {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-login") | nindent 8 }}
     spec:
+      enableServiceLinks: false
       {{- include "swgw.imagePullSecrets" . | nindent 6 }}
       securityContext:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
         # BOTH HARD. This container reads its service-user token from a file at
-        # startup and EXITS if it is not there - so without these waits a first
-        # install restarts it every few seconds until the seeder catches up,
-        # which is the crash loop this design exists to remove. It has no
-        # degraded mode worth having: sign-in screens that cannot drive a login
-        # are not useful, they are a 500 with a spinner.
+        # startup and EXITS if it is not there, so without these a first install
+        # restarts it every few seconds. It has no useful degraded mode: sign-in
+        # screens that cannot drive a login are a 500 with a spinner.
         {{- include "swgw.waitForHTTP" (dict "ctx" . "name" "zitadel" "url" "http://zitadel:8080/debug/ready") | nindent 8 }}
         {{- include "swgw.waitForFile" (dict "ctx" . "name" "login-token" "path" "/pat/login-client.pat"
               "mounts" (printf "- name: pat\n  mountPath: /pat\n  readOnly: true")) | nindent 8 }}
       containers:
         - name: login
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.zitadelLogin) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           ports:
             - name: http
               containerPort: 3000
           env:
-            # Server to server, so the internal name - the one URL here that is
-            # NOT the browser-facing one.
+            # Server to server, so the internal name.
             - name: ZITADEL_API_URL
               value: http://zitadel:8080
             - name: NEXT_PUBLIC_BASE_PATH
               value: /ui/v2/login
             # The image ships HOSTNAME=:: and its Next.js server binds exactly
             # that, so on a node without IPv6 it restart-loops on
-            # `listen EAFNOSUPPORT ... :::3000` - a message naming neither
-            # ZITADEL nor IPv6.
+            # `listen EAFNOSUPPORT ... :::3000`.
             - name: HOSTNAME
               value: 0.0.0.0
-            # A service user holding IAM_LOGIN_CLIENT and nothing else.
-            # Deliberately not the seeder's PAT: that one can write every
-            # object in the instance, and this container is the one thing here
-            # a signed-out browser talks to.
+            # A service user holding IAM_LOGIN_CLIENT and nothing else -
+            # deliberately not the seeder's PAT, which can write every object in
+            # the instance.
             - name: ZITADEL_SERVICE_USER_TOKEN_FILE
               value: /pat/login-client.pat
             # ZITADEL answers 404 to a Host it does not recognise as its own
             # external name, and this service reaches it as `zitadel:8080`.
             - name: CUSTOM_REQUEST_HEADERS
-              value: {{ printf "Host:%s,X-Forwarded-Proto:%s" (include "swgw.identityHostHeader" .) (ternary "https" "http" (eq (include "swgw.identitySecure" .) "true")) | quote }}
+              value: {{ printf "Host:%s,X-Forwarded-Proto:%s" (include "swgw.identityHostHeader" .) (include "swgw.urlScheme" (include "swgw.identityUrl" .)) | quote }}
           readinessProbe:
             httpGet: {path: /ui/v2/login/healthy, port: http}
             periodSeconds: 10
@@ -386,10 +359,6 @@ spec:
         - name: pat
           secret:
             secretName: {{ $full }}-state
-            # Optional, so this schedules before the seeder has issued the
-            # token. Without the file the container exits and is restarted,
-            # which is a pod reporting the truth rather than one stuck Pending
-            # on a Secret key.
             optional: true
             defaultMode: 0444
             items:
@@ -416,42 +385,40 @@ spec:
         {{- include "swgw.componentLabels" (dict "ctx" . "component" "zitadel-proxy") | nindent 8 }}
       annotations:
         checksum/proxy-config: {{ .Files.Get "files/zitadel/nginx.conf" | sha256sum }}
-        checksum/proxy-entrypoint: {{ printf "%s|%s" (.Files.Get "files/zitadel/docker-entrypoint.sh") (default "" .Values.web.supportContact) | sha256sum }}
+        checksum/proxy-entrypoint: {{ printf "%s|%s" (.Files.Get "files/zitadel/docker-entrypoint.sh") (default "" .Values.supportContact) | sha256sum }}
     spec:
+      enableServiceLinks: false
       {{- include "swgw.imagePullSecrets" . | nindent 6 }}
       securityContext:
         {{- include "swgw.nginxPodSecurityContext" . | nindent 8 }}
       initContainers:
-        # The front door proxies BOTH upstreams and has nothing of its own to
-        # serve, so starting before either is up means answering 502 on the one
-        # address every sign-in goes through. Hard on the core, soft on the
-        # screens: a console session is still worth serving while the sign-in
-        # app is coming up.
+        # The front door proxies both upstreams and has nothing of its own to
+        # serve. Hard on the core, soft on the screens: a console session is
+        # still worth serving while the sign-in app comes up.
         {{- include "swgw.waitForTCP" (dict "ctx" . "name" "zitadel" "host" "zitadel" "port" 8080) | nindent 8 }}
         {{- include "swgw.waitForHTTP" (dict "ctx" . "name" "login-screens" "url" "http://zitadel-login:3000/ui/v2/login/healthy" "soft" true "timeout" 300) | nindent 8 }}
       containers:
         - name: proxy
           image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.nginx) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          # The same entrypoint compose runs. It renders the resolver address
-          # from /etc/resolv.conf - kube-dns here, aardvark or 127.0.0.11 there
-          # - and writes the one CSS rule that names who to ask on the Account
-          # Not Found page.
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          # The same entrypoint compose runs: it renders nginx's resolver from
+          # /etc/resolv.conf and writes the rule naming who to ask on the
+          # Account Not Found page.
           command: ["/bin/sh", "/entrypoint/docker-entrypoint.sh"]
           ports:
             - name: http
               containerPort: 80
           env:
             - name: SUPPORT_CONTACT
-              value: {{ default .Values.identity.bootstrapAdmin.email .Values.web.supportContact | quote }}
+              value: {{ default .Values.identity.bootstrapAdmin.email .Values.supportContact | quote }}
           readinessProbe:
             httpGet: {path: /debug/ready, port: http}
             periodSeconds: 10
             failureThreshold: 3
           livenessProbe:
-            # TCP, not HTTP: every HTTP path here is proxied, so an HTTP
-            # liveness probe would restart the front door whenever ZITADEL was
-            # briefly unavailable - which is when it is most needed.
+            # TCP, not HTTP: every HTTP path here is proxied, so an HTTP probe
+            # would restart the front door whenever ZITADEL was briefly
+            # unavailable - which is when it is most needed.
             tcpSocket: {port: http}
             periodSeconds: 20
             failureThreshold: 5
@@ -465,8 +432,8 @@ spec:
             {{- include "swgw.nginxContainerSecurityContext" . | nindent 12 }}
           volumeMounts:
             - {name: entrypoint, mountPath: /entrypoint, readOnly: true}
-            # The entrypoint reads the config from here and renders it into
-            # nginx's own directory, because this mount is read-only.
+            # The entrypoint renders the config into nginx's own directory,
+            # because this mount is read-only.
             - {name: templates, mountPath: /etc/nginx/templates, readOnly: true}
       volumes:
         - name: entrypoint

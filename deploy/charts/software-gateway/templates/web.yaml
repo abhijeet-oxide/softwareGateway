@@ -1,3 +1,4 @@
+{{- if .Values.layers.application }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -42,9 +43,9 @@ spec:
       annotations:
         # The SPA's runtime configuration is rendered by the entrypoint at
         # container start, so a change to what feeds it has to roll these pods.
-        # It is three public strings and no traffic is dropped doing it.
-        checksum/runtime-config: {{ printf "%s|%s|%s" (include "swgw.identityUrl" .) .Values.web.supportContact (default "" .Values.identity.sso.displayName) | sha256sum }}
+        checksum/runtime-config: {{ printf "%s|%s|%s" (include "swgw.identityUrl" .) .Values.supportContact (ternary .Values.identity.sso.displayName "" .Values.identity.sso.enabled) | sha256sum }}
     spec:
+      enableServiceLinks: false
       serviceAccountName: {{ include "swgw.fullname" . }}-web
       {{- include "swgw.imagePullSecrets" . | nindent 6 }}
       securityContext:
@@ -63,12 +64,10 @@ spec:
       topologySpreadConstraints: {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
-        # BOTH SOFT, and deliberately. This tier renders the page that explains
-        # why the rest of the system is unavailable, so it must come up when the
-        # rest of the system has not. The waits make a first install arrive in
-        # order - the entrypoint reads the OIDC client id ONCE, at container
-        # start, so a pod that starts before the seeder has published it serves
-        # an application that cannot sign anybody in until it is replaced.
+        # BOTH SOFT: this tier renders the page that explains why the rest of
+        # the system is unavailable, so it must come up when the rest has not.
+        # The waits only order a first install - the entrypoint reads the OIDC
+        # client id once, at container start.
         {{- include "swgw.waitForHTTP" (dict "ctx" . "name" "coordinator" "url" "http://controller:8080/healthz" "soft" true "timeout" 120) | nindent 8 }}
 {{- if .Values.identity.enabled }}
         {{- include "swgw.waitForFile" (dict "ctx" . "name" "oidc-client" "path" "/oidc/web.json" "soft" true "timeout" 300
@@ -77,32 +76,28 @@ spec:
       containers:
         - name: web
           image: {{ include "swgw.image" (dict "ctx" . "name" "web") }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           ports:
             - name: http
               containerPort: 80
           env:
             # Public values only: a public OIDC client has no secret, which is
-            # why this ends up in a file every browser fetches rather than in a
-            # mounted Secret.
+            # why these end up in a file every browser fetches.
             - name: OIDC_ISSUER
               value: {{ include "swgw.identityUrl" . | quote }}
             - name: OIDC_REDIRECT_URI
               value: {{ printf "%s/auth/callback" (include "swgw.webUrl" .) | quote }}
             - name: SUPPORT_CONTACT
-              value: {{ default .Values.identity.bootstrapAdmin.email .Values.web.supportContact | quote }}
+              value: {{ default .Values.identity.bootstrapAdmin.email .Values.supportContact | quote }}
             - name: SSO_DISPLAY_NAME
-              value: {{ if .Values.identity.sso.issuer }}{{ .Values.identity.sso.displayName | quote }}{{ else }}""{{ end }}
-            # The client id ZITADEL generated for the SPA. Read from the file
-            # the seeder publishes; the environment above wins when a
-            # deployment provisions its identity provider some other way.
+              value: {{ ternary .Values.identity.sso.displayName "" .Values.identity.sso.enabled | quote }}
+            # The client id ZITADEL generated for the SPA, read from the file the
+            # seeder publishes.
             - name: OIDC_CONFIG_FILE
               value: /oidc/web.json
-          # LIVENESS IS LOCAL. /healthz is matched exactly and answers from
-          # nginx itself: a Coordinator outage must not restart the tier that
-          # renders the page explaining it. Readiness proxies to the
-          # Coordinator, so a pod that cannot reach the API stops taking
-          # browsers.
+          # LIVENESS IS LOCAL: /healthz answers from nginx itself, so a
+          # Coordinator outage cannot restart the tier that renders the page
+          # explaining it. Readiness proxies to the Coordinator.
           livenessProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 20
@@ -117,10 +112,8 @@ spec:
             failureThreshold: 30
           lifecycle:
             preStop:
-              # nginx is removed from the Service's endpoints and stops taking
-              # new connections at the same moment, and the two propagate at
-              # different speeds. Sleeping through the gap is what makes a
-              # rollout drop zero requests; `sleep` exists in the alpine image.
+              # Endpoint removal and connection draining propagate at different
+              # speeds; sleeping through the gap is what drops zero requests.
               exec:
                 command: ["/bin/sh", "-c", "sleep 5; nginx -s quit"]
           resources:
@@ -136,8 +129,7 @@ spec:
           secret:
             secretName: {{ include "swgw.fullname" . }}-state
             # Optional: the UI must LOAD before anybody can be told why they
-            # cannot sign in. The entrypoint says so on stdout and the screen
-            # says so to the reader.
+            # cannot sign in.
             optional: true
             items:
               - key: web.json
@@ -155,4 +147,5 @@ spec:
   selector:
     matchLabels:
       {{- include "swgw.selectorLabels" (dict "ctx" . "component" "web") | nindent 6 }}
+{{- end }}
 {{- end }}

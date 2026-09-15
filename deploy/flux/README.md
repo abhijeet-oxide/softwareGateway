@@ -1,210 +1,155 @@
-# Flux - how this product reaches a cluster
-
-Flux reconciles many applications in these clusters. This directory is the part
-of it that is ours, and it is deliberately small: two objects per cluster, and
-neither of them says anything about what the application IS.
+# Deploying with Flux
 
 ```
-clusters/
-  nprd/  source.yaml  GitRepository (branch `main`) + HelmRepository (JFrog)
-    kustomization.yaml  -> ./deploy/environments/nprd
+deploy/flux/
+├── clusters/<cluster>/       what is true of the cluster
+│   ├── 0-sources/            the Git and chart sources, and the operators
+│   ├── 1-instances/          which instances this cluster runs
+│   ├── kustomization.yaml    applied once, by hand
+│   └── sync.yaml             the cluster reconciling this directory
+│
+├── instances/<instance>/     one deployment, in one namespace
+│   ├── 0-secrets/            what must exist before the release installs
+│   ├── release/              which release of the software this instance runs
+│   ├── values/values.yaml    THE ONE FILE
+│   ├── kustomization.yaml
+│   └── namespace.yaml
+│
+└── software/                 the product, with nothing instance-specific in it
+    ├── base/                 the two HelmReleases
+    ├── patch/<version>/      one directory per chart version an instance may run
+    └── schema/               what a values file is allowed to say
 ```
 
-Each of those directories creates **two more** Kustomizations, and the second
-`dependsOn` the first:
+## One file per instance
+
+`instances/<instance>/values/values.yaml` is the whole of what a deployment
+differs in. A `configMapGenerator` turns it into a ConfigMap, and **both**
+HelmReleases read that one ConfigMap through `valuesFrom` — so the database and
+the application cannot disagree about the database.
+
+There is no second place to look. Anything not in that file is the chart's
+default, listed by `helm show values software-gateway`, and constrained by
+`software/schema/values.schema.json` — which Helm checks before the render, so a
+misspelled key is a failed reconciliation naming the key rather than a setting
+that silently did not apply.
+
+Deploying somewhere new is therefore: copy an instance directory, edit one file,
+add one line to a cluster's `1-instances/`.
+
+A values edit is applied at the next HelmRelease reconciliation (5 minutes), or
+at once with `flux -n <namespace> reconcile helmrelease software-gateway`.
+
+### What is deliberately not in it
+
+Three things are facts about a **cluster** rather than about a deployment, so
+they live in `clusters/<cluster>/0-sources/` and are set once when the cluster is
+bootstrapped: which Git repository it reconciles from, which registry it pulls
+charts from, and which version of the database operator it runs. An instance
+never restates them, and moving an instance between clusters changes none of its
+own files.
+
+## Two layers, and the order between them
+
+`software/base` holds two HelmReleases of the same chart:
+
+| release | renders | remediation |
+|---|---|---|
+| `software-gateway-db` | the CloudNativePG `Cluster` | none — a database is not rolled back automatically |
+| `software-gateway` | everything else, `dependsOn` the first | rollback |
+
+They are separate so that a rollback of the application cannot reach the
+database, so `helm uninstall` cannot delete it, and so the chart's ZITADEL
+migration can stay a Helm pre-install hook — which needs the database to already
+exist.
+
+Ordering continues below Helm: every workload has a `wait-for-<dependency>` init
+container, so a pod whose dependency is not ready sits in `Init` saying what it
+is waiting for, rather than crash-looping.
 
 ```
-software-gateway-<env>-database    the CloudNativePG Cluster       wait: true
-software-gateway-<env>-platform    the Helm release  dependsOn ^   wait: true
+platform-operators                CloudNativePG           wait: true
+  software-gateway-<instance>     the instance            wait: true
+    software-gateway-db           the database            dependsOn ^
+      software-gateway            the application         dependsOn ^
 ```
-
-Flux will not apply the platform layer until the database reports Ready. That
-is `depends_on`, and it is why nothing in this deployment ever starts against a
-database that is not there.
-
-Deployments reconcile from `main`. Promotion is the pull request that changes
-the deployment artifacts in that branch - the thing the team already reviews -
-rather than a second mechanism that has to be kept honest.
-
-Same cluster or two clusters: the manifests do not care. Two namespaces in one
-cluster works because every name in the chart is namespaced and the two
-HelmReleases never meet. Two clusters works because each one applies only its
-own directory. Start with one cluster and split later; nothing here changes.
 
 ## Bootstrapping a cluster
 
-Once per cluster, by somebody with admin on it. Everything after this is a
-pull request.
+Once per cluster, by somebody with admin on it. Everything after this is a pull
+request.
 
 ```sh
-# 1. Flux itself, from the internal registry like everything else
-flux install --namespace flux-system \
-  --registry=artifactory.internal.example.com/docker/fluxcd
+# 1. Flux itself. --registry points it at an internal mirror.
+flux install --namespace flux-system
 
 # 2. Read access to this repository
 flux create secret git software-gateway-git \
   --namespace flux-system \
   --url https://github.com/abhijeet-oxide/softwareGateway \
-  --username git --password "$GITHUB_TOKEN"
+  --username git --password "$GIT_TOKEN"
 
-# 3. The JFrog credential - the SAME one the pipeline pushes with. It is used
-#    twice: Flux pulls the chart with it, and the kubelet pulls the images with
-#    it (the chart's secrets.registryPullSecret puts it in the namespace).
-flux create secret oci jfrog \
+# 3. The registry credential. Used twice: Flux pulls the chart with it, and the
+#    kubelet pulls the images with it.
+flux create secret oci chart-registry \
   --namespace flux-system \
-  --url artifactory.internal.example.com \
-  --username "$JFROG_USERNAME" --password "$JFROG_TOKEN"
+  --url <registry host> \
+  --username "$REGISTRY_USERNAME" --password "$REGISTRY_TOKEN"
 
-# 4. The database operator, ONCE PER CLUSTER. There is one CloudNativePG per
-#    cluster in either scope - its CRDs and admission webhooks are cluster-
-#    scoped singletons - so the choice is where it LIVES and what it WATCHES:
-#
-#      cluster-scoped        required when one cluster hosts both environments
-#      namespace-scoped/<env>  preferred when this cluster hosts one
-#
-#    Both create a Kustomization named `platform-operators`, so nothing in
-#    deploy/environments changes either way. See
-#    deploy/flux/platform/operators/README.md.
-kubectl apply -k deploy/flux/platform/bootstrap/cluster-scoped
-
-# 5. This environment
-kubectl apply -k deploy/flux/clusters/lab      # or clusters/prod
+# 4. The cluster
+kubectl apply -k deploy/flux/clusters/lab
 ```
 
-Step 4 creates a `platform-operators` Kustomization, and the environment's
-database layer `dependsOn` it - so the `Cluster` object is never submitted to an
-API server that has not been taught the kind.
+Step 4 creates the sources, the operator layer, and one reconciler per instance.
+Nothing is silent if a step is skipped: the instance layer reports
+`dependencies do not meet ready condition` naming `platform-operators`, applies
+nothing, and retries every minute.
 
-**If step 4 is skipped, nothing breaks and nothing is silent.** The database
-layer reports `dependencies do not meet ready condition` naming
-`platform-operators`, applies nothing, and retries every minute; the platform
-layer waits behind it; and the info Alert says so on every retry, so the channel
-reads "waiting for platform-operators" until somebody runs the step. Forty-five
-minutes in, the root Kustomization's own timeout fires and the failure Alert
-repeats it as an error. No pod is created, nothing crash-loops, and the message
-names the missing step rather than a symptom of it.
-
-### The operators
-
-**CloudNativePG is managed by Flux**, in `deploy/flux/platform/operators` -
-pinned, reviewed, and the same version in lab and production. Where it runs is a
-per-cluster choice with its own page: `deploy/flux/platform/operators/README.md`. The alternative
-is `helm install` once by hand per cluster, after which the version running in
-each is whatever it was installed with on a date nobody recorded; an operator
-that owns every database in the cluster is exactly the thing whose version
-should be written down.
-
-It is deliberately **not** treated like the application, and the three
-differences are all because an operator upgrade can restart every database it
-manages:
-
-| | why |
-|---|---|
-| `prune: false` on its Kustomization | pruning would remove its CRDs, and deleting a CRD deletes every object of that kind - for CloudNativePG, every database. Removing an operator is a maintenance window, not something a merge can do. |
-| `upgrade.crds: CreateReplace` | `helm upgrade` does **not** touch CRDs by default. Without this the operator moves and its schema does not, and new fields are silently dropped by the API server. |
-| `remediation.retries: 0` | no automatic rollback. Rolling an application back is free; rolling a database operator back mid-upgrade, while it holds every Cluster and may already have migrated their CRDs, turns a bad ten minutes into a bad week. It stops, alerts, and waits for a person. |
-
-There is no managed-database option anywhere in this repository. PostgreSQL runs
-in-cluster in every environment, with replication and automatic failover, and
-`deploy/environments/<env>/database/cluster.yaml` is the whole description of it.
-
-The credential operator belongs in the same directory and the same shape, and
-is left for whichever this estate settles on:
-
-> **Backups are not configured, and that is the one gap to close before this
-> holds data anybody would miss.** A CloudNativePG cluster replicates, which
-> protects against losing an instance and not against losing the data: a
-> `DROP TABLE` is replicated faithfully and immediately. `spec.backup` in that
-> file is where continuous WAL archiving goes, and it ships unset with the
-> shape of the answer in a comment.
-
-
+## Watching it
 
 ```sh
-# HashiCorp Vault Secrets Operator (secrets.backend: vault)
-helm install vault-secrets-operator hashicorp/vault-secrets-operator \
-  --namespace vault-secrets-operator-system --create-namespace
-# then a VaultConnection and a VaultAuth in each namespace, named by
-# secrets.vault.authRef.
+flux -n flux-system get kustomizations            # the chain, in order
+flux -n swgw-lab get helmreleases                 # the two layers
+kubectl -n swgw-lab get cluster.postgresql.cnpg.io
+kubectl -n swgw-lab get pods
 
-# or Azure Key Vault CSI (secrets.backend: azure)
-helm install csi-secrets-store secrets-store-csi-driver/secrets-store-csi-driver \
-  --namespace kube-system --set syncSecret.enabled=true
+# A pod in Init is WAITING, not failing.
+kubectl -n swgw-lab logs <pod> -c wait-for-database
 ```
 
-On AKS the CSI driver is an add-on: `az aks enable-addons --addons
-azure-keyvault-secrets-provider`. Both paths produce the same Secrets with the
-same names and keys, so the choice is invisible above `secrets.backend`.
-
-## Watching a deployment
-
-```sh
-# The layers, in order. The platform one reads "dependency not ready" until the
-# database one is Ready - which is the ordering working, not a fault.
-flux -n flux-system get kustomizations
-
-kubectl -n swgw get cluster.postgresql.cnpg.io    # instances, and which is primary
-flux -n swgw get helmreleases
-kubectl -n swgw get pods
-```
-
-**A pod in `Init:0/1` is waiting, not failing.** Every workload has a
-`wait-for-<dependency>` init container, so ordered startup is visible as pods
-that have not begun rather than pods that are crashing:
-
-```sh
-kubectl -n swgw logs <pod> -c wait-for-database
-#   waiting for database at swgw-db-rw:5432
-```
-
-A restart count above zero in this deployment means something actually went
-wrong, which is the whole reason the waits exist.
-
-## Being told what happened
-
-The pipeline moves one line in Git and stops; Flux does the deployment. So
-without notifications the only place a deploy exists is `flux get` on somebody's
-laptop, and the first anybody hears of a failed upgrade is a user.
-
-`deploy/flux/clusters/<env>/notifications.yaml` carries a Provider and **two**
-Alerts, and the split is the point:
-
-- **`deploys-<env>`** (`eventSeverity: info`) is the running commentary: the
-  database layer reaching Ready, the platform layer starting because of it, the
-  Helm upgrade finishing. Health-check progress is excluded - it is emitted
-  every few seconds during a rollout and says nothing anybody can act on.
-- **`deploys-<env>-failures`** (`eventSeverity: error`) is wider than the first:
-  it listens to every source and release in the namespace, not only the ones a
-  deploy touches, so a chart that cannot be pulled from the internal registry or
-  a credential the operator could not resolve is heard about too.
-
-Sending both to one channel would put the failures in a scroll of successes,
-where they are read on Monday.
-
-The target is Microsoft Teams because this estate's directory is Entra. Any
-other is the same three lines with a different `type` - `slack`, `discord`,
-`generic` for any webhook. The webhook URL comes from the credential backend
-like everything else, as `flux-notifications` in flux-system.
+A restart count above zero means something actually went wrong, which is the
+whole reason the waits exist.
 
 ## When a release goes wrong
 
-Nothing has to be done, and that is the design. `maxUnavailable: 0` means a
-replica is replaced only after its successor reports ready, so a broken image
-never removes capacity - the rollout stalls with the old pods serving.
-`spec.upgrade.timeout` then fires and `remediation.strategy: rollback` puts the
-previous release back.
+Nothing has to be done. `maxUnavailable: 0` means a replica is replaced only
+after its successor reports ready, so a broken image never removes capacity — the
+rollout stalls with the old pods serving, `spec.upgrade.timeout` fires, and
+`remediation.strategy: rollback` puts the previous release back.
 
-What is left for a person is deciding whether to go forward or stay put:
+What is left is deciding whether to go forward or stay put:
 
 ```sh
-# stay put: pin the version in Git, so Flux stops trying
-#   deploy/environments/nprd/platform/helmrelease.yaml -> spec.chart.spec.version
-# go back further: set it to any version in the registry, in a pull request
+# stay put: repoint instances/<instance>/release/kustomization.yaml at an
+#           earlier software/patch/<version>, in a pull request
 
 # stop deploying entirely, right now
-flux -n swgw suspend helmrelease software-gateway
+flux -n swgw-lab suspend helmrelease software-gateway
 ```
 
-`flux suspend` is the emergency brake and it is not a fix: Git and the cluster
-now disagree, and nothing will tell you so later. Follow it with the pull
-request that makes Git say what the cluster is doing.
+`flux suspend` is the emergency brake and not a fix: Git and the cluster now
+disagree and nothing will say so later. Follow it with the pull request that
+makes Git say what the cluster is doing.
+
+## Adding an instance
+
+```sh
+cp -r deploy/flux/instances/lab deploy/flux/instances/lab2
+$EDITOR deploy/flux/instances/lab2/{namespace.yaml,kustomization.yaml,values/values.yaml}
+cp deploy/flux/clusters/lab/1-instances/lab.yaml \
+   deploy/flux/clusters/lab/1-instances/lab2.yaml   # edit name, path, namespace
+$EDITOR deploy/flux/clusters/lab/1-instances/kustomization.yaml
+```
+
+Two instances in one cluster works because every name is namespaced and the two
+never meet. Two clusters works because each applies only its own directory.

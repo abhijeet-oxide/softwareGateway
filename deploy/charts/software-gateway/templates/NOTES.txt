@@ -1,4 +1,5 @@
 {{ .Chart.Name }} {{ .Chart.Version }} is installed in namespace {{ .Release.Namespace }}.
+{{- if .Values.layers.application }}
 
   images        {{ include "swgw.imageTag" . }}   (chart appVersion)
   tenant        {{ .Values.tenant }}
@@ -8,7 +9,8 @@
 {{- else }}
   identity      external - this release deploys no identity provider
 {{- end }}
-  database      {{ .Values.database.host }}, credentials from Secret {{ .Values.database.existingSecret }}
+  published by  {{ .Values.access.expose.type }}
+  database      {{ include "swgw.dbHost" . }}, credentials from Secret {{ include "swgw.dbSecretName" . }}
   credentials   {{ .Values.secrets.backend }}{{ if eq .Values.secrets.backend "none" }} - the Secrets in config/secrets/secrets.yaml must already exist{{ end }}
 
 WATCH IT COME UP
@@ -17,41 +19,37 @@ WATCH IT COME UP
 {{- if .Values.identity.enabled }}
   kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/component=seed --tail=-1
 
-The seeding Job is the one to read first. It prints what it provisioned - the
-people, their grants, and every account that CANNOT sign in and why. On a first
-install it runs after ZITADEL has migrated, so give it a minute.
+The seeding Job prints what it provisioned - the people, their grants, and every
+account that CANNOT sign in and why. On a first install it runs after ZITADEL has
+migrated, so give it a minute.
 {{- end }}
+
+A pod in Init is WAITING, not failing. Every workload has a wait-for-<dependency>
+init container, so ordered startup is visible as pods that have not begun:
+
+  kubectl -n {{ .Release.Namespace }} logs <pod> -c wait-for-database
 
 WHAT A CHANGE COSTS
 
-  a product, a policy    nothing restarts. The Coordinator, the workers and
-                         Cerbos watch their directories and reload in place.
-  a person               one Job runs. No pod is touched.
-  config.yaml, an image  a rolling update with maxUnavailable {{ .Values.rollout.maxUnavailable }}: a
-                         replica is removed only after its replacement is
-                         ready, so a bad release stalls rather than taking
-                         capacity away.
-
-{{- if and .Values.identity.enabled (not .Values.identity.sso.issuer) }}
+  a product, a policy    nothing restarts - all three watch their directories
+  a person               one Job runs; no pod is touched
+  config.yaml, an image  a rolling update with maxUnavailable {{ .Values.rollout.maxUnavailable }}
+{{- if and .Values.identity.enabled (not .Values.identity.sso.enabled) }}
 
 SINGLE SIGN-ON IS NOT CONFIGURED. Anybody in config/users/users.yaml signs in
-with the password in that file, which is a local and evaluation arrangement.
-Set identity.sso.issuer, identity.sso.clientId and identity.sso.existingSecret
-before this serves anyone real; deploy/STACK.md has the Entra registration,
-including the one redirect URI that has to be registered as "Web" rather than
-"Single-page application".
+with the password in that file, which is a local and evaluation arrangement. Set
+identity.sso.enabled before this serves anyone real.
 {{- end }}
+{{- end }}
+{{- if .Values.layers.database }}
 
-WHAT THIS RELEASE DOES NOT INCLUDE
+THE DATABASE
 
-The database. It is applied before this chart by its own Flux Kustomization,
-which is what lets the ZITADEL migration be a pre-install hook - Helm waits for
-it, so no pod is ever created against an unmigrated schema. It is also what
-keeps `helm rollback` away from the one thing here that cannot be recreated.
+  kubectl -n {{ .Release.Namespace }} get cluster.postgresql.cnpg.io {{ .Values.database.cluster.name }}
+{{- if not .Values.database.cluster.backup.enabled }}
 
-  kubectl -n {{ .Release.Namespace }} get cluster.postgresql.cnpg.io
-
-CHECK THAT IT HAS BACKUPS. A CloudNativePG cluster replicates, which protects
-against losing an instance and not against losing the data: a DROP TABLE is
-replicated faithfully and immediately. `spec.backup` in the database layer is
-where continuous archiving is configured, and it ships unset.
+BACKUPS ARE NOT CONFIGURED. Replication protects against losing an instance, not
+against losing the data: a DROP TABLE is replicated faithfully and immediately.
+Set database.cluster.backup before this holds anything anybody would miss.
+{{- end }}
+{{- end }}

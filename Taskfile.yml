@@ -234,7 +234,7 @@ tasks:
   # ------------------------------------------------------------------- lint --
 
   lint:
-    desc: Run golangci-lint (requires v2 - a v1 binary rejects the v2 config)
+    desc: Run golangci-lint (v2.13+ - it refuses to run when built with a Go older than go.mod targets)
     cmds:
       - golangci-lint run
 
@@ -481,25 +481,91 @@ tasks:
         --set identity.rootPassword.value=lint
 
   chart:template:
-    desc: Render the chart as one environment really deploys it
+    desc: Render the chart as one instance really deploys it
     summary: |
-      task chart:template            the nprd environment
-      task chart:template -- nprd    nprd
+      task chart:template            the lab instance
+      task chart:template -- prod    the prod instance
 
-      Renders deploy/charts/software-gateway with the values in that
-      environment's HelmRelease - the same file Flux reads - so a template
-      error or a tripped validation rule shows up here rather than in a
-      cluster.
+      Renders both layers with the instance's one values file - the same bytes
+      Flux puts in the ConfigMap - so a template error or a tripped validation
+      rule shows up here rather than in a cluster.
     deps: [chart:stage]
     vars:
-      ENV: '{{default "nprd" .CLI_ARGS}}'
+      INSTANCE: '{{default "lab" .CLI_ARGS}}'
     cmds:
-      - go run ./deploy/chartstage/cmd/chartstage -values {{.ENV}} > .task-values.yaml
+      - go run ./deploy/chartstage/cmd/chartstage -values {{.INSTANCE}} > .task-values.yaml
       - >-
-        helm template swgw deploy/charts/software-gateway
-        --values .task-values.yaml
+        helm template swgw-db deploy/charts/software-gateway --values .task-values.yaml
+        --set layers.database=true --set layers.application=false
+      - >-
+        helm template swgw deploy/charts/software-gateway --values .task-values.yaml
+        --set layers.database=false --set layers.application=true
       - cmd: rm -f .task-values.yaml
         platforms: [linux, darwin]
+
+  flux:build:
+    desc: Build every kustomization under deploy/flux
+    summary: |
+      What Flux will apply, rendered locally. A `resources` path that no longer
+      resolves or a patch that matches nothing fails here rather than as a
+      reconciliation error somebody finds in a cluster.
+    cmds:
+      - for: {var: FLUX_DIRS}
+        cmd: kustomize build {{.ITEM}} > /dev/null
+    vars:
+      FLUX_DIRS:
+        sh: find deploy/flux -name kustomization.yaml -exec dirname {} \;
+
+  flux:secrets:
+    desc: Print the kubectl commands for the Secrets an instance needs created by hand
+    summary: |
+      task flux:secrets -- lab
+
+      Derived from that instance's values file, so it cannot go stale: turning
+      single sign-on on adds a Secret to this list in the same commit.
+
+      Export the values first and paste the output - nothing lands in shell
+      history, and no credential is ever written to a file in this repository.
+    vars:
+      INSTANCE: '{{default "lab" .CLI_ARGS}}'
+    cmds:
+      - go run ./deploy/chartstage/cmd/chartstage -secrets {{.INSTANCE}}
+
+  images:mirror:
+    desc: Print the commands that copy the third-party images into your registry
+    summary: |
+      task images:mirror -- lab
+
+      Versions come from the chart and the destination from that instance's
+      images.mirror, so the paths printed are the ones the pods will ask for -
+      which is the thing that is easy to get wrong by hand and shows up as
+      ImagePullBackOff naming a path nobody wrote down.
+
+      This product's own three images are pushed by the pipeline and are not
+      listed.
+    vars:
+      INSTANCE: '{{default "lab" .CLI_ARGS}}'
+    cmds:
+      - go run ./deploy/chartstage/cmd/chartstage -mirror {{.INSTANCE}}
+
+  flux:instances:
+    desc: List the deployment instances and the chart version each runs
+    cmds:
+      - go run ./deploy/chartstage/cmd/chartstage -instances
+
+  flux:version:
+    desc: Point an instance at a chart version
+    summary: |
+      task flux:version -- lab 1.4.3
+
+      Creates deploy/flux/software/patch/<version> if it does not exist and
+      repoints the instance at it. The release pipeline runs this same command,
+      so moving a deployment pointer and rolling one back are one edit.
+    vars:
+      INSTANCE: '{{index (splitArgs .CLI_ARGS) 0}}'
+      VERSION: '{{index (splitArgs .CLI_ARGS) 1}}'
+    cmds:
+      - go run ./deploy/chartstage/cmd/chartstage -instance {{.INSTANCE}} -set-version {{.VERSION}}
 
   chart:package:
     desc: Package the chart as the pipeline does
@@ -551,7 +617,7 @@ tasks:
       Extra arguments are passed through:  task images -- --no-cache
 
       If a podman build fails with "archive/tar: write too long", the cause is
-      a build secret whose file is not empty - see deploy/STACK.md. It is not
+      a build secret whose file is not empty - see QUICKSTART.md section 5. It is not
       concurrency, and building serially does not help.
     cmds:
       - |

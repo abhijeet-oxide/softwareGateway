@@ -1,0 +1,15 @@
+# Applied once per cluster, by somebody with admin on it:
+#
+#   kubectl apply -k deploy/flux/clusters/lab
+#
+# Everything after that is a pull request. sync.yaml then reconciles this same
+# directory, so the cluster keeps itself up to date.
+#
+# This is a KUSTOMIZE kustomization; sync.yaml beside it is a FLUX Kustomization,
+# a different kind with the same name.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - 0-sources
+  - 1-instances
+  - sync.yaml

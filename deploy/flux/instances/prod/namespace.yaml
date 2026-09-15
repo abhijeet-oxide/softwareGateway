@@ -1,0 +1,13 @@
+# THE NAME IS SET BY kustomization.yaml's `namespace:` FIELD, which is the one
+# place this deployment's namespace is written. Kustomize renames this object
+# and stamps the same value on every other one, so they cannot disagree.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: set-by-kustomization
+  labels:
+    app.kubernetes.io/part-of: software-gateway
+    softwaregateway.io/instance: prod
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

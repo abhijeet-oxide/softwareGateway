@@ -1,0 +1,46 @@
+# LAYER 2 - the application.
+#
+# `dependsOn` holds this release until the database one has installed. Readiness
+# of the PostgreSQL cluster itself is covered inside the chart by the
+# wait-for-database init containers, because Helm does not wait on a custom
+# resource's health.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: software-gateway
+spec:
+  interval: 5m
+  releaseName: swgw
+  dependsOn:
+    - name: software-gateway-db
+  chart:
+    spec:
+      chart: software-gateway
+      # Pinned by the instance, through software/patch/<version>.
+      version: "0.0.0"
+      sourceRef:
+        kind: HelmRepository
+        name: software-gateway
+        namespace: flux-system
+      interval: 0s
+  install:
+    remediation:
+      retries: 3
+    timeout: 20m
+  upgrade:
+    timeout: 15m
+    remediation:
+      retries: 2
+      remediateLastFailure: true
+      strategy: rollback
+    cleanupOnFail: true
+  driftDetection:
+    mode: enabled
+  valuesFrom:
+    - kind: ConfigMap
+      name: software-gateway-values
+      valuesKey: values.yaml
+  values:
+    layers:
+      database: false
+      application: true

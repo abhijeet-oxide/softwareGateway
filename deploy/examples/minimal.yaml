@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=../charts/software-gateway/values.schema.json
+#
+# THE SMALLEST VALUES FILE THAT DEPLOYS A WORKING STACK.
+#
+# Everything not written here is a chart default. `helm show values
+# software-gateway` lists them; `../charts/software-gateway/values.yaml` is the
+# same file with the reasoning attached.
+#
+# This one pulls every image from the public internet and publishes nothing, so
+# it is an evaluation on a cluster with egress. Reach it with:
+#
+#   kubectl -n swgw port-forward svc/web 8000:80
+#   kubectl -n swgw port-forward svc/zitadel-proxy 8090:80
+
+access:
+  webUrl: http://localhost:8000
+  identityUrl: http://localhost:8090
+  expose:
+    # ClusterIP only. Nothing outside the cluster can reach this.
+    type: none
+
+identity:
+  # Nothing here for the master key: the chart generates it on first install and
+  # reads it back afterwards. `kubectl get secret <release>-identity` has it.
+  bootstrapAdmin:
+    username: admin
+    email: admin@example.com
+    # Local and evaluation only. The chart and the seeder both refuse this once
+    # single sign-on is configured.
+    password: "change-me-too"

@@ -1,0 +1,16 @@
+# HOW THIS NAMESPACE AUTHENTICATES TO VAULT.
+#
+# The operator itself and its VaultConnection are cluster objects installed once;
+# this is the per-namespace half, and it holds no token. The chart's
+# secrets.vault.authRef names it.
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: vault-auth
+spec:
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: software-gateway
+    serviceAccount: default
+    audiences: [vault]

@@ -1,91 +1,65 @@
-# softwareGateway
+# Software Gateway
 
-Gateway for replicating OCI artifacts from one repository to another.
+Discovers software packages published to vendor OCI registries and replicates
+them into internal ones — streamed registry to registry, deduplicated by content
+address, and recorded.
 
-A cloud-native platform that continuously discovers software packages published to vendor OCI registries and replicates them into internal registries - optimized for throughput on 30–60 GB packages, resilient to any single failure, and operable without reading the source.
-
-> **Status: M3 in progress - packages now transfer.** Point it at an OCI registry and it finds what is published, records packages with their artifact trees, evaluates auto-download rules, and **moves the bytes to your internal registry** - planned per blob, streamed registry-to-registry, deduplicated against what the destination already holds, and tagged only once the whole package has landed.
->
-> Still to come in M3: chunked-upload resumption, and the pause/resume/cancel/retry controls (`transferctl transfers` is read-only for now). A 30–60 GB acceptance run against real infrastructure has not been done yet - the transfer path is proven against an in-process OCI registry, not at scale. See the [delivery plan](docs/design/17-delivery-plan.md).
->
-> **Get it running:** [Developer Guide →](docs/DEVELOPER-GUIDE.md)
+> **Status: M3 in progress.** Packages transfer: discovery, the artifact tree,
+> auto-download rules, and the bytes moving to your registry. Still to come in
+> M3 — chunked-upload resumption and the pause/resume/cancel controls
+> (`transferctl transfers` is read-only). No 30–60 GB acceptance run has been
+> done yet. [Delivery plan](docs/design/17-delivery-plan.md).
 
 ## What it does
 
-- **Discovers** new software packages across vendor OCI repositories, continuously and without duplicates
-- **Replicates** them into one or more internal registries, streaming blobs registry-to-registry without ever touching disk
-- **Promotes** packages between internal registries (lab → production)
-- **Scans** replicated releases with JFrog Xray and Anchore, merging what both
-  say into one posture and reporting what only one of them saw
-- **Verifies** vendor signatures with cosign/Sigstore, at source and at destination
-- **Deduplicates** by content address, so a blob moves once no matter how many packages reference it
+- **Discovers** new packages across vendor repositories, continuously and without duplicates
+- **Replicates** them into internal registries, streaming blobs without touching disk
+- **Promotes** between internal registries (lab → production)
+- **Scans** with JFrog Xray and Anchore, reporting where the two disagree
+- **Verifies** vendor signatures with cosign, at source and at destination
+- **Deduplicates** by content address, so a blob moves once
 
 ## Architecture
 
 Three binaries, one PostgreSQL database, nothing else.
 
-| Component | Role |
+| | |
 |---|---|
-| `cmd/coordinator` | Control plane - API, discovery, scheduling, queue, notifications, audit |
-| `cmd/worker` | Data plane - stateless; streams OCI blobs registry to registry |
-| `cmd/transferctl` | CLI - a pure Coordinator API client |
+| `cmd/coordinator` | control plane — API, discovery, scheduling, queue, audit |
+| `cmd/worker` | data plane — stateless; streams OCI blobs registry to registry |
+| `cmd/transferctl` | CLI — a pure Coordinator API client |
 
-Artifact bytes flow only between registries. They never enter the Coordinator, never land on a worker's disk, and never pass through the database.
+Artifact bytes flow only between registries. They never enter the coordinator,
+never land on a worker's disk, and never pass through the database.
 
-## Run the whole thing
+## Run it
 
-```bash
-docker compose up -d
+```sh
+docker compose up -d        # the whole stack, seeded — http://localhost:8000
+task run                    # the binaries, SQLite, no sign-in
 ```
 
-Postgres, ZITADEL, Cerbos, the controller, workers and the web UI, seeded and
-authenticated, with no configuration. Open http://localhost:8000.
+In a cluster, a deployment is **one values file** and Flux does the rest:
 
-**[Quick start](QUICKSTART.md)** covers every environment variable, how to add
-users, products and roles, and how to turn on Microsoft SSO.
-
-## Run it in a cluster
-
-```bash
-helm install swgw oci://artifactory.internal.example.com/swgw/software-gateway \
-  --version 1.4.3 --namespace swgw --create-namespace --values my-values.yaml
 ```
-
-The same images, the same seeder and the same `config/` directory the two
-commands above read - as a Helm chart, reconciled by Flux from this repository.
-Adding a product or a person restarts nothing; only a code or `config.yaml`
-change rolls the fleet, and it does that without dropping a request.
-
-**[The chart](deploy/charts/software-gateway/README.md)** ·
-**[Bootstrapping a cluster](deploy/flux/README.md)** ·
-**[How a change reaches it](docs/design/30-continuous-delivery.md)**
+deploy/flux/instances/<instance>/values/values.yaml
+```
 
 ## Documentation
 
-**Running it? [Read the Developer Guide →](docs/DEVELOPER-GUIDE.md)**
+| | |
+|---|---|
+| [Install](docs/install.md) | a cluster, start to finish: the secrets, the commands, the order |
+| [Quick start](QUICKSTART.md) | every variable, adding people and products, Podman, proxies |
+| [Developer guide](docs/DEVELOPER-GUIDE.md) | build, configure, test, and a worked example |
+| [Functional overview](docs/FUNCTIONAL-OVERVIEW.md) | what it does, where it runs, ten day-in-the-life scenarios |
+| [Design](docs/design/README.md) | thirty documents, each decision with its alternatives |
+| [Troubleshooting](docs/deployment-troubleshooting.md) | the cluster failures this has hit, and what stops them now |
+| [Contributing](CONTRIBUTING.md) | what CI runs, and the shape of a change |
+| [Entra registration](docs/entra-app-registration.md) | single sign-on, and the three settings that fail late |
 
-How to build (including Windows), configure the two separate kinds of configuration, test without Docker, and run it - plus a worked example that goes from a fresh clone to a discovered package.
-
-**New here? [Read the Functional Overview →](docs/FUNCTIONAL-OVERVIEW.md)**
-
-What the tool does, the logical components and where they run, the file-level code layout, the CLI grouped by task, and ten day-in-the-life scenarios showing what operating it actually looks like.
-
-**Running two scanners? [Read the Anchore integration guide →](docs/security/anchore-integration.md)**
-
-What Anchore has to be able to reach, the two lines of configuration, what a
-sync does in five phases, what each failure means, and what running a second
-scanner beside JFrog Xray actually buys - which is auditable disagreement rather
-than a bigger number.
-
-**Enforcing your own standards? [Read the compliance ground truth →](docs/compliance/README.md)**
-
-What a check is allowed to say, the 118-assertion catalog triaged into what a machine can decide and what it cannot, how to add a check, and an honest review of the Rego policies we already had.
-
-**Building it? [Read the design →](docs/design/README.md)**
-
-Eighteen documents covering component responsibilities, the full data model and SQL schema, queue and scheduling algorithms, the transfer engine, API surface, state machines, failure recovery, observability, deployment, and technology choices - each major decision recorded with the alternatives considered and what would change our mind.
-
-Start with [00 - Overview](docs/design/00-overview.md).
+Also: [compliance](docs/compliance/README.md) — what a check may assert and how
+to add one — and [Anchore](docs/security/anchore-integration.md).
 
 ## License
 

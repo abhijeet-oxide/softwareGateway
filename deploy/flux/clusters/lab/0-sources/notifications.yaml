@@ -1,0 +1,78 @@
+# WHAT IS HAPPENING TO THIS CLUSTER, said out loud.
+#
+# The pipeline moves one line in Git and stops; Flux does the deployment. Without
+# this the only place a deploy exists is `flux get` on somebody's laptop, and the
+# first anybody hears of a failed upgrade is a user.
+#
+# TWO ALERTS, because a deploy is routine and noisy and a failure is neither.
+# Sending both to one channel means the failures arrive in a scroll of successes
+# and are read on Monday.
+#
+# `type` is the only line that changes for another target: slack, msteams,
+# discord, or generic for any webhook. The Secret it names carries one key,
+# `address`, and is created in flux-system.
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: deploys
+  namespace: flux-system
+spec:
+  type: generic
+  secretRef:
+    name: flux-notifications
+  # Stamped on every message: a channel that carries more than one cluster needs
+  # to know which one is talking.
+  channel: lab
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Alert
+metadata:
+  name: deploys
+  namespace: flux-system
+spec:
+  providerRef:
+    name: deploys
+  eventSeverity: info
+  eventSources:
+    - kind: Kustomization
+      name: "*"
+      namespace: flux-system
+    - kind: HelmRelease
+      name: "*"
+      namespace: swgw-lab
+  # Health-check progress is emitted every few seconds during a rollout and says
+  # nothing anybody can act on. "dependencies do not meet ready condition" is NOT
+  # excluded: it is what a cluster says when a bootstrap step was skipped, and
+  # excluding it made the one failure that waits forever the one nobody heard.
+  exclusionList:
+    - "health check.*in progress"
+  summary: "software-gateway (lab)"
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Alert
+metadata:
+  name: deploys-failures
+  namespace: flux-system
+spec:
+  providerRef:
+    name: deploys
+  eventSeverity: error
+  # WIDER than the alert above: a failure is worth hearing about from anything
+  # that can break this cluster, including what a deploy does not touch - a
+  # source that cannot be fetched, a chart that cannot be pulled, a credential
+  # the operator could not resolve.
+  eventSources:
+    - kind: GitRepository
+      name: "*"
+      namespace: flux-system
+    - kind: HelmRepository
+      name: "*"
+      namespace: flux-system
+    - kind: Kustomization
+      name: "*"
+      namespace: flux-system
+    - kind: HelmRelease
+      name: "*"
+      namespace: swgw-lab
+  summary: "FAILED - software-gateway (lab)"

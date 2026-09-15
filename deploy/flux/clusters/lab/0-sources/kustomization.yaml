@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - gitrepository.yaml
+  - helmrepository.yaml
+  - operators.yaml
+  # Uncomment once the webhook Secret exists. Without notifications the only
+  # place a deploy exists is `flux get` on a laptop, and the first anybody hears
+  # of a failed upgrade is a user.
+  #
+  #   kubectl -n flux-system create secret generic flux-notifications \
+  #     --from-literal=address="$WEBHOOK_URL"
+  #
+  # - notifications.yaml

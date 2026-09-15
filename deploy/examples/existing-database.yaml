@@ -1,0 +1,60 @@
+# yaml-language-server: $schema=../charts/software-gateway/values.schema.json
+#
+# A DATABASE THIS DEPLOYMENT DOES NOT OWN - a managed PostgreSQL service, or a
+# CloudNativePG cluster somebody else runs.
+#
+# Install only the application layer:
+#
+#   helm install swgw <chart> --values existing-database.yaml \
+#     --set layers.database=false --set layers.application=true
+#
+# Under Flux, `layers` is set by deploy/flux/software/base; clearing
+# `database.cluster.name` here is what says the database layer has nothing to do.
+
+# Objects are named <this>-<component>: swgw-coordinator, swgw-worker, swgw-web.
+# Without it they are <release>-<chart>-<component>.
+fullnameOverride: swgw
+
+database:
+  # Empty means: this deployment provisions nothing, so it cannot derive the two
+  # settings below and they must be stated.
+  cluster:
+    name: ""
+
+  host: swgw-prod.postgres.database.azure.com
+  port: 5432
+  name: swgw
+  # ZITADEL claims `public` and about 150 tables, so it needs its OWN database in
+  # the same instance. Create it before installing, owned by the same account:
+  #
+  #   CREATE DATABASE zitadel OWNER swgw;
+  identityDatabase: zitadel
+  sslMode: require
+
+  # A Secret you create, with these keys. `dsnKey` names a key holding a
+  # ready-made connection URL; leave it EMPTY to have the chart compose the DSN
+  # from the parts above - in which case the password must be URL-safe, because
+  # the kubelet substitutes it without encoding.
+  existingSecret: swgw-postgres
+  usernameKey: username
+  passwordKey: password
+  dsnKey: ""
+
+identity:
+  # masterkey and rootPassword are generated on first install and read back from
+  # the cluster on every upgrade, so neither is yours to create.
+  bootstrapAdmin:
+    username: admin
+    email: admin@example.com
+
+access:
+  webUrl: https://gateway.example.com
+  identityUrl: https://id.gateway.example.com
+  expose:
+    type: ingress
+    ingress:
+      className: nginx
+      tls:
+        enabled: true
+        webSecretName: gateway-tls
+        identitySecretName: id-gateway-tls

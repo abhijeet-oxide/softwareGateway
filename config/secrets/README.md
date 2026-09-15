@@ -41,16 +41,69 @@ Empty rather than a placeholder: a file containing `CHANGEME` is a credential
 the registry rejects with a 401 that names nothing, and an empty one is
 reported at load, by path, as the missing value it is.
 
-## The two directories here
+## Adding one, end to end
 
-**`manifests/` is committed.** Worked examples of the documents the chart
-renders from `secrets.yaml` - a VaultStaticSecret, an ExternalSecret - kept so
-a reader can see the shape without rendering a chart. They carry a REFERENCE to
-a value, never a value. In a deployment the chart produces them from the
-inventory rather than these files being applied directly, so there is one list
-and not two.
+A product that pushes to a registry needing credentials, from nothing to
+working. Three edits and one command.
 
-**`local/` is not committed, and never will be.** It is the same shape, filled
+**1. Declare it in the inventory.** Name, keys, and the path the backend looks
+under. No value.
+
+```yaml
+# config/secrets/secrets.yaml
+  - name: acme-registry
+    description: >-
+      Service account for the ACME vendor registry that software-04 pulls from.
+    keys: [username, password]
+    path: acme-registry
+```
+
+**2. Name it on the product.**
+
+```yaml
+# config/products/software-04.yaml
+spec:
+  sources:
+    - name: vendor
+      registry: registry.acme.example.com:443
+      repository: acme/software-04
+      credentialsRef:
+        secretName: acme-registry      # must match `name` above
+```
+
+Getting these two out of step is a test failure on the pull request, not a
+deployment that comes up healthy and marks one product invalid.
+
+**3. Create the Secret** where the deployment runs.
+
+```sh
+# A cluster, with no credentials operator (secrets.backend: none)
+kubectl -n swgw-lab create secret generic acme-registry \
+  --from-literal=username="$ACME_USERNAME" \
+  --from-literal=password="$ACME_PASSWORD"
+
+# Locally
+mkdir -p config/secrets/local/acme-registry
+printf '%s' "$ACME_USERNAME" > config/secrets/local/acme-registry/username
+printf '%s' "$ACME_PASSWORD" > config/secrets/local/acme-registry/password
+```
+
+With an operator instead, create the entry in the vault at
+`<secrets.vault.pathPrefix>/acme-registry` with those two keys and the chart
+renders the rest. Nothing above this line changes.
+
+**Check it.** `task flux:secrets -- <instance>` lists it as required from the
+moment a product names it, and as optional before that.
+
+```sh
+kubectl -n swgw-lab logs -l app.kubernetes.io/component=coordinator | grep acme
+#   product software-04 invalid: credential not found at
+#   /etc/softwaregateway/secrets/acme-registry/password
+```
+
+## `local/`
+
+**Not committed, and never will be.** It is the same shape, filled
 in by hand, bind-mounted by `docker-compose.yml` at the same path. A developer
 gets the same layout as production without a Vault:
 

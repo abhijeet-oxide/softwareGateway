@@ -1,0 +1,139 @@
+# yaml-language-server: $schema=../charts/software-gateway/values.schema.json
+#
+# AKS, PRODUCTION: two DNS names with certificates, single sign-on against
+# Entra, credentials from Azure Key Vault, and a database with backups.
+
+# Objects are named <this>-<component>: swgw-coordinator, swgw-worker, swgw-web.
+# Without it they are <release>-<chart>-<component>.
+fullnameOverride: swgw
+
+tenant: default
+supportContact: https://support.example.com/software-gateway
+
+access:
+  # Two hosts, because they are two ORIGINS. The identity one is stamped into
+  # every token's `iss` and ZITADEL answers 404 to a Host header it does not
+  # recognise, so one host with two paths works for the UI and breaks sign-in.
+  webUrl: https://gateway.example.com
+  identityUrl: https://id.gateway.example.com
+  expose:
+    type: ingress
+    ingress:
+      className: nginx
+      tls:
+        enabled: true
+        # Issued by cert-manager, or created by hand. The chart does not make
+        # certificates.
+        webSecretName: gateway-tls
+        identitySecretName: id-gateway-tls
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-internal
+
+images:
+  registry: contoso.azurecr.io
+  mirror: contoso.azurecr.io/docker
+
+database:
+  cluster:
+    name: swgw-db
+    instances: 3
+    storage: {size: 200Gi, className: managed-csi-premium}
+    walStorage: {size: 40Gi, className: managed-csi-premium}
+    resources:
+      requests: {cpu: "2", memory: 4Gi}
+      limits: {memory: 8Gi}
+    # A commit is on two instances before the client is told it committed, so a
+    # primary failure loses nothing.
+    synchronousReplicas: 1
+    # Continuous WAL archiving - point-in-time recovery to any second in the
+    # window. Replication is not a backup: it replicates a DROP TABLE faithfully.
+    backup:
+      enabled: true
+      destinationPath: https://contosobackups.blob.core.windows.net/swgw/
+      retentionPolicy: 30d
+      azureCredentials:
+        storageAccount: {name: swgw-db-backup, key: account}
+        storageKey: {name: swgw-db-backup, key: key}
+
+identity:
+  # masterkey and rootPassword are generated on first install and read back from
+  # the cluster on every upgrade, so neither is yours to create.
+  bootstrapAdmin:
+    username: admin
+    email: platform-team@example.com
+  sso:
+    enabled: true
+    # Register the application in Entra with redirect URI
+    # https://id.gateway.example.com/idps/callback, under the "Web" platform -
+    # NOT "Single-page application", which refuses the code exchange.
+    issuer: https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0
+    clientId: "00000000-0000-0000-0000-000000000000"
+    # Never a value. A client secret in a values file is a client secret in Git,
+    # in the HelmRelease, and in `helm get values`.
+    existingSecret: swgw-sso
+    displayName: Microsoft
+    requireMfa: true
+  # How long removing somebody takes to bite. Tokens are verified offline, so a
+  # removal stops the RENEWAL rather than the session.
+  tokenLifetimes:
+    accessToken: 15m
+
+# Every entry in config/secrets/secrets.yaml becomes a Kubernetes Secret, mounted
+# through the Azure Key Vault CSI driver. Object names in the vault are
+# <objectPrefix><name>-<key>.
+secrets:
+  backend: azureKeyVault
+  azureKeyVault:
+    name: contoso-swgw-prod
+    tenantId: "00000000-0000-0000-0000-000000000000"
+    # Workload identity: the client id of the user-assigned managed identity
+    # federated with this namespace's service accounts.
+    clientId: "00000000-0000-0000-0000-000000000000"
+    objectPrefix: swgw-
+  # The kubelet's pull credential, produced from the same inventory so the one
+  # registry credential is held in one place.
+  registryPullSecret:
+    enabled: true
+    name: registry-pull
+    from: registry-pull
+
+coordinator:
+  replicas: 3
+  resources:
+    requests: {cpu: 500m, memory: 512Mi}
+    limits: {memory: 1Gi}
+  podDisruptionBudget: {enabled: true, minAvailable: 2}
+  # ScheduleAnyway, not DoNotSchedule: a zone outage must degrade the spread
+  # rather than stop scheduling.
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels: {app: coordinator}
+
+worker:
+  replicas: 4
+  resources:
+    requests: {cpu: "1", memory: 512Mi}
+    limits: {memory: 1Gi}
+  podDisruptionBudget: {enabled: true, minAvailable: 2}
+
+web:
+  replicas: 3
+  podDisruptionBudget: {enabled: true, minAvailable: 2}
+
+networkPolicy:
+  enabled: true
+  # Everything else reaching the Coordinator is denied. `monitoring` is
+  # Prometheus; add whatever namespace runs transferctl.
+  allowFromNamespaces: [monitoring]
+
+metrics:
+  serviceMonitor:
+    enabled: true
+
+# debug | info | warn | error
+logLevel:
+  coordinator: info
+  worker: info

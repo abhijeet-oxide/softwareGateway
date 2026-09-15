@@ -1,0 +1,4 @@
+{{/* Renders nothing. It is a file rather than a call inside a partial so the
+     checks run whatever Helm decides to do about files whose names begin with
+     an underscore. See _validate.tpl. */}}
+{{- include "swgw.validate" . -}}

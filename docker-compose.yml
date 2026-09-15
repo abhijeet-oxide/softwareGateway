@@ -76,7 +76,7 @@
 # Anything worth saying about them is in the README beside them.
 #
 # A CREDENTIALED file is not empty and therefore still hits this. See
-# deploy/STACK.md for what to do about that; it is podman's bug to fix, not
+# QUICKSTART.md section 5 for what to do about that; it is podman's bug to fix, not
 # something this file can work around. Docker is unaffected: buildx streams
 # secrets over its session rather than through the context.
 # ======================================================================

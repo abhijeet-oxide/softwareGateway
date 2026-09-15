@@ -665,7 +665,7 @@ func renderFailureLine(name string, failed []*compliance.Chart) string {
 		b.WriteString(")")
 	}
 	if n := len(failed) - 1; n > 0 {
-		b.WriteString(fmt.Sprintf(" [and %d more chart(s) under this artifact]", n))
+		fmt.Fprintf(&b, " [and %d more chart(s) under this artifact]", n)
 	}
 	return b.String()
 }

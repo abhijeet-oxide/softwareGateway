@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -565,3 +566,149 @@ func TestCoordinatorImageShipsHelm(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryComposeVariableIsDocumented keeps .env.example honest in both
+// directions.
+//
+// An undocumented variable is one somebody finds by reading docker-compose.yml,
+// which is the file the .env is meant to save them from reading. A documented
+// variable nothing reads is worse: somebody sets it, nothing happens, and the
+// file they trusted is the reason they lost an afternoon.
+//
+// The seeder is passed the whole environment rather than named variables, so a
+// name it reads out of process.env counts as used.
+func TestEveryComposeVariableIsDocumented(t *testing.T) {
+	compose, err := os.ReadFile(filepath.Join(repoRoot, "docker-compose.yml"))
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	example, err := os.ReadFile(filepath.Join(repoRoot, ".env.example"))
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	seeder, err := os.ReadFile(filepath.Join(repoRoot, "deploy", "zitadel", "bootstrap.mjs"))
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	documented := map[string]bool{}
+	for _, m := range envAssignment.FindAllSubmatch(example, -1) {
+		documented[string(m[1])] = true
+	}
+	if len(documented) < 10 {
+		t.Fatalf("found %d variables in .env.example, so this test is reading it wrongly", len(documented))
+	}
+
+	substituted := map[string]bool{}
+	for _, m := range composeSubstitution.FindAllSubmatch(compose, -1) {
+		substituted[string(m[1])] = true
+	}
+	read := map[string]bool{}
+	for _, m := range processEnvRead.FindAllSubmatch(seeder, -1) {
+		read[string(m[1])] = true
+	}
+
+	for name := range substituted {
+		if !documented[name] {
+			t.Errorf("docker-compose.yml substitutes %s and .env.example does not mention it.\n"+
+				"\nAdd it, marked REQUIRED or OPTIONAL, with the one reason to change it.\n", name)
+		}
+	}
+	for name := range documented {
+		if !substituted[name] && !read[name] {
+			t.Errorf(".env.example documents %s and nothing reads it.\n"+
+				"\nEither docker-compose.yml should substitute it, the seeder should read it, or\n"+
+				"the line is dead and belongs deleted - somebody will set it and wait.\n", name)
+		}
+	}
+}
+
+var (
+	// `NAME=` or `# NAME=` at the start of a line: the commented-out ones are
+	// documented too, which is the point of writing them that way.
+	envAssignment = regexp.MustCompile(`(?m)^#? ?([A-Z][A-Z0-9_]*)=`)
+	// `${NAME}` and `${NAME:-default}`.
+	composeSubstitution = regexp.MustCompile(`\$\{([A-Z][A-Z0-9_]*)`)
+	processEnvRead      = regexp.MustCompile(`process\.env\.([A-Z][A-Z0-9_]*)`)
+)
+
+// TestEveryDocumentLinkResolves catches the documentation failure that costs a
+// reader the most: a link that used to go somewhere.
+//
+// It happens on every rename and every deletion, it is invisible to the person
+// making the change, and the reader who finds it has no way to know what the
+// page was called before. The check is cheap and the failure names both ends.
+//
+// Only relative links are followed. An external URL cannot be checked without a
+// network call, and a test that needs the internet is a test that fails on a
+// train.
+func TestEveryDocumentLinkResolves(t *testing.T) {
+	var checked int
+	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			// .claude holds installed tooling, node_modules is vendored, and
+			// files/ is the staged copy of config/ that chart:stage writes.
+			case ".git", ".claude", "node_modules", "files":
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".md" {
+			return nil
+		}
+		b, err := os.ReadFile(path) // #nosec G304 -- path comes from walking the repository.
+		if err != nil {
+			return err
+		}
+		for _, target := range documentLinks(string(b)) {
+			checked++
+			if _, err := os.Stat(filepath.Join(filepath.Dir(path), target)); err != nil {
+				rel, _ := filepath.Rel(repoRoot, path)
+				t.Errorf("%s links to %q, which does not exist.\n"+
+					"\nEither the file moved and the link did not, or it was deleted and this page\n"+
+					"still sends people to it.\n", filepath.ToSlash(rel), target)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk the repository: %v", err)
+	}
+	if checked < 50 {
+		t.Fatalf("followed %d links, which is too few for this repository - the "+
+			"matcher is not finding them", checked)
+	}
+}
+
+// documentLinks returns the relative targets a Markdown document links to.
+// Fenced code blocks are removed first: a regular expression inside one is not
+// a link, and reading it as one is how this test would cry wolf.
+func documentLinks(doc string) []string {
+	doc = fencedCode.ReplaceAllString(doc, "")
+	var out []string
+	for _, m := range markdownLink.FindAllStringSubmatch(doc, -1) {
+		target := m[1]
+		if target == "" || strings.HasPrefix(target, "#") {
+			continue
+		}
+		if strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:") {
+			continue
+		}
+		if i := strings.Index(target, "#"); i >= 0 {
+			target = target[:i]
+		}
+		if target != "" {
+			out = append(out, target)
+		}
+	}
+	return out
+}
+
+var (
+	fencedCode   = regexp.MustCompile("(?s)```.*?```|`[^`\n]*`")
+	markdownLink = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]*)\)`)
+)

@@ -1,0 +1,14 @@
+# Where Flux pulls the chart from. A different credential object from the one
+# the kubelet pulls images with - same registry, different namespace, different
+# reader - so it has its own name.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: software-gateway
+  namespace: flux-system
+spec:
+  type: oci
+  url: oci://contoso.azurecr.io/charts
+  interval: 5m
+  secretRef:
+    name: chart-registry

@@ -1,12 +1,15 @@
 package deploy
 
 import (
+	"bytes"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -394,8 +397,8 @@ func TestTheDatabaseIsNotInTheChart(t *testing.T) {
 					"that cannot be recreated. And the ZITADEL migration can no longer be a pre-install\n"+
 					"hook - it would wait for a Postgres that Helm has not created yet - so ordered\n"+
 					"startup becomes a deadlock on every fresh install.\n"+
-					"\nThe database belongs in deploy/environments/<env>/database, applied by the Flux\n"+
-					"layer this chart's layer depends on.\n", kind, name, image)
+					"\nThe database is the `database` layer: a CloudNativePG Cluster, installed as its\n"+
+					"own HelmRelease before this one. See deploy/flux/software/base.\n", kind, name, image)
 			}
 		}
 	}
@@ -496,32 +499,40 @@ func nestedSlice(doc map[string]any, path ...string) ([]any, bool) {
 // name a list of public ones. A denylist of hostnames would pass the first
 // registry nobody thought of.
 func TestNothingIsPulledFromThePublicInternet(t *testing.T) {
-	for _, env := range []string{"nprd"} {
-		t.Run(env, func(t *testing.T) {
-			values, err := chartstage.EnvironmentValues(repoRoot, env)
+	instances, err := chartstage.Instances(repoRoot)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if len(instances) == 0 {
+		t.Fatal("no instances under deploy/flux/instances, so this test is not testing anything")
+	}
+
+	for _, instance := range instances {
+		t.Run(instance, func(t *testing.T) {
+			values, err := chartstage.InstanceValues(repoRoot, instance)
 			if err != nil {
 				t.Fatalf("%v", err)
 			}
 			var v struct {
-				Image struct {
+				Images struct {
 					Registry string `json:"registry"`
-				} `json:"image"`
+				} `json:"images"`
 			}
 			if err := yaml.Unmarshal(values, &v); err != nil {
-				t.Fatalf("parse %s values: %v", env, err)
+				t.Fatalf("parse %s values: %v", instance, err)
 			}
-			registry := v.Image.Registry
+			registry := v.Images.Registry
 			if registry == "" {
-				t.Fatalf("%s sets no image.registry, so this environment pulls this product's "+
-					"own images from wherever their path points", env)
+				t.Fatalf("%s sets no images.registry, so this instance pulls this product's "+
+					"own images from wherever their path points", instance)
 			}
 
-			for _, ref := range imageRefs(t, env, values) {
+			for _, ref := range imageRefs(t, instance, values) {
 				if !strings.HasPrefix(ref.image, registry+"/") {
 					t.Errorf("%s: %s pulls %q, which does not come from %s.\n"+
 						"\nAn estate with no egress cannot start this pod, and nothing here would say so\n"+
 						"until it tried. Route it through the mirror - images.mirror in the chart, or the\n"+
-						"reference itself for anything outside it.\n", env, ref.where, ref.image, registry)
+						"reference itself for anything outside it.\n", instance, ref.where, ref.image, registry)
 				}
 			}
 		})
@@ -530,13 +541,12 @@ func TestNothingIsPulledFromThePublicInternet(t *testing.T) {
 
 type imageRef struct{ where, image string }
 
-// imageRefs collects every image a deployed environment produces: the rendered
-// chart, the CloudNativePG Cluster beside it, and the operator that runs it.
-// The last two are not Helm and would be missed by rendering alone - which is
-// exactly where the forgettable ones live.
-func imageRefs(t *testing.T, env string, values []byte) []imageRef {
+// imageRefs collects every image an instance produces, from BOTH layers of the
+// chart. The database one matters most and is the easiest to miss: CloudNativePG
+// pulls its PostgreSQL image during a failover, so a cluster missing that mirror
+// does not fail when it is deployed - it fails when the primary dies.
+func imageRefs(t *testing.T, instance string, values []byte) []imageRef {
 	t.Helper()
-	var refs []imageRef
 
 	helm, err := exec.LookPath("helm")
 	if err != nil {
@@ -550,41 +560,21 @@ func imageRefs(t *testing.T, env string, values []byte) []imageRef {
 	if err := os.WriteFile(valuesFile, values, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.CommandContext(t.Context(), helm, "template", "swgw", chart, "--values", valuesFile).CombinedOutput()
-	if err != nil {
-		t.Fatalf("helm template %s: %v\n%s", env, err, out)
-	}
-	for _, m := range imageLine.FindAllStringSubmatch(string(out), -1) {
-		refs = append(refs, imageRef{where: "the chart", image: m[1]})
-	}
 
-	// The database and its operator, which are plain manifests in Flux layers
-	// rather than Helm. GLOBBED, not listed: a file moved between overlays must
-	// not quietly take its images out of this test's sight, which is exactly
-	// what a hardcoded path would have done the first time the operator was
-	// split into a base and two scopes.
-	var manifests []string
-	manifests = append(manifests, filepath.Join(repoRoot, "deploy", "environments", env, "database", "cluster.yaml"))
-	err = filepath.WalkDir(filepath.Join(repoRoot, "deploy", "flux", "platform"), func(path string, d fs.DirEntry, err error) error {
+	var refs []imageRef
+	for _, layer := range []string{"application", "database"} {
+		args := []string{"template", "swgw", chart, "--values", valuesFile,
+			"--set", "layers.application=" + boolFor(layer, "application"),
+			"--set", "layers.database=" + boolFor(layer, "database")}
+		out, err := exec.CommandContext(t.Context(), helm, args...).CombinedOutput()
 		if err != nil {
-			return err
+			t.Fatalf("helm template %s (%s layer): %v\n%s", instance, layer, err, out)
 		}
-		if !d.IsDir() && strings.HasSuffix(path, ".yaml") {
-			manifests = append(manifests, path)
+		for _, m := range imageLine.FindAllStringSubmatch(string(out), -1) {
+			refs = append(refs, imageRef{where: "the " + layer + " layer", image: m[1]})
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk deploy/flux/platform: %v", err)
-	}
-
-	for _, f := range manifests {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("read %s: %v", f, err)
-		}
-		for _, m := range manifestImage.FindAllStringSubmatch(string(b), -1) {
-			refs = append(refs, imageRef{where: filepath.Base(f), image: m[1]})
+		for _, m := range manifestImage.FindAllStringSubmatch(string(out), -1) {
+			refs = append(refs, imageRef{where: "the " + layer + " layer", image: m[1]})
 		}
 	}
 
@@ -594,136 +584,443 @@ func imageRefs(t *testing.T, env string, values []byte) []imageRef {
 	return refs
 }
 
+func boolFor(layer, want string) string {
+	if layer == want {
+		return "true"
+	}
+	return "false"
+}
+
 var (
 	// Indented `image:` only, so a `#` comment that happens to contain the word
 	// is not read as a reference.
 	imageLine = regexp.MustCompile(`(?m)^\s+image:\s+(\S+:\S+)\s*$`)
-	// `imageName:` for a CloudNativePG Cluster, `repository:` for the operator
-	// chart's values - the two spellings the non-Helm manifests use.
-	manifestImage = regexp.MustCompile(`(?m)^\s+(?:imageName|repository):\s+(\S+/\S+)\s*$`)
+	// `imageName:` is what a CloudNativePG Cluster calls the same thing.
+	manifestImage = regexp.MustCompile(`(?m)^\s+imageName:\s+(\S+/\S+)\s*$`)
 )
 
-// TestEveryOperatorScopeBuildsAndKeepsOneName guards the switch that decides
-// where the database operator runs.
+// TestFluxSchemaMatchesTheChart keeps the copy an editor validates an instance's
+// values against identical to the one Helm enforces.
 //
-// Two things have to hold, and neither is visible by reading one file.
+// A stale copy is worse than no copy: it accepts a key the chart will refuse,
+// which is exactly the mistake the schema exists to catch, found one layer later.
+func TestFluxSchemaMatchesTheChart(t *testing.T) {
+	chart, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(chartstage.ChartSchema)))
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	copied, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(chartstage.SchemaCopy)))
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if !bytes.Equal(bytes.ReplaceAll(chart, []byte("\r\n"), []byte("\n")),
+		bytes.ReplaceAll(copied, []byte("\r\n"), []byte("\n"))) {
+		t.Errorf("%s is not the chart's schema.\n\nRun:\n\n    task chart:stage\n", chartstage.SchemaCopy)
+	}
+}
+
+// TestEveryFluxDirectoryBuilds is the cheapest test in this file and catches the
+// most.
 //
-// EVERY ARRANGEMENT MUST BUILD. The overlays differ by a namespace and a
-// patched value, which is exactly the kind of difference that rots: a field
-// renamed in the base, a patch path that no longer resolves, and the scope
-// nobody uses in CI is broken on the day somebody needs it.
-//
-// EVERY BOOTSTRAP MUST PRODUCE `platform-operators`. That name is what
-// deploy/environments/<env>/layers.yaml depends on. If a scope produced a
-// differently named Kustomization, choosing it would leave every environment
-// waiting on a dependency that will never exist - and waiting is exactly what
-// that arrangement is designed to do, so it would wait quietly and forever.
-func TestEveryOperatorScopeBuildsAndKeepsOneName(t *testing.T) {
+// The Flux tree is three layers of kustomize - clusters, instances, software -
+// and the ones nobody is currently deploying are the ones that rot: a renamed
+// field in `software/base`, a `resources` path that no longer resolves, a patch
+// target that matches nothing. None of that is visible by reading one file, and
+// all of it fails as a reconciliation error in a cluster rather than on a pull
+// request.
+func TestEveryFluxDirectoryBuilds(t *testing.T) {
 	kustomize, err := exec.LookPath("kustomize")
 	if err != nil {
 		t.Skip("kustomize is not on PATH; the chart job in CI covers this")
 	}
 
-	bootstraps, err := filepath.Glob(filepath.Join(repoRoot, "deploy", "flux", "platform", "bootstrap", "*", "kustomization.yaml"))
+	root := filepath.Join(repoRoot, "deploy", "flux")
+	var dirs []string
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && d.Name() == "kustomization.yaml" {
+			dirs = append(dirs, filepath.Dir(path))
+		}
+		return nil
+	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("walk deploy/flux: %v", err)
 	}
-	nested, err := filepath.Glob(filepath.Join(repoRoot, "deploy", "flux", "platform", "bootstrap", "*", "*", "kustomization.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	bootstraps = append(bootstraps, nested...)
-	if len(bootstraps) < 2 {
-		t.Fatalf("found %d bootstrap arrangements; there should be one per scope", len(bootstraps))
+	if len(dirs) < 6 {
+		t.Fatalf("found %d kustomizations under deploy/flux; the tree has more than that, so "+
+			"this test is looking in the wrong place", len(dirs))
 	}
 
-	for _, k := range bootstraps {
-		dir := filepath.Dir(k)
-		scope, _ := filepath.Rel(filepath.Join(repoRoot, "deploy", "flux", "platform", "bootstrap"), dir)
-		t.Run(filepath.ToSlash(scope), func(t *testing.T) {
+	for _, dir := range dirs {
+		rel, _ := filepath.Rel(root, dir)
+		t.Run(filepath.ToSlash(rel), func(t *testing.T) {
 			out, err := exec.CommandContext(t.Context(), kustomize, "build", dir).CombinedOutput()
 			if err != nil {
-				t.Fatalf("kustomize build %s: %v\n%s", scope, err, out)
+				t.Fatalf("kustomize build: %v\n%s", err, out)
 			}
+		})
+	}
+}
 
-			var operatorLayer string
-			for _, raw := range strings.Split(string(out), "\n---\n") {
-				var doc map[string]any
-				if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
-					continue
-				}
-				kind, _ := doc["kind"].(string)
-				if kind != "Kustomization" {
-					continue
-				}
-				name, _ := nested2(doc, "metadata", "name")
-				path, _ := nested2(doc, "spec", "path")
-				operatorLayer = path
-				if name != "platform-operators" {
-					t.Errorf("this arrangement creates a Kustomization named %q, not "+
-						"\"platform-operators\".\n"+
-						"\ndeploy/environments/<env>/layers.yaml depends on that exact name. A scope that\n"+
-						"produces a different one leaves every environment waiting on a dependency that\n"+
-						"will never exist - quietly, because waiting is what it is designed to do.\n", name)
-				}
-			}
-			if operatorLayer == "" {
-				t.Fatal("no Kustomization was produced, so this scope installs no operator at all")
-			}
+// TestEveryInstanceReadsOneValuesFile is the property the whole Flux layout
+// exists for, made checkable.
+//
+// Both HelmReleases must read the SAME ConfigMap. The day one of them stops -
+// a copied file, a renamed generator, an inline `values:` block that grew
+// past the two `layers` keys - the database and the application can disagree
+// about which database they mean, and the symptom is a coordinator talking to
+// an empty schema.
+func TestEveryInstanceReadsOneValuesFile(t *testing.T) {
+	kustomize, err := exec.LookPath("kustomize")
+	if err != nil {
+		t.Skip("kustomize is not on PATH; the chart job in CI covers this")
+	}
+	instances, err := chartstage.Instances(repoRoot)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
 
-			// And the layer it points at must build too, with exactly one
-			// operator in it: the CRDs and admission webhooks are cluster-scoped
-			// singletons, so a second would fight the first over both.
-			layer := filepath.Join(repoRoot, filepath.FromSlash(strings.TrimPrefix(operatorLayer, "./")))
-			out, err = exec.CommandContext(t.Context(), kustomize, "build", layer).CombinedOutput()
+	for _, instance := range instances {
+		t.Run(instance, func(t *testing.T) {
+			dir := filepath.Join(repoRoot, filepath.FromSlash(chartstage.InstanceDir(instance)))
+			out, err := exec.CommandContext(t.Context(), kustomize, "build", dir).CombinedOutput()
 			if err != nil {
-				t.Fatalf("kustomize build %s (named by %s): %v\n%s", operatorLayer, scope, err, out)
+				t.Fatalf("kustomize build: %v\n%s", err, out)
 			}
+
+			sources := map[string]int{}
+			generated := ""
 			releases := 0
 			for _, raw := range strings.Split(string(out), "\n---\n") {
 				var doc map[string]any
 				if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
 					continue
 				}
-				if kind, _ := doc["kind"].(string); kind != "HelmRelease" {
-					continue
-				}
-				releases++
-
-				// THE SCOPES MUST BE MUTUALLY EXCLUSIVE, and this pair is what
-				// makes them so. The two scopes put the operator's HelmRelease
-				// in different namespaces, so they are different objects and
-				// the layer - which has prune off, because pruning an operator
-				// can take its CRDs and every database with them - will not
-				// remove the one it stopped pointing at.
-				//
-				// Helm keys a release by (releaseName, storageNamespace).
-				// Identical in every scope means the second one cannot install:
-				// it fails loudly instead of succeeding into two operators that
-				// both report healthy while fighting over one admission
-				// webhook. Drift here would restore that silent failure.
-				name, _ := nested2(doc, "spec", "releaseName")
-				storage, _ := nested2(doc, "spec", "storageNamespace")
-				if name != "cloudnative-pg" || storage != "cnpg-system" {
-					t.Errorf("this scope installs Helm release %q in storage namespace %q; every "+
-						"scope must use (cloudnative-pg, cnpg-system).\n"+
-						"\nThat pair is the only thing stopping a scope change from leaving TWO operators\n"+
-						"running - each reconciling the same cluster-scoped admission webhooks to point at\n"+
-						"itself, each reporting healthy, and nothing saying so. See\n"+
-						"deploy/flux/platform/operators/README.md, \"Changing scope after a deployment\".\n",
-						name, storage)
+				switch kind, _ := doc["kind"].(string); kind {
+				case "ConfigMap":
+					generated, _ = nested(doc, "metadata", "name")
+				case "HelmRelease":
+					releases++
+					from, _ := nestedSlice(doc, "spec", "valuesFrom")
+					if len(from) != 1 {
+						name, _ := nested(doc, "metadata", "name")
+						t.Errorf("%s reads %d valuesFrom entries; it must read exactly one, so "+
+							"there is one place to look.", name, len(from))
+						continue
+					}
+					m, _ := from[0].(map[string]any)
+					name, _ := m["name"].(string)
+					sources[name]++
 				}
 			}
-			if releases != 1 {
-				t.Errorf("%s renders %d operator HelmReleases; there must be exactly one.\n"+
-					"\nCloudNativePG's CRDs and admission webhooks are cluster-scoped singletons. Two\n"+
-					"operators reconcile the same webhook configuration to point at themselves, and\n"+
-					"the loser's databases are admitted - or rejected - by the winner's webhook.\n",
-					operatorLayer, releases)
+
+			if releases != 2 {
+				t.Fatalf("%d HelmReleases; an instance is the database layer and the application "+
+					"layer, and nothing else", releases)
+			}
+			if len(sources) != 1 {
+				t.Fatalf("the two layers read %d different values sources: %v.\n"+
+					"\nThey must read one, or they can disagree about the database they share.\n",
+					len(sources), sources)
+			}
+			for name := range sources {
+				if name != generated {
+					t.Errorf("the HelmReleases read ConfigMap %q but this instance generates %q, "+
+						"so nothing in Git supplies their values.", name, generated)
+				}
 			}
 		})
 	}
 }
 
-// nested2 is nested() for documents decoded by this file's own loop.
-func nested2(doc map[string]any, path ...string) (string, bool) { return nested(doc, path...) }
+// instanceDials are the settings an instance may state even when the value is
+// the chart's default.
+//
+// They are the knobs an operator is EXPECTED to turn, and for those, seeing the
+// current value in the instance file is the point - somebody sizing a lab reads
+// `worker: {replicas: 2}` and changes the 2. Hiding them because they happen to
+// match the chart today would make the file answer "what is different" at the
+// cost of answering "what can I change", and the second question is the one
+// somebody has at 09:00 on their first day.
+//
+// Everything NOT on this list must differ, which is where the rule below earns
+// its place: a resource request or a probe threshold pinned at today's default
+// is a decision nobody made, and it diverges silently the day the chart moves.
+var instanceDials = []string{
+	"coordinator.replicas",
+	"worker.replicas",
+	"web.replicas",
+	"cerbos.replicas",
+	"identity.zitadel.replicas",
+	"identity.login.replicas",
+	"identity.proxy.replicas",
+	"identity.sso.enabled",
+	"identity.bootstrapAdmin.username",
+	"database.cluster.instances",
+	"database.cluster.storage.size",
+	"database.cluster.walStorage.size",
+	"database.cluster.synchronousReplicas",
+	"database.cluster.backup.enabled",
+	"logLevel.coordinator",
+	"logLevel.worker",
+}
+
+// TestNoInstanceRestatesAChartDefault keeps one rule true: the chart holds every
+// default, and an instance's values file holds what differs plus the dials.
+//
+// A restated default that is not a dial is not harmless. It reads as a decision
+// somebody made for this deployment, so the next person changing the chart's
+// default changes it everywhere except the places that silently pinned the old
+// one - and the divergence is invisible until something behaves differently in
+// one namespace.
+func TestNoInstanceRestatesAChartDefault(t *testing.T) {
+	var defaults map[string]any
+	b, err := os.ReadFile(filepath.Join(repoRoot, "deploy", "charts", "software-gateway", "values.yaml"))
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if err := yaml.Unmarshal(b, &defaults); err != nil {
+		t.Fatalf("parse the chart's values: %v", err)
+	}
+
+	instances, err := chartstage.Instances(repoRoot)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	for _, instance := range instances {
+		t.Run(instance, func(t *testing.T) {
+			raw, err := chartstage.InstanceValues(repoRoot, instance)
+			if err != nil {
+				t.Fatalf("%v", err)
+			}
+			var values map[string]any
+			if err := yaml.Unmarshal(raw, &values); err != nil {
+				t.Fatalf("parse values: %v", err)
+			}
+			for _, restated := range sameAsDefault(values, defaults, "") {
+				if slices.Contains(instanceDials, restated.path) {
+					continue
+				}
+				t.Errorf("%s states %s: %v, which is already the chart's default.\n"+
+					"\nDelete the line. If it is a knob an operator is meant to turn, add it to\n"+
+					"instanceDials in this test and say so - that list is the difference between a\n"+
+					"value somebody chose and one nobody did.\n",
+					instance, restated.path, restated.value)
+			}
+		})
+	}
+}
+
+type restatement struct {
+	path  string
+	value any
+}
+
+// sameAsDefault returns the dotted paths an instance sets to the value the chart
+// already has. Maps are walked; anything else is compared whole, because a list
+// that happens to equal the default is still a restatement.
+func sameAsDefault(values, defaults map[string]any, prefix string) []restatement {
+	var found []restatement
+	for key, got := range values {
+		want, ok := defaults[key]
+		if !ok {
+			continue
+		}
+		path := key
+		if prefix != "" {
+			path = prefix + "." + key
+		}
+		gotMap, gotIsMap := got.(map[string]any)
+		wantMap, wantIsMap := want.(map[string]any)
+		if gotIsMap && wantIsMap {
+			found = append(found, sameAsDefault(gotMap, wantMap, path)...)
+			continue
+		}
+		if reflect.DeepEqual(got, want) {
+			found = append(found, restatement{path: path, value: got})
+		}
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].path < found[j].path })
+	return found
+}
+
+// TestEachInstanceNamesItsNamespaceOnce is the other half of the rule that one
+// file holds what a deployment differs in.
+//
+// The namespace is not a Helm value - kustomize stamps it on everything the
+// instance applies, and it renames the Namespace object too - so it lives in
+// `kustomization.yaml` rather than in `values/values.yaml`. Written twice it is
+// a deployment whose Secrets land in one namespace and whose pods start in
+// another, which fails as ImagePullBackOff naming neither.
+//
+// So: exactly one Namespace, named by the transformer, with everything else
+// inside it, and the literal written nowhere else in the directory.
+// namespaceLookalikes are keys whose value may equal the namespace without
+// being one. An object-name prefix that matches the namespace is ordinary -
+// `fullnameOverride: swgw` in namespace `swgw` is what most deployments write.
+var namespaceLookalikes = []string{"nameOverride", "fullnameOverride"}
+
+// scalarEquals reports whether any scalar anywhere in a decoded document is
+// exactly want, ignoring the keys above.
+func scalarEquals(node any, want string) bool {
+	switch v := node.(type) {
+	case string:
+		return v == want
+	case map[string]any:
+		for key, child := range v {
+			if slices.Contains(namespaceLookalikes, key) {
+				continue
+			}
+			if scalarEquals(child, want) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if scalarEquals(child, want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestEachInstanceNamesItsNamespaceOnce(t *testing.T) {
+	kustomize, err := exec.LookPath("kustomize")
+	if err != nil {
+		t.Skip("kustomize is not on PATH; the chart job in CI covers this")
+	}
+	instances, err := chartstage.Instances(repoRoot)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	for _, instance := range instances {
+		t.Run(instance, func(t *testing.T) {
+			dir := filepath.Join(repoRoot, filepath.FromSlash(chartstage.InstanceDir(instance)))
+
+			kfile := filepath.Join(dir, "kustomization.yaml")
+			b, err := os.ReadFile(kfile) // #nosec G304 -- instance passed checkSegment.
+			if err != nil {
+				t.Fatalf("%v", err)
+			}
+			var k struct {
+				Namespace string `json:"namespace"`
+			}
+			if err := yaml.Unmarshal(b, &k); err != nil {
+				t.Fatalf("parse kustomization.yaml: %v", err)
+			}
+			if k.Namespace == "" {
+				t.Fatal("kustomization.yaml sets no namespace, so nothing says where this " +
+					"instance is deployed")
+			}
+
+			out, err := exec.CommandContext(t.Context(), kustomize, "build", dir).CombinedOutput()
+			if err != nil {
+				t.Fatalf("kustomize build: %v\n%s", err, out)
+			}
+			namespaces := 0
+			for _, raw := range strings.Split(string(out), "\n---\n") {
+				var doc map[string]any
+				if err := yaml.Unmarshal([]byte(raw), &doc); err != nil || doc["kind"] == nil {
+					continue
+				}
+				name, _ := nested(doc, "metadata", "name")
+				if kind, _ := doc["kind"].(string); kind == "Namespace" {
+					namespaces++
+					if name != k.Namespace {
+						t.Errorf("the Namespace is called %q but the transformer says %q",
+							name, k.Namespace)
+					}
+					continue
+				}
+				if got, ok := nested(doc, "metadata", "namespace"); ok && got != k.Namespace {
+					t.Errorf("%s %s is in namespace %q, not %q", doc["kind"], name, got, k.Namespace)
+				}
+			}
+			if namespaces != 1 {
+				t.Errorf("%d Namespace objects; an instance is one namespace", namespaces)
+			}
+
+			// And no other file in the instance states it as a VALUE. Compared as
+			// whole scalars rather than as text: `swgw` is a substring of
+			// `swgw-db-backup`, and a test that cried wolf about that would be
+			// turned off within a week.
+			err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+				if err != nil || d.IsDir() || filepath.Base(path) == "kustomization.yaml" {
+					return err
+				}
+				if ext := filepath.Ext(path); ext != ".yaml" && ext != ".yml" {
+					return nil
+				}
+				b, err := os.ReadFile(path) // #nosec G304 -- walked from the instance directory.
+				if err != nil {
+					return err
+				}
+				var doc any
+				if err := yaml.Unmarshal(b, &doc); err != nil {
+					return nil
+				}
+				if scalarEquals(doc, k.Namespace) {
+					rel, _ := filepath.Rel(repoRoot, path)
+					t.Errorf("%s states the namespace %q.\n\n"+
+						"It belongs in kustomization.yaml and nowhere else - kustomize stamps it on\n"+
+						"everything, including the Namespace object's own name.\n",
+						filepath.ToSlash(rel), k.Namespace)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("walk %s: %v", instance, err)
+			}
+		})
+	}
+}
+
+// TestMirrorPathsMatchTheChart keeps `task images:mirror` honest.
+//
+// It prints where every third-party image has to be copied to, and the chart
+// decides where it will be pulled from. Those are two implementations of one
+// rule - Go's mirroredPath and the chart's swgw.mirroredImage - and a drift
+// between them is a set of copy commands that produce paths no pod asks for.
+// The symptom is ImagePullBackOff on a registry that visibly has the image.
+func TestMirrorPathsMatchTheChart(t *testing.T) {
+	instances, err := chartstage.Instances(repoRoot)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	for _, instance := range instances {
+		t.Run(instance, func(t *testing.T) {
+			want, mirror, err := chartstage.ImagesToMirror(repoRoot, instance)
+			if err != nil {
+				t.Fatalf("%v", err)
+			}
+			if mirror == "" {
+				t.Skip("this instance pulls from upstream, so nothing is mirrored")
+			}
+
+			values, err := chartstage.InstanceValues(repoRoot, instance)
+			if err != nil {
+				t.Fatalf("%v", err)
+			}
+			// imageRefs renders both layers, which is where all six appear.
+			rendered := map[string]bool{}
+			for _, ref := range imageRefs(t, instance, values) {
+				rendered[ref.image] = true
+			}
+
+			for _, img := range want {
+				if !rendered[img.Destination] {
+					t.Errorf("images.%s is copied to %q, and no pod pulls that.\n"+
+						"\nThe chart's swgw.mirroredImage and chartstage.mirroredPath disagree, so the copy\n"+
+						"commands produce a path nothing asks for - which reads as ImagePullBackOff on a\n"+
+						"registry that visibly has the image.\n", img.Key, img.Destination)
+				}
+			}
+		})
+	}
+}

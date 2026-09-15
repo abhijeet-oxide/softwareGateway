@@ -1,0 +1,26 @@
+# WHAT THIS CLUSTER DEPLOYS. One of these per instance; a cluster hosting two
+# instances lists two, and their namespaces keep them apart.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: software-gateway-prod
+  namespace: flux-system
+spec:
+  # THE OPERATOR FIRST. This path submits a chart that renders a `Cluster`, a
+  # kind the API server only knows once CloudNativePG has registered its CRD.
+  dependsOn:
+    - name: platform-operators
+  interval: 10m
+  retryInterval: 1m
+  path: ./deploy/flux/instances/prod
+  prune: true
+  # Ready means every object this applies is Ready - the two HelmReleases
+  # included - not merely that the apply succeeded. `healthChecks` would be
+  # ignored beside it, and naming one would put this instance's namespace in a
+  # second file.
+  wait: true
+  timeout: 30m
+  sourceRef:
+    kind: GitRepository
+    name: software-gateway
+    namespace: flux-system

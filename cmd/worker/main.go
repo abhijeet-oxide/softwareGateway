@@ -56,11 +56,13 @@ func probeReadiness() error {
 	// the kind that hangs a container healthcheck.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	// #nosec G704 -- the address is this process's own listener, read from the
+	// same variable it binds. There is no request-scoped input on this path.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/readyz", nil)
 	if err != nil {
 		return fmt.Errorf("not ready: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- see the request above.
 	if err != nil {
 		return fmt.Errorf("not ready: %w", err)
 	}

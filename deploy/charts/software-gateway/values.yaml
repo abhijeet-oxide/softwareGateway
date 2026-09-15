@@ -1,122 +1,249 @@
-# Software Gateway - the values an operator sets.
+# Software Gateway - chart defaults.
 #
-# Nothing here has to be set for `helm install` to produce a running stack:
-# the defaults are the compose stack's defaults, which is what makes the
-# QUICKSTART path and the cluster path the same product. What a real
-# deployment must state is small and is listed at the top of README.md.
+# A deployment states its differences in one values file. Annotated examples for
+# an AKS lab, AKS production, OpenShift and an external reverse proxy are in
+# deploy/examples/.
 #
-# THE SHAPE OF THIS FILE. Every workload gets the same five keys - image,
-# replicas, resources, and the two scheduling ones - so there is one thing to
-# learn rather than nine. What differs per component is stated after them, with
-# the reason.
+# EVERY OPTIONAL FEATURE IS ONE FLAG, and turning one on is the only thing that
+# adds a Secret to create. `task flux:secrets -- <instance>` prints the current
+# list for an instance, derived from its values file.
+#
+#   identity.enabled              deploy ZITADEL          on   - off points at
+#                                                              an identity
+#                                                              provider you run
+#   identity.sso.enabled          sign in through a       off  - needs a Secret
+#                                 corporate directory            (client secret)
+#   layers.database               deploy PostgreSQL       off* - on in the Flux
+#                                                                path
+#   access.expose.type            publish the addresses   none
+#   access.expose.ingress.tls     terminate TLS here      off  - needs two
+#                                   .enabled                     certificate
+#                                                                Secrets
+#   database.cluster.backup       continuous WAL          off  - needs object
+#                                   .enabled              archiving  storage creds
+#   networkPolicy.enabled         fence the coordinator   off
+#   metrics.serviceMonitor        scrape metrics          off
+#     .enabled
+#   secrets.backend               a credentials operator  none - none means the
+#                                                                Secrets already
+#                                                                exist
+#   seed.enabled                  provision people        on
+#
+# Flux notifications are a cluster concern rather than a deployment one: one
+# commented line in deploy/flux/clusters/<cluster>/0-sources/kustomization.yaml.
 
-# --------------------------------------------------------------------- naming
 nameOverride: ""
 fullnameOverride: ""
 
-# --------------------------------------------------------------------- images
+# --------------------------------------------------------------------- layers
 #
-# ONE REGISTRY, ONE REPOSITORY PATH. All three of this product's images live
-# under `<registry>/<repository>/<name>`, tagged with the chart's appVersion.
-# The tag is deliberately not settable per component: three images built from
-# one commit are one artifact, and letting them drift is how a coordinator ends
-# up talking to a worker from another release.
-image:
-  registry: artifactory.internal.example.com
-  repository: swgw
-  # Empty means .Chart.AppVersion, which the pipeline stamps at package time.
-  # Set it only to pin a chart to an image it was not built with, which is a
-  # debugging move and not a deployment.
-  tag: ""
-  pullPolicy: IfNotPresent
-  # The Secret holding the JFrog credentials the kubelet pulls with. Created by
-  # the secrets backend below when `secrets.registryPullSecret.enabled` is set,
-  # or by hand.
-  pullSecrets: []
-  #  - name: jfrog
+# The chart renders two independent layers. They are separate so that a
+# rollback of one cannot reach the other, and so that the ZITADEL migration can
+# be a Helm pre-install hook - which needs the database to already exist.
+#
+# A plain `helm install` of a self-contained stack turns both on and accepts
+# that ordering is then the operator's problem. The GitOps path installs two
+# releases from ONE values file, the database one first; see
+# deploy/flux/software/base.
+layers:
+  database: false
+  application: true
 
-# Third-party images. Listed here rather than beside each component so an
-# air-gapped estate has ONE place to repoint, and tagged to the same versions
-# docker-compose.yml runs so the two stacks are the same software.
-#
-# EVERY ONE OF THESE IS PULLED THROUGH `mirror`. They are written as the
-# upstream path - `zitadel/zitadel:v4.17.3` - and the mirror is prefixed, so a
-# virtual repository in Artifactory that aggregates Docker Hub, ghcr.io and
-# whatever else resolves all of them with one credential and one hostname.
-#
-# `postgres` is deliberately absent: the database is not deployed by this chart
-# and its image is named by the CloudNativePG Cluster in the layer before it.
-images:
-  # THE ONE LINE THAT DECIDES WHETHER THIS DEPLOYMENT REACHES THE INTERNET.
-  #
-  # Empty pulls each image from wherever its path points. The default is NOT
-  # empty, and is the same placeholder registry `image.registry` carries, for
-  # one reason: the chart REFUSES to render with an internal registry set for
-  # this product's own images and an empty mirror for everything else. That
-  # combination is a cluster pulling three images from Artifactory and five
-  # from the internet, which is not an air-gapped deployment and looks exactly
-  # like one until the first node without egress - so the defaults describe a
-  # consistent deployment rather than a half of one.
-  #
-  # Clear BOTH to pull everything from upstream, which is what a public
-  # evaluation wants.
-  mirror: artifactory.internal.example.com/docker
-  zitadel: zitadel/zitadel:v4.17.3
-  zitadelLogin: zitadel/zitadel-login:v4.17.3
-  nginx: nginx:1.27.5-alpine
-  cerbos: cerbos/cerbos:0.55.0
-  # ONE UTILITY IMAGE, used by the seeder and by every `wait-for-...` init
-  # container. A second one would be a second thing to mirror for the sake of
-  # `sleep`; this one is already required because the seeder is a node script
-  # this chart carries.
-  node: node:22.23.2-alpine
-
-# --------------------------------------------------------------- where it is
-#
-# The two addresses a BROWSER uses. Everything internal is a service name and
-# is not configurable, because there is nothing to decide.
-#
-# These are not cosmetic. ZITADEL stamps `identity.externalUrl` into every
-# token's `iss` and answers 404 to a Host header it does not recognise, and the
-# SPA's OIDC redirect is built from `web.externalUrl`. Getting one wrong is a
-# stack that comes up green and cannot sign anybody in.
-externalUrls:
-  web: http://localhost:8000
-  identity: http://localhost:8090
-
-# THE TENANT THIS DEPLOYMENT SERVES, and the boundary around it.
-#
-# ZITADEL signs every organization's tokens with the same keys, so a signature
-# says who minted a token and nothing about who it was minted for. Without a
-# tenant the Coordinator accepts a token from another organization at the same
-# issuer and reads its roles as if they had been granted here. It is the
-# ZITADEL organization NAME; the seeder creates the org with it.
+# The ZITADEL organization this deployment serves. A token minted for a
+# different organization at the same issuer is rejected rather than read.
 tenant: default
 
-# ------------------------------------------------------------------ the app
+# Who somebody is told to ask when this deployment refuses them. An address or
+# a URL. Empty names no route, which is better than inventing one.
+supportContact: ""
+
+# --------------------------------------------------------------------- images
+images:
+  # WHERE THEY COME FROM. These three are what a deployment sets.
+  #
+  #   registry     this product's own three images, at
+  #                <registry>/<repository>/software-gateway-<name>
+  #   mirror       every third-party image below. They are written as upstream
+  #                paths and this is prefixed, so one line repoints all of them -
+  #                usually the same registry with a pull-through path.
+  #   pullSecrets  names of Secrets the kubelet pulls with. Applied to every pod
+  #                and to the database cluster.
+  #
+  # Setting `registry` without `mirror` is refused: it is a cluster that pulls
+  # three images from you and six from the internet, which is not an air-gapped
+  # deployment and looks exactly like one until the first node without egress.
+  registry: ""
+  mirror: ""
+  pullSecrets: []
+  pullPolicy: IfNotPresent
+
+  # WHAT IS PULLED. Versions this chart was built and tested against, pinned
+  # together. A deployment does not normally set any of them - change one only to
+  # take a patch ahead of the chart release that carries it, and expect to carry
+  # that override until it catches up.
+  #
+  # The tag for this product's three images is deliberately not settable per
+  # component: three images built from one commit are one artifact, and letting
+  # them drift is how a coordinator ends up talking to a worker from another
+  # release.
+  repository: software-gateway
+  # Empty means .Chart.AppVersion.
+  tag: ""
+  # Upstream references, written the way a registry names them: a Docker Hub
+  # image is its bare path, and anything published elsewhere carries its host.
+  #
+  # `mirror` replaces that host - or is prefixed when there is none - so the path
+  # under your registry is the one `az acr import`, `crane copy` or `skopeo` give
+  # you by default. `task images:mirror -- <instance>` prints the exact commands.
+  zitadel: ghcr.io/zitadel/zitadel:v4.17.3
+  zitadelLogin: ghcr.io/zitadel/zitadel-login:v4.17.3
+  nginx: nginx:1.27.5-alpine
+  cerbos: cerbos/cerbos:0.55.0
+  # One utility image, used by the seeder and every wait-for-... init container.
+  node: node:22.23.2-alpine
+  # Read by the `database` layer, and pulled again on every failover - a cluster
+  # that cannot reach it cannot recover.
+  postgres: ghcr.io/cloudnative-pg/postgresql:16.10
+
+# --------------------------------------------------------------------- access
+#
+# THE TWO ADDRESSES A BROWSER USES. Everything internal is a Service name and is
+# not configurable, because there is nothing to decide.
+#
+# Whole URLs, exactly as somebody would type them. Scheme, host and port are read
+# out of these rather than set separately, so there is nothing to get out of step.
+#
+#   webUrl       where the Software Gateway UI answers
+#   identityUrl  where a browser is sent to sign in
+#
+# They are TWO ORIGINS, not one host with two paths: ZITADEL cannot serve under a
+# path prefix, it stamps identityUrl into every token's `iss`, and it answers 404
+# to a Host header it does not recognise. One IP with two DNS names, or one name
+# on two ports, are both fine - no public DNS is required.
+#
+# The SCHEME is what the BROWSER speaks to whatever is in front. `https` here
+# with a plain-HTTP front door is a stack that comes up green and refuses every
+# sign-in. ZITADEL always serves plain HTTP behind the front door; that is a
+# different question and does not change the issuer.
+access:
+  webUrl: http://localhost:8000
+  identityUrl: http://localhost:8090
+
+  # HOW THOSE ADDRESSES ARE PUBLISHED.
+  #
+  #   none          nothing rendered. Every Service stays ClusterIP and your own
+  #                 proxy - Traefik, nginx, an ingress you already run - is
+  #                 pointed at `web:80` and `zitadel-proxy:80`.
+  #   ingress       an Ingress per address
+  #   route         a Route per address (OpenShift)
+  #   loadBalancer  a Service per address, each with its own address
+  #   nodePort      a Service per address, reached at <node ip>:<port>
+  expose:
+    type: none
+    # Applied to whichever objects the type above renders.
+    annotations: {}
+    ingress:
+      className: ""
+      tls:
+        enabled: false
+        webSecretName: ""
+        identitySecretName: ""
+    route:
+      # edge, passthrough, reencrypt, or "" for plain HTTP.
+      termination: ""
+    loadBalancer:
+      webIP: ""
+      identityIP: ""
+    nodePort:
+      # 0 lets the API server allocate.
+      web: 0
+      identity: 0
+
+# ------------------------------------------------------------------- database
+#
+# Connection the application and ZITADEL use.
+database:
+  # Empty derives <cluster.name>-rw and <cluster.name>-app, which is what
+  # CloudNativePG publishes. Set them for a database this release does not
+  # provision.
+  host: ""
+  port: 5432
+  name: swgw
+  # ZITADEL claims `public` and about 150 tables, so it gets its own database
+  # in the same instance rather than a schema.
+  identityDatabase: zitadel
+  sslMode: require
+
+  existingSecret: ""
+  usernameKey: username
+  passwordKey: password
+  # A key holding a ready-made connection URL. CloudNativePG publishes `uri`.
+  # Empty composes the DSN from the parts above; the password must then be
+  # URL-safe, because the kubelet substitutes it without encoding.
+  dsnKey: uri
+
+  # How long a pod waits in Init for the database before reporting why. It does
+  # not crash-loop.
+  waitTimeoutSeconds: 600
+
+  # The CloudNativePG Cluster the `database` layer renders. Its name is what the
+  # two settings above are derived from, so both releases agree on the database
+  # without restating it.
+  #
+  # Clear the name for a database this deployment does not own - a managed
+  # service, an existing cluster - and set `host` and `existingSecret` instead.
+  cluster:
+    name: swgw-db
+    instances: 3
+    storage:
+      size: 50Gi
+      className: ""
+    # THE WRITE-AHEAD LOG, ON ITS OWN VOLUME. Nothing to do with backups.
+    #
+    # Every write is journalled here before it reaches the data files, and the
+    # journal is only recycled once it has. A large transfer writes WAL far
+    # faster than it is recycled, so on one volume a burst fills the disk the
+    # data is on - and a PostgreSQL that cannot write WAL stops accepting writes
+    # entirely. Separate volumes turn that into a full WAL disk and a database
+    # that is still serving reads.
+    #
+    # Set size to "" to keep WAL on the data volume.
+    walStorage:
+      size: 10Gi
+      className: ""
+    resources:
+      requests: {cpu: "1", memory: 2Gi}
+      limits: {memory: 4Gi}
+    parameters:
+      max_connections: "400"
+    # A commit is on two instances before the client is told it committed.
+    synchronousReplicas: 1
+    # Continuous WAL archiving. A replica is not a backup: it replicates a
+    # DROP TABLE faithfully and immediately.
+    backup:
+      enabled: false
+      destinationPath: ""
+      retentionPolicy: 30d
+      # Exactly one of these, matching destinationPath.
+      azureCredentials: {}
+      s3Credentials: {}
+      googleCredentials: {}
+
+# ------------------------------------------------------------------ workloads
 coordinator:
-  # TWO, not one. The API stays up through a node drain, and one replica holds
-  # the leader lock (docs/design/04 section 9) while both serve reads.
   replicas: 2
   resources:
+    # No CPU limit: CFS throttling on a control plane produces stalls that read
+    # as network faults. Memory is limited - unbounded memory is a node hazard.
     requests: {cpu: 200m, memory: 256Mi}
-    # No CPU limit. CFS throttling on a latency-sensitive control plane
-    # produces sporadic multi-hundred-millisecond stalls that look like network
-    # problems. Memory IS limited: unbounded memory is a node-level hazard.
     limits: {memory: 512Mi}
-  # minAvailable rather than maxUnavailable: with replicas 2 they are the same
-  # number, and this one stays correct if replicas is raised.
   podDisruptionBudget:
     enabled: true
     minAvailable: 1
   nodeSelector: {}
   tolerations: []
   affinity: {}
-  # Spread replicas across nodes without making a single-node lab cluster
-  # unschedulable - ScheduleAnyway, not DoNotSchedule.
   topologySpreadConstraints: []
-  # SERVICE-SIDE GRACE. 45s covers an in-flight discovery call and the
-  # scheduler's tick; the process itself stops accepting at SIGTERM.
   terminationGracePeriodSeconds: 45
 
 worker:
@@ -131,20 +258,16 @@ worker:
   tolerations: []
   affinity: {}
   topologySpreadConstraints: []
-  # LONG, and the number is a judgement. A worker streams a blob registry to
-  # registry; on SIGTERM it stops leasing, finishes what it holds and exits.
-  # A blob that outlives this is killed and its lease expires, which is correct
-  # and merely slower. 120s is long enough for a typical layer and short enough
-  # not to stall a node drain.
+  # A worker streams blobs registry to registry. On SIGTERM it stops leasing and
+  # finishes what it holds; anything outliving this is killed and its lease
+  # expires.
   terminationGracePeriodSeconds: 120
   autoscaling:
-    # OFF by default: the metric below is an external one and needs
-    # prometheus-adapter. Turning it on without that gives an HPA that reports
-    # `unknown` forever and never scales.
+    # Needs prometheus-adapter to publish the metric. Without it the HPA reports
+    # `unknown` forever and pins replicas at minReplicas.
     enabled: false
     minReplicas: 2
     maxReplicas: 20
-    # A RATIO, not a queue depth: an absolute count does not converge.
     metricName: softwaregateway_queue_backlog_per_worker
     targetAverageValue: "20"
 
@@ -161,10 +284,6 @@ web:
   affinity: {}
   topologySpreadConstraints: []
   terminationGracePeriodSeconds: 30
-  # Who somebody is told to ask when this deployment will not let them in. An
-  # address or a URL - a mailbox, a service desk, a wiki page. Unset names no
-  # route, which is better than inventing one.
-  supportContact: ""
 
 cerbos:
   replicas: 2
@@ -177,22 +296,38 @@ cerbos:
 
 # ------------------------------------------------------------------ identity
 #
-# ZITADEL, its sign-in screens, and the one nginx that puts them on a single
-# origin. `enabled: false` for an estate that already runs ZITADEL: set
-# externalUrls.identity at it, run the seeder against it, and this chart
-# deploys none of the three.
+# ZITADEL, its sign-in screens, and the nginx that puts them on one origin.
+# `enabled: false` points the deployment at an identity provider it does not
+# manage: set access.identity at it and run the seeder against it.
 identity:
   enabled: true
 
-  # The 32-byte key ZITADEL encrypts its own secrets with. NOT generated by
-  # this chart on purpose: a generated key that is not stored is a database
-  # nobody can decrypt after the next `helm upgrade`. Point this at a Secret
-  # the backend below produces, or create it by hand once.
+  # THE TWO VALUES WITH NO SAFE DEFAULT, and you do not have to create either.
+  #
+  # Left as they are, the chart generates them on first install and reads them
+  # back from the cluster on every upgrade, so they never rotate. Read one at any
+  # time with:
+  #
+  #   kubectl -n <namespace> get secret <release>-identity \
+  #     -o jsonpath='{.data.masterkey}' | base64 -d
+  #
+  # `existingSecret` takes them from a Secret you manage instead - a credentials
+  # operator, or your own `kubectl create secret`. `value` is for a laptop.
+  #
+  # KEEP A COPY OF THE MASTER KEY somewhere deleting the namespace cannot reach.
+  # ZITADEL encrypts its own database with it, so a database restored into a
+  # fresh namespace without it is bytes nothing can read.
   masterkey:
     existingSecret: ""
     key: masterkey
-    # Local and evaluation ONLY. The chart refuses to render a production-
-    # looking install with this still set - see templates/_validate.tpl.
+    value: ""
+
+  # ZITADEL's own instance owner, created at first boot. Not the product
+  # administrator - that account comes from config/users/users.yaml. This one is
+  # the way back in if provisioning ever breaks.
+  rootPassword:
+    existingSecret: ""
+    key: rootPassword
     value: ""
 
   # The first administrator, created before anybody has signed in.
@@ -201,38 +336,36 @@ identity:
     email: admin@example.com
     firstName: ""
     lastName: ""
-    # LOCAL AND EVALUATION ONLY, and the seeder REFUSES to run with this set
-    # while sso.issuer is configured. The shortcut cannot follow you into
-    # production.
+    # Local and evaluation only. The seeder refuses to run with this set while
+    # sso.issuer is configured.
     password: ""
     existingSecret: ""
 
-  # ZITADEL's own root account, created at first boot.
-  rootPassword:
-    existingSecret: ""
-    value: ""
-
-  # Single sign-on against the corporate directory. With `issuer` set, the
-  # sign-in screen redirects straight to it and ZITADEL's own form is never
-  # shown. See deploy/STACK.md for registering the app in Entra - the redirect
-  # URI is ${externalUrls.identity}/idps/callback and it must be registered
-  # under the "Web" platform, not "Single-page application".
+  # SINGLE SIGN-ON against a corporate directory. On, the sign-in screen
+  # redirects straight to it and ZITADEL's own form is never shown.
+  #
+  # OFF HERE AND ON IN EVERY SHIPPED INSTANCE. A chart whose defaults do not
+  # render is a broken chart, and `enabled: true` has no sensible default issuer
+  # or client id to render with - so the default is the local and evaluation
+  # arrangement, and deploy/flux/instances/* turn it on.
+  #
+  # Needs an app registration in the directory. Its issuer and client id are
+  # values; its client SECRET is a Secret, named below and never written here.
+  # The redirect URI to register is <identity url>/idps/callback, under the
+  # "Web" platform - see docs/entra-app-registration.md.
   sso:
+    enabled: false
     issuer: ""
     clientId: ""
-    # Read from the Secret the backend produces, never from values.
     existingSecret: ""
     clientSecretKey: clientSecret
     displayName: Microsoft
-    # Keeps ZITADEL's password box after SSO is configured. It also keeps
-    # `zitadel-admin` able to sign in, which is the reason to leave it on until
-    # the directory path is proven.
+    # Keeps ZITADEL's own password box available after SSO is configured.
     allowPasswordLogin: false
     requireMfa: false
 
-  # HOW LONG A REMOVAL TAKES TO BITE. The Coordinator verifies tokens offline
-  # and never asks whether one is still good, so a token already issued works
-  # until it expires. Removing somebody stops the RENEWAL; this is the window.
+  # Tokens are verified offline, so removing somebody stops the RENEWAL rather
+  # than the session. This is that window.
   tokenLifetimes:
     accessToken: 15m
     idToken: 12h
@@ -263,171 +396,70 @@ identity:
 # ------------------------------------------------------------------- seeding
 #
 # The Job that turns config/users/users.yaml and config/access/roles.yaml into
-# accounts, projects and grants. It runs when those files change AND NOT
-# OTHERWISE: its name carries a hash of what it reads, so a release that only
-# moved an image creates no Job at all.
-#
-# It never restarts a pod. Adding a person is a Job that runs for ten seconds
-# while every replica keeps serving - see docs/design/30 section 5.
+# accounts, projects and grants. Its name carries a hash of what it reads, so a
+# release that only moved an image creates no Job. It restarts nothing.
 seed:
   enabled: true
-  # Kept after it finishes so `kubectl logs` can answer "what did the last
-  # provisioning run actually do". An hour is long enough to be asked and short
-  # enough not to accumulate.
   ttlSecondsAfterFinished: 3600
   backoffLimit: 4
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {memory: 512Mi}
   # Reissues the worker fleet's credentials on the next run. The old ones stop
-  # working at once and workers take the new ones when their pods restart, so
-  # set it, let the run finish, then roll the workers.
+  # working at once, so let the run finish and then roll the workers.
   rotateWorkerSecret: false
-
-# ------------------------------------------------------------------ database
-#
-# NOT DEPLOYED BY THIS CHART, and that is the decision rather than an omission.
-#
-# The database is the only thing here that cannot be recreated. A `helm
-# rollback` must not be able to reach it, a `helm uninstall` must not be able to
-# delete it, and its lifecycle is not this application's - it outlives every
-# release and is upgraded on its own schedule. So it is applied BEFORE this
-# chart, by a Flux Kustomization that this one depends on
-# (deploy/environments/<env>/database), and what the chart takes is a name.
-#
-# The GitOps path uses CloudNativePG: three instances, synchronous replication
-# and automatic failover. For a standalone `helm install`, create a database
-# first - the chart's README has the one CNPG manifest that does it.
-database:
-  # CloudNativePG publishes the owner's connection as `<cluster>-app` and
-  # generates the password itself, so the password exists in one place, is in
-  # nobody's Git history and in nobody's values file, and nobody rotates it by
-  # hand. This chart reads two keys out of it.
-  existingSecret: swgw-db-app
-  usernameKey: username
-  passwordKey: password
-
-  # WHERE IT ANSWERS. Plain values rather than more keys from the Secret,
-  # because these are read by two things that cannot take a URL apart: the
-  # `wait-for-database` init container, which has no shell, and the DSN below,
-  # which Kubernetes composes with $(VAR) substitution rather than a script.
-  #
-  # CloudNativePG's read-write endpoint is `<cluster>-rw` and it follows the
-  # primary through a failover, so a promotion needs no change here.
-  host: swgw-db-rw
-  port: 5432
-  name: swgw
-  # ZITADEL gets its OWN database in the same instance, never a shared one: it
-  # claims `public` and about 150 tables.
-  identityDatabase: zitadel
-  # `require` rather than `verify-full` because CloudNativePG issues its own
-  # certificates from a CA the client would have to be given. Raising it means
-  # mounting that CA - worth doing, and it is a change in two places rather
-  # than one setting, so it is not pretended to be a flag.
-  sslMode: require
-
-  # THE PASSWORD MUST BE URL-SAFE. The DSN is assembled by Kubernetes from
-  # $(VAR) references rather than by a shell, so nothing URL-encodes it: a `@`
-  # or a `/` in the password would silently truncate the host. CloudNativePG's
-  # generated passwords are alphanumeric and safe; this only matters if you
-  # replace the Secret with one of your own.
-
-  # How long a pod waits for the database before giving up and reporting why.
-  # It does NOT crash-loop: a pod whose dependency is not ready sits in Init,
-  # saying what it is waiting for.
-  waitTimeoutSeconds: 600
 
 # ------------------------------------------------------------------- secrets
 #
-# WHERE VALUES COME FROM. The inventory is config/secrets/secrets.yaml - names,
-# keys and a relative path, no values, committed and reviewable. This picks the
-# operator that turns each entry into a Kubernetes Secret. The Secret that
-# lands is identical either way, and so is the path the process reads it from,
-# so switching backends changes nothing above this line.
+# config/secrets/secrets.yaml lists the credentials this deployment needs -
+# names, keys and a relative path, no values. This picks the operator that
+# turns each entry into a Kubernetes Secret; the Secret that lands is identical
+# either way.
 secrets:
-  # vault  - HashiCorp Vault Secrets Operator (VaultStaticSecret)
-  # azure  - Azure Key Vault CSI driver (SecretProviderClass, secretObjects)
-  # none   - the Secrets already exist in the namespace, made some other way
+  # vault | azureKeyVault | none
   backend: none
 
   vault:
-    # The VaultConnection/VaultAuth the operator resolves. Both are cluster
-    # objects installed with VSO, not by this chart: a chart that creates its
-    # own auth method is a chart that has to hold a Vault token.
-    connectionRef: ""
     authRef: vault-auth
     mount: kv
     type: kv-v2
-    # The inventory's `path` is appended to this. Different per environment,
-    # which is exactly why it is here and not in the inventory.
+    # The inventory's `path` is appended to this.
     pathPrefix: softwaregateway
     refreshAfter: 1h
 
-  azure:
-    # The CSI driver mounts on a POD, not on a namespace, so a SecretProviderClass
-    # only produces a Secret while a pod referencing it is running. This chart
-    # mounts every SecretProviderClass on the coordinator, which is the workload
-    # that must have them all - see templates/secrets-azure.yaml for why that is
-    # the honest way to do it rather than a workaround.
-    keyvaultName: ""
+  azureKeyVault:
+    name: ""
     tenantId: ""
-    # workload-identity is the supported path on AKS; the deprecated
-    # aad-pod-identity is not offered.
+    # Workload identity. The deprecated aad-pod-identity is not offered.
     clientId: ""
-    # Object names in the vault are `<objectPrefix><name>-<key>`, so one flat
-    # naming rule covers the whole inventory.
+    # Object names are <objectPrefix><name>-<key>.
     objectPrefix: swgw-
 
-  # The credentials the kubelet pulls this product's images with. Rendered from
-  # the backend above into a kubernetes.io/dockerconfigjson Secret, so the one
-  # JFrog credential the pipeline pushes with is the one the cluster pulls
-  # with, held in one place.
+  # Produce the kubelet's pull Secret from the inventory as well, so one
+  # credential is held in one place. The rendered Secret's name is added to
+  # images.pullSecrets automatically.
   registryPullSecret:
     enabled: false
-    name: jfrog
-    # The inventory entry (keys: username, password) holding it.
-    from: jfrog
+    name: registry-pull
+    # The inventory entry holding a ready-made .dockerconfigjson.
+    from: registry-pull
 
 # --------------------------------------------------------- extra trust roots
 #
 # PEM certificates for internal registries signed by a private CA. Mounted over
-# the image's bundle and named in SSL_CERT_FILE, which Go's crypto/x509 reads.
-# The alternative - network.tls.insecureSkipVerify on the product - turns
-# verification off rather than making it succeed.
+# the image's bundle and named in SSL_CERT_FILE.
 extraCAs:
   enabled: false
-  # Either paste PEM here, or name a ConfigMap that already holds them under
-  # the key `ca-certificates.crt`.
   existingConfigMap: ""
   certificates: ""
 
-# ------------------------------------------------------------------- ingress
-ingress:
-  enabled: false
-  className: nginx
-  annotations: {}
-  # Two hosts, because they are two origins and the identity one is stamped
-  # into every token. Leave `identity.host` empty when identity.enabled is
-  # false and an existing provider is used.
-  app:
-    host: ""
-    tls:
-      enabled: false
-      secretName: ""
-  identity:
-    host: ""
-    tls:
-      enabled: false
-      secretName: ""
-
-# --------------------------------------------------------------- networking
+# ---------------------------------------------------------------- networking
 networkPolicy:
-  # OFF by default because a policy that names the wrong namespace is an outage
-  # and a cluster without a CNI that enforces them is a false sense of safety.
-  # On, it is the only control in front of the Coordinator's API.
+  # Off by default: a policy naming the wrong namespace is an outage, and a
+  # cluster whose CNI does not enforce them is a false sense of safety.
   enabled: false
-  # Namespaces allowed to reach the Coordinator directly: monitoring for
-  # Prometheus, whatever runs transferctl.
+  # Namespaces allowed to reach the Coordinator directly - monitoring, whatever
+  # runs transferctl.
   allowFromNamespaces: []
 
 # ------------------------------------------------------------- observability
@@ -437,37 +469,41 @@ metrics:
     interval: 30s
     labels: {}
 
-# ------------------------------------------------- system configuration
+# ------------------------------------------------------------------- logging
+#
+# How much each plane says. Empty leaves config/config.yaml's own value, which
+# is `info`.
+#
+#   debug   every decision, including the ones that went the usual way. Loud.
+#   info    what happened: transfers, discoveries, provisioning
+#   warn    what was survived: a retry, a degraded product, a lease taken back
+#   error   what was not
+logLevel:
+  coordinator: ""
+  worker: ""
+
+# ------------------------------------------------------------ configuration
 #
 # config/config.yaml is mounted verbatim - the same file `task run` reads and
-# docker-compose.yml mounts. What differs in a cluster is stated HERE as
-# SWGW_ overrides, which is the same layering the loader already does:
-# defaults, then the file, then the environment.
+# docker-compose.yml mounts. Anything else a cluster needs to differ in is
+# stated here as a SWGW_ override, which is the layering the loader already
+# performs: a variable is SWGW_ plus the config path with dots as underscores.
 #
-# An unknown SWGW_ variable is REFUSED at startup rather than ignored, so a
-# typo here is a failed rollout and not a setting that silently did not apply.
+# An unknown SWGW_ variable is REFUSED at startup rather than ignored, so a typo
+# here is a failed rollout and not a setting that silently did not apply.
 settings: {}
-#  SWGW_OBSERVABILITY_LOG_LEVEL: debug
 #  SWGW_COORDINATOR_SCHEDULER_TICKINTERVAL: 5s
 
-# Anything this chart does not model. Applied to the two components that read
-# product configuration; use it for a setting that is genuinely one-off.
 coordinatorExtraEnv: []
 workerExtraEnv: []
 
 # ------------------------------------------------------------------ rollout
 #
-# NO DISRUPTION, stated as numbers rather than as an intention.
-#
-# maxUnavailable 0 means a replica is only ever removed after its replacement
-# is READY, and readiness on the Coordinator means the database answers, the
-# schema matches this build and products loaded. So a bad image never takes
-# capacity away: the rollout stalls with the old pods serving, Flux's
-# HelmRelease times out, and the release is rolled back with nothing having
-# gone down.
+# maxUnavailable 0: a replica is removed only after its replacement is ready,
+# and readiness on the Coordinator means the database answers and the schema
+# matches this build. A bad image stalls the rollout instead of taking capacity
+# away, which is what makes Flux's remediation fire.
 rollout:
   maxSurge: 1
   maxUnavailable: 0
-  # Fails a stuck rollout rather than leaving it half-done forever, which is
-  # what makes Flux's remediation fire.
   progressDeadlineSeconds: 600

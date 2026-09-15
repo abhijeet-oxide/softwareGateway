@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../charts/software-gateway/values.schema.json
+#
+# AKS, INTERNAL LAB, NO PUBLIC DNS AND NO CERTIFICATES.
+#
+# The shape most internal labs are: a private cluster on a corporate subnet, a
+# private container registry, and no name anybody can resolve. Two internal load
+# balancer addresses are the whole of the external surface, and everything else
+# stays inside the namespace.
+#
+# Copy this to deploy/flux/instances/<name>/values/values.yaml and edit the
+# addresses, the registry and the storage class.
+
+# Objects are named <this>-<component>: swgw-coordinator, swgw-worker, swgw-web.
+# Without it they are <release>-<chart>-<component>.
+fullnameOverride: swgw
+
+tenant: default
+supportContact: platform-team@example.internal
+
+# --------------------------------------------------------------------- access
+access:
+
+  # An IP is a perfectly good host: it is what the browser types, and what
+  # ZITADEL matches the Host header against.
+  webUrl: http://10.20.30.40
+  identityUrl: http://10.20.30.41
+
+  expose:
+    # One Service per address, each with a private IP on the cluster's subnet.
+    #
+    # The alternatives, for a lab:
+    #   nodePort  no load balancer at all - the browser's port IS the node port,
+    #             so set access.*.port in 30000-32767 and point your own reverse
+    #             proxy at <node ip>:<port>.
+    #   none      you already run a reverse proxy: point it at the `web` and
+    #             `zitadel-proxy` Services and set access.*.host to the names or
+    #             addresses it serves.
+    type: loadBalancer
+    annotations:
+      # Without this Azure allocates a PUBLIC address.
+      service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+      # Only needed when the load balancer belongs in a subnet other than the
+      # nodes'.
+      # service.beta.kubernetes.io/azure-load-balancer-internal-subnet: lab-ingress
+    loadBalancer:
+      # Free addresses in that subnet. Leave empty to let Azure allocate, then
+      # put what it allocated into access.*.host above and reconcile again.
+      webIP: 10.20.30.40
+      identityIP: 10.20.30.41
+
+# --------------------------------------------------------------------- images
+#
+# Three lines. `registry` is where this product's own images live; `mirror` is a
+# repository that proxies Docker Hub and ghcr.io, and the chart rewrites every
+# third-party image through it. The versions themselves are chart defaults,
+# pinned and tested together - nothing here names one.
+#
+# Setting `registry` without `mirror` is refused: half-mirrored looks air-gapped
+# right up until the first node without egress.
+#
+# The pull credential is the kubelet's, on every pod and on the database cluster.
+# Create it once in the namespace:
+#
+#   kubectl -n <namespace> create secret docker-registry registry-pull \
+#     --docker-server=contoso.azurecr.io \
+#     --docker-username="$SP_ID" --docker-password="$SP_SECRET"
+images:
+  registry: contoso.azurecr.io
+  mirror: contoso.azurecr.io/docker
+  pullSecrets: [registry-pull]
+
+# ------------------------------------------------------------------- database
+#
+# Provisioned by the database layer, which needs the CloudNativePG operator in
+# the cluster. `database.host` and `database.existingSecret` are derived from
+# this name - CloudNativePG publishes `<name>-rw` and `<name>-app` - so the name
+# is the only thing to change.
+database:
+  cluster:
+    name: swgw-db
+    instances: 2
+    storage: {size: 32Gi, className: managed-csi}
+    walStorage: {size: 8Gi, className: managed-csi}
+    resources:
+      requests: {cpu: 500m, memory: 1Gi}
+      limits: {memory: 2Gi}
+    # With two instances a synchronous standby is the whole fleet, and a lab can
+    # afford to lose the last few seconds.
+    synchronousReplicas: 0
+
+# ------------------------------------------------------------------ identity
+identity:
+  # masterkey and rootPassword are generated on first install and read back from
+  # the cluster on every upgrade, so neither is yours to create. Point them at
+  # `existingSecret` only to manage them yourself.
+  bootstrapAdmin:
+    username: admin
+    email: platform-team@example.internal
+  zitadel: {replicas: 1}
+  login: {replicas: 1}
+  proxy: {replicas: 1}
+
+# `none` means the Secrets in config/secrets/secrets.yaml already exist in the
+# namespace, made by hand. Switch to `vault` or `azureKeyVault` when an operator
+# is available; nothing above this line changes.
+secrets:
+  backend: none
+
+coordinator: {replicas: 2}
+worker: {replicas: 2}
+web: {replicas: 2}
+cerbos: {replicas: 1}
+
+# debug | info | warn | error
+logLevel:
+  coordinator: debug
+  worker: debug

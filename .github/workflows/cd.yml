@@ -45,7 +45,7 @@ jobs:
       tag: ${{ steps.v.outputs.tag }}
       instance: ${{ steps.env.outputs.name }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # Version calculation requires complete tag and commit history.
           fetch-depth: 0
@@ -95,7 +95,7 @@ jobs:
           - component: web
             dockerfile: deploy/build/Dockerfile.web
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: docker/setup-buildx-action@v3
         with:
@@ -177,7 +177,7 @@ jobs:
     outputs:
       chart_version: ${{ needs.version.outputs.chart_version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -251,7 +251,7 @@ jobs:
     # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}

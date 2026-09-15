@@ -38,6 +38,36 @@ actionable on the diff in front of you can turn a pull request red. Trivy's
 database and the npm advisory feed move on their own schedule, and a new CVE
 published overnight must not fail a pull request that touches the chart.
 
+## 2.1 When each one runs
+
+A pull request pays for the languages it changed; everything else pays for all
+of them.
+
+| Trigger | What the `changes` job decides |
+|---|---|
+| `pull_request` | the changed paths, per language - a chart-only diff builds no CodeQL database at all |
+| `push` to main, weekly schedule, `workflow_dispatch` | `files=ALL`, so every language is scanned |
+
+So **a manual run of this workflow is the full scan**, which is what makes the
+export in section 7 worth dispatching: it scans everything and then publishes
+what the scan found.
+
+**The JavaScript gate is not `^web/`.** It reads every JavaScript and
+TypeScript extension anywhere in the tree, because that is what the extractor
+reads: the ZITADEL seeders under `deploy/` and the mock provider under `test/`
+are `.mjs` and are analysed with the web tier. Gating on `^web/` meant a pull
+request touching only those files got no JavaScript scan while the run still
+went green - and the unanchored-host bug in section 4 lived in exactly that
+tree. It is a separate output from `web`, which still means `web/` alone,
+because `web` also gates `pnpm audit` and auditing `web/pnpm-lock.yaml` because
+a seeder changed is a job with nothing to do.
+
+**Still not covered:** the JavaScript extractor also reads YAML, which is how
+`values.yaml` produces the finding in section 5.5. A chart-only pull request
+therefore gets no scan of it. Left alone deliberately - the only finding there
+is a default that means "unset", and widening the gate to every YAML file would
+put a database build on every chart edit to re-report it.
+
 ## 3. What is scanned, and what is not
 
 `.github/codeql/codeql-config.yml` excludes two kinds of tree. Neither is
@@ -179,3 +209,36 @@ which is one place to update when a classification stops being true.
 **What would change our mind:** a recurring finding on code that changes often,
 where the dismissal has to be re-applied on every new line. That is an argument
 for fixing the shape of the code, as section 4 did.
+
+## 7. Reading the inventory outside the tab
+
+The Security tab is the only place the alert count lives, and reading it needs
+a browser and a person with repository access. A release review, a reviewer
+without admin, and anything automated all want the list.
+
+The `export` job answers that: it pages the code scanning alerts API and
+publishes every open alert - **from every tool that uploads SARIF, so CodeQL
+and Trivy together** - as a breakdown by tool and severity in the job summary
+and as `alerts.json` in an artifact.
+
+It is **manual only**, and that is the design rather than an oversight. It
+reports what the scanners have already published, so it has nothing to add to a
+pull request and must never cost one a minute. `workflow_dispatch` is also the
+trigger that scans everything (section 2.1), so one dispatch does the full scan
+and then exports its result.
+
+Two details worth keeping:
+
+- **It waits.** A SARIF upload is indexed asynchronously, so the analysis the
+  job above just pushed is not necessarily queryable the moment this one
+  starts. Ten tries, five seconds apart.
+- **An empty list means no alerts, never a failed read.** Those are the same
+  empty file. A summary reporting `0 open alerts` because the API refused is
+  precisely the conflation [21](21-security-posture.md) section 2 refuses to
+  ship, so a read that never succeeded fails the job instead of publishing a
+  zero.
+
+**What this does not reach:** Dependabot alerts. They are a different API and a
+different permission, and `GITHUB_TOKEN` cannot be granted it at all - no
+`permissions:` key exists for it. A count that includes them has to come from
+the tab or from a token held by a person.

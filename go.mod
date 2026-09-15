@@ -27,7 +27,7 @@ require (
 	golang.org/x/sync v0.23.0
 	golang.org/x/term v0.46.0
 	golang.org/x/time v0.16.0
-	modernc.org/sqlite v1.57.0
+	modernc.org/sqlite v1.58.0
 	oras.land/oras-go/v2 v2.6.2
 	sigs.k8s.io/yaml v1.6.0
 )

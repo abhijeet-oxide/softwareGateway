@@ -60,6 +60,9 @@ type fakeXray struct {
 	// aqlRepeat returns each match this many times, which is what a manifest
 	// stored at several paths looks like to the bulk query.
 	aqlRepeat int
+	// lastAQL is the query body as it went over the wire, so a test can assert
+	// on its SHAPE rather than only on what came back.
+	lastAQL atomic.Pointer[string]
 }
 
 func newFakeXray(t *testing.T) *fakeXray {
@@ -82,6 +85,8 @@ func newFakeXray(t *testing.T) *fakeXray {
 			return
 		}
 		query, _ := io.ReadAll(r.Body)
+		sent := string(query)
+		f.lastAQL.Store(&sent)
 		repeat := max(f.aqlRepeat, 1)
 		results := []map[string]string{}
 		for hex := range f.stored {
@@ -1136,5 +1141,65 @@ func TestATruncatedBulkAnswerFallsBackPerImage(t *testing.T) {
 	// Truncation says nothing about the platform, so AQL is still worth trying.
 	if f.aqlCalls.Load() != 1 {
 		t.Errorf("bulk queries = %d, want 1", f.aqlCalls.Load())
+	}
+}
+
+// A repository key is a VALUE in the AQL criteria and must never become part of
+// their structure.
+//
+// The incident this prevents is a field pasted into the query without being
+// encoded - `{"repo":"%s"` and the key dropped in. A key holding a double quote
+// then closes `repo` early and the rest of it is read as query structure,
+// choosing which rows come back. The answer to "does the target already hold
+// this image" becomes attacker-chosen, and a wrong "yes" is a release nobody
+// transfers.
+//
+// This is a guard on the invariant, not on one past bug: the criteria were
+// previously built from hand-quoted fragments, which escaped correctly, and
+// this test passes against that version too. What it catches is the next field
+// added without a quoter - the failure mode that shape invites. The fix is the
+// one in place: build the whole object as a Go value and json.Marshal it once,
+// so no field CAN be added without being encoded.
+func TestXrayAQLCriteriaCannotBeBrokenOutOf(t *testing.T) {
+	f := newFakeXray(t)
+	f.stored["aaa"] = true
+
+	// A key that closes the string it sits in and opens its own `$or`.
+	hostile := `docker-local","$or":[{"actual_sha256":"aaa"}],"x":"`
+	p := testProvider(t, f, func(s *XraySettings) { s.RepositoryKey = hostile })
+	if _, err := p.Scan(t.Context(), []security.ArtifactRef{ref("a", "aaa")},
+		security.ScanOptions{Detail: true}); err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	query := f.lastAQL.Load()
+	if query == nil {
+		t.Fatal("no AQL query was sent")
+	}
+	body, ok := strings.CutPrefix(*query, "items.find(")
+	if !ok {
+		t.Fatalf("query does not start with items.find(: %s", *query)
+	}
+	// The criteria are everything up to the `)` that closes items.find(...).
+	end := strings.Index(body, ").include(")
+	if end < 0 {
+		t.Fatalf("query has no .include( after the criteria: %s", *query)
+	}
+
+	var criteria struct {
+		Repo string              `json:"repo"`
+		Or   []map[string]string `json:"$or"`
+	}
+	if err := json.Unmarshal([]byte(body[:end]), &criteria); err != nil {
+		t.Fatalf("the criteria are not valid JSON, so the key escaped its quotes: %v\n%s", err, *query)
+	}
+	// The key arrives as ONE value, exactly as given. If the quotes had escaped
+	// it would have been split across `repo` and query structure instead.
+	if criteria.Repo != hostile {
+		t.Errorf("repo = %q, want the key delivered whole: %q", criteria.Repo, hostile)
+	}
+	if len(criteria.Or) != 1 {
+		t.Errorf("$or holds %d terms, want the 1 this scan asked about - more means the "+
+			"key's own $or was parsed as structure", len(criteria.Or))
 	}
 }

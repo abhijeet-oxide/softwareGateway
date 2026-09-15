@@ -66,9 +66,21 @@ jobs:
           web=$(has '^web/')
           actions=$(has '^\.github/')
 
+          # WHAT THE JAVASCRIPT EXTRACTOR READS IS NOT JUST web/. The ZITADEL
+          # seeders under deploy/ and the mock provider under test/ are .mjs
+          # and are analysed with it - the host-matching bug fixed in
+          # bootstrap.mjs was a CodeQL finding in exactly that tree. Gating the
+          # language on `^web/` meant a pull request touching only those files
+          # got no JavaScript scan while the run still reported green.
+          #
+          # Kept SEPARATE from `web`, which still means web/ alone: `web` also
+          # gates pnpm audit, and auditing web/pnpm-lock.yaml because a seeder
+          # changed is a job with nothing to do.
+          js=$(has '^web/|\.(mjs|cjs|js|jsx|ts|tsx)$')
+
           langs=""
           [ "$go" = true ]      && langs="${langs}\"go\","
-          [ "$web" = true ]     && langs="${langs}\"javascript-typescript\","
+          [ "$js" = true ]      && langs="${langs}\"javascript-typescript\","
           # Workflow analysis: the unpinned action, and the expression
           # interpolated straight into a `run:` block.
           [ "$actions" = true ] && langs="${langs}\"actions\","
@@ -111,6 +123,9 @@ jobs:
           # security-extended over the default pack: the default set is tuned
           # for noise, and this is a product that moves credentials around.
           queries: security-extended
+          # Which trees are test input rather than shipped code. Named in a
+          # file so the list carries its reasons; see the comments there.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - uses: github/codeql-action/autobuild@v4
 
@@ -150,7 +165,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v7
@@ -185,7 +200,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: aquasecurity/trivy-action@v0.36.0
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scanners: vuln,misconfig,secret
@@ -200,6 +215,121 @@ jobs:
         with:
           sarif_file: trivy.sarif
           category: trivy
+
+  # THE ALERT INVENTORY, AS A FILE. Every open code scanning alert, from every
+  # tool that publishes one - CodeQL and Trivy both - with a breakdown by tool
+  # and severity in the job summary and the raw JSON as an artifact.
+  #
+  # Why this exists: the Security tab is the only place that number lives, and
+  # reading it needs a browser and a person. A release review, a reviewer
+  # without repository admin, and anything automated all want the list, and a
+  # screenshot of a tab is not a list.
+  #
+  # MANUAL ONLY, and that is the whole design. It reports what the scanners
+  # have already published, so it has nothing to add to a pull request and must
+  # never cost one a minute. A `workflow_dispatch` run is also the full scan -
+  # the `changes` job only narrows the languages for a pull request, and sets
+  # every one of them for a manual run - so dispatching this workflow scans
+  # everything and then exports what the scan found.
+  export:
+    name: Export alert inventory
+    # always(): the scans above are what makes the export worth reading, but a
+    # language that had nothing to build must not stop the export of the rest.
+    if: always() && github.event_name == 'workflow_dispatch'
+    needs: [codeql, trivy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # The one permission this whole job is for. The read is why a token that
+      # cannot reach the Security tab can still be handed its contents.
+      security-events: read
+    steps:
+      - name: Collect open alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # A SARIF upload is indexed asynchronously, so the analysis the job
+          # above just pushed is not necessarily queryable the moment this one
+          # starts. Ten tries, five seconds apart, then take what is there:
+          # a slightly stale inventory is worth more than a failed job.
+          read_ok=false
+          for attempt in $(seq 1 10); do
+            if gh api --paginate \
+                 "repos/$REPO/code-scanning/alerts?state=open&per_page=100" \
+                 --jq '.[]' > alerts.jsonl; then
+              read_ok=true
+              break
+            fi
+            echo "code scanning alerts not queryable yet (attempt $attempt/10)"
+            sleep 5
+          done
+
+          # AN EMPTY LIST MUST MEAN "NO ALERTS" AND NEVER "THE READ FAILED".
+          # Those are the same empty file, and a summary reporting 0 open
+          # alerts because the API refused is the failure this product's own
+          # design refuses to ship (docs/design/21 section 2). So a read that
+          # never succeeded fails the job instead of publishing a zero.
+          if [ "$read_ok" != true ]; then
+            echo "::error::could not read code scanning alerts after 10 attempts; check that this job still has security-events read"
+            exit 1
+          fi
+          jq -s '.' alerts.jsonl > alerts.json
+
+          total=$(wc -l < alerts.jsonl | tr -d ' ')
+
+          # security_severity_level is what the tab's Critical/High badge reads
+          # from, and only security queries carry one; rule.severity is the
+          # fallback so a quality finding still lands in a row instead of
+          # vanishing from the count.
+          #
+          # Ordered by severity and not by count, because the row somebody is
+          # looking for is the critical one even when there is a single one of
+          # it under four hundred mediums.
+          rows () {
+            jq -s -r --arg by "$1" '
+              def rank: {"critical":0,"high":1,"medium":2,"low":3}[.] // 4;
+              def key: if $by == "rule"
+                       then [.tool, .sev, .rule] else [.tool, .sev] end;
+              map({ tool: .tool.name,
+                    sev:  (.rule.security_severity_level // .rule.severity // "unknown"),
+                    rule: .rule.id })
+              | group_by(key)
+              | map(.[0] + {n: length})
+              | sort_by([(.sev | rank), -.n, .tool])
+              | .[]
+              | if $by == "rule"
+                then "| \(.tool) | \(.sev) | `\(.rule)` | \(.n) |"
+                else "| \(.tool) | \(.sev) | \(.n) |" end
+            ' alerts.jsonl
+          }
+
+          {
+            echo "### Open code scanning alerts: $total"
+            echo
+            echo "| Tool | Severity | Alerts |"
+            echo "|---|---|---:|"
+            rows tool
+            echo
+            echo "<details><summary>By rule</summary>"
+            echo
+            echo "| Tool | Severity | Rule | Alerts |"
+            echo "|---|---|---|---:|"
+            rows rule
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: code-scanning-alerts
+          path: |
+            alerts.json
+            alerts.jsonl
+          retention-days: 30
 
   # A CREDENTIAL IN THE HISTORY IS A CREDENTIAL TO ROTATE, so this one does
   # fail the build. The rule it enforces is in CLAUDE.md: no credential is ever

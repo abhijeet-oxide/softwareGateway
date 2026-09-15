@@ -51,7 +51,8 @@ Settings -> Secrets and variables -> Actions -> Variables.
 | `SECURITY_GOVULNCHECK` | security | govulncheck does not run. Needs the module proxy and vuln.go.dev. |
 | `SECURITY_PNPM_AUDIT` | security | `pnpm audit` does not run. A pull-through registry mirror often does not serve the audit endpoint. |
 | `SECURITY_ALERT_EXPORT` | security | The alert inventory does not run. It needs the code scanning API, and `gh` and `jq` on the runner. |
-| `TRIVY_DB_REPOSITORY`, `TRIVY_JAVA_DB_REPOSITORY`, `GOVULNDB` | security | Upstream. Set them to internal mirrors. |
+| `TRIVY_DB_REPOSITORY`, `TRIVY_JAVA_DB_REPOSITORY` | security | Upstream (ghcr.io). Set them to internal mirrors. |
+| `GOVULNDB` | security, **and the shared `security.yml`** | Upstream (`vuln.go.dev`). govulncheck makes two fetches and only the first uses GOPROXY: the tool is a module, the database behind it is a plain request to that host. A policy that mirrors Go modules and not that host fails the second while the first succeeds. |
 
 ### CodeQL is a repository setting before it is a workflow
 

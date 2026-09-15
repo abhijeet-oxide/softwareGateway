@@ -231,16 +231,31 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      # GOPROXY is whatever the runner is configured with; `@latest` still
-      # resolves through it. The vulnerability database is a second fetch, from
-      # vuln.go.dev, and GOVULNDB points that at a mirror when there is one.
+      # TWO FETCHES, NOT ONE, and only the first goes through GOPROXY: the tool
+      # is a module, and the vulnerability database it then reads is a plain
+      # HTTPS request to vuln.go.dev. An egress policy that mirrors Go modules
+      # and has never heard of that host refuses the second while the first
+      # succeeds, which reads as govulncheck being broken:
+      #
+      #   go: downloading golang.org/x/vuln v1.8.0          <- fine
+      #   govulncheck: fetching vulnerabilities:
+      #   Get "https://vuln.go.dev/index/modules.json.gz": Forbidden
+      #
+      # GOVULNDB points it at a mirror of that database. Unset, it is the
+      # upstream default and this is the line it always was.
       - env:
           GOVULNDB: ${{ vars.GOVULNDB }}
         run: |
           set -euo pipefail
-          if [ -n "$GOVULNDB" ]; then export GOVULNDB; fi
+          if [ -n "${GOVULNDB:-}" ]; then export GOVULNDB; else unset GOVULNDB; fi
           go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+  # The web tier's advisories. pnpm audit rather than npm audit - this project
+  # has no package-lock.json and npm audit would resolve a different tree.
+  #
+  # Advisory data moves independently of this repository, so a new critical in
+  # a transitive dependency must not turn every unrelated pull request red:
+  # the finding is reported, the job is not failed.
   audit:
     name: pnpm audit
     needs: changes

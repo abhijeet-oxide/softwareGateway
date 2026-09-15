@@ -127,15 +127,16 @@ after the fact.
 
 ## 4. One repository for images and charts
 
-`vars.JFROG_REGISTRY` and `vars.JFROG_REPOSITORY` name one OCI repository
-holding `software-gateway-coordinator`, `-worker`, `-web` and the
-`software-gateway` chart. One credential (`JFROG_USERNAME`, `JFROG_TOKEN`)
+`vars.REGISTRY_HOST` and `vars.REGISTRY_REPOSITORY` name one OCI repository -
+Artifactory, ACR or Harbor, the pipeline does not care which - holding
+`software-gateway-coordinator`, `-worker`, `-web` and the `software-gateway`
+chart. One credential (`secrets.REGISTRY_USERNAME`, `secrets.REGISTRY_TOKEN`)
 pushes all four, Flux pulls the chart with it, and the kubelet pulls the images
 with it - the chart's `secrets.registryPullSecret` puts the same credential in
 the namespace from the same vault entry.
 
-That is the whole credential surface: **three secrets in GitHub, one in the
-cluster.**
+That is the whole credential surface: **four settings in GitHub, one credential
+in the cluster.**
 
 **An image tag is written once.** The pipeline checks the registry before it
 builds and fails if the tag exists. Overwriting one would make every recorded
@@ -591,25 +592,150 @@ files are baked into images and mounted by `docker-compose.yml`. Prefixing would
 mean a second copy of both, differing in three words, and a class of bug where
 the compose stack works and the cluster 502s.
 
-## 12. Pipelines, and why there are two
+## 12. Three workflows, and what each one costs
 
-**`ci.yml`** runs on every pull request: build, test, lint, the configuration
-validators, and now the chart - staged, linted, rendered with **both**
-environments' real values, validated against the Kubernetes schemas, and proved
-to refuse five configurations that cannot work.
+### 12.1 What runs, and when
 
-**`cd.yml`** runs on a merge to `lab` or `main`: decide the version, build the
-images if code changed, package and publish the chart, move the pointer.
+| | trigger | gate | typical |
+|---|---|---|---|
+| `ci.yml` | pull request, push to `main` | **`CI`** | 3-5 min |
+| `security.yml` | pull request, push to `main`, Monday 06:17 | **`Security`** | 4-12 min, in parallel with CI |
+| `cd.yml` | push to `main` | none - it publishes | 6-20 min |
 
-They are two because they answer different questions at different times. They
-are not three because there is one artefact: a chart version carries a config
-directory and names an image version, and the three are decided together.
-Splitting the image build from the chart publish would mean two runs each
-knowing half the answer and a window in which they disagree.
+### 12.2 Running once instead of three times
+
+CI used to run three times for one change: on the branch push, again on the
+pull request opened from that branch, and a third time on `main` after the
+merge. Three identical runs, the same commit each time, one of which decided
+anything.
+
+The fix is the trigger list. `push` is restricted to `main`, so a branch push
+produces nothing on its own and the pull request is where the work happens.
+The run on `main` after a merge stays, and is not redundant: it is the record
+of what `main` is, and it is the only run whose result a later bisect can
+trust.
+
+The second half is `concurrency`. A pull request keys on its number and sets
+`cancel-in-progress`, so pushing a fix abandons the run for the commit nobody
+is going to merge. `main` keys on the ref and does **not** cancel, because a
+cancelled run there is a commit with no result.
+
+### 12.3 Running only what the change can break
+
+A `changes` job resolves the diff once - against the pull request's base, or
+against `HEAD^` on `main` - and emits one boolean per area. Every other job
+takes its `if` from those.
+
+So a change to `deploy/flux/instances/lab/values/values.yaml` runs the
+deployment job and skips the Go, web and cross-compilation jobs, which cannot
+observe it. A change under `internal/` runs the Go jobs and skips the web
+build.
+
+**Anything under `.github/` runs everything.** A workflow edit changes what
+"passing" means, and narrowing that is how an untested change ships.
+
+### 12.4 The aggregate gate
+
+A skipped job reports neither success nor failure, so it can never be a
+required check - required checks that never report block a merge forever.
+
+Each workflow therefore ends in one job that always runs, `needs` every other
+job, and fails when any of them failed or was cancelled:
+
+```yaml
+  ci:
+    if: always()
+    needs: [changes, go, lint, config, schema, postgres, deploy, cross-compile, portable]
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+```
+
+**Branch protection requires `CI` and `Security`, and nothing else.** Adding a
+job to a workflow needs no settings change, and removing one cannot leave a
+required check that will never report again.
+
+### 12.5 Where the minutes went
+
+- **Released binaries instead of `go install`.** `.github/actions/toolchain`
+  downloads Task, Helm, kustomize, kubeconform and golangci-lint. Compiling
+  golangci-lint from source is about two minutes, and it was being compiled in
+  every job that linted anything.
+- **One toolchain action.** The Go module and build caches are configured once,
+  in one place, rather than copied into each job with a different key.
+- **A registry layer cache for the images.** `cache-from`/`cache-to` against a
+  `:buildcache` tag per component, so a release that touches one Go package
+  rebuilds one layer rather than re-resolving every module.
+- **`timeout-minutes` on every job.** A hung job used to hold a runner for six
+  hours.
+
+### 12.6 The scanners are not in CI
+
+CodeQL builds a database before it queries one, which for Go is longer than the
+whole of CI. Putting it in `ci.yml` would mean every pull request waited on it,
+including the ones that only edit a values file.
+
+`security.yml` is separate, gated by the same `changes` pattern, and split by
+what a finding means:
+
+| | fails the build | why |
+|---|---|---|
+| CodeQL (`go`, `javascript-typescript`, `actions`) | yes | a finding is a defect in this diff |
+| gitleaks | yes | a credential in the history is a credential to rotate |
+| dependency review | yes | a dependency is reviewed before it is merged |
+| govulncheck | reported | call-graph filtered, but the database moves on its own |
+| pnpm audit | reported | a new advisory must not redden unrelated work |
+| Trivy | reported to the Security tab | a HIGH in a base image is a scheduled upgrade |
+
+The split is the point. A scanner whose red is routine is a scanner people
+learn to merge past, and then the one that matters is ignored too.
+
+`.gitleaks.toml` is the one allowlist, and every entry names a file and why the
+match is not a credential - mostly `internal/compliance/`, whose fixtures
+contain things that read as secrets because detecting them is the feature under
+test.
+
+### 12.7 What CD publishes, and what it does not
+
+`version.sh` decides, from `git` alone, whether there is anything to publish
+(§3). Three outcomes:
+
+- **Nothing under `RELEASE_PATHS` changed** - a pull request that only touched
+  tests, workflows or `*.md`. No tag, no images, no chart, no pointer PR.
+- **Configuration changed, code did not** - a new chart version is published
+  and it names the image tag already running. The rollout replaces no pod.
+- **Code changed** - images are built and the chart names them.
+
+The registry variables are checked before anything runs. A fork, or a
+repository nobody has pointed at a registry, gets a step summary naming the
+four settings to fill in - not `Username and password required` from inside
+`docker/login-action`, which reads like a broken pipeline rather than an
+unconfigured one. Nothing is tagged in that case either, so the version stays
+available for the run that does publish it.
+
+### 12.8 CD stops at the pull request
+
+`main` is rule-protected, so the pointer update goes out on a branch and CD
+opens a pull request for it. **It does not merge that pull request and it does
+not delete the branch**, because the policy here forbids both and the token has
+permission for neither.
+
+The pipeline holds no kubeconfig and no cluster credential, so the deployment
+is exactly one reviewable commit: a person merges it, and Flux applies it. The
+one thing CD will not do is open an empty pull request - `chartstage` is
+idempotent, so a re-run against a version the instance already points at leaves
+the tree clean and the job says so instead.
 
 The pointer commit is excluded by `paths-ignore`, so a release does not trigger
 the release after it - and a person editing the pointer to pin or roll back
 publishes nothing, which is correct: the version being pinned to already exists.
+
+### 12.9 Permissions
+
+Every workflow starts at `permissions: contents: read` and raises it per job.
+CodeQL gets `security-events: write` in its job only; CD gets `contents: write`
+for the tag and `pull-requests: write` for the pointer PR. No workflow uses
+`pull_request_target`, so nothing from a fork runs with a writable token.
 
 ## 13. Files
 
@@ -622,4 +748,9 @@ publishes nothing, which is correct: the version being pinned to already exists.
 - [`deploy/zitadel/k8s-state.mjs`](../../deploy/zitadel/k8s-state.mjs) - a compose volume, as a Secret
 - [`deploy/delivery_test.go`](../../deploy/delivery_test.go) - the three invariants
 - [`.github/scripts/version.sh`](../../.github/scripts/version.sh) - the version
-- [`.github/workflows/cd.yml`](../../.github/workflows/cd.yml) - the pipeline
+- [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) - correctness, on every pull request
+- [`.github/workflows/cd.yml`](../../.github/workflows/cd.yml) - build, publish, open the pointer PR
+- [`.github/workflows/security.yml`](../../.github/workflows/security.yml) - the scanners
+- [`.github/actions/toolchain/`](../../.github/actions/toolchain/) - one place that installs Go and the CLIs
+- [`.gitleaks.toml`](../../.gitleaks.toml) - what is allowed to look like a credential
+- [`.github/dependabot.yml`](../../.github/dependabot.yml) - grouped minors, majors one at a time

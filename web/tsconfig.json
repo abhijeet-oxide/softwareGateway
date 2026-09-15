@@ -18,8 +18,8 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": false,
-    "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] },
+    // TypeScript 7 removed baseUrl, so the mapping is relative to this file.
+    "paths": { "@/*": ["./src/*"] },
     "types": ["unplugin-icons/types/react"]
   },
   "include": ["src"]

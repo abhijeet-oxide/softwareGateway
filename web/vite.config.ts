@@ -53,8 +53,14 @@ export default defineConfig({
         // only the Activity page uses. Letting rollup split it moves that
         // ~40 kB behind the route that needs it and leaves the first paint
         // smaller.
-        manualChunks: {
-          react: ['react', 'react-dom', 'react-router-dom'],
+        // A FUNCTION, not a map. Vite 8 builds with rolldown, which dropped the
+        // object form and reports it at build time as
+        // `TypeError: manualChunks is not a function`.
+        manualChunks(id) {
+          if (/node_modules\/(react|react-dom|react-router|react-router-dom)\//.test(id)) {
+            return 'react'
+          }
+          return undefined
         },
       },
     },

@@ -18,7 +18,7 @@ jobs:
     # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
@@ -82,7 +82,7 @@ jobs:
         ports:
           - 5432:5432
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
@@ -113,7 +113,7 @@ jobs:
     # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
@@ -168,7 +168,7 @@ jobs:
     # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
@@ -217,7 +217,7 @@ jobs:
     # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
@@ -262,7 +262,7 @@ jobs:
     # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
@@ -294,7 +294,7 @@ jobs:
     # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
@@ -403,7 +403,7 @@ jobs:
     # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # The algorithm asks which release first contained a commit, which a
           # shallow clone answers wrongly rather than failing.
@@ -419,7 +419,7 @@ jobs:
     # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:

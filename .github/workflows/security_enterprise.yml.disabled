@@ -88,6 +88,16 @@ env:
   # company's mirror does not belong in this repository (CLAUDE.md).
   GOPROXY: ${{ vars.GOPROXY || 'https://proxy.golang.org,direct' }}
   GOSUMDB: ${{ vars.GOSUMDB || 'sum.golang.org' }}
+  # The credential for that mirror, if it wants one. Go has no GOPROXY_TOKEN of
+  # its own - it reads a netrc - so .github/actions/toolchain turns this pair
+  # into one, writes it to RUNNER_TEMP and points NETRC at it. Empty, Go fetches
+  # anonymously, which is this repository and any fork.
+  #
+  # The same credential the registry uses: an Artifactory that serves the module
+  # mirror, the npm registry and the container registry is one host with one
+  # login, and inventing a second name for it would not make it a second secret.
+  GOPROXY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+  GOPROXY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
   NODE_VERSION: "22"
   PNPM_VERSION: "12.3.4"
 
@@ -196,11 +206,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
+      # The toolchain action rather than setup-go, for the netrc it writes: a
+      # module mirror that wants a credential is one CodeQL's autobuild hits too.
+      - uses: ./.github/actions/toolchain
         if: matrix.language == 'go'
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          mirror: ${{ vars.TOOL_MIRROR }}
 
       # THE TYPESCRIPT EXTRACTOR SHELLS OUT TO NODE, and a runner is not
       # required to have one. ubuntu-latest ships it, which is why this was
@@ -245,10 +257,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/toolchain
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          mirror: ${{ vars.TOOL_MIRROR }}
       # TWO FETCHES, NOT ONE, and only the first goes through GOPROXY: the tool
       # is a module, and the vulnerability database it then reads is a plain
       # HTTPS request to vuln.go.dev. An egress policy that mirrors Go modules

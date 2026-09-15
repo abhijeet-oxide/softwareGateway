@@ -72,6 +72,16 @@ env:
   # company's mirror does not belong in this repository (CLAUDE.md).
   GOPROXY: ${{ vars.GOPROXY || 'https://proxy.golang.org,direct' }}
   GOSUMDB: ${{ vars.GOSUMDB || 'sum.golang.org' }}
+  # The credential for that mirror, if it wants one. Go has no GOPROXY_TOKEN of
+  # its own - it reads a netrc - so .github/actions/toolchain turns this pair
+  # into one, writes it to RUNNER_TEMP and points NETRC at it. Empty, Go fetches
+  # anonymously, which is this repository and any fork.
+  #
+  # The same credential the registry uses: an Artifactory that serves the module
+  # mirror, the npm registry and the container registry is one host with one
+  # login, and inventing a second name for it would not make it a second secret.
+  GOPROXY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+  GOPROXY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
   NODE_VERSION: "22"
   PNPM_VERSION: "12.3.4"
 

@@ -79,11 +79,30 @@ diagnostic rather than a failure, and `file` on the image clears it.
 
 ### The one secret
 
-`REGISTRY_TOKEN`, under Settings -> Secrets and variables -> Actions ->
-Secrets. `cd.yml` already reads it for the image build; the enterprise copies of
-`ci.yml` and `security.yml` pass it to the web toolchain as well, for a registry
-that will not serve packages anonymously. Unset, the registry is read
-anonymously and nothing else changes.
+`REGISTRY_USERNAME` and `REGISTRY_TOKEN`, under Settings -> Secrets and
+variables -> Actions -> Secrets. One Artifactory commonly serves the container
+registry, the npm registry and the Go module mirror; that is one host with one
+login, so it is one secret used three ways rather than three secrets.
+
+- `cd.yml` logs the image build and the chart push in with it.
+- The web toolchain writes an npmrc from it, for a registry that will not serve
+  packages anonymously.
+- The Go toolchain writes a **netrc** from it. This is the one that surprises
+  people: **Go has no `GOPROXY_TOKEN`.** Point `GOPROXY` at an authenticated
+  Artifactory with no credential configured and every fetch fails with a 401
+  that names no setting to change. Go reads a netrc and nothing else, so
+  `.github/actions/toolchain` derives the hosts from `GOPROXY`, `GOSUMDB` and
+  `GOVULNDB`, writes one, and points `NETRC` at it.
+
+Unset, all three read anonymously and nothing changes. Two guards are worth
+knowing: a token with no username fails the step rather than writing half a
+credential, and a public host among those URLs (`proxy.golang.org`,
+`sum.golang.org`, `vuln.go.dev`) is skipped, so leaving `GOPROXY` at its default
+never sends the organisation's token to Google.
+
+The alternative for Go is credentials in the `GOPROXY` URL itself. It works and
+it leaks: that URL is printed by `go env`, quoted back in module errors, and
+inherited by every child process.
 
 It is written to `$RUNNER_TEMP`, mode 0600, and never to a home directory: a
 self-hosted runner's `HOME` outlives the job, and an `~/.npmrc` there would hand

@@ -1,0 +1,173 @@
+{{- if .Values.layers.application }}
+{{- if .Values.observability.enabled }}
+{{/*
+The performance dashboards, in the cluster.
+
+THE SAME TWO FILES AS THE LAPTOP. deploy/observability/scrape.yml names its
+targets `controller:8080` and `worker:8081`, and those are the Service names
+this chart creates as well as the compose service names - deliberately not
+release-prefixed (see the comment on the controller Service). So one scrape
+configuration and one dashboard serve both runtimes, and what an operator sees
+in a lab is what a developer sees on a laptop, which is the whole point of
+config/ being read unchanged by three runtimes.
+
+ONE CONTAINER, no Grafana and no Prometheus Operator. VictoriaMetrics scrapes
+on its own and serves its own query interface at /vmui. `metrics.serviceMonitor`
+remains for an estate that already runs the Operator and wants these series in
+its own Prometheus; the two are not exclusive and neither is required.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "swgw.fullname" . }}-observability
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "observability") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swgw.fullname" . }}-observability
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "observability") | nindent 4 }}
+data:
+  # Staged from deploy/observability by `task chart:stage`, so the file in the
+  # cluster cannot drift from the one a developer edits.
+  scrape.yml: |
+{{ .Files.Get "files/observability/scrape.yml" | indent 4 }}
+  dashboard-api.json: |
+{{ .Files.Get "files/observability/dashboard-api.json" | indent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: victoriametrics
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "observability") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8428
+      targetPort: http
+  selector:
+    {{- include "swgw.selectorLabels" (dict "ctx" . "component" "observability") | nindent 4 }}
+---
+{{- if .Values.observability.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "swgw.fullname" . }}-observability
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "observability") | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.observability.persistence.size }}
+  {{- with .Values.observability.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "swgw.fullname" . }}-observability
+  labels:
+    {{- include "swgw.componentLabels" (dict "ctx" . "component" "observability") | nindent 4 }}
+spec:
+  replicas: 1
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  strategy:
+    # RECREATE, not a rolling update: this holds its data on one
+    # ReadWriteOnce volume, and a second pod would sit Pending on a volume the
+    # first still has - which reads as a stuck rollout rather than as the
+    # single-writer store it is.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "swgw.selectorLabels" (dict "ctx" . "component" "observability") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "swgw.componentLabels" (dict "ctx" . "component" "observability") | nindent 8 }}
+      annotations:
+        # Both files are read at startup, so a change to either has to restart
+        # the pod to be seen.
+        checksum/observability: {{ printf "%s%s" (.Files.Get "files/observability/scrape.yml") (.Files.Get "files/observability/dashboard-api.json") | sha256sum }}
+    spec:
+      enableServiceLinks: false
+      serviceAccountName: {{ include "swgw.fullname" . }}-observability
+      {{- include "swgw.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "swgw.podSecurityContext" . | nindent 8 }}
+        runAsUser: 1000
+        fsGroup: 1000
+      {{- with .Values.observability.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.observability.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.observability.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # NO wait-for init container, and that is deliberate rather than an
+      # omission. Every other workload here waits for what it cannot work
+      # without; this one's whole job is to record whether the others are up,
+      # and a monitor that refuses to start until the thing it monitors is
+      # healthy is a monitor that is absent exactly when it is wanted. A target
+      # that is down is data, not a failure - which is why the scrape errors
+      # are suppressed below rather than logged per interval.
+      containers:
+        - name: victoriametrics
+          image: {{ include "swgw.mirroredImage" (dict "ctx" . "image" .Values.images.victoriametrics) }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args:
+            - -promscrape.config=/etc/vm/scrape.yml
+            - -storageDataPath=/victoria-metrics-data
+            - -retentionPeriod={{ .Values.observability.retention }}
+            - -vmui.customDashboardsPath=/etc/vm/dashboards
+            - -promscrape.suppressScrapeErrors=true
+          ports:
+            - name: http
+              containerPort: 8428
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.observability.resources | nindent 12 }}
+          securityContext:
+            {{- include "swgw.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/vm/scrape.yml
+              subPath: scrape.yml
+              readOnly: true
+            - name: config
+              mountPath: /etc/vm/dashboards
+              readOnly: true
+            - name: data
+              mountPath: /victoria-metrics-data
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "swgw.fullname" . }}-observability
+        - name: data
+          {{- if .Values.observability.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "swgw.fullname" . }}-observability
+          {{- else }}
+          # Ephemeral, which is the right default for a lab: the dashboards are
+          # the product here and the history is a convenience. Turn persistence
+          # on where somebody will want to compare this week with last.
+          emptyDir: {}
+          {{- end }}
+{{- end }}
+{{- end }}

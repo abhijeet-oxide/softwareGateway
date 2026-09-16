@@ -90,6 +90,16 @@ var Sources = []Source{
 	// from it, so it is a file in both deployments rather than flags in one.
 	{From: "deploy/cerbos/config.yaml", To: "cerbos/config.yaml"},
 
+	// The scrape configuration and the dashboards. Staged rather than
+	// templated because they are the SAME files compose mounts: the targets
+	// are `controller:8080` and `worker:8081`, which are the Service names in
+	// both runtimes, so what an operator sees in a lab is what a developer
+	// sees on a laptop. A second copy written in Helm would be a second thing
+	// to keep in step. The README is left behind - it is for somebody reading
+	// the repository, not for the cluster.
+	{From: "deploy/observability/scrape.yml", To: "observability/scrape.yml"},
+	{From: "deploy/observability/dashboard-api.json", To: "observability/dashboard-api.json"},
+
 	// ZITADEL gets its own database in the same instance, never a shared one:
 	// it claims `public` and about 150 tables. One statement, and it is the
 	// same statement compose feeds to docker-entrypoint-initdb.d.

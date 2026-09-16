@@ -99,6 +99,7 @@ images:
   zitadelLogin: ghcr.io/zitadel/zitadel-login:v4.17.3
   nginx: nginx:1.31.5-alpine
   cerbos: cerbos/cerbos:0.55.0
+  victoriametrics: victoriametrics/victoria-metrics:v1.111.0
   # One utility image, used by the seeder and every wait-for-... init container.
   node: node:22.23.2-alpine
   # Read by the `database` layer, and pulled again on every failover - a cluster
@@ -470,6 +471,46 @@ metrics:
     enabled: false
     interval: 30s
     labels: {}
+
+# THE DASHBOARDS, so somebody can see whether this deployment is slow.
+#
+# Nobody reports a slow page. They stop using it. This brings up the thing that
+# answers "which endpoint is slow, and why" with the deployment, rather than
+# leaving it to be set up when somebody finally complains - and it is the same
+# two files a developer sees on a laptop, because the scrape configuration
+# names the Service names this chart creates.
+#
+# ONE CONTAINER. VictoriaMetrics scrapes on its own and serves its own query
+# interface; there is no Grafana and no Prometheus Operator to install. It is
+# not exclusive with `metrics.serviceMonitor` above: an estate that already
+# runs the Operator can have both, or turn this off and keep its own.
+#
+# Reaching it is a port-forward, or an ingress of your own:
+#
+#   kubectl port-forward svc/victoriametrics 8428:8428
+#   open http://localhost:8428/vmui
+#
+# See deploy/observability/README.md for how to read the dashboard.
+observability:
+  enabled: true
+  # A month, which is long enough to compare this week against the last time
+  # somebody said it felt slow.
+  retention: 31d
+  # OFF by default, which suits a lab: the dashboards are the product here and
+  # the history is a convenience. Turn it on where somebody will want to
+  # compare this week with last, and give it a class that actually binds.
+  persistence:
+    enabled: false
+    size: 10Gi
+    storageClass: ""
+  resources:
+    # It scrapes three targets every fifteen seconds. This is not a fleet-wide
+    # Prometheus and does not need to be sized like one.
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
 
 # THE PROFILER, for working out where a slow request spends its time.
 #

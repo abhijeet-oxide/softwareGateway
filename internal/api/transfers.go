@@ -252,20 +252,48 @@ func (s *Server) handleListTransfers(w http.ResponseWriter, r *http.Request) {
 	} else {
 		out.TotalSize = len(rows)
 	}
+	/*
+	   THE PAGE'S CONTENT, WEIGHED IN ONE QUERY.
+
+	   The progress bar in the ongoing-download list must use the same
+	   distinct-content account as the transfer detail page. The legacy job
+	   counters include mounts to multiple repositories, which can make the
+	   list percentage disagree with the detail percentage.
+
+	   This used to ask PER ROW, inside the loop below. A page of twenty-five
+	   was twenty-five round trips, each re-deriving the release's digests and
+	   the transfer's destinations from scratch and each carrying four
+	   correlated subqueries over `jobs` per digest - and none of it visible in
+	   the listing's own query plan, because it is not part of the listing's
+	   query. A CPU profile of a slow Downloads page put TransferContentBytes
+	   under this handler and nothing else close.
+
+	   A failure is not fatal and never was: the bar falls back to the job
+	   counters in transferDTO, which is what a transfer with no content
+	   account has always shown.
+	*/
+	content := map[string]store.ContentBytes{}
+	if !summary && len(rows) > 0 {
+		ids := make([]string, 0, len(rows))
+		for _, t := range rows {
+			ids = append(ids, t.ID)
+		}
+		var err error
+		if content, err = s.deps.Packages.TransferContentBytesFor(r.Context(), ids); err != nil {
+			s.deps.Logger.Warn("could not weigh the content of a transfer listing",
+				"transfers", len(ids), "error", err)
+			content = map[string]store.ContentBytes{}
+		}
+	}
+
 	for _, t := range rows {
 		dto := transferDTO(t, !summary)
-		// The progress bar in the ongoing-download list must use the same
-		// distinct-content account as the transfer detail page. The legacy job
-		// counters include mounts to multiple repositories, which can make the
-		// list percentage disagree with the detail percentage.
-		if !summary {
-			if c, err := s.deps.Packages.TransferContentBytes(r.Context(), t.ID); err == nil {
-				if c.Total > 0 {
-					dto.Progress.ContentBytes = int64String(c.Total)
-				}
-				dto.Progress.ContentMovedBytes = int64String(c.Moved)
-				dto.Progress.ContentPresentBytes = int64String(c.Present)
+		if c, ok := content[t.ID]; ok {
+			if c.Total > 0 {
+				dto.Progress.ContentBytes = int64String(c.Total)
 			}
+			dto.Progress.ContentMovedBytes = int64String(c.Moved)
+			dto.Progress.ContentPresentBytes = int64String(c.Present)
 		}
 		out.Transfers = append(out.Transfers, dto)
 	}

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -80,7 +81,9 @@ func (s *Server) handleListReplication(w http.ResponseWriter, r *http.Request) {
 	// somebody is comparing against a previous one does not reshuffle itself
 	// because a registry was slow this time.
 	WriteJSON(w, r, http.StatusOK,
-		v1.ListReplicationResponse{Targets: s.replicationViews(r.Context(), []*product.Product{p})})
+		v1.ListReplicationResponse{
+			Targets: s.replicationViews(r.Context(), []*product.Product{p},
+				maxConcurrentTargetReads)})
 }
 
 // handleFleetReplication reports every target of every product this caller may
@@ -143,9 +146,52 @@ func (s *Server) handleFleetReplication(w http.ResponseWriter, r *http.Request) 
 		return products[i].Metadata.Name < products[j].Metadata.Name
 	})
 
+	/*
+	   A DEADLINE, because the banner is advisory and the page is not.
+
+	   Every delegated target is a round trip to somebody else's registry, and
+	   one that accepts the connection and then does not answer costs
+	   DefaultRetryMaxElapsed - ninety seconds - before it gives up. Read
+	   twenty-five at a time that is fine; read the whole estate behind a
+	   concurrency limit it is ninety seconds PER BATCH, and a deployment with
+	   one unresponsive registry watched the Downloads page sit for minutes.
+
+	   That is what the per-product fan-out this route replaced was hiding: the
+	   browser issued those requests in parallel, so the wall-clock was the
+	   slowest single target rather than the sum of the batches. Reading them
+	   here in one request is right - it is one authorization and one set of
+	   connections - but it has to carry the bound the browser used to provide.
+
+	   So the whole read is capped. A target that has not answered by then
+	   comes back saying so, which is what the banner should say about a
+	   registry that will not answer: the page renders, and the row carries the
+	   reason instead of the page carrying the wait.
+	*/
+	ctx, cancel := context.WithTimeout(r.Context(), fleetReplicationBudget)
+	defer cancel()
+
 	WriteJSON(w, r, http.StatusOK,
-		v1.ListReplicationResponse{Targets: s.replicationViews(r.Context(), products)})
+		v1.ListReplicationResponse{
+			Targets: s.replicationViews(ctx, products, maxConcurrentFleetTargetReads)})
 }
+
+// fleetReplicationBudget is the longest the drift banner may take.
+//
+// Ten seconds is above the round trip to a registry that is answering - those
+// are tens of milliseconds - and far below the ninety a registry that is NOT
+// answering costs. It bounds the page rather than the registry: a slow target
+// is reported as slow and everything else on the page is still drawn.
+const fleetReplicationBudget = 10 * time.Second
+
+// maxConcurrentFleetTargetReads is the estate-wide fan-out.
+//
+// Wider than the per-product eight, because the estate's targets are the SUM
+// of every product's and eight of them at a time makes the budget above a
+// queue rather than a cap: a thirty-target estate would only ever attempt the
+// first eight. These are independent registries on independent hosts, so the
+// cost of asking them at once is connections rather than contention, and the
+// deadline is what bounds the whole thing either way.
+const maxConcurrentFleetTargetReads = 24
 
 // replicationViews reads every target of every product given, side by side.
 //
@@ -164,7 +210,9 @@ func (s *Server) handleFleetReplication(w http.ResponseWriter, r *http.Request) 
 // The order of the answer is the order of the configuration - written by index
 // rather than appended - so a listing somebody is comparing against a previous
 // one does not reshuffle itself because a registry was slow this time.
-func (s *Server) replicationViews(ctx context.Context, products []*product.Product) []v1.ReplicationView {
+func (s *Server) replicationViews(
+	ctx context.Context, products []*product.Product, limit int,
+) []v1.ReplicationView {
 	type slot struct {
 		p *product.Product
 		t product.Target
@@ -178,11 +226,25 @@ func (s *Server) replicationViews(ctx context.Context, products []*product.Produ
 
 	views := make([]v1.ReplicationView, len(slots))
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(maxConcurrentTargetReads)
+	g.SetLimit(limit)
 	for i, sl := range slots {
 		g.Go(func() error {
 			st, err := s.deps.Replication.Status(gctx, sl.p, sl.t)
 			if err != nil {
+				// A target the BUDGET ran out on, rather than one that
+				// refused: "context deadline exceeded" is true and tells a
+				// reader nothing they can act on.
+				if errors.Is(err, context.DeadlineExceeded) ||
+					errors.Is(err, context.Canceled) {
+					views[i] = v1.ReplicationView{
+						Product: sl.p.Metadata.Name, Target: sl.t.Name,
+						Mode: string(sl.t.ReplicationMode()),
+						Unreachable: fmt.Sprintf(
+							"the registry did not answer within %s, so this target was not checked",
+							fleetReplicationBudget),
+					}
+					return nil
+				}
 				// One bad target must not blank the whole listing: the row is
 				// returned with the reason in it, which is more useful than a
 				// 500 that does not say which target failed. So the error is

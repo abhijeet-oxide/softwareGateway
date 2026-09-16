@@ -80,8 +80,10 @@ func TestFleetReplicationReadsEveryProduct(t *testing.T) {
 // unauthenticated-looking GET.
 //
 // Eight products of four targets is thirty-two reads. If the limit still
-// applied per product they would all overlap; with one limit over the call,
-// no more than maxConcurrentTargetReads can ever be in flight.
+// applied per product they would all overlap; with one limit over the call, no
+// more than maxConcurrentFleetTargetReads can ever be in flight - which is
+// wider than the per-product bound on purpose (see the constant) and still a
+// bound.
 func TestFleetReplicationBoundsTheWholeFanOut(t *testing.T) {
 	docs := make([]string, 0, 8)
 	docs = append(docs, fourTargetDoc)
@@ -102,10 +104,10 @@ func TestFleetReplicationBoundsTheWholeFanOut(t *testing.T) {
 	if len(out.Targets) != 32 {
 		t.Fatalf("listed %d targets, want 32 - eight products of four", len(out.Targets))
 	}
-	if peak := rep.peak.Load(); peak > maxConcurrentTargetReads {
+	if peak := rep.peak.Load(); peak > maxConcurrentFleetTargetReads {
 		t.Errorf("%d registry reads were in flight at once, and the limit is %d - "+
 			"the bound is being applied per product rather than over the call",
-			peak, maxConcurrentTargetReads)
+			peak, maxConcurrentFleetTargetReads)
 	}
 }
 
@@ -143,5 +145,62 @@ func TestFleetReplicationSurvivesOneBadRegistry(t *testing.T) {
 	if unreachable != 2 || readable != 6 {
 		t.Errorf("%d unreachable and %d readable, want 2 and 6 - a failure in one "+
 			"target is cancelling the reads of the others", unreachable, readable)
+	}
+}
+
+// THE DRIFT BANNER MAY NOT HOLD THE PAGE, whatever a registry does.
+//
+// Every delegated target is a round trip to somebody else's registry, and one
+// that accepts the connection and then never answers costs
+// transport.DefaultRetryMaxElapsed - ninety seconds - before it gives up. Read
+// behind a concurrency limit that is ninety seconds PER BATCH, and a
+// deployment with one unresponsive registry watched the Downloads page sit for
+// minutes.
+//
+// The per-product fan-out this route replaced hid that: the browser issued
+// those requests in parallel, so the wall-clock was the slowest single target
+// rather than the sum of the batches. Reading the estate in one request is
+// right, and it has to carry the bound the browser used to provide.
+//
+// So the whole read is capped, and every row still comes back - a target that
+// did not answer says so rather than the page waiting for it.
+func TestTheDriftBannerIsBoundedWhenARegistryHangs(t *testing.T) {
+	// Longer than the budget by a wide margin: this stands in for a registry
+	// that accepts the connection and then says nothing.
+	rep := &slowReplicator{delay: 10 * time.Minute}
+
+	docs := make([]string, 0, 4)
+	docs = append(docs, fourTargetDoc)
+	for i := range 3 {
+		docs = append(docs,
+			strings.ReplaceAll(secondFourTargetDoc, "vendor-b", "vendor-"+string(rune('c'+i))))
+	}
+	h := newAPIHarnessWith(t, func(d *Deps) { d.Replication = rep }, docs...)
+
+	start := time.Now()
+	var out v1.ListReplicationResponse
+	code := h.get("/api/v1/replication", &out)
+	elapsed := time.Since(start)
+
+	if code != http.StatusOK {
+		t.Fatalf("fleet listing = %d, want 200 - a hanging registry must not "+
+			"fail the banner either", code)
+	}
+	// Generous over the budget, because a loaded machine is not a stopwatch -
+	// and still far below the ninety seconds one hanging target used to cost,
+	// let alone the minutes a whole estate of them did.
+	if limit := fleetReplicationBudget * 3; elapsed > limit {
+		t.Errorf("the drift banner took %s against a registry that never answers; "+
+			"the budget is %s", elapsed.Round(time.Millisecond), fleetReplicationBudget)
+	}
+	if len(out.Targets) != 16 {
+		t.Errorf("listed %d targets, want 16 - every row must come back, "+
+			"carrying its own reason", len(out.Targets))
+	}
+	for _, v := range out.Targets {
+		if v.Unreachable == "" {
+			t.Errorf("target %s/%s came back with no reason, against a registry "+
+				"that never answered", v.Product, v.Target)
+		}
 	}
 }

@@ -26,6 +26,7 @@ import (
 
 	plog "github.com/abhijeet-oxide/softwareGateway/internal/platform/log"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
+	"github.com/abhijeet-oxide/softwareGateway/internal/platform/querycount"
 )
 
 type ctxKeyRequestID struct{}
@@ -98,17 +99,36 @@ func Logging(base *slog.Logger) func(http.Handler) http.Handler {
 				l = l.With(slog.String(plog.KeyTraceID, sc.TraceID().String()))
 			}
 			ctx := plog.Into(r.Context(), l)
+			// COUNT THIS REQUEST'S DATABASE ROUND TRIPS. Installed here, in
+			// the OUTERMOST middleware that cares, so both the line below and
+			// the metrics middleware inside it read the same counter - and so
+			// a slow request's log line can say what it was slow doing. See
+			// internal/platform/querycount.
+			ctx, counted := querycount.With(ctx)
 
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			next.ServeHTTP(ww, r.WithContext(ctx))
 
+			took := time.Since(start)
+
 			// Probes and the metrics scrape run every few seconds; logging
 			// them at info would bury everything else.
 			level := slog.LevelInfo
-			if isNoisyPath(r.URL.Path) {
+			switch {
+			case isNoisyPath(r.URL.Path):
 				level = slog.LevelDebug
-			} else if ww.Status() >= 500 {
+			case ww.Status() >= 500:
 				level = slog.LevelError
+			case took >= slowRequest:
+				// A SLOW REQUEST IS WORTH FINDING WITHOUT A DASHBOARD.
+				//
+				// Nobody reports a slow page; they stop using it. This is the
+				// line somebody greps for at the moment they finally do, and
+				// it carries the query count beside the duration because the
+				// two together say WHICH kind of slow it was: a handful of
+				// queries and seconds is one slow query or a slow dependency,
+				// and hundreds of queries is a listing asking once per row.
+				level = slog.LevelWarn
 			}
 
 			l.Log(r.Context(), level, "http request",
@@ -116,11 +136,20 @@ func Logging(base *slog.Logger) func(http.Handler) http.Handler {
 				slog.String("path", r.URL.Path),
 				slog.Int("status", ww.Status()),
 				slog.Int("bytes", ww.BytesWritten()),
-				slog.Duration("duration", time.Since(start)),
+				slog.Duration("duration", took),
+				slog.Int64("queries", counted.N()),
 			)
 		})
 	}
 }
+
+// slowRequest is the duration above which a request is logged as a warning.
+//
+// One second, because that is roughly where a page stops feeling like it
+// responded and starts feeling like it is loading - and because the reads this
+// service is built on are measured in single-digit milliseconds, so a second
+// is three orders of magnitude out rather than a busy moment.
+const slowRequest = time.Second
 
 func isNoisyPath(p string) bool {
 	return p == "/healthz" || p == "/readyz" || p == "/metrics"
@@ -136,6 +165,17 @@ func Metrics(reg *metrics.Registry) func(http.Handler) http.Handler {
 			start := time.Now()
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 
+			// COUNT THE ROUND TRIPS THIS REQUEST MAKES, not just how long it
+			// took. Latency cannot see an N+1 on a small database and this
+			// can: twenty-five queries to draw twenty-five rows is wrong at
+			// any size, and two listings in this application shipped doing
+			// exactly that. The counter rides the request's context, so the
+			// driver wrapper in internal/store increments THIS request's and
+			// nobody else's. See internal/platform/querycount.
+			// The counter the Logging middleware installed, which wraps this
+			// one - so both report the same request's round trips.
+			counted := querycount.From(r.Context())
+
 			next.ServeHTTP(ww, r)
 
 			route := chi.RouteContext(r.Context()).RoutePattern()
@@ -147,6 +187,7 @@ func Metrics(reg *metrics.Registry) func(http.Handler) http.Handler {
 
 			reg.APIRequests.WithLabelValues(route, r.Method, metrics.StatusClass(ww.Status())).Inc()
 			reg.APILatency.WithLabelValues(route, r.Method).Observe(time.Since(start).Seconds())
+			reg.APIQueries.WithLabelValues(route, r.Method).Observe(float64(counted.N()))
 		})
 	}
 }

@@ -198,6 +198,11 @@ func run() error {
 	}
 	defer func() { _ = st.Close() }()
 
+	// The pool's own numbers, read at scrape time rather than copied on a
+	// timer - see metrics.Registry.BindDatabase. A saturated pool is what
+	// turns one slow query into a slow page, and nothing else looks like it.
+	mreg.BindDatabase(st.Stats)
+
 	if err := store.Migrate(ctx, st, logger); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
 	}

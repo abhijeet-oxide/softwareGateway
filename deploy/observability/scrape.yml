@@ -1,0 +1,43 @@
+# What VictoriaMetrics scrapes, and how often.
+#
+# STATIC TARGETS, because compose already knows the topology: the services are
+# named in docker-compose.yml and reach each other by those names. Service
+# discovery would be a mechanism for a list that is five lines long and never
+# changes without the compose file changing with it.
+#
+# Fifteen seconds is the interval every dashboard in this directory is written
+# against. Moving it means moving the `rate()` windows too - a rate over a
+# window shorter than four intervals is noise - so it is stated once here and
+# the panels use 5m, which survives this being lowered as well as raised.
+global:
+  scrape_interval: 15s
+  external_labels:
+    # Which deployment these came from. `local` for compose; the chart sets it
+    # to the instance name, so one VictoriaMetrics can hold several estates
+    # without their series colliding.
+    deployment: local
+
+scrape_configs:
+  - job_name: coordinator
+    metrics_path: /metrics
+    static_configs:
+      - targets: [controller:8080]
+        labels:
+          component: coordinator
+
+  - job_name: worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: [worker:8081]
+        labels:
+          component: worker
+
+  # VictoriaMetrics' own numbers. Worth having: a dashboard that has stopped
+  # updating looks exactly like a system that has stopped doing anything, and
+  # `vm_promscrape_targets_up` is what tells those apart.
+  - job_name: victoriametrics
+    metrics_path: /metrics
+    static_configs:
+      - targets: [victoriametrics:8428]
+        labels:
+          component: observability

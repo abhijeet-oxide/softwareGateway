@@ -11,6 +11,7 @@
 package metrics
 
 import (
+	"database/sql"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 
@@ -18,6 +19,23 @@ import (
 )
 
 const namespace = "softwaregateway"
+
+// apiLatencyBuckets covers what this service actually does, which
+// prometheus.DefBuckets does not.
+//
+// DefBuckets stops at ten seconds. A deployment reported a listing taking five
+// MINUTES and the histogram could say only that it was over ten seconds: every
+// such request fell in +Inf, so every quantile above that bucket was
+// extrapolation rather than measurement, and the metric that should have
+// screamed could only shrug.
+//
+// The fast end is kept dense because that is where a healthy read lives and
+// where a regression first shows, and the slow end runs to five minutes
+// because that is the shape of the failure worth catching - a registry that
+// accepts a connection and never answers, or a page asking once per row.
+var apiLatencyBuckets = []float64{
+	.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60, 120, 300,
+}
 
 // Registry holds every metric this process exposes.
 type Registry struct {
@@ -38,6 +56,9 @@ type Registry struct {
 	// API.
 	APIRequests *prometheus.CounterVec
 	APILatency  *prometheus.HistogramVec
+	// APIQueries is round trips per request - see where it is built for why
+	// latency alone cannot see an N+1.
+	APIQueries *prometheus.HistogramVec
 
 	// Discovery (docs/design/07 §7, docs/design/12 §2.3).
 	// Delegated replication (docs/design/12 §2.6.1). Note what is NOT here:
@@ -121,7 +142,29 @@ func New(component string) *Registry {
 			Namespace: namespace,
 			Name:      "api_request_duration_seconds",
 			Help:      "API request latency by route template and method.",
-			Buckets:   prometheus.DefBuckets,
+			Buckets:   apiLatencyBuckets,
+		}, []string{"route", "method"}),
+
+		// HOW MANY DATABASE ROUND TRIPS ONE REQUEST MADE.
+		//
+		// This is the metric that makes an N+1 visible in production, and it
+		// is here because latency could not: this repository shipped two
+		// listings that asked the database once per row, and on a developer's
+		// estate twenty-five extra round trips cost forty milliseconds and
+		// nothing complained. On a real deployment they cost minutes.
+		//
+		// Time is data-dependent; a count is not. Twenty-five queries to draw
+		// twenty-five rows is wrong at any size, and a histogram of this per
+		// route says so the moment it ships rather than when somebody
+		// eventually profiles it. The companion is
+		// internal/api/apicost_test.go, which holds the same number in CI.
+		APIQueries: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "api_request_queries",
+			Help: "Database round trips made while serving one API request, " +
+				"by route template. A route whose count grows with its page " +
+				"size is asking once per row.",
+			Buckets: []float64{0, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233},
 		}, []string{"route", "method"}),
 
 		MirrorSyncs: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -222,6 +265,7 @@ func New(component string) *Registry {
 		m.LeaderElected,
 		m.APIRequests,
 		m.APILatency,
+		m.APIQueries,
 		m.MirrorSyncs,
 		m.MirrorSyncDuration,
 		m.MirrorConfigDrift,
@@ -260,4 +304,69 @@ func StatusClass(code int) string {
 	default:
 		return "5xx"
 	}
+}
+
+// BindDatabase publishes the connection pool's own numbers.
+//
+// # Why a collector rather than a gauge somebody sets
+//
+// Because sql.DBStats is a SNAPSHOT the pool already keeps, and anything that
+// copied it into a gauge on a timer would report the value as of the last tick
+// - which is exactly wrong for saturation, the thing these exist to show. A
+// collector reads them when Prometheus scrapes, so the numbers are the pool's
+// own at that instant.
+//
+// # Why saturation is worth its own metrics
+//
+// A saturated pool is the difference between "one endpoint is slow" and
+// "everything is slow". A request that cannot get a connection waits without
+// doing any work, and that wait is charged to whatever route it happened to
+// be serving - so a single expensive query elsewhere reads as every page
+// being slow, and the route labels point at the victims rather than the
+// cause. `db_connection_wait_seconds_total` climbing while `db_connections`
+// sits at max is that, and nothing else looks like it.
+//
+// Safe to call with a nil registry or a nil stats function, which is what a
+// Coordinator without a database does.
+func (m *Registry) BindDatabase(stats func() sql.DBStats) {
+	if m == nil || m.reg == nil || stats == nil {
+		return
+	}
+	m.reg.MustRegister(&dbCollector{stats: stats})
+}
+
+type dbCollector struct{ stats func() sql.DBStats }
+
+var (
+	dbInUse = prometheus.NewDesc(
+		namespace+"_db_connections",
+		"Database pool connections by state.", []string{"state"}, nil)
+	dbWaitCount = prometheus.NewDesc(
+		namespace+"_db_connection_waits_total",
+		"Times a caller had to wait for a database connection.", nil, nil)
+	dbWaitSeconds = prometheus.NewDesc(
+		namespace+"_db_connection_wait_seconds_total",
+		"Time callers have spent waiting for a database connection.", nil, nil)
+)
+
+func (c *dbCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- dbInUse
+	ch <- dbWaitCount
+	ch <- dbWaitSeconds
+}
+
+func (c *dbCollector) Collect(ch chan<- prometheus.Metric) {
+	s := c.stats()
+	for state, v := range map[string]float64{
+		"in_use": float64(s.InUse),
+		"idle":   float64(s.Idle),
+		"open":   float64(s.OpenConnections),
+		"max":    float64(s.MaxOpenConnections),
+	} {
+		ch <- prometheus.MustNewConstMetric(dbInUse, prometheus.GaugeValue, v, state)
+	}
+	ch <- prometheus.MustNewConstMetric(dbWaitCount,
+		prometheus.CounterValue, float64(s.WaitCount))
+	ch <- prometheus.MustNewConstMetric(dbWaitSeconds,
+		prometheus.CounterValue, s.WaitDuration.Seconds())
 }

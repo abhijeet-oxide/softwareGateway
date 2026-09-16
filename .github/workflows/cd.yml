@@ -33,55 +33,14 @@ permissions:
 
 env:
   GO_VERSION: "1.26"
-
-
-  # WHERE GO MODULES COME FROM, for the jobs themselves - the Dockerfiles have
-  # taken these as build arguments from the start and the workflows never set
-  # them, so every `go` command on a runner went to proxy.golang.org whatever an
-  # internal mirror was configured for.
-  #
-  # GOSUMDB travels with GOPROXY because it is the next thing to fail: with a
-  # complete go.sum nothing is looked up, but `go run <module>@latest` - which
-  # is how govulncheck is installed - resolves a module that go.sum has never
-  # seen and verifies it against the checksum database. A mirror that proxies
-  # modules and not `sum.golang.org` fails there. Set GOSUMDB to `off` if the
-  # mirror is trusted and does not serve it.
-  #
-  # The defaults are Go's own, so an unset variable is the behaviour Go would
-  # have had anyway. Set the VARIABLES rather than editing these lines: a
-  # company's mirror does not belong in this repository (CLAUDE.md).
   GOPROXY: ${{ vars.GOPROXY || 'https://proxy.golang.org,direct' }}
   GOSUMDB: ${{ vars.GOSUMDB || 'sum.golang.org' }}
-  # The credential for that mirror, if it wants one. Go has no GOPROXY_TOKEN of
-  # its own - it reads a netrc - so .github/actions/toolchain turns this pair
-  # into one, writes it to RUNNER_TEMP and points NETRC at it. Empty, Go fetches
-  # anonymously, which is this repository and any fork.
-  #
-  # The same credential the registry uses: an Artifactory that serves the module
-  # mirror, the npm registry and the container registry is one host with one
-  # login, and inventing a second name for it would not make it a second secret.
   GOPROXY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
   GOPROXY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
   GODEBUG: http2client=0
-  # THE PROXY, FOR THE RUNNER'S OWN FETCHES - not only for the image builds,
-  # which have had it as build arguments all along (see the `images` job). A
-  # release also downloads Helm and kustomize and talks to the registry from the
-  # runner itself, and none of that was going through it.
-  #
-  # UPPER CASE ONLY: a workflow's `env` keys are compared case-insensitively, so
-  # the pair the Dockerfiles set would be one key here and GitHub would refuse
-  # the file with "'http_proxy' is already defined". Go, npm, pnpm and the runner
-  # read either case, and curl takes the upper for everything but plain
-  # `http://`, which no URL in these workflows is.
-  #
-  # Unset, they are empty and every tool reads that as "no proxy" - so on a
-  # runner whose image carries a proxy these variables must be SET rather than
-  # left to the image: an empty value here overrides it.
   HTTP_PROXY: ${{ vars.HTTP_PROXY }}
   HTTPS_PROXY: ${{ vars.HTTPS_PROXY }}
   NO_PROXY: ${{ vars.NO_PROXY }}
-  # The registry this product publishes to. Set these repository variables to
-  # point the pipeline at your own Artifactory, ACR or Harbor.
   REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
   REGISTRY_URL: https://${{ vars.REGISTRY_HOST }}
   REGISTRY_REPOSITORY: ${{ vars.REGISTRY_REPOSITORY }}
@@ -176,15 +135,9 @@ jobs:
   images:
     name: ${{ matrix.component }} image
     needs: version
-    # `images_changed` is NOT a condition here any more - it is one input to the
-    # decision the `plan` step below makes against the registry. Gating the job
-    # on it is what let a failed build become a published chart pointing at
-    # images that were never pushed; see that step. The job is cheap when there
-    # is nothing to do: it checks out, asks the registry, and stops.
     if: >-
       needs.version.outputs.should_release == 'true'
       && needs.version.outputs.configured == 'true'
-    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 45
     strategy:
@@ -199,27 +152,9 @@ jobs:
             dockerfile: deploy/build/Dockerfile.web
     steps:
       - uses: actions/checkout@v7
-
-      # WHICH BUILDER, AND WHY IT IS A VARIABLE.
-      #
-      # `docker-container` is the default and the better one: it is a real
-      # BuildKit, so the registry layer cache below works. The `docker` driver
-      # builds through the runner's own daemon and cannot export a cache at all
-      # - "cache export is not supported by the docker driver".
-      #
-      # But it cannot be the only option. A self-hosted runner that is ITSELF a
-      # container usually cannot start a privileged one, and the builder dies
-      # before it builds anything:
-      #
-      #   failed to create shim task: OCI runtime create failed: runc create
-      #   failed: ... error mounting "sysfs" to rootfs at "/sys": operation not
-      #   permitted
-      #
-      # On such a runner set BUILDX_DRIVER to `docker`, and the cache is dropped
-      # with it below rather than failing the release.
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
         with:
-          driver: ${{ vars.BUILDX_DRIVER || 'docker-container' }}
+          driver: docker
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:

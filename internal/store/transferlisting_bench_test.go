@@ -67,9 +67,21 @@ func BenchmarkTransferListing(b *testing.B) {
 	}{
 		{"rollups", false}, // the Downloads page
 		{"summary", true},  // view=summary, the Overview
+		// The same page again once the transfers on it have settled, which is
+		// what a Downloads history is: every rollup is remembered, so the
+		// listing reads the page and no jobs at all. See rollupcache.go.
+		{"settled", false},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			filter := ListTransfersFilter{Limit: pageSize, WithoutJobCounts: tc.withoutJobCounts}
+			if tc.name == "settled" {
+				settleBenchEstate(b, st)
+				// Warm it, so the loop measures the remembered path rather
+				// than one computed read and many remembered ones.
+				if _, err := p.ListTransfers(b.Context(), filter); err != nil {
+					b.Fatal(err)
+				}
+			}
 			b.ReportAllocs()
 			for b.Loop() {
 				rows, err := p.ListTransfers(b.Context(), filter)
@@ -198,6 +210,16 @@ func seedBenchEstate(b *testing.B, st Store, transfers, jobsEach int) {
 	flush()
 
 	if err := tx.Commit(); err != nil {
+		b.Fatal(err)
+	}
+}
+
+// settleBenchEstate finishes every transfer, which is what makes its rollup
+// memoisable. A Downloads history is entirely this.
+func settleBenchEstate(b *testing.B, st Store) {
+	b.Helper()
+	if _, err := st.DB().ExecContext(b.Context(),
+		`UPDATE transfers SET state = 'succeeded'`); err != nil {
 		b.Fatal(err)
 	}
 }

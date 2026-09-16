@@ -1660,7 +1660,7 @@ func (t TransferSummary) SavedBytes() int64 {
 // support it today. `SUM(CASE WHEN ... THEN 1 ELSE 0 END)` is the one that has
 // always been in both, and this is the most load-bearing query in the file -
 // not the place to acquire a version floor nobody has written down.
-func (p *Packages) transferListQuery(where string, withJobRollups bool) string {
+func (p *Packages) transferListQuery(where string, withJobRollups bool, rollupIDs int) string {
 	if !withJobRollups {
 		return p.transferProjection(false, "") + where +
 			" ORDER BY t.created_at DESC, t.id DESC LIMIT ? OFFSET ?"
@@ -1668,7 +1668,7 @@ func (p *Packages) transferListQuery(where string, withJobRollups bool) string {
 	return `
 	WITH page AS (
 	` + transferPageClause(where) + `
-	)` + p.rollupCTE() + p.transferProjection(true, "\n\t  JOIN page ON page.id = t.id") +
+	)` + p.rollupCTE(rollupIDs) + p.transferProjection(true, "\n\t  JOIN page ON page.id = t.id") +
 		" ORDER BY t.created_at DESC, t.id DESC"
 }
 
@@ -1681,7 +1681,7 @@ func (p *Packages) transferGetQuery() string {
 	return `
 	WITH page AS (
 	  SELECT id, created_at FROM transfers WHERE id = ?
-	)` + p.rollupCTE() + p.transferProjection(true, "\n\t  JOIN page ON page.id = t.id")
+	)` + p.rollupCTE(0) + p.transferProjection(true, "\n\t  JOIN page ON page.id = t.id")
 }
 
 // transferPageClause chooses the page, by id, before anything is projected.
@@ -1700,7 +1700,14 @@ func transferPageClause(where string) string {
 }
 
 // rollupCTE computes every job aggregate for the page in ONE pass.
-func (p *Packages) rollupCTE() string {
+func (p *Packages) rollupCTE(rollupIDs int) string {
+	scope := "j.transfer_id IN (SELECT id FROM page)"
+	if rollupIDs > 0 {
+		// Only the transfers whose rollup is not already known. See
+		// rollupcache.go: a terminal transfer's rollup cannot change, so the
+		// ones already memoised are not read again.
+		scope = "j.transfer_id IN (" + placeholders(rollupIDs) + ")"
+	}
 	return `,
 	rollup AS (
 	  SELECT j.transfer_id AS tid,
@@ -1724,7 +1731,7 @@ func (p *Packages) rollupCTE() string {
 	                  THEN j.size_bytes - j.bytes_transferred ELSE 0 END) AS outstanding_bytes,
 	         MIN(CASE WHEN j.state = 'leased' THEN j.updated_at END) AS quietest_in_flight
 	    FROM jobs j
-	   WHERE j.transfer_id IN (SELECT id FROM page)
+	   WHERE ` + scope + `
 	   GROUP BY j.transfer_id
 	)`
 }
@@ -1916,11 +1923,123 @@ func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]
 		limit = 50
 	}
 	// The page's arguments are the whole query's arguments, and they are all
-	// inside the leading CTE - see transferQuery on why that matters.
+	// inside the leading CTE - see transferListQuery on why that matters.
 	args = append(args, limit, f.Offset)
 
-	query := p.transferListQuery(where, !f.WithoutJobCounts)
+	// The cheap plan asks nothing of `jobs` at all, so there is nothing to
+	// memoise and nothing to look up.
+	if f.WithoutJobCounts {
+		return p.scanTransfers(ctx, p.transferListQuery(where, false, 0), args)
+	}
 
+	/*
+	   WHICH OF THIS PAGE'S ROLLUPS ARE ALREADY KNOWN.
+
+	   A second query, and it earns its round trip: it reads twenty-five ids
+	   and states off `transfers_recent_idx` and nothing else, and what it buys
+	   is not reading the JOBS of every finished transfer on the page. On an
+	   estate whose listing is mostly history - which is what a Downloads page
+	   is - that is nearly all of them.
+
+	   A cold process reads what it always read, plus this. See rollupcache.go
+	   for why a remembered rollup cannot be stale.
+	*/
+	page, err := p.transferPageStates(ctx, where, args)
+	if err != nil {
+		return nil, err
+	}
+
+	known := make(map[string]transferRollup, len(page))
+	compute := make([]any, 0, len(page))
+	version := make(map[string]transferPageRow, len(page))
+	for _, row := range page {
+		version[row.id] = row
+		// The memo answers only for a transfer that is still terminal AND
+		// still on the version it was computed from - see rollupcache.go.
+		if r, ok := p.rollups.get(row.id, row.state, row.updatedAt); ok {
+			known[row.id] = r
+			continue
+		}
+		compute = append(compute, row.id)
+	}
+
+	/*
+	   EVERY ROLLUP ON THIS PAGE ALREADY KNOWN is the case worth naming: it is
+	   what a Downloads history is, once somebody has looked at it.
+
+	   The query then asks nothing of `jobs` at all - the same flat plan
+	   `view=summary` uses - and the twelve columns come out of the memo below.
+	   Passing an empty id list instead would be read as "scope the rollup to
+	   the page", which is the whole rollup and the entire cost this is here to
+	   avoid.
+	*/
+	query := p.transferListQuery(where, len(compute) > 0, len(compute))
+	out, err := p.scanTransfers(ctx, query, append(args, compute...))
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range out {
+		if r, ok := known[out[i].ID]; ok {
+			applyRollup(&out[i], r)
+			continue
+		}
+		// Newly computed. Remembered only if the transfer has finished, which
+		// rollupCache.put is what decides - see the invariant there.
+		v := version[out[i].ID]
+		p.rollups.put(out[i].ID, v.state, v.updatedAt, rollupOf(out[i]))
+	}
+	return out, nil
+}
+
+// transferPageStates reads the ids and states of one page, and nothing else.
+//
+// The projection's repository and package joins are not here: this decides
+// which rollups have to be computed, and doing six joins for rows that are
+// about to be read again properly is the cost the separation avoids.
+func (p *Packages) transferPageStates(
+	ctx context.Context, where string, args []any,
+) ([]transferPageRow, error) {
+	query := `SELECT t.id, t.state, ` + p.dialect.TimestampText("t.updated_at") + `
+	    FROM transfers t
+	    JOIN transfer_requests rq ON rq.id = t.request_id
+	    JOIN packages pk ON pk.id = t.package_id
+	    JOIN products pr ON pr.id = pk.product_id` + where + `
+	   ORDER BY t.created_at DESC, t.id DESC
+	   LIMIT ? OFFSET ?`
+
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(query), args...)
+	if err != nil {
+		return nil, fmt.Errorf("page transfers: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []transferPageRow
+	for rows.Next() {
+		var r transferPageRow
+		if err := rows.Scan(&r.id, &r.state, &r.updatedAt); err != nil {
+			return nil, fmt.Errorf("scan transfer page: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// transferPageRow is what the page query reads: which transfers are on this
+// page, and enough to decide whether their rollup is already known.
+//
+// `updatedAt` is the row VERSION. Every statement that changes a transfer's
+// state sets it, so it is what tells a memo written before a retry from one
+// written after - see rollupcache.go.
+type transferPageRow struct {
+	id        string
+	state     string
+	updatedAt string
+}
+
+func (p *Packages) scanTransfers(
+	ctx context.Context, query string, args []any,
+) ([]TransferSummary, error) {
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(query), args...)
 	if err != nil {
 		return nil, fmt.Errorf("list transfers: %w", err)
@@ -1936,6 +2055,26 @@ func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+// rollupOf and applyRollup are the two halves of one mapping, kept next to each
+// other so a column added to one is visibly missing from the other.
+func rollupOf(t TransferSummary) transferRollup {
+	return transferRollup{
+		SkippedBytes: t.SkippedBytes, JobsDone: t.JobsDone, JobsFailed: t.JobsFailed,
+		JobsOutstanding: t.JobsOutstanding, BytesTransferred: t.BytesTransferred,
+		JobsInFlight: t.JobsInFlight, Workers: t.Workers, JobsWaiting: t.JobsWaiting,
+		JobsBlocked: t.JobsBlocked, JobsRepaired: t.JobsRepaired,
+		OutstandingBytes: t.OutstandingBytes, QuietestInFlight: t.QuietestInFlight,
+	}
+}
+
+func applyRollup(t *TransferSummary, r transferRollup) {
+	t.SkippedBytes, t.JobsDone, t.JobsFailed = r.SkippedBytes, r.JobsDone, r.JobsFailed
+	t.JobsOutstanding, t.BytesTransferred = r.JobsOutstanding, r.BytesTransferred
+	t.JobsInFlight, t.Workers, t.JobsWaiting = r.JobsInFlight, r.Workers, r.JobsWaiting
+	t.JobsBlocked, t.JobsRepaired = r.JobsBlocked, r.JobsRepaired
+	t.OutstandingBytes, t.QuietestInFlight = r.OutstandingBytes, r.QuietestInFlight
 }
 
 // GetTransfer returns one transfer.

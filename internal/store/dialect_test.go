@@ -107,7 +107,7 @@ func TestTheTransferProjectionRewritesCompletely(t *testing.T) {
 	p := &Packages{dialect: postgresDialect{}}
 
 	got := p.dialect.Rewrite(
-		p.transferListQuery(" WHERE pr.name = ?", true))
+		p.transferListQuery(" WHERE pr.name = ?", true, 0))
 	if strings.Contains(got, "?") {
 		t.Errorf("the transfer projection still leaves a bare `?` for Postgres:\n%s", got)
 	}

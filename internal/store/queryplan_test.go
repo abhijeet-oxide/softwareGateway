@@ -18,7 +18,7 @@ func TestTransferListingQueryPlan(t *testing.T) {
 
 	rows, err := h.st.DB().QueryContext(t.Context(),
 		"EXPLAIN QUERY PLAN "+
-			h.packages.transferListQuery(" WHERE 1=1", true), 25, 0)
+			h.packages.transferListQuery(" WHERE 1=1", true, 0), 25, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

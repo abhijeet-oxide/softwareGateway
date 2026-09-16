@@ -4,8 +4,8 @@
 > **Status:** implemented. The measurement is `task bench`, `task bench:api`
 > and the `Performance` job in `.github/workflows/ci.yml`; §5.1 and §5.3 are in
 > `internal/store/queue.go` and `web/src/pages/Downloads.tsx`, §5.4 in
-> `cmd/coordinator` and §5.5 in `internal/api/replication.go`. §5.2 remains
-> proposed, with the numbers that justify it.
+> `cmd/coordinator`, §5.5 in `internal/api/replication.go` and §5.2 in
+> `internal/store/rollupcache.go`. All five are in.
 
 ---
 
@@ -105,9 +105,9 @@ polls every five seconds while anything is running.
 
 **Concurrent readers.** Before §5.1 a seeded estate supported roughly **one to
 two** readers of the Downloads page before p95 passed a second. After it,
-twenty readers see a p95 of 0.68 s against the same estate, and a single reader
-0.13 s. The remaining cost is still proportional to the jobs of the transfers
-ON THE PAGE, which is what §5.2 would remove.
+twenty readers see a p95 of 0.238 s against the same estate, and a single reader
+0.040 s. What remains is proportional to the jobs of the transfers on the page
+that are still RUNNING - a settled page costs nothing beyond reading it.
 
 **Resources.** The Coordinator idles at ~55 MB RSS; the chart requests 200m CPU
 and 256Mi and that is sound. Throughput here is not memory-bound and will not
@@ -193,20 +193,65 @@ forever. That test was checked to FAIL against a deliberately broken aggregate
 before it was trusted. If a future rollup cannot be expressed in one pass
 without changing a single one of those numbers, it does not ship.
 
-### 5.2 Keep the rollups on the transfer row
+### 5.2 Remember the rollups that cannot change - DONE
 
-The real fix, and the larger one: maintain the counts on `transfers` as jobs
-complete, so a listing reads what it displays and the page costs its page size.
-This turns the listing from O(jobs on the page) into O(1) per row.
+A transfer's rollup is the shape of its jobs. While it runs that changes
+constantly; once it has SETTLED it cannot change again, because no job of a
+succeeded, failed or cancelled transfer will ever be touched. So the listing
+memoises the rollup of terminal transfers and computes everything else on every
+read (`internal/store/rollupcache.go`).
 
-The cost is a write on every job completion and a reconciliation path for when
-those drift - which is why it is proposed second, and why §5.1 is worth doing
-on its own first.
+A page whose rollups are all known asks nothing of `jobs` at all - it runs the
+same flat plan `view=summary` uses, and the twelve columns come out of the memo.
+That is what a Downloads *history* is once somebody has looked at it.
 
-**What would change our mind:** if the write amplification on the job-completion
-path measurably slows the queue - `internal/store/throughput_test.go` is where
-that would show - the counters belong in a separate table updated in batches
-rather than on the transfer row.
+Measured on the seeded estate, through the API:
+
+| request | before all of this | after §5.1 | after §5.2 |
+|---|---|---|---|
+| `/transfers?pageSize=25` | 1.0 - 3.7 s | 0.12 - 0.36 s | **0.039 - 0.050 s** |
+| a page of settled rows | - | - | **0.0116 s** |
+| k6, one reader, p95 | 1.01 s | 0.13 s | **0.040 s** |
+| k6, twenty readers, p95 | 5.94 s | 0.68 s | **0.238 s** |
+
+In the benchmark, a page of settled transfers is 0.77 ms against 11.1 ms
+computed - near enough the `view=summary` floor of 0.65 ms, which is the least
+this listing can cost.
+
+**Why this rather than counters on the row.** Twenty-two statements in
+`internal/store` mutate `jobs` and a dozen mutate a transfer's state.
+Maintained counters would have to be correct in every one of them, and the
+failure - a count wrong by the rows of one state - is a progress bar reading
+94% forever rather than a crash. Live counters would also have sixteen
+concurrent jobs of one transfer contending on that single `transfers` row,
+which is the write amplification this document warned would slow the queue.
+
+Here there is no write path to get wrong, because there is no write path: a
+value exists only once the thing it describes has stopped moving.
+
+**The two things that make it correct**, both checked by tests that were run
+against a deliberately broken version first:
+
+- **Nothing non-terminal is ever stored.** `rollupCache.put` refuses it rather
+  than trusting its caller. A running transfer is computed on every read, so a
+  progress bar cannot freeze.
+- **An entry carries the `updated_at` it was computed at**, and is used only
+  while the row still carries the same one. A retry REOPENS a failed transfer
+  (`recovery.go`), it runs again and settles again with different numbers; every
+  statement that changes a transfer's state sets `updated_at`, so both
+  transitions invalidate the memo without any of them knowing this file exists.
+  (`activetime.go` deliberately does not set it, and does not change a rollup
+  either.)
+
+The memo is per process and bounded at four thousand transfers. Two replicas
+computing the same rollup of the same immutable rows get the same answer, so
+nothing needs coordinating; a restart costs the first listing after it.
+
+**What would change our mind:** if a state is ever added from which a transfer
+can be settled *and* resumed without `updated_at` moving, the version check
+stops working and `terminalTransferStates` is no longer sufficient on its own.
+That is the assumption to re-check, and it is asserted in
+`TestAReopenedTransferIsNotServedItsOldRollup`.
 
 ### 5.3 Stop the Downloads page asking for what it does not draw - DONE
 

@@ -4,8 +4,9 @@
 > **Status:** implemented. The measurement is `task bench`, `task bench:api`
 > and the `Performance` job in `.github/workflows/ci.yml`; §5.1 and §5.3 are in
 > `internal/store/queue.go` and `web/src/pages/Downloads.tsx`, §5.4 in
-> `cmd/coordinator`, §5.5 in `internal/api/replication.go` and §5.2 in
-> `internal/store/rollupcache.go`. All five are in.
+> `cmd/coordinator`, §5.5 in `internal/api/replication.go`, §5.2 in
+> `internal/store/rollupcache.go` and §5.6 in `internal/api/events.go`. All six
+> are in.
 
 ---
 
@@ -309,6 +310,63 @@ therefore never appeared**, and `DownloadDetail` decided whether a target was
 mirrored from the same empty list, so a delegated target with no sync yet
 showed no mirror step. Both looked like working code and neither had a test.
 The type now matches the wire, and the compiler found both callers.
+
+### 5.6 Tell the page what changed, instead of it asking - DONE
+
+The Downloads page polls its listing every five seconds while anything is
+running, and that listing is the most expensive read in the application. The
+refresh rate was therefore tied to the cost of a refresh: twenty people
+watching one download cost twenty listings every five seconds, and making the
+page feel live meant making it more expensive.
+
+`GET /api/v1/events` inverts it. One indexed query per Coordinator per second
+finds the transfers that moved (`Packages.LiveTransferVersions`, bounded by
+what the estate is DOING rather than by what it has ever done) and tells every
+reader subscribed to that replica. Latency goes from five seconds to one, and
+an idle estate costs nothing: the query is skipped entirely while nobody is
+subscribed.
+
+**The stream carries no data.** An event is a transfer ID - "this moved, look
+again". Pushing the rollups themselves would mean two paths that can disagree
+about what a transfer looks like, out-of-order delivery to reconcile, and
+authorization decided at publish time for a reader who may have lost the
+product since. A hint has none of those: the answer still comes from the
+ordinary listing through the ordinary authorization, and the worst a lost or
+duplicated event can do is cost one extra read.
+
+**The polls are deliberately still there.** They are the floor this rests on. A
+proxy that buffers, a dropped connection, a Coordinator too old to serve the
+route - in every one of those the page keeps working exactly as it did, a
+little less promptly. Nothing here is load-bearing for correctness.
+
+**Server-sent events, not a WebSocket**, for three reasons that are specific to
+this deployment:
+
+- Progress is one-directional, and the browser already has a channel for
+  commands: the API, with its authorization, audit trail and errors. A socket
+  would be a second one to reimplement all of that on.
+- This deployment authenticates with an `Authorization` header, and neither
+  `EventSource` nor a browser `WebSocket` can set one. `fetch` with a streaming
+  body can, so the stream goes through the same middleware chain as every other
+  request. The alternatives were a token in the query string - which lands in
+  the proxy's access log - or a second authentication path for one route.
+- SSE reconnects on its own and is plain HTTP, so it needs no upgrade
+  negotiated through every proxy.
+
+Two things that would break it silently, both now asserted:
+`middleware.Compress` works from an ALLOWLIST and `text/event-stream` is not on
+it (a compressor holds each frame until its window fills), and `X-Accel-Buffering:
+no` is sent for nginx, which buffers a proxied response by default and would
+hold every event until a stream that never ends, ended.
+
+**What would change our mind.** The one-second tick is a poll, just a single
+cheap one per replica instead of one expensive one per browser. If an estate
+ever runs enough concurrent transfers that `LiveTransferVersions` stops being
+trivial, or a second of latency stops being enough, the next step is
+PostgreSQL `LISTEN/NOTIFY` - there is no connection pooler in front of the
+database, so it is available without new infrastructure. It was not taken now
+because it adds a second connection type, a reconnect loop and a dialect
+branch for latency nobody has asked for.
 
 ## 6. What is already right
 

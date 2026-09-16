@@ -810,6 +810,10 @@ func run() error {
 		return nil
 	})
 
+	// The change feed behind GET /api/v1/events. It queries nothing while
+	// nobody is subscribed, so an estate nobody is watching costs nothing.
+	g.Go(func() error { srv.WatchTransfers(gctx); return nil })
+
 	g.Go(func() error { return elector.Run(gctx) })
 	g.Go(func() error { return watcher.Run(gctx) })
 	g.Go(func() error { return discoveryCtl.Run(gctx) })

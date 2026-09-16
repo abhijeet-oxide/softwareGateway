@@ -90,6 +90,13 @@ func PolicyFor(r *http.Request) PolicyResource {
 		res.Kind, res.Action = "package", "view"
 	case strings.HasPrefix(p, "/api/v1/system"):
 		res.Kind, res.Action = "system", "view"
+	// The change feed. `software_download`/`view`, because what it reports is
+	// that a download moved - the same fact the listing carries, and a caller
+	// who may not read the listing has no business being told when it changes.
+	// The stream carries IDs and nothing else, so this is the whole of what it
+	// discloses.
+	case strings.HasPrefix(p, "/api/v1/events"):
+		res.Kind, res.Action = "software_download", "view"
 
 	// ---- downloads, which the domain calls transfers ----
 	case strings.HasPrefix(p, "/api/v1/transfers"):

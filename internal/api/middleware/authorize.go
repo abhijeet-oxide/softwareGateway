@@ -126,6 +126,13 @@ func RequiredFor(r *http.Request) Requirement {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/packages":
 		// handleListAllPackages filters by VisibleProducts.
 		req.AnyScope = true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/events":
+		// The change feed reports that a download moved, for any product the
+		// caller can see. It carries transfer IDs and no product-scoped
+		// content, and what it points AT is read back through the listing,
+		// which does its own narrowing - so a caller who holds the action on
+		// any product may be told when something moved.
+		req.AnyScope = true
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/replication":
 		// handleFleetReplication filters by VisibleProducts. Same rule as
 		// /discovery: the drift banner is an estate-wide question, and

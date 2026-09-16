@@ -2532,3 +2532,57 @@ func (p *Packages) WaveProgress(ctx context.Context, transferID string) ([]WaveS
 	}
 	return out, rows.Err()
 }
+
+// TransferVersion is a transfer and the version of its row.
+//
+// `UpdatedAt` is the same watermark the rollup memo keys on: every statement
+// that changes a transfer's state sets it. Two reads that disagree about it are
+// a transfer that has moved.
+type TransferVersion struct {
+	ID        string
+	State     string
+	UpdatedAt string
+}
+
+// LiveTransferVersions is every transfer that is still moving, and how far it
+// has moved.
+//
+// # What this is for
+//
+// The change feed behind GET /api/v1/events. One query per Coordinator per
+// tick tells every browser connected to it which transfers have moved, in
+// place of each of those browsers re-fetching a whole listing on a timer.
+//
+// # Why it is cheap enough to run on a tick
+//
+// It reads only LIVE transfers, which is bounded by what the estate is
+// actually doing rather than by what it has ever done - a handful, against
+// `transfers_active_idx`. A settled transfer is not here and is not polled for:
+// its last change is reported by the tick that settled it, and its rollup
+// cannot change afterwards (see rollupcache.go).
+//
+// `bytes_transferred` is deliberately NOT summed here. That would put the
+// listing's own expense on a one-second tick; the feed says WHICH transfer
+// moved, and what moved is read back through the ordinary listing, once, by
+// whoever is looking at it.
+func (p *Packages) LiveTransferVersions(ctx context.Context) ([]TransferVersion, error) {
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(
+		`SELECT id, state, `+p.dialect.TimestampText("updated_at")+`
+		   FROM transfers
+		  WHERE state IN (`+liveTransferStates+`)
+		  ORDER BY id`))
+	if err != nil {
+		return nil, fmt.Errorf("read live transfers: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []TransferVersion
+	for rows.Next() {
+		var v TransferVersion
+		if err := rows.Scan(&v.ID, &v.State, &v.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan live transfer: %w", err)
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}

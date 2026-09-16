@@ -89,7 +89,10 @@ spec:
 
 // apiHarness wires a Server over a real migrated store.
 type apiHarness struct {
-	t          *testing.T
+	t *testing.T
+	// api is the Server itself, for the handful of tests about something that
+	// is not reachable over HTTP - the change feed's own goroutine, say.
+	api        *Server
 	server     *httptest.Server
 	store      store.Store
 	packages   *store.Packages
@@ -190,7 +193,7 @@ func newAPIHarnessWith(t *testing.T, adjust func(*Deps), docs ...string) *apiHar
 	t.Cleanup(ts.Close)
 
 	return &apiHarness{
-		t: t, server: ts, store: st, packages: packages, discoverer: disc,
+		t: t, api: srv, server: ts, store: st, packages: packages, discoverer: disc,
 		productID: ref.ID, repoID: ref.Repositories["vendor"],
 	}
 }

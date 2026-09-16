@@ -9,6 +9,7 @@ import { IdentityProvider } from './auth/permissions'
 import { SessionGate } from './auth/SessionGate'
 import { BootGate } from './BootGate'
 import { FeedbackBridge, reportFailure } from './components/feedback'
+import { TransferFeed } from './api/TransferFeed'
 import { watchService } from './api/health'
 import { AppErrorBoundary } from './routing'
 import { ThemeProvider } from './uikit'
@@ -138,6 +139,14 @@ createRoot(document.getElementById('root')!).render(
               */}
               <SessionGate>
                 <IdentityProvider>
+                  {/*
+                    WHAT CHANGED, streamed, in place of each page asking every
+                    few seconds whether anything did. It renders nothing and
+                    nothing depends on it: the polls it relieves are still
+                    there, so a stream that never connects costs the page
+                    promptness and not correctness. See api/events.
+                  */}
+                  <TransferFeed />
                   <BrowserRouter>
                     {/* Nothing renders until we know the Coordinator is there. */}
                     <BootGate>

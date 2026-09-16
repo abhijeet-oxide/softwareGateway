@@ -330,8 +330,26 @@ export default function Downloads() {
     pageSize: transferPageSize, operation: 'replicate',
     pageToken: transferPage > 1 ? String((transferPage - 1) * transferPageSize) : undefined,
   })
+  /*
+    THE CHEAP PLAN, because this table draws no progress.
+
+    Its columns are the route, the method, the state, the time spent and when -
+    every one of them a column of `transfers` itself. The dozen aggregates over
+    `jobs` that the listing above needs for its progress bars are read here,
+    rendered nowhere, and thrown away.
+
+    `view=summary` is the same rows without them. See
+    docs/design/32-performance.md: on a real estate the rollups are the whole
+    cost of this request, and this page issued TWO of them - one for the
+    downloads table, which draws them, and this one, which does not.
+
+    If a column here ever needs a job count, take this off rather than
+    reaching for the number: without the rollups those fields are zero, and a
+    progress bar reading a zero looks like a stalled promotion rather than a
+    missing request.
+  */
   const promotionsQuery = useTransfers({
-    pageSize: promotionPageSize, operation: 'promote',
+    pageSize: promotionPageSize, operation: 'promote', view: 'summary',
     pageToken: promotionPage > 1 ? String((promotionPage - 1) * promotionPageSize) : undefined,
   })
   const replicationPerProduct = useReplicationForAll(names)

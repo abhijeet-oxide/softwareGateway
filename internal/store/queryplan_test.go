@@ -17,8 +17,8 @@ func TestTransferListingQueryPlan(t *testing.T) {
 	seedJobs(t, h, ids, 10)
 
 	rows, err := h.st.DB().QueryContext(t.Context(),
-		"EXPLAIN QUERY PLAN "+h.packages.transferSelect(true)+
-			" WHERE 1=1 ORDER BY t.created_at DESC, t.id DESC LIMIT 25 OFFSET 0")
+		"EXPLAIN QUERY PLAN "+
+			h.packages.transferListQuery(" WHERE 1=1", true), 25, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

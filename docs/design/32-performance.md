@@ -1,9 +1,10 @@
 # 32 - Performance
 
 > **Consumed by:** [03](03-persistence.md), [09](09-api.md)
-> **Status:** the measurement is implemented (`task bench`, `task bench:api`,
-> the `Performance` job in `.github/workflows/ci.yml`). The remedies in §5 are
-> proposed, with the numbers that justify them.
+> **Status:** implemented. The measurement is `task bench`, `task bench:api`
+> and the `Performance` job in `.github/workflows/ci.yml`; §5.1 and §5.3 are in
+> `internal/store/queue.go` and `web/src/pages/Downloads.tsx`. §5.2 and §5.4
+> remain proposed, with the numbers that justify them.
 
 ---
 
@@ -101,10 +102,11 @@ transfer listing with an empty database; **under 20 req/s** on a seeded one.
 The listing is the number that matters, because it is what the Downloads page
 polls every five seconds while anything is running.
 
-**Concurrent readers.** At the current cost per request, a seeded estate
-supports roughly **one to two** readers of the Downloads page before p95 passes
-a second. That is the honest answer and it is the finding, not a limit anybody
-chose.
+**Concurrent readers.** Before §5.1 a seeded estate supported roughly **one to
+two** readers of the Downloads page before p95 passed a second. After it,
+twenty readers see a p95 of 0.68 s against the same estate, and a single reader
+0.13 s. The remaining cost is still proportional to the jobs of the transfers
+ON THE PAGE, which is what §5.2 would remove.
 
 **Resources.** The Coordinator idles at ~55 MB RSS; the chart requests 200m CPU
 and 256Mi and that is sound. Throughput here is not memory-bound and will not
@@ -139,30 +141,56 @@ loose.
 
 Proposed, in the order the numbers justify.
 
-### 5.1 One pass over `jobs` instead of twelve
+### 5.1 One pass over `jobs` instead of twelve - DONE
 
-Replace the twelve correlated subqueries with a single grouped aggregate over
-the page's transfers, using `FILTER` (PostgreSQL) / `CASE WHEN` (SQLite):
+The twelve correlated subqueries are now a single grouped aggregate over the
+page's jobs. The page is chosen FIRST, in a leading CTE, so `jobs` is never
+read for a row that is about to be discarded:
 
 ```
-LEFT JOIN (SELECT transfer_id, count(*) FILTER (WHERE state = 'failed') ...
-             FROM jobs WHERE transfer_id IN (<the page>) GROUP BY transfer_id)
+WITH page AS (SELECT id ... ORDER BY ... LIMIT ?),
+     rollup AS (SELECT transfer_id, <twelve aggregates>
+                  FROM jobs WHERE transfer_id IN (SELECT id FROM page)
+                 GROUP BY transfer_id)
+SELECT ... FROM transfers t JOIN page ... LEFT JOIN rollup ...
 ```
 
-Measured on the seeded estate: **62,627 buffers and 100 ms**, against 188,806
-and 675 ms - the same 25 rows, the same numbers out.
+A derived table rather than `LATERAL`, and `SUM(CASE WHEN ...)` rather than
+`FILTER`, because this projection is shared by both dialects and SQLite has
+neither. The page leads because `Dialect.Rewrite` numbers placeholders in
+textual order, which is what lets both shapes keep taking the same arguments.
 
-A plain derived table rather than `LATERAL`, because `LATERAL` does not exist
-in SQLite and this projection is shared by both dialects (`internal/store/dialect.go`).
+Measured on the seeded estate, through the API:
 
-This is mechanical and it is a third of the cost. It is not the whole answer:
-it still reads every job of every transfer on the page, which is why it is
-first and not last.
+| request | before | after |
+|---|---|---|
+| `/transfers?pageSize=25` | 1.0 - 3.7 s | **0.12 - 0.36 s** |
+| `/transfers?pageSize=100` | 1.6 - 2.0 s | **0.25 - 0.27 s** |
 
-**What would change our mind:** if the rewrite cannot be made to produce
-identical values for every one of the twelve columns across both dialects, it
-does not ship - `scanTransfer` is one function precisely so list and get cannot
-disagree, and a rollup that is subtly wrong is worse than one that is slow.
+Under k6 at twenty readers, p95 went from **5.9 s to 0.68 s**, and a single
+reader from **1.01 s to 0.13 s** - the run that used to breach the thresholds
+in `test/load/api.js` now passes them.
+
+THE CHEAP PATH IS UNCHANGED, deliberately. An earlier version of this put every
+listing through the page CTE, which cost `view=summary` 39% for a rollup it
+does not read. `transferListQuery` now emits the flat query when no rollups are
+wanted, and `benchstat` confirms that path is unmoved.
+
+On SQLite the same change is worth about 16% rather than 8x: its correlated
+subqueries were already seeking `jobs_transfer_state_idx` cheaply, and the
+twelve passes cost far less on a database in the same process. SQLite is not
+supported in production (`config/config.yaml`), so the Postgres number is the
+one that matters - but it is why `task bench`, which runs on SQLite, reports a
+modest gain for a change that is transformative in a deployment.
+
+**What is asserted, and what would change our mind.** All twelve rollups are
+pinned against a hand-built estate in
+`internal/store/transferrollup_test.go`, on both dialects and through both
+`ListTransfers` and `GetTransfer` - a rewrite like this fails quietly, and a
+count that is wrong by the rows of one state is a progress bar that says 94%
+forever. That test was checked to FAIL against a deliberately broken aggregate
+before it was trusted. If a future rollup cannot be expressed in one pass
+without changing a single one of those numbers, it does not ship.
 
 ### 5.2 Keep the rollups on the transfer row
 
@@ -179,16 +207,22 @@ path measurably slows the queue - `internal/store/throughput_test.go` is where
 that would show - the counters belong in a separate table updated in batches
 rather than on the transfer row.
 
-### 5.3 Stop the Downloads page asking for what it does not draw
+### 5.3 Stop the Downloads page asking for what it does not draw - DONE
 
-`web/src/pages/Downloads.tsx` mounts `useTransfers` **twice** (replications and
-promotions), neither with `view=summary`, and polls both every five seconds
-while anything is live. `Overview.tsx` already uses `view=summary` and is
-consequently 200x cheaper.
+`web/src/pages/Downloads.tsx` mounted `useTransfers` **twice** - replications
+and promotions - neither with `view=summary`, and polled both every five
+seconds while anything was live.
 
-The promotions table and the completed rows do not draw a progress bar and do
-not need the rollups. Asking for the cheap plan where nothing is being drawn is
-a frontend change with no server cost at all.
+The promotions table draws the route, the method, the state, the time spent and
+when: every one of them a column of `transfers` itself. It read the dozen
+aggregates over `jobs`, rendered none of them and threw them away. It now asks
+for `view=summary`, measured at **0.134 s to 0.005 s** on a seeded estate.
+
+Every component in that table was checked for a rollup field first, because the
+failure mode of getting this wrong is not slowness: without the rollups those
+fields are zero, and a progress bar reading a zero looks like a stalled
+promotion rather than a missing request. The downloads table keeps the full
+projection, because it does draw progress.
 
 ### 5.4 Give the Coordinator a profiler
 

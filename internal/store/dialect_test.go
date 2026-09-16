@@ -106,8 +106,8 @@ func TestRewriteDoesNotTreatCommentMarkersInsideStringsAsComments(t *testing.T) 
 func TestTheTransferProjectionRewritesCompletely(t *testing.T) {
 	p := &Packages{dialect: postgresDialect{}}
 
-	got := p.dialect.Rewrite(p.transferSelect(true) +
-		" WHERE pr.name = ? ORDER BY t.created_at DESC LIMIT ? OFFSET ?")
+	got := p.dialect.Rewrite(
+		p.transferListQuery(" WHERE pr.name = ?", true))
 	if strings.Contains(got, "?") {
 		t.Errorf("the transfer projection still leaves a bare `?` for Postgres:\n%s", got)
 	}

@@ -1,4 +1,4 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { api, fetchText, query, packageRef } from './client'
 import { useIdentity } from '../auth/permissions'
@@ -724,27 +724,38 @@ export function useDownloads(product: string | undefined) {
  * tab a second time costs nothing, so deferring the first fetch to the moment
  * it is needed loses nothing either.
  */
-export function useDownloadsForAll(products: string[], enabled = true) {
-  return useQueries({
-    queries: products.map((product) => ({
-      queryKey: ['downloads', product],
-      queryFn: () => api.get<ListDownloadsResponse>(
-        `/products/${encodeURIComponent(product)}/downloads`),
-      staleTime: 5 * MINUTE,
-      enabled,
-    })),
+/**
+ * Every product's declared downloads, and every product's rules, in ONE
+ * request each.
+ *
+ * # Why these are not a query per product
+ *
+ * They were, and it is the fan-out `useDiscoveryStatus`, `useAllPackages` and
+ * `useFleetReplication` each already replaced. These two are the worst of the
+ * set, because they fire on a CLICK: opening the Rules tab issued one request
+ * per product, thirty on a real deployment, all at once and all competing for
+ * the browser's six connections per host - and the answer is derived from the
+ * product document in memory, so the thirty bought nothing whatever.
+ *
+ * `enabled` still gates them on the tab being open. The page does not open on
+ * either tab, and a request nobody is going to read is worth not making even
+ * when it is only one.
+ */
+export function useFleetDownloads(enabled = true) {
+  return useQuery({
+    queryKey: ['downloads', '*'],
+    queryFn: () => api.get<ListDownloadsResponse>('/downloads'),
+    staleTime: 5 * MINUTE,
+    enabled,
   })
 }
 
-export function useRulesForAll(products: string[], enabled = true) {
-  return useQueries({
-    queries: products.map((product) => ({
-      queryKey: ['rules', product],
-      queryFn: () => api.get<ListAutoDownloadRulesResponse>(
-        `/products/${encodeURIComponent(product)}/autoDownloadRules`),
-      staleTime: 5 * MINUTE,
-      enabled,
-    })),
+export function useFleetRules(enabled = true) {
+  return useQuery({
+    queryKey: ['rules', '*'],
+    queryFn: () => api.get<ListAutoDownloadRulesResponse>('/autoDownloadRules'),
+    staleTime: 5 * MINUTE,
+    enabled,
   })
 }
 

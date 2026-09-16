@@ -169,3 +169,49 @@ func tristate(b *bool) string {
 		return "false"
 	}
 }
+
+// handleFleetDownloads reports every product's declared downloads in ONE
+// request.
+//
+// # Why this route exists
+//
+// The Downloads page's Rules tab is built from them, and with only the
+// per-product route to read them from it asked once PER PRODUCT - a deployment
+// with thirty products fired thirty requests the moment somebody clicked the
+// tab, all at once, competing with each other and with the listing beside them
+// for the browser's six connections per host.
+//
+// Nothing about that fan-out was buying anything: a download's status is
+// derived from the product DOCUMENT, in memory, with no database or registry
+// behind it (download.Service.Downloads does not even take a context it uses).
+// Thirty requests to read thirty structs already in this process.
+//
+// The same shape, and the same narrowing, as /discovery and /replication - see
+// visibleProducts and middleware.Requirement.AnyScope, which is set for this
+// path and is only safe because of that narrowing.
+func (s *Server) handleFleetDownloads(w http.ResponseWriter, r *http.Request) {
+	out := v1.ListDownloadsResponse{Downloads: []v1.DownloadView{}}
+	for _, p := range s.visibleProducts(r) {
+		for _, d := range s.deps.Downloads.Downloads(r.Context(), p) {
+			out.Downloads = append(out.Downloads, downloadView(d))
+		}
+	}
+	WriteJSON(w, r, http.StatusOK, out)
+}
+
+// handleFleetAutoDownloadRules reports every product's rules in ONE request,
+// for the same reason and with the same narrowing as handleFleetDownloads.
+//
+// `Enabled` is per product and a flat listing cannot carry one flag for the
+// estate, so it is left false here and each rule names its own product. The
+// switch belongs to the product's own page, which reads it from the
+// per-product route; a reader of the estate's rules wants the rules.
+func (s *Server) handleFleetAutoDownloadRules(w http.ResponseWriter, r *http.Request) {
+	out := v1.ListAutoDownloadRulesResponse{Rules: []v1.AutoDownloadRuleView{}}
+	for _, p := range s.visibleProducts(r) {
+		for _, rule := range s.deps.Downloads.Rules(r.Context(), p) {
+			out.Rules = append(out.Rules, autoRuleView(rule))
+		}
+	}
+	WriteJSON(w, r, http.StatusOK, out)
+}

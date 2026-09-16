@@ -457,3 +457,39 @@ func permitted(r *http.Request, all []string) []string {
 	}
 	return out
 }
+
+// visibleProducts is the estate this caller may read, in a stable order.
+//
+// Shared by every fleet-wide route that walks products rather than rows -
+// replication, downloads and the auto-download rules. Each of those is
+// reachable by a caller who holds the action on ANY product (see
+// middleware.Requirement.AnyScope), and this narrowing is the whole reason
+// that wider door is safe: the three must not drift apart in how they apply
+// it, which is why it is one function.
+//
+// Empty VisibleProducts means unrestricted, which is what a tenant-wide role
+// and an unauthenticated deployment both produce.
+//
+// Sorted by name so a listing somebody is comparing against a previous one
+// does not reshuffle because the registry happened to load in another order.
+func (s *Server) visibleProducts(r *http.Request) []*product.Product {
+	if s.deps.Products == nil {
+		return nil
+	}
+	allowed := map[string]bool{}
+	for _, name := range middleware.IdentityFrom(r.Context()).VisibleProducts() {
+		allowed[name] = true
+	}
+
+	out := make([]*product.Product, 0)
+	for _, p := range s.deps.Products.List() {
+		if len(allowed) > 0 && !allowed[p.Metadata.Name] {
+			continue
+		}
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Metadata.Name < out[j].Metadata.Name
+	})
+	return out
+}

@@ -364,3 +364,118 @@ func (p *Packages) TransferContentBytes(ctx context.Context, transferID string) 
 	}
 	return out, nil
 }
+
+// TransferContentBytesFor weighs the content of a PAGE of transfers, in one
+// query.
+//
+// # Why this exists beside TransferContentBytes
+//
+// Because the listing called that one in a loop, once per row. A page of
+// twenty-five transfers was twenty-five round trips, each re-deriving the same
+// CTEs from scratch - the release's digests, the transfer's target
+// repositories - and each carrying four correlated subqueries over `jobs` per
+// digest. On a real estate it was the single most expensive thing the
+// Downloads page did, and it did not show up in the listing's own query plan
+// because it is not part of the listing's query. A profile of a slow page put
+// `TransferContentBytes` under `handleListTransfers` and nothing else close.
+//
+// The arithmetic per digest is IDENTICAL to the single-transfer version, which
+// is deliberate: the correlated subqueries now correlate on the row's own
+// transfer rather than on a literal, so there is one place the semantics live
+// and TestBatchedContentBytesMatchesOneAtATime holds the two to it.
+//
+// A transfer with no content answers zero, and a transfer this returns nothing
+// for is one the caller should treat as zero rather than as an error - the same
+// as asking for it alone.
+func (p *Packages) TransferContentBytesFor(
+	ctx context.Context, transferIDs []string,
+) (map[string]ContentBytes, error) {
+	out := make(map[string]ContentBytes, len(transferIDs))
+	if len(transferIDs) == 0 {
+		return out, nil
+	}
+
+	ids := placeholders(len(transferIDs))
+	args := make([]any, 0, len(transferIDs))
+	for _, id := range transferIDs {
+		args = append(args, id)
+	}
+
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		WITH tr AS (
+			SELECT id AS transfer_id, package_id, target_repo_id
+			  FROM transfers WHERE id IN (`+ids+`)
+		),
+		-- EVERY repository each transfer writes to, carrying the transfer it
+		-- belongs to. See TransferContentBytes for why the transfer's own
+		-- target_repo_id is the fallback rather than the answer.
+		targets AS (
+			SELECT tr.transfer_id, j.target_repo_id AS repository_id
+			  FROM jobs j JOIN tr ON tr.transfer_id = j.transfer_id
+			UNION
+			SELECT transfer_id, target_repo_id FROM tr
+		),
+		owned AS (
+			-- The blobs, once each however many components reference them.
+			SELECT DISTINCT tr.transfer_id, ab.digest AS digest,
+			       COALESCE(b.size_bytes, 0) AS size_bytes
+			  FROM tr
+			  JOIN package_artifacts pa ON pa.package_id = tr.package_id
+			  JOIN artifact_blobs ab ON ab.artifact_id = pa.id
+			  LEFT JOIN blobs b ON b.digest = ab.digest
+			UNION
+			-- And the manifests, which are content too.
+			SELECT DISTINCT tr.transfer_id, pa.digest, COALESCE(pa.size_bytes, 0)
+			  FROM tr
+			  JOIN package_artifacts pa ON pa.package_id = tr.package_id
+		),
+		state AS (
+			SELECT o.transfer_id AS transfer_id, o.size_bytes AS size_bytes,
+			       COALESCE((SELECT MAX(j.bytes_transferred) FROM jobs j
+			                  WHERE j.transfer_id = o.transfer_id
+			                    AND j.digest = o.digest), 0) AS moved,
+			       CASE WHEN EXISTS (
+			              SELECT 1 FROM jobs j
+			               WHERE j.transfer_id = o.transfer_id AND j.digest = o.digest
+			                 AND j.state = 'succeeded')
+			       THEN 1 ELSE 0 END AS finished,
+			       CASE WHEN EXISTS (
+			              SELECT 1 FROM jobs j
+			               WHERE j.transfer_id = o.transfer_id AND j.digest = o.digest
+			                 AND j.state = 'skipped')
+			            OR (NOT EXISTS (
+			                  SELECT 1 FROM jobs j
+			                   WHERE j.transfer_id = o.transfer_id AND j.digest = o.digest)
+			                AND EXISTS (
+			                  SELECT 1 FROM blob_placements bp
+			                   WHERE bp.digest = o.digest
+			                     AND bp.repository_id IN
+			                         (SELECT repository_id FROM targets t
+			                           WHERE t.transfer_id = o.transfer_id)))
+			       THEN 1 ELSE 0 END AS present
+			  FROM owned o
+		)
+		SELECT transfer_id,
+		       COALESCE(SUM(size_bytes), 0),
+		       COALESCE(SUM(CASE WHEN finished = 1        THEN size_bytes
+		                         WHEN moved > size_bytes  THEN size_bytes
+		                         ELSE moved END), 0),
+		       COALESCE(SUM(CASE WHEN finished = 0 AND moved = 0 AND present = 1
+		                         THEN size_bytes ELSE 0 END), 0)
+		  FROM state
+		 GROUP BY transfer_id`), args...)
+	if err != nil {
+		return nil, fmt.Errorf("weigh the content of %d transfers: %w", len(transferIDs), err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var id string
+		var c ContentBytes
+		if err := rows.Scan(&id, &c.Total, &c.Moved, &c.Present); err != nil {
+			return nil, fmt.Errorf("scan transfer content bytes: %w", err)
+		}
+		out[id] = c
+	}
+	return out, rows.Err()
+}

@@ -81,6 +81,19 @@ func PolicyFor(r *http.Request) PolicyResource {
 	// owner - the people it is written for.
 	case strings.HasPrefix(p, "/api/v1/replication"):
 		res.Kind, res.Action = "replication", "view"
+	// The estate's declared downloads and auto-download rules, which the
+	// Downloads page's two configuration tabs are built from. The same kinds
+	// the per-product routes ask, for the same rows; handleFleetDownloads and
+	// handleFleetAutoDownloadRules narrow them to VisibleProducts, which is
+	// what makes the wider door safe.
+	//
+	// BEFORE the /api/v1/products case below, and matched on the estate path
+	// rather than the substring: `/products/{p}/downloads` must keep asking
+	// with its product attached.
+	case strings.HasPrefix(p, "/api/v1/autoDownloadRules"):
+		res.Kind, res.Action = "download_rule", "view"
+	case strings.HasPrefix(p, "/api/v1/downloads"):
+		res.Kind, res.Action = "software_download", "view"
 	// Releases across every product, which is what the Packages listing shows.
 	// The same `package`/`view` the per-product route asks, for the same rows;
 	// the handler narrows them to VisibleProducts, which is what makes the

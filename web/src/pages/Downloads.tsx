@@ -9,7 +9,7 @@ import {
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  useDownloadsForAll, useFleetReplication, useProducts, useRulesForAll, useTransfers, useWorkers,
+  useFleetDownloads, useFleetReplication, useFleetRules, useProducts, useTransfers, useWorkers,
 } from '../api/queries'
 import { isLive, isPromotion, repositoryOf, transferVersion } from '../domain/derive'
 import { describeFleet, holdOn, summariseFleet, type Fleet } from '../domain/fleet'
@@ -318,8 +318,6 @@ export default function Downloads() {
   const [rulesSearch, setRulesSearch] = useState('')
   const [autoDownloadSearch, setAutoDownloadSearch] = useState('')
   const products = useProducts()
-  const productList = (products.data?.products ?? []).filter((p) => p.enabled)
-  const names = productList.map((p) => p.productId)
 
   // TWO QUERIES, not one listing split in the browser.
   //
@@ -453,16 +451,19 @@ export default function Downloads() {
     The replication fan-out below is not gated: it feeds the drift banner,
     which is on the page whichever tab is showing.
   */
-  const downloadsPerProduct = useDownloadsForAll(names, openTab === 'rules')
-  const rulesPerProduct = useRulesForAll(names, openTab === 'auto-download')
+  const downloadsQuery = useFleetDownloads(openTab === 'rules')
+  const rulesQuery = useFleetRules(openTab === 'auto-download')
   const visibleOngoing = searchable(ongoing, ongoingSearch, (t) => `${t.product} ${t.packageName} ${t.tag} ${t.source} ${t.target}`)
   const visibleFinished = searchable(finished, downloadSearch, (t) => `${t.product} ${t.packageName} ${t.tag} ${t.source} ${t.target}`)
   const visiblePromotions = searchable(promotions, promotionSearch, (t) => `${t.product} ${t.packageName} ${t.tag} ${t.source} ${t.target}`)
   // Flattened with the product each row belongs to, since the tables now cover
   // the estate rather than one product at a time.
-  const downloads: WithProduct<DownloadView>[] = downloadsPerProduct.flatMap((q, i) =>
-    (q.data?.downloads ?? []).map((d) => ({ ...d, product: names[i]! })))
-  const rules: AutoDownloadRuleView[] = rulesPerProduct.flatMap((q) => q.data?.rules ?? [])
+  // The server names the product on every row, so there is nothing to stitch:
+  // the index-into-product-names join this replaces was only ever needed
+  // because the answers arrived one product at a time.
+  const downloads: WithProduct<DownloadView>[] = (downloadsQuery.data?.downloads ?? [])
+    .map((d) => ({ ...d, product: d.product }))
+  const rules: AutoDownloadRuleView[] = rulesQuery.data?.rules ?? []
   const visibleRules = searchable(downloads, rulesSearch, (d) => `${d.product} ${d.name} ${d.chain?.join(' ')}`)
   const visibleAutoDownloads = searchable(rules, autoDownloadSearch, (r) => `${r.product} ${r.name} ${r.tagPattern} ${r.download}`)
   const drifted: ReplicationView[] = (replication.data?.targets ?? [])
@@ -906,7 +907,7 @@ export default function Downloads() {
                     <TableSearch value={rulesSearch} onChange={setRulesSearch} />
                     <ManagedInGit />
                   </TableToolbar>
-          <Card loading={downloadsPerProduct.some((q) => q.isLoading)} styles={{ body: { padding: 0 } }}>
+          <Card loading={downloadsQuery.isLoading} styles={{ body: { padding: 0 } }}>
             <DataTable<WithProduct<DownloadView>>
               tableEnhancedKey="downloads-by-product"
               size="small"
@@ -962,8 +963,8 @@ export default function Downloads() {
                     <TableSearch value={autoDownloadSearch} onChange={setAutoDownloadSearch} />
                     <ManagedInGit />
                   </TableToolbar>
-          <Card loading={rulesPerProduct.some((q) => q.isLoading)} styles={{ body: { padding: 0 } }}>
-            {!rulesPerProduct.some((q) => q.isLoading) && rules.length === 0 ? (
+          <Card loading={rulesQuery.isLoading} styles={{ body: { padding: 0 } }}>
+            {!rulesQuery.isLoading && rules.length === 0 ? (
               <EmptyStateCard
                 title="No auto-download rules"
                 explanation="Nothing is downloaded automatically. Rules are defined in Git; adding one there will show it here."

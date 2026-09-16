@@ -459,6 +459,69 @@ jobs:
           TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
         run: task test:postgres
 
+  # --------------------------------------------------------------- performance
+  #
+  # BACKEND CHANGES ONLY, which is what `changes.outputs.go` already means: Go
+  # sources, the migrations, go.mod and config/. A frontend-only pull request
+  # does not pay for this, and neither does a documentation one.
+  #
+  # Two measurements, because "is it fast" is two questions. See Taskfile's
+  # bench section and test/load/README.md.
+  bench:
+    name: Performance
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          task: 'true'
+
+      - name: Cache Go modules and build output
+        uses: actions/cache@v4 # PIN
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ env.GO_VERSION }}-bench-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-bench-
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-
+
+      # WHAT A QUERY COSTS. Recorded rather than gated: ns/op on a shared
+      # runner is too noisy to fail a pull request on, and a benchmark that
+      # fails for the weather is one that gets deleted. It is in the job
+      # summary so a reviewer can see what a change did to it.
+      - name: Benchmark the polled queries
+        run: |
+          set -euo pipefail
+          task bench -- -benchtime 20x | tee "$RUNNER_TEMP/bench.txt"
+          {
+            echo '### Query cost'
+            echo
+            echo '```'
+            grep -E '^Benchmark' "$RUNNER_TEMP/bench.txt" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # WHAT THE SERVICE DOES UNDER LOAD. This one IS gated, on thresholds an
+      # order of magnitude above where the code sits - see test/load/api.js for
+      # why they are loose and what that buys.
+      - name: Load-test the read path
+        run: task bench:api
+
+      - name: Keep the k6 summary
+        if: '!cancelled()'
+        uses: actions/upload-artifact@v4 # PIN
+        with:
+          name: bench-summary
+          path: dev/bench-summary.json
+          if-no-files-found: warn
+
   # ------------------------------------------------------------- the deployment
   deploy:
     name: Chart and manifests
@@ -699,6 +762,7 @@ jobs:
       - deploy
       - cross-compile
       - portable
+      - bench
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:

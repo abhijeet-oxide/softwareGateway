@@ -207,6 +207,43 @@ tasks:
     cmds:
       - go test -tags=integration ./test/integration/...
 
+  # ------------------------------------------------------------------ bench --
+  #
+  # TWO LAYERS, because "is it fast" is two questions with different answers.
+  #
+  #   bench      what one QUERY costs as the estate grows. Go's own benchmarks,
+  #              so there is nothing to install and the numbers are comparable
+  #              between runs with benchstat.
+  #   bench:api  what the SERVICE does under concurrent readers - throughput,
+  #              p95, p99. k6, which is a single static binary and the tool a
+  #              load test is normally written in.
+  #
+  # The first catches the regression that matters here: the transfer listing
+  # projects a dozen aggregates over `jobs`, so its cost follows what the estate
+  # has DONE rather than what the reader asked for. That is invisible on an
+  # empty development database, which is every test in the suite.
+
+  bench:
+    desc: Benchmark the queries the interface polls
+    cmds:
+      # -run '^$' so no TEST runs: without it the whole package's tests run
+      # first and the benchmark's numbers arrive after several minutes.
+      - go test ./internal/store -run '^$' -bench . -benchmem {{.CLI_ARGS}}
+
+  bench:compare:
+    desc: 'Compare this branch to main (task bench:compare)'
+    # benchstat is the standard way to read two benchmark runs: it repeats each
+    # and reports whether the difference is significant, which a single pair of
+    # ns/op numbers cannot say.
+    cmds:
+      - go run golang.org/x/perf/cmd/benchstat@latest {{.CLI_ARGS | default "main.txt new.txt"}}
+
+  bench:api:
+    desc: Load-test the read path with k6 (starts its own Coordinator)
+    deps: [build:backend]
+    cmds:
+      - test/load/run.sh
+
   cover:
     desc: Run tests with coverage and print the total
     cmds:

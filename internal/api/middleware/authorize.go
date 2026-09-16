@@ -133,6 +133,12 @@ func RequiredFor(r *http.Request) Requirement {
 		// which does its own narrowing - so a caller who holds the action on
 		// any product may be told when something moved.
 		req.AnyScope = true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/downloads",
+		r.Method == http.MethodGet && r.URL.Path == "/api/v1/autoDownloadRules":
+		// Both filter by VisibleProducts, through Server.visibleProducts.
+		// Same rule as /discovery and /replication: a product owner reading
+		// the estate's configuration tabs is reading the products they hold.
+		req.AnyScope = true
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/replication":
 		// handleFleetReplication filters by VisibleProducts. Same rule as
 		// /discovery: the drift banner is an estate-wide question, and

@@ -459,6 +459,15 @@ func (s *Server) routes() chi.Router {
 		// somebody asking.
 		if s.deps.Downloads != nil {
 			r.Get("/products/{product}/downloads", s.handleListDownloads)
+			// THE SAME READS FOR THE WHOLE ESTATE, in one request each.
+			//
+			// The Rules and Auto download tabs are built from these, and with
+			// only the per-product routes they asked once per product the
+			// moment somebody opened a tab. Both answers are derived from the
+			// product documents in memory, so the fan-out bought nothing at
+			// all. Same shape as /discovery and /replication.
+			r.Get("/downloads", s.handleFleetDownloads)
+			r.Get("/autoDownloadRules", s.handleFleetAutoDownloadRules)
 			r.Post("/products/{product}/downloads:run", s.handleRunDownload)
 			r.Get("/products/{product}/autoDownloadRules", s.handleListAutoDownloadRules)
 			r.Get("/products/{product}/autoDownloadRules/{rule}/matches", s.handleRuleMatches)

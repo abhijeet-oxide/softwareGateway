@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -128,23 +127,7 @@ func (s *Server) handleFleetReplication(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	allowed := map[string]bool{}
-	for _, name := range middleware.IdentityFrom(r.Context()).VisibleProducts() {
-		allowed[name] = true
-	}
-
-	products := make([]*product.Product, 0)
-	for _, p := range s.deps.Products.List() {
-		if len(allowed) > 0 && !allowed[p.Metadata.Name] {
-			continue
-		}
-		products = append(products, p)
-	}
-	// By name, so a banner somebody is comparing against a previous one does
-	// not reshuffle because the registry happened to load in another order.
-	sort.Slice(products, func(i, j int) bool {
-		return products[i].Metadata.Name < products[j].Metadata.Name
-	})
+	products := s.visibleProducts(r)
 
 	/*
 	   A DEADLINE, because the banner is advisory and the page is not.

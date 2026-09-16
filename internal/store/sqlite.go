@@ -26,7 +26,14 @@ func openSQLite(ctx context.Context, cfg Config) (Store, error) {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite", dsn)
+	// Through the counting wrapper, so a request can be asked how many round
+	// trips it made. See countingdriver.go - it is a passthrough that adds an
+	// atomic increment when somebody is counting.
+	name, err := countingDriverName("sqlite-counting", "sqlite")
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open(name, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}

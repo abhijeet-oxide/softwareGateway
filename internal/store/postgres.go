@@ -18,7 +18,13 @@ type postgresStore struct {
 }
 
 func openPostgres(ctx context.Context, cfg Config) (Store, error) {
-	db, err := sql.Open("pgx", cfg.DSN)
+	// Through the counting wrapper, for the same reason as SQLite - see
+	// countingdriver.go.
+	name, err := countingDriverName("pgx-counting", "pgx")
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open(name, cfg.DSN)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}

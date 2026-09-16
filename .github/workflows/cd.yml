@@ -13,14 +13,6 @@ on:
       - '**/*.md'
   workflow_dispatch:
     inputs:
-      promote_to:
-        description: >-
-          Promote the published build to this Artifactory repository. Empty
-          publishes without promoting, which is the default: a build is
-          published because it was built, and promoted because somebody decided
-          it was good. Artifacts are copied, never moved.
-        type: string
-        default: ''
       create_release:
         description: >-
           Cut a release: a new version, a new git tag, and every image rebuilt
@@ -195,11 +187,6 @@ jobs:
   images:
     name: ${{ matrix.component }} image
     needs: version
-    permissions:
-      contents: read
-      # Both only for actions/attest-build-provenance, and unused without it.
-      id-token: write
-      attestations: write
     # `images_changed` is NOT a condition here any more - it is one input to the
     # decision the `plan` step below makes against the registry. Gating the job
     # on it is what let a failed build become a published chart pointing at
@@ -404,26 +391,6 @@ jobs:
             org.opencontainers.image.version=${{ needs.version.outputs.image_version }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
-      # A SIGNED STATEMENT OF WHERE THIS IMAGE CAME FROM. in-toto/SLSA
-      # provenance, signed through Sigstore with the job's own OIDC identity, so
-      # there is no key to hold: `gh attestation verify oci://<ref>` answers
-      # which workflow, which commit and which runner built a digest, from
-      # outside this repository and without trusting it.
-      #
-      # On the digest rather than the tag, because a tag is a pointer and the
-      # statement has to be about the bits.
-      #
-      # Off unless BUILD_ATTESTATION is set: it needs `id-token: write`, which
-      # is a permission worth granting deliberately.
-      - uses: actions/attest-build-provenance@v3
-        if: steps.plan.outputs.build == 'true' && vars.BUILD_ATTESTATION == 'true'
-        with:
-          subject-name: ${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_REPOSITORY }}/software-gateway-${{ matrix.component }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          # The attestation lives in GitHub by default. Pushing it to the
-          # registry as an OCI referrer needs the registry to serve the
-          # referrers API, which not every Artifactory version does.
-          push-to-registry: ${{ vars.BUILD_ATTESTATION_IN_REGISTRY == 'true' }}
 
   # ------------------------------------------------------------------ 3. chart
   chart:
@@ -501,120 +468,6 @@ jobs:
           helm registry login "$registry" --username "$REGISTRY_USERNAME" --password-stdin <<<"$REGISTRY_TOKEN"
           helm push "$RUNNER_TEMP/chart/software-gateway-${CHART_VERSION}.tgz" \
             "oci://${registry}/${REGISTRY_REPOSITORY}"
-
-  # ------------------------------------------------ 3.5 the release, as a build
-  #
-  # THE RELEASE AS ONE OBJECT, in the view an organisation already uses to ask
-  # what shipped. Everything else this pipeline produces is addressed one
-  # artifact at a time - three images and a chart, four tags related only by a
-  # version number somebody has to know to type.
-  #
-  # Done with the JFrog CLI rather than by calling the API: `jf` is what JFrog
-  # supports, it knows the Build Info schema and how it changes, and the two
-  # awkward parts - a module per image with its layers, and promotion - are one
-  # verb each.
-  #
-  # IT DESCRIBES EVERY COMPONENT, NOT THE ONES THIS RUN BUILT. `jf` normally
-  # collects build info from the pushes it performs, and this pipeline
-  # deliberately does not push what is already published (§12.9.1) - a
-  # configuration-only release pushes nothing at all. So each component is
-  # attached with `build-docker-create`, which records an image ALREADY in the
-  # registry by its digest. Built or reused, every component is in the build, or
-  # the job fails naming the one that is not.
-  build-info:
-    name: Publish the release build
-    needs: [version, images, chart]
-    if: >-
-      always()
-      && vars.BUILD_INFO == 'true'
-      && needs.chart.result == 'success'
-      && needs.version.outputs.configured == 'true'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # build-add-git reads the log to attach the commits since the last
-          # build, which is what makes the Builds view answer "what changed".
-          fetch-depth: 0
-
-      - uses: ./.github/actions/toolchain
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          jfrog-cli: 'true'
-
-      # The same credential that pushed the images, and the same one `jf` uses.
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          registry: ${{ env.REGISTRY_HOST }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_TOKEN }}
-
-      - name: Collect and publish the build
-        env:
-          JF_USER: ${{ secrets.REGISTRY_USERNAME }}
-          JF_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-          # Derived from the registry host, because that is where Artifactory
-          # is. Set BUILD_INFO_URL only when it is not - a JFrog instance that
-          # serves its registry on a different hostname than its API.
-          JF_URL: ${{ vars.BUILD_INFO_URL || format('https://{0}/artifactory', env.REGISTRY_HOST) }}
-          JF_PROJECT: ${{ vars.BUILD_INFO_PROJECT }}
-          BUILD_NAME: ${{ vars.BUILD_INFO_NAME || 'software-gateway' }}
-          BUILD_NUMBER: ${{ needs.version.outputs.chart_version }}
-          IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
-          CHART_VERSION: ${{ needs.version.outputs.chart_version }}
-          PROMOTE_TO: ${{ inputs.promote_to }}
-        run: |
-          set -euo pipefail
-          project=()
-          [ -n "${JF_PROJECT:-}" ] && project=(--project "$JF_PROJECT")
-
-          # On stdin: a token in argv is in the runner's process list.
-          jf config add cd --url "$JF_URL" --user "$JF_USER" --password-stdin \
-            --interactive=false --overwrite <<<"$JF_TOKEN"
-
-          registry="${REGISTRY_HOST}"
-          digest_file="$RUNNER_TEMP/image-digest.txt"
-
-          # Every component of the release, whether this run built it or not.
-          attach() {
-            local image="$1" version="$2"
-            local ref="${registry}/${REGISTRY_REPOSITORY}/${image}:${version}"
-            local digest
-            if ! digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$ref" 2>/dev/null)"; then
-              echo "::error::${ref} is not in the registry, so this release cannot be described."
-              echo "::error::A build listing some of a release reads as complete and is not."
-              return 1
-            fi
-            # build-docker-create wants the repository path as the registry
-            # serves it, and the digest rather than the tag.
-            echo "${REGISTRY_REPOSITORY}/${image}@${digest}" > "$digest_file"
-            jf rt build-docker-create "$REGISTRY_REPOSITORY" \
-              --image-file "$digest_file" \
-              --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER" "${project[@]}"
-            echo "- \`${ref}\` \`${digest}\`" >> "$GITHUB_STEP_SUMMARY"
-          }
-
-          echo "### ${BUILD_NAME} ${BUILD_NUMBER}" >> "$GITHUB_STEP_SUMMARY"
-          for component in $(go run ./deploy/release/cmd/release names | tr ',' ' '); do
-            attach "software-gateway-${component}" "$IMAGE_VERSION"
-          done
-          attach "software-gateway" "$CHART_VERSION"
-
-          # The runner and the commits, so the build says where it came from.
-          jf rt build-collect-env "$BUILD_NAME" "$BUILD_NUMBER" "${project[@]}"
-          jf rt build-add-git "$BUILD_NAME" "$BUILD_NUMBER" "${project[@]}"
-          jf rt build-publish "$BUILD_NAME" "$BUILD_NUMBER" "${project[@]}"
-
-          if [ -n "${PROMOTE_TO:-}" ]; then
-            # --copy: a promotion that MOVES empties the repository anything
-            # still pulling this release reads from.
-            jf rt build-promote "$BUILD_NAME" "$BUILD_NUMBER" "$PROMOTE_TO" \
-              --status Released --copy=true --source-repo "$REGISTRY_REPOSITORY" "${project[@]}"
-            echo "promoted to $PROMOTE_TO" >> "$GITHUB_STEP_SUMMARY"
-          fi
 
   # ---------------------------------------------------------------- 4. promote
   #

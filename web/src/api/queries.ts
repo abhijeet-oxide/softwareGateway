@@ -749,28 +749,38 @@ export function useRulesForAll(products: string[], enabled = true) {
 }
 
 /**
- * Every product's replication targets, for the drift banner.
+ * Every product's replication targets, for the drift banner, in ONE request.
  *
- * CACHED LIKE THE CONFIGURATION IT IS. This is the most expensive read on the
- * Downloads page by a wide margin: one request per product, and each one asks
- * every delegated target's registry what it currently looks like - a network
- * round trip apiece, and a row written recording the observation. On the shared
- * 30-second default the whole estate was re-read every time somebody navigated
- * back to this page, against a Coordinator that may be leasing and completing
- * jobs at the same time.
+ * # Why this is not a query per product
  *
- * Five minutes, which is what the two sibling product-configuration reads above
- * already use. Drift is somebody editing a registry by hand: it does not need
- * spotting within thirty seconds, and the target's own page reads it fresh.
+ * It was, and it is the same fan-out `useDiscoveryStatus` and `useAllPackages`
+ * each already replaced: drift is a property of the ESTATE, so a deployment
+ * with thirty products issued thirty requests to draw one banner - each one
+ * authorized, logged, and competing with the other twenty-nine, and with the
+ * transfer listing beside them, for the browser's six connections per host.
+ *
+ * The server answers all of it at once and bounds the registry fan-out over
+ * the whole call rather than per product. See GET /api/v1/replication.
+ *
+ * # Why it is cached like the configuration it is
+ *
+ * This is still the most expensive read on the Downloads page: every delegated
+ * target is a round trip to its own registry and a row written recording the
+ * observation. Five minutes, which is what the two sibling
+ * product-configuration reads above already use. Drift is somebody editing a
+ * registry by hand: it does not need spotting within thirty seconds, and the
+ * target's own page reads it fresh.
  */
-export function useReplicationForAll(products: string[]) {
-  return useQueries({
-    queries: products.map((product) => ({
-      queryKey: ['replication', product],
-      queryFn: () => api.get<ListReplicationResponse>(
-        `/products/${encodeURIComponent(product)}/replication`),
-      staleTime: 5 * MINUTE,
-    })),
+export function useFleetReplication(opts: { enabled?: boolean } = {}) {
+  const { enabled = true } = opts
+  return useQuery({
+    queryKey: ['replication', '*'],
+    queryFn: () => api.get<ListReplicationResponse>('/replication'),
+    enabled,
+    staleTime: 5 * MINUTE,
+    // A banner that briefly disagrees with a registry is better than one that
+    // blinks out: the previous rows stay on screen while the next arrive.
+    placeholderData: (previous) => previous,
   })
 }
 

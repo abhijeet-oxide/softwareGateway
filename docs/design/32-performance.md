@@ -3,8 +3,9 @@
 > **Consumed by:** [03](03-persistence.md), [09](09-api.md)
 > **Status:** implemented. The measurement is `task bench`, `task bench:api`
 > and the `Performance` job in `.github/workflows/ci.yml`; §5.1 and §5.3 are in
-> `internal/store/queue.go` and `web/src/pages/Downloads.tsx`. §5.2 and §5.4
-> remain proposed, with the numbers that justify them.
+> `internal/store/queue.go` and `web/src/pages/Downloads.tsx`, §5.4 in
+> `cmd/coordinator` and §5.5 in `internal/api/replication.go`. §5.2 remains
+> proposed, with the numbers that justify it.
 
 ---
 
@@ -224,12 +225,45 @@ fields are zero, and a progress bar reading a zero looks like a stalled
 promotion rather than a missing request. The downloads table keeps the full
 projection, because it does draw progress.
 
-### 5.4 Give the Coordinator a profiler
+### 5.4 Give the Coordinator a profiler - DONE
 
-There is no `net/http/pprof` endpoint in this repository, so the way to find
-out where the time goes is to reproduce the estate locally and use
-`EXPLAIN`. A guarded pprof listener - off by default, bound to the metrics port
-- is what made §2 take an afternoon instead of a day.
+`observability.profiling`, off by default and on loopback when it is on. It is
+a listener of ITS OWN and is never mounted on the API router: a profiler hands
+the heap - registry credentials included - to anything that can reach it, and
+`/pprof` is already in `cel.operationalPaths`, which NET-06 fails a deployment
+for publishing. The chart declares no containerPort for it, so reaching it is a
+deliberate `kubectl port-forward`.
+
+This is what would have made §2 an afternoon's work instead of a day's.
+
+### 5.5 One replication read for the estate - DONE
+
+`useReplicationForAll` issued a request PER PRODUCT to draw the Downloads
+page's drift banner - thirty on a real deployment, every time somebody
+navigated back to the page, each one authorized, logged, and competing with the
+other twenty-nine and with the transfer listing beside them for the browser's
+six connections per host.
+
+`GET /api/v1/replication` answers all of it at once. The same shape, and the
+same narrowing to `Identity.VisibleProducts`, that `/discovery` and `/packages`
+already are - see `middleware.Requirement.AnyScope`, which is set for this path
+and is only safe because the handler filters.
+
+THE CONCURRENCY BOUND IS NOW OVER THE WHOLE CALL. The per-product handler
+bounded its own fan-out at eight, which bounds nothing once one request reads
+every product: thirty products of four targets would open a hundred and twenty
+registry connections from a single GET. `TestFleetReplicationBoundsTheWholeFanOut`
+asserts it, and was checked to fail when the limit is applied per product.
+
+**A bug this found.** `ListReplicationResponse` was declared in TypeScript as
+`{ replication: ReplicationView[] }`; the server has always sent `{ targets:
+... }`. Nothing caught it - `api.get` casts the parsed body with `as T` rather
+than validating it - so the field read `undefined` and every caller's `?? []`
+turned that into an empty list. **The drift banner was drawn from it and
+therefore never appeared**, and `DownloadDetail` decided whether a target was
+mirrored from the same empty list, so a delegated target with no sync yet
+showed no mirror step. Both looked like working code and neither had a test.
+The type now matches the wire, and the compiler found both callers.
 
 ## 6. What is already right
 

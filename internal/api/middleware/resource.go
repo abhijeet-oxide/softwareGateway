@@ -72,6 +72,15 @@ func PolicyFor(r *http.Request) PolicyResource {
 	// every product owner the Overview.
 	case strings.HasPrefix(p, "/api/v1/discovery"):
 		res.Kind, res.Action = "product", "view"
+	// Target replication across every product, which is what the Downloads
+	// page's drift banner is drawn from. The same `replication`/`view` the
+	// per-product route asks, for the same rows; handleFleetReplication
+	// narrows them to VisibleProducts, which is what makes the wider door
+	// safe. Named here rather than left to the fallback, which would judge it
+	// a tenant-wide `system` read and refuse the banner to every product
+	// owner - the people it is written for.
+	case strings.HasPrefix(p, "/api/v1/replication"):
+		res.Kind, res.Action = "replication", "view"
 	// Releases across every product, which is what the Packages listing shows.
 	// The same `package`/`view` the per-product route asks, for the same rows;
 	// the handler narrows them to VisibleProducts, which is what makes the

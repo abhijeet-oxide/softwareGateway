@@ -9,7 +9,7 @@ import {
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  useDownloadsForAll, useProducts, useReplicationForAll, useRulesForAll, useTransfers, useWorkers,
+  useDownloadsForAll, useFleetReplication, useProducts, useRulesForAll, useTransfers, useWorkers,
 } from '../api/queries'
 import { isLive, isPromotion, repositoryOf, transferVersion } from '../domain/derive'
 import { describeFleet, holdOn, summariseFleet, type Fleet } from '../domain/fleet'
@@ -352,7 +352,7 @@ export default function Downloads() {
     pageSize: promotionPageSize, operation: 'promote', view: 'summary',
     pageToken: promotionPage > 1 ? String((promotionPage - 1) * promotionPageSize) : undefined,
   })
-  const replicationPerProduct = useReplicationForAll(names)
+  const replication = useFleetReplication()
 
   /*
     THE FLEET. A download is planned by the Coordinator and performed by
@@ -465,8 +465,8 @@ export default function Downloads() {
   const rules: AutoDownloadRuleView[] = rulesPerProduct.flatMap((q) => q.data?.rules ?? [])
   const visibleRules = searchable(downloads, rulesSearch, (d) => `${d.product} ${d.name} ${d.chain?.join(' ')}`)
   const visibleAutoDownloads = searchable(rules, autoDownloadSearch, (r) => `${r.product} ${r.name} ${r.tagPattern} ${r.download}`)
-  const drifted: ReplicationView[] = replicationPerProduct.flatMap(
-    (q) => (q.data?.replication ?? []).filter((r) => r.drift?.drifted))
+  const drifted: ReplicationView[] = (replication.data?.targets ?? [])
+    .filter((r) => r.drift?.drifted)
 
   if (products.isError) {
     return (

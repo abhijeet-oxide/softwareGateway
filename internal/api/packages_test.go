@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -123,6 +124,16 @@ func newAPIHarnessWith(t *testing.T, adjust func(*Deps), docs ...string) *apiHar
 	if err := os.WriteFile(filepath.Join(dir, "vendor-a.yaml"), []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// ANY FURTHER DOCUMENTS become products of their own, which is what an
+	// estate-wide route needs: a fan-out over one product proves nothing about
+	// a fan-out over the estate. Named by index rather than by parsing the
+	// document, because the file name is not what the registry keys on.
+	for i, extra := range docs[min(len(docs), 1):] {
+		name := filepath.Join(dir, fmt.Sprintf("extra-%d.yaml", i))
+		if err := os.WriteFile(name, []byte(extra), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// A credential on disk, because a JFrog repository with a scanner must
 	// declare one - `anonymous: true` is rejected for Xray, deliberately, since
 	// there is no anonymous Xray access worth having.
@@ -141,8 +152,14 @@ func newAPIHarnessWith(t *testing.T, adjust func(*Deps), docs ...string) *apiHar
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if len(res.Valid) != 1 {
-		t.Fatalf("expected 1 product, got %d valid / %d invalid", len(res.Valid), len(res.Invalid))
+	// One per document written above. The count is asserted rather than
+	// assumed: a document that stops parsing would otherwise show up as a
+	// handler returning fewer rows than the test expects, which reads as a bug
+	// in the handler.
+	wantProducts := max(len(docs), 1)
+	if len(res.Valid) != wantProducts {
+		t.Fatalf("expected %d product(s), got %d valid / %d invalid",
+			wantProducts, len(res.Valid), len(res.Invalid))
 	}
 
 	products := product.NewRegistry()

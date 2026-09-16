@@ -435,6 +435,13 @@ func (s *Server) routes() chi.Router {
 		// the routes need a management client and the secrets behind it.
 		if s.deps.Replication != nil {
 			r.Get("/products/{product}/replication", s.handleListReplication)
+			// THE SAME READ FOR THE WHOLE ESTATE, in one request.
+			//
+			// Drift is a property of the estate and the Downloads page draws a
+			// banner from it, so with only the per-product route a deployment
+			// with thirty products issued thirty requests to draw one banner.
+			// The same shape, and the same reason, as /discovery above.
+			r.Get("/replication", s.handleFleetReplication)
 			r.Get("/products/{product}/targets/{target}/replication", s.handleGetReplication)
 			r.Post("/products/{product}/targets/{target}/replication:apply", s.handleApplyReplication)
 			r.Post("/products/{product}/targets/{target}/replication:sync", s.handleSyncReplication)

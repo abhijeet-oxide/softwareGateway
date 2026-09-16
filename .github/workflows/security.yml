@@ -37,7 +37,7 @@ jobs:
   # database build; a pull request that only edits the chart must not pay it.
   changes:
     name: What changed
-    runs-on: ${{ vars.RUNNER_LABEL }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       go: ${{ steps.f.outputs.go }}
@@ -103,7 +103,7 @@ jobs:
     name: CodeQL (${{ matrix.language }})
     needs: changes
     if: vars.SECURITY_CODEQL == 'true' && needs.changes.outputs.languages != '[]'
-    runs-on: ${{ vars.RUNNER_LABEL }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -150,7 +150,7 @@ jobs:
     name: govulncheck
     needs: changes
     if: vars.SECURITY_GOVULNCHECK == 'true' && needs.changes.outputs.go == 'true'
-    runs-on: ${{ vars.RUNNER_LABEL }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -175,7 +175,7 @@ jobs:
     name: pnpm audit
     needs: changes
     if: needs.changes.outputs.web == 'true'
-    runs-on: ${{ vars.RUNNER_LABEL }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -204,7 +204,7 @@ jobs:
     name: Trivy
     needs: changes
     if: needs.changes.outputs.containers == 'true' || github.event_name != 'pull_request'
-    runs-on: ${{ vars.RUNNER_LABEL }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -270,7 +270,7 @@ jobs:
     # language that had nothing to build must not stop the export of the rest.
     if: always() && github.event_name == 'workflow_dispatch'
     needs: [codeql, trivy]
-    runs-on: ${{ vars.RUNNER_LABEL }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -372,7 +372,7 @@ jobs:
   # for organisation-owned repositories.
   gitleaks:
     name: Secret scan
-    runs-on: ${{ vars.RUNNER_LABEL }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -408,7 +408,7 @@ jobs:
   dependency-review:
     name: Dependency review
     if: github.event_name == 'pull_request'
-    runs-on: ${{ vars.RUNNER_LABEL }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -426,7 +426,7 @@ jobs:
     name: Security
     if: always()
     needs: [changes, codeql, gitleaks, dependency-review]
-    runs-on: ${{ vars.RUNNER_LABEL }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Every scanner that ran must have passed

@@ -72,6 +72,15 @@ func PolicyFor(r *http.Request) PolicyResource {
 	// every product owner the Overview.
 	case strings.HasPrefix(p, "/api/v1/discovery"):
 		res.Kind, res.Action = "product", "view"
+	// Target replication across every product, which is what the Downloads
+	// page's drift banner is drawn from. The same `replication`/`view` the
+	// per-product route asks, for the same rows; handleFleetReplication
+	// narrows them to VisibleProducts, which is what makes the wider door
+	// safe. Named here rather than left to the fallback, which would judge it
+	// a tenant-wide `system` read and refuse the banner to every product
+	// owner - the people it is written for.
+	case strings.HasPrefix(p, "/api/v1/replication"):
+		res.Kind, res.Action = "replication", "view"
 	// Releases across every product, which is what the Packages listing shows.
 	// The same `package`/`view` the per-product route asks, for the same rows;
 	// the handler narrows them to VisibleProducts, which is what makes the
@@ -81,6 +90,13 @@ func PolicyFor(r *http.Request) PolicyResource {
 		res.Kind, res.Action = "package", "view"
 	case strings.HasPrefix(p, "/api/v1/system"):
 		res.Kind, res.Action = "system", "view"
+	// The change feed. `software_download`/`view`, because what it reports is
+	// that a download moved - the same fact the listing carries, and a caller
+	// who may not read the listing has no business being told when it changes.
+	// The stream carries IDs and nothing else, so this is the whole of what it
+	// discloses.
+	case strings.HasPrefix(p, "/api/v1/events"):
+		res.Kind, res.Action = "software_download", "view"
 
 	// ---- downloads, which the domain calls transfers ----
 	case strings.HasPrefix(p, "/api/v1/transfers"):

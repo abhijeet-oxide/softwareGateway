@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -310,6 +311,9 @@ type Server struct {
 	// analyses are the manifest-tree walks THIS replica is running, so one can
 	// be stopped rather than only disowned. See internal/api/analysis.go.
 	analyses *analysisRunner
+	// events is the change feed behind GET /api/v1/events, and the readers
+	// subscribed to it on THIS replica. See internal/api/events.go.
+	events *eventHub
 }
 
 // NewServer builds the HTTP surface.
@@ -329,6 +333,7 @@ func NewServer(deps Deps) *Server {
 		deps:        deps,
 		comparisons: newCompareTracker(),
 		analyses:    newAnalysisRunner(),
+		events:      newEventHub(deps.Logger),
 	}
 	s.router = s.routes()
 	return s
@@ -435,6 +440,13 @@ func (s *Server) routes() chi.Router {
 		// the routes need a management client and the secrets behind it.
 		if s.deps.Replication != nil {
 			r.Get("/products/{product}/replication", s.handleListReplication)
+			// THE SAME READ FOR THE WHOLE ESTATE, in one request.
+			//
+			// Drift is a property of the estate and the Downloads page draws a
+			// banner from it, so with only the per-product route a deployment
+			// with thirty products issued thirty requests to draw one banner.
+			// The same shape, and the same reason, as /discovery above.
+			r.Get("/replication", s.handleFleetReplication)
 			r.Get("/products/{product}/targets/{target}/replication", s.handleGetReplication)
 			r.Post("/products/{product}/targets/{target}/replication:apply", s.handleApplyReplication)
 			r.Post("/products/{product}/targets/{target}/replication:sync", s.handleSyncReplication)
@@ -652,6 +664,12 @@ func (s *Server) routes() chi.Router {
 			// two to disagree.
 			r.Get("/comparisons/{comparison}", s.handleCompareProgress)
 
+			// WHAT CHANGED, streamed, so the page is not asking every five
+			// seconds whether anything did. Registered beside the listing it
+			// exists to stop re-fetching; see internal/api/events.go for why
+			// the events carry no data and why the polls stay.
+			r.Get("/events", s.handleTransferEvents)
+
 			r.Get("/transfers", s.handleListTransfers)
 			// Registered BEFORE the parameterised route, and spelled with a
 			// colon rather than as a path segment, so it cannot ever be read as
@@ -695,6 +713,23 @@ func (s *Server) routes() chi.Router {
 	})
 
 	return r
+}
+
+// WatchTransfers runs the change feed behind GET /api/v1/events until ctx ends.
+//
+// Started by cmd/coordinator rather than by NewServer, because it is a
+// goroutine with a lifetime and the composition root is what owns those. A
+// Coordinator that never starts it still serves the route: readers subscribe,
+// receive the heartbeat, and are told nothing - which is exactly what the web
+// interface's polling fallback is there for.
+func (s *Server) WatchTransfers(ctx context.Context) {
+	if s.deps.Packages == nil {
+		return
+	}
+	// A SECOND, which is the interval at which a number on screen is worth
+	// re-reading. It is one indexed query over the transfers that are actually
+	// moving, and it is skipped entirely when nobody is subscribed.
+	s.watchTransfers(ctx, time.Second)
 }
 
 // Shutdown releases server-held resources. The HTTP server's own lifecycle is

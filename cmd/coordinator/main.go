@@ -14,7 +14,9 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -758,6 +760,48 @@ func run() error {
 
 	g, gctx := errgroup.WithContext(ctx)
 
+	// THE PROFILER, on a listener of its own and only when asked for.
+	//
+	// Never on the API server: a profiler hands the heap - registry
+	// credentials included - to anybody who can reach it, and a CPU profile is
+	// a denial of service on request. See config.ProfilingConfig for the whole
+	// argument, and internal/compliance/cel for the NET-06 check that fails a
+	// deployment which publishes one of these paths.
+	var profileServer *http.Server
+	if cfg.Observability.Profiling.Enabled {
+		addr := cfg.Observability.Profiling.Address
+		// Only the pprof handlers, on a mux of their own: http.DefaultServeMux
+		// is where net/http/pprof registers itself, and serving that mux would
+		// also serve whatever any other package has registered on it.
+		mux := http.NewServeMux()
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+		profileServer = &http.Server{
+			Addr: addr, Handler: mux,
+			ReadHeaderTimeout: 10 * time.Second,
+			// No WriteTimeout: a CPU profile is a thirty-second response by
+			// default and a deadline here would truncate every one of them.
+		}
+		if !loopbackAddr(addr) {
+			logger.Warn("THE PROFILER IS NOT ON LOOPBACK - anything that can reach "+
+				"this address can read the heap of this process, which holds registry "+
+				"credentials", "address", addr,
+				"setting", "observability.profiling.address")
+		}
+		g.Go(func() error {
+			logger.Info("profiler listening", "address", addr, "path", "/debug/pprof/")
+			if err := profileServer.ListenAndServe(); err != nil &&
+				!errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("profile server: %w", err)
+			}
+			return nil
+		})
+	}
+
 	g.Go(func() error {
 		logger.Info("http listening", "address", cfg.Server.Address)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -765,6 +809,10 @@ func run() error {
 		}
 		return nil
 	})
+
+	// The change feed behind GET /api/v1/events. It queries nothing while
+	// nobody is subscribed, so an estate nobody is watching costs nothing.
+	g.Go(func() error { srv.WatchTransfers(gctx); return nil })
 
 	g.Go(func() error { return elector.Run(gctx) })
 	g.Go(func() error { return watcher.Run(gctx) })
@@ -790,6 +838,11 @@ func run() error {
 
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			logger.Warn("http shutdown", "error", err)
+		}
+		if profileServer != nil {
+			if err := profileServer.Shutdown(shutdownCtx); err != nil {
+				logger.Warn("profiler shutdown", "error", err)
+			}
 		}
 		return nil
 	})
@@ -892,4 +945,28 @@ func anchoreTuning(
 	log.Info("anchore is available for products that enable it",
 		"endpoint", cfg.Endpoint, "submit", tuning.Submit, "grouping", tuning.Grouping)
 	return tuning
+}
+
+// loopbackAddr reports whether a listen address is reachable only from this
+// pod, which is what decides whether the profiler needs a warning.
+//
+// The HOST half only: a port says nothing about who can reach it. An empty
+// host is the case that matters most - ":6060" binds every interface, and it
+// is the shortest thing somebody types.
+func loopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Not a host:port at all. Warning is the safe answer for something
+		// nobody can read, and the listener itself will fail on it anyway.
+		return false
+	}
+	switch host {
+	case "":
+		// ":6060" - every interface, including the pod network.
+		return false
+	case "localhost":
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

@@ -198,11 +198,17 @@ type BlobRef struct {
 type Packages struct {
 	db      *sql.DB
 	dialect Dialect
+	// The rollups of transfers that have finished. See rollupcache.go for why
+	// remembering these cannot serve a stale number.
+	rollups *rollupCache
 }
 
 // NewPackages builds the package store.
 func NewPackages(s Store) *Packages {
-	return &Packages{db: s.DB(), dialect: DialectFor(s.Driver())}
+	return &Packages{
+		db: s.DB(), dialect: DialectFor(s.Driver()),
+		rollups: newRollupCache(defaultRollupCacheSize),
+	}
 }
 
 // DB exposes the handle so callers can open the transaction they will pass

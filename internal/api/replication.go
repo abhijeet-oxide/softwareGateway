@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -78,12 +79,109 @@ func (s *Server) handleListReplication(w http.ResponseWriter, r *http.Request) {
 	// configuration - written by index rather than appended - so a listing
 	// somebody is comparing against a previous one does not reshuffle itself
 	// because a registry was slow this time.
-	views := make([]v1.ReplicationView, len(p.Spec.Targets))
-	g, gctx := errgroup.WithContext(r.Context())
+	WriteJSON(w, r, http.StatusOK,
+		v1.ListReplicationResponse{Targets: s.replicationViews(r.Context(), []*product.Product{p})})
+}
+
+// handleFleetReplication reports every target of every product this caller may
+// read, in ONE request.
+//
+// # Why this route exists
+//
+// The Downloads page draws a banner naming any registry whose configuration has
+// drifted from what Git says, and drift is a property of the ESTATE - so with
+// the per-product route as the only way to read it, the page asked once per
+// product. A deployment with thirty products issued thirty requests to draw one
+// banner, every time somebody navigated back to the page, each one
+// re-authorized, re-logged, and competing with the other twenty-nine (and with
+// the transfer listing beside them) for the browser's six connections per host.
+//
+// This is the same route `/discovery` already is, for the same reason and with
+// the same narrowing - see handleFleetDiscoveryStatus.
+//
+// # What it costs, and why the bound is global
+//
+// Unlike discovery, this answer is NOT held in memory: every delegated target
+// is a round trip to its own registry. One request for thirty products of four
+// targets is a hundred and twenty of them, so the concurrency limit has to
+// cover the whole fan-out rather than each product's share of it - eight at a
+// time across the estate, not eight per product. That makes this request
+// slower than any single per-product one it replaces and far cheaper than all
+// of them together, which is the trade the banner wants.
+//
+// # What it narrows to
+//
+// The products this caller may READ, from the same Identity.VisibleProducts
+// every other fleet-wide read uses. Empty means unrestricted, which is what a
+// tenant-wide role and an unauthenticated deployment both produce. That
+// narrowing is what makes the route safe to reach for a caller who holds
+// product.view on one product rather than tenant-wide - see
+// middleware.Requirement.AnyScope, which is set for this path and must be
+// changed with this filter or not at all.
+func (s *Server) handleFleetReplication(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Products == nil {
+		WriteJSON(w, r, http.StatusOK,
+			v1.ListReplicationResponse{Targets: []v1.ReplicationView{}})
+		return
+	}
+
+	allowed := map[string]bool{}
+	for _, name := range middleware.IdentityFrom(r.Context()).VisibleProducts() {
+		allowed[name] = true
+	}
+
+	products := make([]*product.Product, 0)
+	for _, p := range s.deps.Products.List() {
+		if len(allowed) > 0 && !allowed[p.Metadata.Name] {
+			continue
+		}
+		products = append(products, p)
+	}
+	// By name, so a banner somebody is comparing against a previous one does
+	// not reshuffle because the registry happened to load in another order.
+	sort.Slice(products, func(i, j int) bool {
+		return products[i].Metadata.Name < products[j].Metadata.Name
+	})
+
+	WriteJSON(w, r, http.StatusOK,
+		v1.ListReplicationResponse{Targets: s.replicationViews(r.Context(), products)})
+}
+
+// replicationViews reads every target of every product given, side by side.
+//
+// SIDE BY SIDE, because each delegated target costs a round trip to its own
+// registry. Read serially, a product with four delegated targets spent four
+// registry latencies end to end - and the fleet route asks this of every
+// product at once, so the slowest registry in the estate would set the
+// wall-clock time of the whole page. They are independent reads of different
+// registries; nothing is gained by waiting for one before starting the next.
+//
+// Bounded, because "one goroutine per target" is a fan-out a product document
+// controls. The bound is over the WHOLE call rather than per product: the fleet
+// route's fan-out is the sum of every product's, and a limit applied per
+// product would not bound it at all.
+//
+// The order of the answer is the order of the configuration - written by index
+// rather than appended - so a listing somebody is comparing against a previous
+// one does not reshuffle itself because a registry was slow this time.
+func (s *Server) replicationViews(ctx context.Context, products []*product.Product) []v1.ReplicationView {
+	type slot struct {
+		p *product.Product
+		t product.Target
+	}
+	var slots []slot
+	for _, p := range products {
+		for _, t := range p.Spec.Targets {
+			slots = append(slots, slot{p: p, t: t})
+		}
+	}
+
+	views := make([]v1.ReplicationView, len(slots))
+	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxConcurrentTargetReads)
-	for i, t := range p.Spec.Targets {
+	for i, sl := range slots {
 		g.Go(func() error {
-			st, err := s.deps.Replication.Status(gctx, p, t)
+			st, err := s.deps.Replication.Status(gctx, sl.p, sl.t)
 			if err != nil {
 				// One bad target must not blank the whole listing: the row is
 				// returned with the reason in it, which is more useful than a
@@ -91,8 +189,8 @@ func (s *Server) handleListReplication(w http.ResponseWriter, r *http.Request) {
 				// carried in the row and never returned to the group - one
 				// unreachable registry must not cancel the reads of the others.
 				views[i] = v1.ReplicationView{
-					Product: p.Metadata.Name, Target: t.Name,
-					Mode: string(t.ReplicationMode()), Unreachable: err.Error(),
+					Product: sl.p.Metadata.Name, Target: sl.t.Name,
+					Mode: string(sl.t.ReplicationMode()), Unreachable: err.Error(),
 				}
 				return nil
 			}
@@ -101,9 +199,7 @@ func (s *Server) handleListReplication(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	_ = g.Wait() // No goroutine above returns an error; see the comment there.
-
-	WriteJSON(w, r, http.StatusOK,
-		v1.ListReplicationResponse{Targets: views})
+	return views
 }
 
 // handleApplyReplication writes the configuration to the registry.

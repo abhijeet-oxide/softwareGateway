@@ -580,7 +580,7 @@ export default function DownloadDetail() {
    * Evidence, not configuration-in-principle: a sync this target has actually
    * reported, or a replication row the reconciler wrote for it.
    */
-  const mirrored = Boolean(lastSync) || (replication.data?.replication ?? [])
+  const mirrored = Boolean(lastSync) || (replication.data?.targets ?? [])
     .some((r) => r.target === t?.targetName)
   const mirrorState: StripState = lastSync?.state === 'succeeded'
     ? 'done'

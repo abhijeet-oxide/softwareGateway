@@ -137,3 +137,17 @@ observability:
   tracing:
     enabled: false
     sampleRatio: 0.05
+  # net/http/pprof, for finding out where a slow request spends its time.
+  #
+  # OFF, and on loopback when it is on. A profiler hands the heap of this
+  # process - registry credentials included - to anything that can reach it,
+  # and a CPU profile is a denial of service on request. It is a listener of
+  # its own and is never on the API port, so no routing change can publish it.
+  #
+  # To use it:
+  #   SWGW_OBSERVABILITY_PROFILING_ENABLED=true   (or set it here)
+  #   kubectl port-forward deploy/coordinator 6060:6060
+  #   go tool pprof -http=: http://127.0.0.1:6060/debug/pprof/profile?seconds=30
+  profiling:
+    enabled: false
+    address: 127.0.0.1:6060

@@ -907,7 +907,17 @@ export interface ReplicationView {
   error?: string
 }
 
-export interface ListReplicationResponse { replication: ReplicationView[] }
+/*
+  `targets`, which is what the server has always sent.
+
+  This said `replication` until it was measured. Nothing caught it: api.get
+  casts the parsed body with `as T` rather than validating it, so the field
+  simply read `undefined` at runtime and every caller's `?? []` turned that
+  into an empty list. The Downloads page's drift banner was drawn from it and
+  therefore never appeared, and DownloadDetail decided a target was not
+  mirrored on the same empty list. Both looked like working code.
+*/
+export interface ListReplicationResponse { targets: ReplicationView[] }
 export interface ListSyncsResponse { syncs: MirrorSyncView[]; nextPageToken?: string }
 
 // ---------------------------------------------------------------------------

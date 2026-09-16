@@ -1615,37 +1615,144 @@ func (t TransferSummary) SavedBytes() int64 {
 	return t.DedupeSkippedBytes + t.SkippedBytes
 }
 
-// transferSelect is the shared projection, so list and get cannot disagree
-// about what a transfer looks like.
-func (p *Packages) transferSelect(withJobRollups bool) string {
-	/*
-	  The dozen aggregates over `jobs`, or literal zeros in their place.
+// The transfer projection, in its two shapes.
+//
+// `scanTransfer` is one function and reads the same columns from both, so list
+// and get cannot drift into disagreeing about what a transfer looks like. What
+// differs is how the dozen job rollups are obtained - and, when they are not
+// wanted at all, whether `jobs` is touched.
+//
+// # The two shapes, and why there are two
+//
+// WITHOUT ROLLUPS the query is flat: the projection, the filter, the order and
+// the page. Most readers of this listing are here - the Overview and the
+// package listing fetch a hundred transfers to join download history onto
+// releases and touch none of the job counts. Nothing about `jobs` appears, so
+// nothing about `jobs` is paid for.
+//
+// WITH ROLLUPS the page is chosen FIRST, in a leading CTE, and the aggregates
+// are computed for that page in one GROUP BY:
+//
+//	WITH page AS (SELECT id ... ORDER BY ... LIMIT ?),
+//	     rollup AS (SELECT transfer_id, <twelve aggregates>
+//	                  FROM jobs WHERE transfer_id IN (SELECT id FROM page)
+//	                 GROUP BY transfer_id)
+//	SELECT ... FROM transfers t JOIN page ... LEFT JOIN rollup ...
+//
+// The version this replaces wrote those twelve as twelve CORRELATED SUBQUERIES
+// in the select list, each evaluated once per row, so one page of twenty-five
+// read each transfer's jobs twelve times. On an estate of two hundred
+// transfers of two thousand five hundred jobs that was 188,806 buffer hits -
+// about 1.5 GB of buffer traffic - to return twenty-five rows, and it measured
+// between one and nearly four seconds. It is what an operator means when they
+// say the Downloads page takes seconds to open.
+//
+// Bounding the page before `jobs` is read is the whole of the fix, and it is
+// why the CTE leads: Dialect.Rewrite numbers placeholders in the order they
+// appear in the text, so putting the page first keeps BOTH shapes taking the
+// same arguments in the same order - the filter's, then the limit and offset.
+//
+// See docs/design/32-performance.md for the measurements.
+//
+// # Why CASE rather than FILTER
+//
+// `count(*) FILTER (WHERE ...)` is the readable spelling and both databases
+// support it today. `SUM(CASE WHEN ... THEN 1 ELSE 0 END)` is the one that has
+// always been in both, and this is the most load-bearing query in the file -
+// not the place to acquire a version floor nobody has written down.
+func (p *Packages) transferListQuery(where string, withJobRollups bool, rollupIDs int) string {
+	if !withJobRollups {
+		return p.transferProjection(false, "") + where +
+			" ORDER BY t.created_at DESC, t.id DESC LIMIT ? OFFSET ?"
+	}
+	return `
+	WITH page AS (
+	` + transferPageClause(where) + `
+	)` + p.rollupCTE(rollupIDs) + p.transferProjection(true, "\n\t  JOIN page ON page.id = t.id") +
+		" ORDER BY t.created_at DESC, t.id DESC"
+}
 
-	  Same columns either way, so `scanTransfer` is one function and the two
-	  callers cannot drift into disagreeing about what a transfer looks like.
-	  What changes is whether the database is asked to read a transfer's jobs at
-	  all.
+// transferGetQuery reads one transfer, rollups and all.
+//
+// The page is that single transfer, which is what scopes the rollup to it -
+// the same shape as a listing of one, so there is one projection rather than
+// two that can disagree.
+func (p *Packages) transferGetQuery() string {
+	return `
+	WITH page AS (
+	  SELECT id, created_at FROM transfers WHERE id = ?
+	)` + p.rollupCTE(0) + p.transferProjection(true, "\n\t  JOIN page ON page.id = t.id")
+}
 
-	  It is worth asking, because most readers of this listing do not want them.
-	  The Overview and the package listing fetch a hundred transfers to join
-	  download history onto releases - which target, which state, when - and
-	  touch none of the job counts. They were paying a dozen index seeks per row
-	  for numbers they discard, every five seconds, for the whole life of a
-	  download.
-	*/
-	// One aggregate over this transfer's jobs, or the literal zero that stands
-	// in for it when the caller did not ask.
-	job := func(agg, filter string) string {
+// transferPageClause chooses the page, by id, before anything is projected.
+//
+// The joins are only the ones the FILTER needs: this selects ids, so the
+// projection's repository joins have no work to do here, and doing them for
+// rows that are about to be discarded is part of what this separation avoids.
+func transferPageClause(where string) string {
+	return `  SELECT t.id, t.created_at
+	    FROM transfers t
+	    JOIN transfer_requests rq ON rq.id = t.request_id
+	    JOIN packages pk ON pk.id = t.package_id
+	    JOIN products pr ON pr.id = pk.product_id` + where + `
+	   ORDER BY t.created_at DESC, t.id DESC
+	   LIMIT ? OFFSET ?`
+}
+
+// rollupCTE computes every job aggregate for the page in ONE pass.
+func (p *Packages) rollupCTE(rollupIDs int) string {
+	scope := "j.transfer_id IN (SELECT id FROM page)"
+	if rollupIDs > 0 {
+		// Only the transfers whose rollup is not already known. See
+		// rollupcache.go: a terminal transfer's rollup cannot change, so the
+		// ones already memoised are not read again.
+		scope = "j.transfer_id IN (" + placeholders(rollupIDs) + ")"
+	}
+	return `,
+	rollup AS (
+	  SELECT j.transfer_id AS tid,
+	         SUM(CASE WHEN j.state = 'skipped' THEN j.size_bytes ELSE 0 END) AS skipped_bytes,
+	         SUM(CASE WHEN j.state IN ('succeeded','skipped') THEN 1 ELSE 0 END) AS jobs_done,
+	         SUM(CASE WHEN j.state = 'failed' THEN 1 ELSE 0 END) AS jobs_failed,
+	         SUM(CASE WHEN j.state IN ('pending','blocked','leased') THEN 1 ELSE 0 END) AS jobs_outstanding,
+	         SUM(j.bytes_transferred) AS bytes_transferred,
+	         SUM(CASE WHEN j.state = 'leased' THEN 1 ELSE 0 END) AS jobs_in_flight,
+	         -- DISTINCT over the CASE rather than a filtered count: the CASE is
+	         -- null for every row that does not qualify and COUNT(DISTINCT x)
+	         -- does not count nulls, so this is the same number in both
+	         -- databases without a FILTER clause.
+	         COUNT(DISTINCT CASE WHEN j.state = 'leased' AND j.lease_owner IS NOT NULL
+	                             THEN j.lease_owner END) AS workers,
+	         SUM(CASE WHEN j.state = 'pending' AND j.next_visible_at > ` + p.dialect.Now() + `
+	                  THEN 1 ELSE 0 END) AS jobs_waiting,
+	         SUM(CASE WHEN j.state = 'blocked' THEN 1 ELSE 0 END) AS jobs_blocked,
+	         SUM(CASE WHEN j.repair_level > 0 THEN 1 ELSE 0 END) AS jobs_repaired,
+	         SUM(CASE WHEN j.state IN ('pending','blocked','leased')
+	                  THEN j.size_bytes - j.bytes_transferred ELSE 0 END) AS outstanding_bytes,
+	         MIN(CASE WHEN j.state = 'leased' THEN j.updated_at END) AS quietest_in_flight
+	    FROM jobs j
+	   WHERE ` + scope + `
+	   GROUP BY j.transfer_id
+	)`
+}
+
+// transferProjection is the column list and the joins under it.
+func (p *Packages) transferProjection(withJobRollups bool, pageJoin string) string {
+	// One column of the rollup, read from the joined aggregate - or the
+	// literal zero that stands in for it when the caller did not ask.
+	//
+	// COALESCE because the join is a LEFT one: a transfer whose jobs have not
+	// been planned yet has no rollup row and must read as zero, not null.
+	job := func(col string) string {
 		if !withJobRollups {
 			return "0"
 		}
-		return "COALESCE((SELECT " + agg + " FROM jobs j WHERE j.transfer_id = t.id " +
-			filter + "), 0)"
+		return "COALESCE(r." + col + ", 0)"
 	}
-	quietest := "''"
+	quietest, rollupJoin := "''", ""
 	if withJobRollups {
-		quietest = p.dialect.TimestampText(`(SELECT MIN(j.updated_at) FROM jobs j
-	                  WHERE j.transfer_id = t.id AND j.state = 'leased')`)
+		quietest = p.dialect.TimestampText("r.quietest_in_flight")
+		rollupJoin = "\n\t  LEFT JOIN rollup r ON r.tid = t.id"
 	}
 
 	return `
@@ -1656,20 +1763,17 @@ func (p *Packages) transferSelect(withJobRollups bool) string {
 	       src.name, dst.name,
 	       t.state, t.priority, t.current_wave, t.max_wave,
 	       t.planned_job_count, t.planned_bytes, t.dedupe_skipped_bytes,
-	       ` + job(`SUM(j.size_bytes)`, `AND j.state = 'skipped'`) + `,
-	       ` + job(`count(*)`, `AND j.state IN ('succeeded','skipped')`) + `,
-	       ` + job(`count(*)`, `AND j.state = 'failed'`) + `,
-	       ` + job(`count(*)`, `AND j.state IN ('pending','blocked','leased')`) + `,
-	       ` + job(`SUM(j.bytes_transferred)`, ``) + `,
-	       ` + job(`count(*)`, `AND j.state = 'leased'`) + `,
-	       ` + job(`count(DISTINCT j.lease_owner)`,
-		`AND j.state = 'leased' AND j.lease_owner IS NOT NULL`) + `,
-	       ` + job(`count(*)`,
-		`AND j.state = 'pending' AND j.next_visible_at > `+p.dialect.Now()) + `,
-	       ` + job(`count(*)`, `AND j.state = 'blocked'`) + `,
-	       ` + job(`count(*)`, `AND j.repair_level > 0`) + `,
-	       ` + job(`SUM(j.size_bytes - j.bytes_transferred)`,
-		`AND j.state IN ('pending','blocked','leased')`) + `,
+	       ` + job("skipped_bytes") + `,
+	       ` + job("jobs_done") + `,
+	       ` + job("jobs_failed") + `,
+	       ` + job("jobs_outstanding") + `,
+	       ` + job("bytes_transferred") + `,
+	       ` + job("jobs_in_flight") + `,
+	       ` + job("workers") + `,
+	       ` + job("jobs_waiting") + `,
+	       ` + job("jobs_blocked") + `,
+	       ` + job("jobs_repaired") + `,
+	       ` + job("outstanding_bytes") + `,
 	       ` + quietest + `,
 	       COALESCE(t.failure_reason, ''),
 	       -- EVERY TIMESTAMP GOES OUT AS RFC3339 TEXT, from both databases.
@@ -1696,7 +1800,7 @@ func (p *Packages) transferSelect(withJobRollups bool) string {
 	  -- what the vendor published it as, whatever it has been copied to since.
 	  JOIN repositories pkgsrc ON pkgsrc.id = pk.source_repo_id
 	  JOIN repositories src ON src.id = t.source_repo_id
-	  JOIN repositories dst ON dst.id = t.target_repo_id`
+	  JOIN repositories dst ON dst.id = t.target_repo_id` + pageJoin + rollupJoin
 }
 
 func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) {
@@ -1812,16 +1916,130 @@ func (p *Packages) CountTransfers(ctx context.Context, f ListTransfersFilter) (i
 
 // ListTransfers returns transfers, newest first.
 func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]TransferSummary, error) {
-	query := p.transferSelect(!f.WithoutJobCounts)
 	where, args := transferWhere(f)
 
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 50
 	}
-	query += where + " ORDER BY t.created_at DESC, t.id DESC LIMIT ? OFFSET ?"
+	// The page's arguments are the whole query's arguments, and they are all
+	// inside the leading CTE - see transferListQuery on why that matters.
 	args = append(args, limit, f.Offset)
 
+	// The cheap plan asks nothing of `jobs` at all, so there is nothing to
+	// memoise and nothing to look up.
+	if f.WithoutJobCounts {
+		return p.scanTransfers(ctx, p.transferListQuery(where, false, 0), args)
+	}
+
+	/*
+	   WHICH OF THIS PAGE'S ROLLUPS ARE ALREADY KNOWN.
+
+	   A second query, and it earns its round trip: it reads twenty-five ids
+	   and states off `transfers_recent_idx` and nothing else, and what it buys
+	   is not reading the JOBS of every finished transfer on the page. On an
+	   estate whose listing is mostly history - which is what a Downloads page
+	   is - that is nearly all of them.
+
+	   A cold process reads what it always read, plus this. See rollupcache.go
+	   for why a remembered rollup cannot be stale.
+	*/
+	page, err := p.transferPageStates(ctx, where, args)
+	if err != nil {
+		return nil, err
+	}
+
+	known := make(map[string]transferRollup, len(page))
+	compute := make([]any, 0, len(page))
+	version := make(map[string]transferPageRow, len(page))
+	for _, row := range page {
+		version[row.id] = row
+		// The memo answers only for a transfer that is still terminal AND
+		// still on the version it was computed from - see rollupcache.go.
+		if r, ok := p.rollups.get(row.id, row.state, row.updatedAt); ok {
+			known[row.id] = r
+			continue
+		}
+		compute = append(compute, row.id)
+	}
+
+	/*
+	   EVERY ROLLUP ON THIS PAGE ALREADY KNOWN is the case worth naming: it is
+	   what a Downloads history is, once somebody has looked at it.
+
+	   The query then asks nothing of `jobs` at all - the same flat plan
+	   `view=summary` uses - and the twelve columns come out of the memo below.
+	   Passing an empty id list instead would be read as "scope the rollup to
+	   the page", which is the whole rollup and the entire cost this is here to
+	   avoid.
+	*/
+	query := p.transferListQuery(where, len(compute) > 0, len(compute))
+	out, err := p.scanTransfers(ctx, query, append(args, compute...))
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range out {
+		if r, ok := known[out[i].ID]; ok {
+			applyRollup(&out[i], r)
+			continue
+		}
+		// Newly computed. Remembered only if the transfer has finished, which
+		// rollupCache.put is what decides - see the invariant there.
+		v := version[out[i].ID]
+		p.rollups.put(out[i].ID, v.state, v.updatedAt, rollupOf(out[i]))
+	}
+	return out, nil
+}
+
+// transferPageStates reads the ids and states of one page, and nothing else.
+//
+// The projection's repository and package joins are not here: this decides
+// which rollups have to be computed, and doing six joins for rows that are
+// about to be read again properly is the cost the separation avoids.
+func (p *Packages) transferPageStates(
+	ctx context.Context, where string, args []any,
+) ([]transferPageRow, error) {
+	query := `SELECT t.id, t.state, ` + p.dialect.TimestampText("t.updated_at") + `
+	    FROM transfers t
+	    JOIN transfer_requests rq ON rq.id = t.request_id
+	    JOIN packages pk ON pk.id = t.package_id
+	    JOIN products pr ON pr.id = pk.product_id` + where + `
+	   ORDER BY t.created_at DESC, t.id DESC
+	   LIMIT ? OFFSET ?`
+
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(query), args...)
+	if err != nil {
+		return nil, fmt.Errorf("page transfers: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []transferPageRow
+	for rows.Next() {
+		var r transferPageRow
+		if err := rows.Scan(&r.id, &r.state, &r.updatedAt); err != nil {
+			return nil, fmt.Errorf("scan transfer page: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// transferPageRow is what the page query reads: which transfers are on this
+// page, and enough to decide whether their rollup is already known.
+//
+// `updatedAt` is the row VERSION. Every statement that changes a transfer's
+// state sets it, so it is what tells a memo written before a retry from one
+// written after - see rollupcache.go.
+type transferPageRow struct {
+	id        string
+	state     string
+	updatedAt string
+}
+
+func (p *Packages) scanTransfers(
+	ctx context.Context, query string, args []any,
+) ([]TransferSummary, error) {
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(query), args...)
 	if err != nil {
 		return nil, fmt.Errorf("list transfers: %w", err)
@@ -1839,6 +2057,26 @@ func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]
 	return out, rows.Err()
 }
 
+// rollupOf and applyRollup are the two halves of one mapping, kept next to each
+// other so a column added to one is visibly missing from the other.
+func rollupOf(t TransferSummary) transferRollup {
+	return transferRollup{
+		SkippedBytes: t.SkippedBytes, JobsDone: t.JobsDone, JobsFailed: t.JobsFailed,
+		JobsOutstanding: t.JobsOutstanding, BytesTransferred: t.BytesTransferred,
+		JobsInFlight: t.JobsInFlight, Workers: t.Workers, JobsWaiting: t.JobsWaiting,
+		JobsBlocked: t.JobsBlocked, JobsRepaired: t.JobsRepaired,
+		OutstandingBytes: t.OutstandingBytes, QuietestInFlight: t.QuietestInFlight,
+	}
+}
+
+func applyRollup(t *TransferSummary, r transferRollup) {
+	t.SkippedBytes, t.JobsDone, t.JobsFailed = r.SkippedBytes, r.JobsDone, r.JobsFailed
+	t.JobsOutstanding, t.BytesTransferred = r.JobsOutstanding, r.BytesTransferred
+	t.JobsInFlight, t.Workers, t.JobsWaiting = r.JobsInFlight, r.Workers, r.JobsWaiting
+	t.JobsBlocked, t.JobsRepaired = r.JobsBlocked, r.JobsRepaired
+	t.OutstandingBytes, t.QuietestInFlight = r.OutstandingBytes, r.QuietestInFlight
+}
+
 // GetTransfer returns one transfer.
 func (p *Packages) GetTransfer(ctx context.Context, ref string) (TransferSummary, error) {
 	id, err := p.ResolveTransferID(ctx, ref)
@@ -1846,7 +2084,7 @@ func (p *Packages) GetTransfer(ctx context.Context, ref string) (TransferSummary
 		return TransferSummary{}, err
 	}
 
-	row := p.db.QueryRowContext(ctx, p.dialect.Rewrite(p.transferSelect(true)+" WHERE t.id = ?"), id)
+	row := p.db.QueryRowContext(ctx, p.dialect.Rewrite(p.transferGetQuery()), id)
 
 	t, scanErr := scanTransfer(row)
 	if errors.Is(scanErr, sql.ErrNoRows) {
@@ -2291,6 +2529,60 @@ func (p *Packages) WaveProgress(ctx context.Context, transferID string) ([]WaveS
 			w.Kind = "mixed"
 		}
 		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// TransferVersion is a transfer and the version of its row.
+//
+// `UpdatedAt` is the same watermark the rollup memo keys on: every statement
+// that changes a transfer's state sets it. Two reads that disagree about it are
+// a transfer that has moved.
+type TransferVersion struct {
+	ID        string
+	State     string
+	UpdatedAt string
+}
+
+// LiveTransferVersions is every transfer that is still moving, and how far it
+// has moved.
+//
+// # What this is for
+//
+// The change feed behind GET /api/v1/events. One query per Coordinator per
+// tick tells every browser connected to it which transfers have moved, in
+// place of each of those browsers re-fetching a whole listing on a timer.
+//
+// # Why it is cheap enough to run on a tick
+//
+// It reads only LIVE transfers, which is bounded by what the estate is
+// actually doing rather than by what it has ever done - a handful, against
+// `transfers_active_idx`. A settled transfer is not here and is not polled for:
+// its last change is reported by the tick that settled it, and its rollup
+// cannot change afterwards (see rollupcache.go).
+//
+// `bytes_transferred` is deliberately NOT summed here. That would put the
+// listing's own expense on a one-second tick; the feed says WHICH transfer
+// moved, and what moved is read back through the ordinary listing, once, by
+// whoever is looking at it.
+func (p *Packages) LiveTransferVersions(ctx context.Context) ([]TransferVersion, error) {
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(
+		`SELECT id, state, `+p.dialect.TimestampText("updated_at")+`
+		   FROM transfers
+		  WHERE state IN (`+liveTransferStates+`)
+		  ORDER BY id`))
+	if err != nil {
+		return nil, fmt.Errorf("read live transfers: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []TransferVersion
+	for rows.Next() {
+		var v TransferVersion
+		if err := rows.Scan(&v.ID, &v.State, &v.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan live transfer: %w", err)
+		}
+		out = append(out, v)
 	}
 	return out, rows.Err()
 }

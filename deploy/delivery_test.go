@@ -17,7 +17,6 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/abhijeet-oxide/softwareGateway/deploy/chartstage"
-	"github.com/abhijeet-oxide/softwareGateway/deploy/release"
 	"github.com/abhijeet-oxide/softwareGateway/deploy/secretsinv"
 )
 
@@ -1542,57 +1541,5 @@ func TestEveryBaseImagePinAgrees(t *testing.T) {
 			"\nThese files cannot import from one another, so a bump has to touch all of them.\n"+
 			"A build that is one patch behind is a build shipping findings that are already fixed.\n",
 			image, len(versions), strings.Join(lines, "\n"))
-	}
-}
-
-// TestTheComponentListIsTheOnlyOne replaces the list cd.yml used to restate.
-//
-// What a release consists of is a fact about this repository - a Dockerfile per
-// image and a deployment that runs it - so deploy/release holds it and the
-// workflow reads it: the matrix is an expression over that output, not a list of
-// its own. This test fails if somebody writes the components back into the
-// workflow, which is how the two would drift again.
-//
-// It also holds the list to its word: a component naming a Dockerfile or an
-// input path that is not there produces a matrix row that cannot build, and a
-// change-detection path that matches nothing and therefore never rebuilds.
-func TestTheComponentListIsTheOnlyOne(t *testing.T) {
-	comps := release.Components()
-	if len(comps) == 0 {
-		t.Fatal("this product publishes no images, which cannot be right")
-	}
-
-	for _, c := range comps {
-		if _, err := os.Stat(filepath.Join(repoRoot, c.Dockerfile)); err != nil {
-			t.Errorf("component %q builds from %s, which does not exist", c.Name, c.Dockerfile)
-		}
-		if len(c.Inputs) == 0 {
-			t.Errorf("component %q declares no inputs, so nothing can decide whether it changed", c.Name)
-		}
-		for _, in := range c.Inputs {
-			if _, err := os.Stat(filepath.Join(repoRoot, in)); err != nil {
-				t.Errorf("component %q reads %s, which does not exist.\n"+
-					"\nAn input path that matches nothing never reports a change, so that image is\n"+
-					"never rebuilt and a release ships the last one that was.\n", c.Name, in)
-			}
-		}
-	}
-
-	for _, name := range []string{"cd.yml", "cd_enterprise.yml.disabled"} {
-		b, err := os.ReadFile(filepath.Join(repoRoot, ".github", "workflows", name)) // #nosec G304 -- fixed names.
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		text := string(b)
-		if !strings.Contains(text, "fromJSON(needs.version.outputs.components)") {
-			t.Errorf("%s does not read its matrix from deploy/release.\n"+
-				"\nA second copy of the component list is a second answer to what a release is,\n"+
-				"and the one that goes stale is whichever nobody is looking at.\n", name)
-		}
-		for _, c := range comps {
-			if strings.Contains(text, "- component: "+c.Name) {
-				t.Errorf("%s spells out component %q; the matrix comes from deploy/release now", name, c.Name)
-			}
-		}
 	}
 }

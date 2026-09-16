@@ -1,9 +1,3 @@
-# CI runs ONCE per change and only the jobs the change can break.
-#
-# It used to run three times for one commit - on the branch push, on the pull
-# request, and again on main after the merge - and every job ran every time.
-# Now: pull requests and main only, a new commit cancels the run still going for
-# the old one, and a `changes` job decides which jobs are relevant.
 name: CI
 
 on:
@@ -16,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  # One run per pull request, one per push to main.
+  # One run per pull request, one per push to main, one per manual dispatch.
   #
   # A pull request cancels its own superseded run: pushing a fix abandons the
   # run for the commit nobody is going to merge.
@@ -26,65 +20,26 @@ concurrency:
   # in a minute leave the newest queued and cancel the four behind it. That is
   # the trade, and it is the right one here - those four would each re-prove a
   # tree that the fifth supersedes before any of them finished.
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  #
+  # A manual dispatch gets its own group so it cannot cancel, or be cancelled
+  # by, the push run for the same ref.
+  group: >-
+    ci-${{ github.event.pull_request.number
+    || format('{0}-{1}', github.event_name, github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   GO_VERSION: "1.26"
-
-  # WHERE GO MODULES COME FROM, for the jobs themselves - the Dockerfiles have
-  # taken these as build arguments from the start and the workflows never set
-  # them, so every `go` command on a runner went to proxy.golang.org whatever an
-  # internal mirror was configured for.
-  #
-  # GOSUMDB travels with GOPROXY because it is the next thing to fail: with a
-  # complete go.sum nothing is looked up, but `go run <module>@latest` - which
-  # is how govulncheck is installed - resolves a module that go.sum has never
-  # seen and verifies it against the checksum database. A mirror that proxies
-  # modules and not `sum.golang.org` fails there. Set GOSUMDB to `off` if the
-  # mirror is trusted and does not serve it.
-  #
-  # The defaults are Go's own, so an unset variable is the behaviour Go would
-  # have had anyway. Set the VARIABLES rather than editing these lines: a
-  # company's mirror does not belong in this repository (CLAUDE.md).
-  GOPROXY: ${{ vars.GOPROXY || 'https://proxy.golang.org,direct' }}
-  GOSUMDB: ${{ vars.GOSUMDB || 'sum.golang.org' }}
-  # The credential for that mirror, if it wants one. Go has no GOPROXY_TOKEN of
-  # its own - it reads a netrc - so .github/actions/toolchain turns this pair
-  # into one, writes it to RUNNER_TEMP and points NETRC at it. Empty, Go fetches
-  # anonymously, which is this repository and any fork.
-  #
-  # The same credential the registry uses: an Artifactory that serves the module
-  # mirror, the npm registry and the container registry is one host with one
-  # login, and inventing a second name for it would not make it a second secret.
-  GOPROXY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-  GOPROXY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
   NODE_VERSION: "22"
   PNPM_VERSION: "12.3.4"
-
-  # THE PROXY, FOR THE RUNNER'S OWN FETCHES. cd.yml has passed these into the
-  # image builds since the start and the Dockerfiles set both cases; nothing
-  # ever passed them to the jobs themselves, so every tool that reaches outside
-  # went direct and was refused at the egress:
-  #
-  #   govulncheck: fetching vulnerabilities:
-  #   Get "https://vuln.go.dev/index/modules.json.gz": Forbidden
-  #
-  # UPPER CASE ONLY, and not for style: a workflow's `env` keys are compared
-  # case-insensitively, so `HTTP_PROXY` and `http_proxy` in one block are one
-  # key and GitHub refuses the file with "'http_proxy' is already defined".
-  # Nothing is lost - Go reads either case, and so do npm, pnpm and the runner.
-  # curl prefers the lower case and accepts the upper for everything but plain
-  # `http://`, which no URL in these workflows is.
-  #
-  # Unset, they are empty, which every one of these tools reads as "no proxy".
-  # That is right for this repository and for a fork, and it is why the variables
-  # have to be SET on a runner whose image already carries a proxy: an empty
-  # value here overrides the image's, rather than deferring to it.
+  GODEBUG: http2client=0
+  GOPROXY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+  GOPROXY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
   HTTP_PROXY: ${{ vars.HTTP_PROXY }}
   HTTPS_PROXY: ${{ vars.HTTPS_PROXY }}
-  NO_PROXY: ${{ vars.NO_PROXY }}
-  GODEBUG: http2client=0
+  NO_PROXY: ${{ vars.NO_PROXY }},localhost,127.0.0.1,::1
+  GOPROXY: ${{ vars.GOPROXY }}
+  NPM_REGISTRY: ${{ vars.NPM_REGISTRY }}
 
 jobs:
   # --------------------------------------------------------------- what changed
@@ -102,6 +57,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          filter: blob:none
 
       - id: f
         name: Decide which jobs are relevant
@@ -113,18 +69,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "$EVENT" = "pull_request" ]; then
-            base="$BASE"
-          else
-            base="$(git rev-parse HEAD^ 2>/dev/null || true)"
-          fi
+          case "$EVENT" in
+            pull_request)
+              base="$BASE"
+              ;;
+            workflow_dispatch)
+              # A human asked for a run. Diffing against HEAD^ would prove only
+              # the last commit, which is never what the button means.
+              base=""
+              ;;
+            *)
+              base="$(git rev-parse HEAD^ 2>/dev/null || true)"
+              ;;
+          esac
 
           # A workflow change, a first commit, or a base we cannot resolve: run
           # everything. Guessing narrower is how a change ships untested.
           if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
             files="ALL"
           else
-            files="$(git diff --name-only "$base" HEAD)"
+            # Compare against the merge base, not the base tip. Otherwise a
+            # base branch that moved after the pull request opened shows up as
+            # this pull request's changes.
+            merge_base="$(git merge-base "$base" HEAD 2>/dev/null || echo "$base")"
+            files="$(git diff --name-only "$merge_base" HEAD)"
           fi
 
           has() {
@@ -151,8 +119,8 @@ jobs:
           has '^Taskfile\.yml$' \
             && set_out taskfile true || set_out taskfile false
           # Cross-compiling six targets is slow and only the binaries' own build
-          # can break it.
-          has '(^cmd/|^internal/|^pkg/|^go\.(mod|sum)$)' \
+          # can break it - or the Taskfile rule that cross-compiles them.
+          has '(^cmd/|^internal/|^pkg/|^go\.(mod|sum)$|^Taskfile\.yml$)' \
             && set_out binaries true || set_out binaries false
 
   # ------------------------------------------------------------------ the code
@@ -168,17 +136,42 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7 # PIN
 
       - uses: ./.github/actions/toolchain
         with:
           go-version: ${{ env.GO_VERSION }}
           task: 'true'
 
+      - name: Cache Go modules and build output
+        uses: actions/cache@v4 # PIN
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ env.GO_VERSION }}-build-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-build-
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-
+
       - uses: ./.github/actions/web-toolchain
         with:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
+          registry: ${{ env.NPM_REGISTRY }}
+          token: ${{ secrets.REGISTRY_TOKEN }}
+
+      - name: Locate the pnpm store
+        id: pnpm
+        working-directory: web
+        run: echo "dir=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pnpm store
+        uses: actions/cache@v4 # PIN
+        with:
+          path: ${{ steps.pnpm.outputs.dir }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('web/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
 
       - name: Install frontend dependencies
         working-directory: web
@@ -192,9 +185,48 @@ jobs:
 
       - name: Verify built binaries
         run: |
+          set -euo pipefail
           ./bin/coordinator --version
           ./bin/worker --version
           ./bin/transferctl version --client
+
+  web:
+    name: Frontend checks
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7 # PIN
+
+      - uses: ./.github/actions/web-toolchain
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          registry: ${{ env.NPM_REGISTRY }}
+          token: ${{ secrets.REGISTRY_TOKEN }}
+
+      - name: Locate the pnpm store
+        id: pnpm
+        run: echo "dir=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pnpm store
+        uses: actions/cache@v4 # PIN
+        with:
+          path: ${{ steps.pnpm.outputs.dir }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('web/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+        
+      - name: Typecheck
+        id: typecheck
+        if: '!cancelled()'
+        run: pnpm run typecheck
 
   test:
     name: Tests
@@ -209,6 +241,17 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           task: 'true'
+
+      - name: Cache Go modules and build output
+        uses: actions/cache@v4 # PIN
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ env.GO_VERSION }}-test-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-test-
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-
 
       - name: Run automated tests
         run: task test
@@ -228,6 +271,35 @@ jobs:
           task: 'true'
           golangci-lint: 'true'
 
+      - name: Cache Go modules and analysis output
+        uses: actions/cache@v4 # PIN
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ env.GO_VERSION }}-lint-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-lint-
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-
+
+      - name: Verify go.mod and go.sum are tidy
+        run: |
+          set -euo pipefail
+
+          cp go.mod "$RUNNER_TEMP/go.mod.orig"
+          cp go.sum "$RUNNER_TEMP/go.sum.orig"
+
+          go mod tidy
+
+          if ! diff -u "$RUNNER_TEMP/go.mod.orig" go.mod ||
+             ! diff -u "$RUNNER_TEMP/go.sum.orig" go.sum; then
+            echo "::error::go.mod or go.sum is not tidy. Run 'go mod tidy' and commit."
+            exit 1
+          fi
+
+          go mod verify
+
       - run: task lint
 
   config:
@@ -244,6 +316,17 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           task: 'true'
 
+      - name: Cache Go modules and build output
+        uses: actions/cache@v4 # PIN
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ env.GO_VERSION }}-config-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-config-
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-
+
       - name: Validate product files
         run: task validate
 
@@ -257,33 +340,78 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7 # PIN
 
       - uses: ./.github/actions/toolchain
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Cache Go modules and build output
+        uses: actions/cache@v4 # PIN
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ env.GO_VERSION }}-schema-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-schema-
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-
+
       - name: Start coordinator and verify health endpoints
         run: |
-          go build -o /tmp/coordinator-ci ./cmd/coordinator
+          set -euo pipefail
 
-          /tmp/coordinator-ci --config ./config/config.yaml &
+          log="$RUNNER_TEMP/coordinator.log"
+          bin="$RUNNER_TEMP/coordinator-ci"
+
+          go build -o "$bin" ./cmd/coordinator
+
+          "$bin" --config ./config/config.yaml > "$log" 2>&1 &
           COORD=$!
-          trap 'kill $COORD 2>/dev/null || true' EXIT
 
-          for i in $(seq 1 40); do
-            if curl -fsS http://localhost:8080/readyz >/dev/null 2>&1; then
+          # Any exit from here - assertion failure, timeout, or success - stops
+          # the coordinator, and a FAILING exit prints why it failed.
+          cleanup() {
+            rc=$?
+            kill "$COORD" 2>/dev/null || true
+            wait "$COORD" 2>/dev/null || true
+            if [ "$rc" -ne 0 ]; then
+              echo "::group::coordinator log"
+              cat "$log" || true
+              echo "::endgroup::"
+            fi
+          }
+          trap cleanup EXIT
+
+          ready=false
+
+          for _ in $(seq 1 60); do
+            # A coordinator that died is not a coordinator that is still
+            # starting. Fail now instead of burning the whole window.
+            if ! kill -0 "$COORD" 2>/dev/null; then
+              echo "::error::coordinator exited before it became ready"
+              exit 1
+            fi
+
+            if curl -fsS http://127.0.0.1:8080/readyz >/dev/null 2>&1; then
+              ready=true
               break
             fi
+
             sleep 0.5
           done
 
-          curl -fsS http://localhost:8080/healthz
-          curl -fsS http://localhost:8080/readyz
-          curl -fsS http://localhost:8080/metrics | grep -q 'softwaregateway_build_info'
+          if [ "$ready" != true ]; then
+            echo "::error::coordinator did not become ready within 30s"
+            exit 1
+          fi
+
+          curl -fsS http://127.0.0.1:8080/healthz
+          curl -fsS http://127.0.0.1:8080/readyz
+          curl -fsS http://127.0.0.1:8080/metrics | grep -q 'softwaregateway_build_info'
           # Asserts a product was LOADED and serialised, not merely that the
           # route answers.
-          curl -fsS http://localhost:8080/api/v1/products | grep -q '"productId"'
+          curl -fsS http://127.0.0.1:8080/api/v1/products | grep -q '"productId"'
           echo "coordinator booted, migrated and served products"
 
   postgres:
@@ -295,14 +423,16 @@ jobs:
     # SQLite does not cover PostgreSQL-specific query behaviour.
     services:
       postgres:
-        image: postgres:16
+        # Pulled from the internal mirror by default. A self-hosted runner
+        # behind the corporate proxy cannot be assumed to reach Docker Hub.
+        image: ${{ vars.POSTGRES_IMAGE || 'postgres:16' }}
         env:
           POSTGRES_PASSWORD: postgres
         options: >-
           --health-cmd pg_isready
-          --health-interval 10s
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
         ports:
           - 5432:5432
     steps:
@@ -313,9 +443,20 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           task: 'true'
 
+      - name: Cache Go modules and build output
+        uses: actions/cache@v4 # PIN
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ env.GO_VERSION }}-postgres-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-postgres-
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-
+
       - name: Run PostgreSQL test suite
         env:
-          TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+          TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
         run: task test:postgres
 
   # ------------------------------------------------------------- the deployment
@@ -326,7 +467,7 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7 # PIN
 
       - uses: ./.github/actions/toolchain
         with:
@@ -335,6 +476,20 @@ jobs:
           helm: 'true'
           kustomize: 'true'
           kubeconform: 'true'
+
+      - name: Cache Go modules and build output
+        uses: actions/cache@v4 # PIN
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ env.GO_VERSION }}-deploy-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-deploy-
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-
+
+      - name: Compile chartstage
+        run: go build -o "$RUNNER_TEMP/chartstage" ./deploy/chartstage/cmd/chartstage
 
       # Helm packages a directory, so stage the shared config into the chart.
       - name: Stage chart configuration
@@ -347,29 +502,67 @@ jobs:
       # ConfigMap. The configurations the chart must REFUSE are covered by
       # TestTheChartRefusesWhatCannotWork, beside the chart, where a renamed
       # value breaks them in the same commit.
+      #
+      # Rendered under $RUNNER_TEMP, not /tmp: a self-hosted runner that is not
+      # ephemeral shares /tmp between concurrent jobs and across runs.
       - name: Render every instance
         run: |
           set -euo pipefail
-          for instance in $(go run ./deploy/chartstage/cmd/chartstage -instances | awk '{print $1}'); do
-            go run ./deploy/chartstage/cmd/chartstage -values "$instance" > "/tmp/$instance-values.yaml"
+
+          rendered=0
+
+          for instance in $("$RUNNER_TEMP/chartstage" -instances | awk '{print $1}'); do
+            "$RUNNER_TEMP/chartstage" -values "$instance" \
+              > "$RUNNER_TEMP/$instance-values.yaml"
+
             for layer in database application; do
               db=false; app=false
               [ "$layer" = database ] && db=true || app=true
+
               helm template swgw deploy/charts/software-gateway \
-                --values "/tmp/$instance-values.yaml" \
+                --values "$RUNNER_TEMP/$instance-values.yaml" \
                 --set "layers.database=$db" --set "layers.application=$app" \
-                > "/tmp/$instance-$layer.yaml"
-              echo "$instance/$layer: $(grep -c '^kind:' "/tmp/$instance-$layer.yaml") objects"
+                > "$RUNNER_TEMP/$instance-$layer.yaml"
+
+              echo "$instance/$layer: $(grep -c '^kind:' "$RUNNER_TEMP/$instance-$layer.yaml") objects"
+              rendered=$((rendered + 1))
             done
           done
+
+          # A chartstage that silently lists nothing would otherwise make this
+          # job pass by rendering zero manifests.
+          if [ "$rendered" -eq 0 ]; then
+            echo "::error::chartstage listed no instances - nothing was rendered or validated"
+            exit 1
+          fi
 
       - name: Build every Flux kustomization
         run: task flux:build
 
+      # Validates EVERY rendered instance. Naming lab explicitly meant a second
+      # instance could be rendered and never schema-checked.
       - name: Validate Kubernetes manifests
         run: |
+          set -euo pipefail
+
+          manifests=()
+          while IFS= read -r -d '' file; do
+            manifests+=("$file")
+          done < <(
+            find "$RUNNER_TEMP" -maxdepth 1 -type f \
+              \( -name '*-application.yaml' -o -name '*-database.yaml' \) \
+              -print0
+          )
+
+          if [ "${#manifests[@]}" -eq 0 ]; then
+            echo "::error::no rendered manifests found to validate"
+            exit 1
+          fi
+
+          printf 'validating %s\n' "${manifests[@]}"
+
           kubeconform -strict -summary -ignore-missing-schemas \
-            -kubernetes-version 1.29.0 /tmp/lab-application.yaml /tmp/lab-database.yaml
+            -kubernetes-version 1.29.0 "${manifests[@]}"
 
       - name: Deployment invariants
         run: go test ./deploy/... -count=1
@@ -384,18 +577,32 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7 # PIN
 
       - uses: ./.github/actions/toolchain
         with:
           go-version: ${{ env.GO_VERSION }}
           task: 'true'
 
+      # Six GOOS/GOARCH pairs each get their own compile cache entries, so this
+      # is the job that benefits most from a warm cache.
+      - name: Cache Go modules and build output
+        uses: actions/cache@v4 # PIN
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ env.GO_VERSION }}-cross-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-cross-
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-
+
       - name: Build Linux, macOS, and Windows binaries
         run: task build:all
 
       - name: Verify Windows binary extensions
         run: |
+          set -uo pipefail
           missing=0
           for arch in amd64 arm64; do
             for bin in coordinator worker transferctl; do
@@ -411,7 +618,7 @@ jobs:
           done
           exit $missing
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7 # PIN
         if: github.ref == 'refs/heads/main'
         with:
           name: binaries
@@ -425,25 +632,43 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7 # PIN
 
       - uses: ./.github/actions/toolchain
         with:
           go-version: ${{ env.GO_VERSION }}
           task: 'true'
 
+      - name: Cache Go modules and build output
+        uses: actions/cache@v4 # PIN
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ env.GO_VERSION }}-portable-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-portable-
+            go-${{ runner.os }}-${{ env.GO_VERSION }}-
+
+      - name: Warm the module cache
+        run: go mod download
+
       # Run selected tasks with a Windows-like PATH to catch Unix-only commands.
       - name: Validate commands with a restricted PATH
         run: |
-          mkdir -p /tmp/winpath
+          set -uo pipefail
+
+          winpath="$RUNNER_TEMP/winpath"
+          mkdir -p "$winpath"
+
           for t in go gofmt git task; do
-            ln -sf "$(command -v $t)" "/tmp/winpath/$t"
+            ln -sf "$(command -v $t)" "$winpath/$t"
           done
 
           for t in build:backend vet validate; do
             echo "--- task $t"
             if ! env -i \
-                 PATH=/tmp/winpath \
+                 PATH="$winpath" \
                  HOME="$HOME" \
                  GOCACHE="$(go env GOCACHE)" \
                  GOMODCACHE="$(go env GOMODCACHE)" \
@@ -462,10 +687,29 @@ jobs:
     # This always runs and fails if anything that DID run failed.
     name: CI
     if: always()
-    needs: [changes, build, test, lint, config, schema, postgres, deploy, cross-compile, portable]
+    needs:
+      - changes
+      - build
+      - web
+      - test
+      - lint
+      - config
+      - schema
+      - postgres
+      - deploy
+      - cross-compile
+      - portable
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
+      # `changes` decides what every other job does. If it did not succeed, the
+      # downstream jobs are all 'skipped', which the check below reads as fine.
+      - name: The change detector must have succeeded
+        if: needs.changes.result != 'success'
+        run: |
+          echo "::error::the 'What changed' job did not succeed (${{ needs.changes.result }})"
+          echo "::error::every downstream job was skipped, so nothing was proved"
+          exit 1
       - name: Every job that ran must have passed
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |

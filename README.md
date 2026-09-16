@@ -1,5 +1,12 @@
 # Software Gateway
 
+[![CI](https://github.com/abhijeet-oxide/softwareGateway/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/abhijeet-oxide/softwareGateway/actions/workflows/ci.yml)
+[![CD](https://github.com/abhijeet-oxide/softwareGateway/actions/workflows/cd.yml/badge.svg?branch=main)](https://github.com/abhijeet-oxide/softwareGateway/actions/workflows/cd.yml)
+[![OCI Artifacts](https://img.shields.io/badge/OCI-artifacts-2496ED?logo=docker&logoColor=white)](https://opencontainers.org/)
+[![Release Lifecycle](https://img.shields.io/badge/release-lifecycle-1F6FEB)](#release-workflow)
+[![Compliance](https://img.shields.io/badge/compliance-governed-2EA043)](#compliance)
+[![Security](https://img.shields.io/badge/security-controlled-8250DF)](#security)
+
 Discovers software packages published to vendor OCI registries and replicates
 them into internal ones — streamed registry to registry, deduplicated by content
 address, and recorded.

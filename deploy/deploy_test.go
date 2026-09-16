@@ -666,9 +666,6 @@ func TestEveryDocumentLinkResolves(t *testing.T) {
 		}
 		for _, target := range documentLinks(string(b)) {
 			checked++
-			if optionalDocument(path, target) {
-				continue
-			}
 			if _, err := os.Stat(filepath.Join(filepath.Dir(path), target)); err != nil {
 				rel, _ := filepath.Rel(repoRoot, path)
 				t.Errorf("%s links to %q, which does not exist.\n"+
@@ -685,31 +682,6 @@ func TestEveryDocumentLinkResolves(t *testing.T) {
 		t.Fatalf("followed %d links, which is too few for this repository - the "+
 			"matcher is not finding them", checked)
 	}
-}
-
-// optionalDocument reports whether a link may dangle because the file it names
-// is not part of the product.
-//
-// CLAUDE.md is agent instructions, not documentation anybody deploys, and a
-// repository is free to not carry it: the corporate mirror of this repository
-// does not, and this test failed there on two citations in
-// docs/design/31-code-scanning.md. That is a difference between two copies,
-// not a link that rotted, and a test that cannot tell them apart fails for the
-// wrong reason in the one place nobody can fix it.
-//
-// The exemption is by name and one name only. Anything else that goes missing
-// is still a broken link, including a second copy of this file somewhere else
-// in the tree - the target must resolve to the repository root.
-func optionalDocument(from, target string) bool {
-	resolved, err := filepath.Abs(filepath.Join(filepath.Dir(from), target))
-	if err != nil {
-		return false
-	}
-	root, err := filepath.Abs(repoRoot)
-	if err != nil {
-		return false
-	}
-	return resolved == filepath.Join(root, "CLAUDE.md")
 }
 
 // documentLinks returns the relative targets a Markdown document links to.

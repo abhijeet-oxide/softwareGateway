@@ -1,475 +1,1076 @@
-# CD builds and publishes one versioned chart and its images. Flux deploys the
-# chart after the pointer PR this workflow opens is merged by a person.
 name: CD
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths-ignore:
-      # Pointer changes are deployment-only and must not publish a new release.
-      - 'deploy/flux/instances/**'
-      - 'deploy/flux/software/patch/**'
-      - 'docs/**'
-      - '**/*.md'
+      # Pointer changes are deployment-only and must not publish another build.
+      - "deploy/flux/instances/**"
+      - "deploy/flux/software/patch/**"
+      - "docs/**"
+      - "**/*.md"
+
   workflow_dispatch:
     inputs:
       create_release:
         description: >-
-          Cut a release: a new version, a new git tag, and every image rebuilt
-          and republished under it whatever the registry already holds. This is
-          what a hand-started run is for, so it is on by default; clear it to
-          run the pipeline without publishing a release.
+          Create a new versioned build. This builds all images and publishes the
+          images and Helm chart and opens the Flux pointer PR.
         type: boolean
         default: true
 
-# Queue releases per branch so version calculation and publishing cannot race.
+# Prevent two releases from calculating or publishing the same version.
 concurrency:
   group: cd-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
-  contents: write       # the version tag, and the one-line pointer commit
-  pull-requests: write  # main is rule-protected: the pointer commit goes through a PR
+  contents: write
+  pull-requests: write
 
 env:
   GO_VERSION: "1.26"
-  GOPROXY: ${{ vars.GOPROXY || 'https://proxy.golang.org,direct' }}
-  GOSUMDB: ${{ vars.GOSUMDB || 'sum.golang.org' }}
-  GOPROXY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-  GOPROXY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
   GODEBUG: http2client=0
+  REGISTRY_URL: https://${{ vars.REGISTRY_HOST }}
+  REGISTRY_REPOSITORY: ${{ vars.REGISTRY_REPOSITORY }}
+  JFROG_BUILD_NAME: software-gateway
   HTTP_PROXY: ${{ vars.HTTP_PROXY }}
   HTTPS_PROXY: ${{ vars.HTTPS_PROXY }}
   NO_PROXY: ${{ vars.NO_PROXY }}
-  REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
-  REGISTRY_URL: https://${{ vars.REGISTRY_HOST }}
-  REGISTRY_REPOSITORY: ${{ vars.REGISTRY_REPOSITORY }}
+  GOPROXY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+  GOPROXY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+  GOPROXY: ${{ vars.GOPROXY }}
+  NPM_REGISTRY: ${{ vars.NPM_REGISTRY }}
 
 jobs:
-  # ---------------------------------------------------------------- 1. version
-  version:
-    name: Decide the version
-    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
+  # ===========================================================================
+  # 1. PREPARE
+  #
+  # Validate configuration, normalize the registry URL, and calculate the
+  # release version.
+  # ===========================================================================
+  prepare:
+    name: Prepare release
+
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 10
-    outputs:
-      chart_version: ${{ steps.v.outputs.chart_version }}
-      image_version: ${{ steps.v.outputs.image_version }}
-      images_changed: ${{ steps.v.outputs.images_changed }}
-      should_release: ${{ steps.v.outputs.should_release }}
-      configured: ${{ steps.registry.outputs.configured }}
-      tag: ${{ steps.v.outputs.tag }}
-      instance: ${{ steps.env.outputs.name }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # Version calculation requires complete tag and commit history.
-          fetch-depth: 0
 
-      - id: env
+    outputs:
+      chart_version: ${{ steps.version.outputs.chart_version }}
+      image_version: ${{ steps.version.outputs.image_version }}
+      images_changed: ${{ steps.version.outputs.images_changed }}
+      should_release: ${{ steps.version.outputs.should_release }}
+      tag: ${{ steps.version.outputs.tag }}
+      instance: ${{ steps.instance.outputs.name }}
+
+      configured: ${{ steps.registry.outputs.configured }}
+      registry_host: ${{ steps.registry.outputs.registry_host }}
+      registry_repository: ${{ steps.registry.outputs.registry_repository }}
+      jf_url: ${{ steps.registry.outputs.jf_url }}
+
+    steps:
+      # Partial clone: full history for version.sh without downloading every
+      # historical blob.
+      - name: Checkout complete Git history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Select deployment instance
+        id: instance
         env:
           REF: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
+
           case "$REF" in
-            main) echo "name=lab" >> "$GITHUB_OUTPUT" ;;
-            *)    echo "::error::CD runs on main only"; exit 1 ;;
+            main)
+              echo "name=lab" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::CD runs on main only"
+              exit 1
+              ;;
           esac
 
-      # A FORK, OR A REPOSITORY NOBODY HAS POINTED AT A REGISTRY YET, has no
-      # REGISTRY_* variables. Publishing then fails inside docker/login-action
-      # with "Username and password required", which reads like a broken
-      # pipeline rather than an unconfigured one. Detect it here and skip the
-      # publishing jobs with an explanation instead.
-      - id: registry
+      - name: Validate and normalize registry configuration
+        id: registry
         env:
+          RAW_REGISTRY_URL: https://${{ vars.REGISTRY_HOST }}
+          RAW_REGISTRY_REPOSITORY: ${{ vars.REGISTRY_REPOSITORY }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         run: |
+          set -euo pipefail
+
           missing=()
-          [ -n "${REGISTRY_HOST:-}" ]       || missing+=("vars.REGISTRY_HOST")
-          [ -n "${REGISTRY_REPOSITORY:-}" ] || missing+=("vars.REGISTRY_REPOSITORY")
-          [ -n "${REGISTRY_USERNAME:-}" ]   || missing+=("secrets.REGISTRY_USERNAME")
-          [ -n "${REGISTRY_TOKEN:-}" ]      || missing+=("secrets.REGISTRY_TOKEN")
-          if [ ${#missing[@]} -eq 0 ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
+
+          [ -n "${RAW_REGISTRY_URL:-}" ] ||
+            missing+=("vars.REGISTRY_URL")
+
+          [ -n "${RAW_REGISTRY_REPOSITORY:-}" ] ||
+            missing+=("vars.REGISTRY_REPOSITORY")
+
+          [ -n "${REGISTRY_USERNAME:-}" ] ||
+            missing+=("secrets.REGISTRY_USERNAME")
+
+          [ -n "${REGISTRY_TOKEN:-}" ] ||
+            missing+=("secrets.REGISTRY_TOKEN")
+
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+
+            {
+              echo "### Publishing skipped"
+              echo
+              echo "The following configuration is missing:"
+              echo
+              for item in "${missing[@]}"; do
+                echo "- \`${item}\`"
+              done
+              echo
+              echo "Configure the values under:"
+              echo
+              echo "**Settings -> Secrets and variables -> Actions**"
+            } >> "$GITHUB_STEP_SUMMARY"
+
             exit 0
           fi
-          echo "configured=false" >> "$GITHUB_OUTPUT"
+
+          # Strip protocol, trailing slash, and surrounding whitespace.
+          registry_host="$(
+            printf '%s' "$RAW_REGISTRY_URL" |
+              sed \
+                -e 's/^[[:space:]]*//' \
+                -e 's/[[:space:]]*$//' \
+                -e 's#^https\?://##' \
+                -e 's#/*$##'
+          )"
+
+          if [ -z "$registry_host" ]; then
+            echo "::error::vars.REGISTRY_URL becomes empty after normalization"
+            exit 1
+          fi
+
+          # REGISTRY_URL must only identify the platform/registry hostname.
+          # Reject URLs containing a path.
+          if printf '%s' "$registry_host" | grep -q '/'; then
+            echo "::error::vars.REGISTRY_URL must contain only the JFrog hostname"
+            echo "::error::Received: $RAW_REGISTRY_URL"
+            echo "::error::Expected example: https://artifact.example.com"
+            exit 1
+          fi
+
+          registry_repository="$(
+            printf '%s' "$RAW_REGISTRY_REPOSITORY" |
+              sed \
+                -e 's/^[[:space:]]*//' \
+                -e 's/[[:space:]]*$//' \
+                -e 's#^https\?://##' \
+                -e 's#^/*##' \
+                -e 's#/*$##'
+          )"
+
+          if [ -z "$registry_repository" ]; then
+            echo "::error::vars.REGISTRY_REPOSITORY becomes empty after normalization"
+            exit 1
+          fi
+
+          # A repository must not contain a host or protocol.
+          if printf '%s' "$registry_repository" | grep -q '://'; then
+            echo "::error::vars.REGISTRY_REPOSITORY must be a repository name"
+            exit 1
+          fi
+
+          jf_url="https://${registry_host}"
+
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+          echo "registry_host=$registry_host" >> "$GITHUB_OUTPUT"
+          echo "registry_repository=$registry_repository" >> "$GITHUB_OUTPUT"
+          echo "jf_url=$jf_url" >> "$GITHUB_OUTPUT"
+
           {
-            echo "### Publishing skipped - no registry configured"
+            echo "### Registry configuration"
             echo
-            echo "CD computed the version but published nothing. Set these in"
-            echo "**Settings -> Secrets and variables -> Actions** and re-run:"
-            echo
-            for m in "${missing[@]}"; do echo "- \`${m}\`"; done
+            echo "- JFrog Platform URL: \`${jf_url}\`"
+            echo "- Docker registry host: \`${registry_host}\`"
+            echo "- repository: \`${registry_repository}\`"
+            echo "- JFrog Build name: \`${JFROG_BUILD_NAME}\`"
+            echo "- JFrog Project: not used"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - id: v
+      - name: Calculate release version
+        id: version
         env:
           CHANNEL: ${{ github.ref_name }}
           FORCE_RELEASE: ${{ inputs.create_release }}
         run: bash .github/scripts/version.sh
 
-      # Reserve the version now, before anything is built or pushed. Image
-      # tags are immutable, so any later failure (build, chart, promote, a
-      # cancelled matrix sibling) must never leave this version un-tagged -
-      # otherwise the next run recomputes the exact same version from git
-      # tags alone and collides with the image this run already pushed.
-      #
-      # Nothing is published when the registry is unconfigured, so nothing is
-      # reserved either: the version stays available for the run that does.
-      - name: Reserve the release tag
-        if: steps.v.outputs.should_release == 'true' && steps.registry.outputs.configured == 'true'
+      - name: Validate calculated version
+        if: >-
+          steps.version.outputs.should_release == 'true'
+          && steps.registry.outputs.configured == 'true'
         env:
-          TAG: ${{ steps.v.outputs.tag }}
-          CHART_VERSION: ${{ steps.v.outputs.chart_version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          CHART_VERSION: ${{ steps.version.outputs.chart_version }}
+          IMAGE_VERSION: ${{ steps.version.outputs.image_version }}
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "$CHART_VERSION"
-          git push origin "$TAG"
+          set -euo pipefail
 
-  # ----------------------------------------------------------------- 2. images
+          [ -n "$TAG" ] || {
+            echo "::error::version.sh produced no tag"
+            exit 1
+          }
+
+          [ -n "$CHART_VERSION" ] || {
+            echo "::error::version.sh produced no chart version"
+            exit 1
+          }
+
+          [ -n "$IMAGE_VERSION" ] || {
+            echo "::error::version.sh produced no image version"
+            exit 1
+          }
+
+          if git rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Git tag $TAG already exists locally"
+            exit 1
+          fi
+
+          if git ls-remote \
+            --exit-code \
+            --tags origin \
+            "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Git tag $TAG already exists on origin"
+            exit 1
+          fi
+
+          {
+            echo "### Version"
+            echo
+            echo "- Git tag: \`${TAG}\`"
+            echo "- chart version: \`${CHART_VERSION}\`"
+            echo "- image version: \`${IMAGE_VERSION}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # 2a. BUILD ONE IMAGE PER JOB
   #
-  # Configuration-only releases reuse the existing application images.
-  images:
-    name: ${{ matrix.component }} image
-    needs: version
+  # Three jobs, one per component, running concurrently and each visible on its
+  # own in the Actions UI with its own log and its own duration.
+  #
+  # NOTHING IS PUSHED HERE. Each job exports its image as a tarball artifact
+  # that `release` loads after every build has succeeded. That is what keeps
+  # publication all-or-nothing while still letting the builds run apart.
+  # ===========================================================================
+  build-image:
+    name: Build ${{ matrix.component }} image
+
+    needs:
+      - prepare
+
     if: >-
-      needs.version.outputs.should_release == 'true'
-      && needs.version.outputs.configured == 'true'
+      needs.prepare.outputs.should_release == 'true'
+      && needs.prepare.outputs.configured == 'true'
+
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 45
+
     strategy:
-      fail-fast: true
+      # Report every broken component in one run. With fail-fast a web failure
+      # would cancel a coordinator build that was also going to fail, and the
+      # second problem only surfaces on the next attempt.
+      fail-fast: false
       matrix:
         include:
           - component: coordinator
-            dockerfile: deploy/build/Dockerfile.coordinator
+            runtime: go
           - component: worker
-            dockerfile: deploy/build/Dockerfile.worker
+            runtime: go
           - component: web
-            dockerfile: deploy/build/Dockerfile.web
+            runtime: node
+
+    env:
+      REGISTRY_HOST: ${{ needs.prepare.outputs.registry_host }}
+      REGISTRY_REPOSITORY: ${{ needs.prepare.outputs.registry_repository }}
+      IMAGE_VERSION: ${{ needs.prepare.outputs.image_version }}
+      COMPONENT: ${{ matrix.component }}
+      RUNTIME: ${{ matrix.runtime }}
+
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
         with:
+          # The current self-hosted runner rejects the nested BuildKit
+          # container required by the docker-container driver.
           driver: docker
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          registry: ${{ env.REGISTRY_HOST }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_TOKEN }}
-
-      - name: Prepare npm registry credentials
-        if: matrix.component == 'web'
-        env:
-          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-          NPM_REGISTRY: ${{ vars.NPM_REGISTRY || 'https://registry.npmjs.org/' }}
-        run: |
-          umask 077
-          cat > "$RUNNER_TEMP/npmrc" <<EOF
-          registry=${NPM_REGISTRY}
-          ${NPM_REGISTRY#https:}:_authToken=${REGISTRY_TOKEN}
-          always-auth=true
-          EOF
-
-      - name: Prepare Go module proxy credentials
-        if: matrix.component != 'web'
+      - name: Prepare build credentials
         env:
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         run: |
+          set -euo pipefail
           umask 077
+
           cat > "$RUNNER_TEMP/netrc" <<EOF
           machine ${REGISTRY_HOST}
             login ${REGISTRY_USERNAME}
             password ${REGISTRY_TOKEN}
           EOF
 
-      # Image tags are immutable, so a tag that already exists is either this
-      # release's images already published - reuse them - or a collision worth
-      # failing on. A hand-started release rebuilds and overwrites regardless.
-      - name: Build this image, or reuse what is published
-        id: plan
-        env:
-          COMPONENT: ${{ matrix.component }}
-          IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
-          IMAGES_CHANGED: ${{ needs.version.outputs.images_changed }}
-          FORCED: ${{ inputs.create_release }}
+          npm_registry="${NPM_REGISTRY%/}/"
+          npm_auth_path="${npm_registry#https:}"
+          npm_auth_path="${npm_auth_path#http:}"
+
+          cat > "$RUNNER_TEMP/npmrc" <<EOF
+          registry=${npm_registry}
+          ${npm_auth_path}:_authToken=${REGISTRY_TOKEN}
+          always-auth=true
+          EOF
+
+      - name: Build the image
         run: |
           set -euo pipefail
-          registry="${REGISTRY_URL#https://}"
-          registry="${registry#http://}"
-          ref="${registry}/${REGISTRY_REPOSITORY}/software-gateway-${COMPONENT}:${IMAGE_VERSION}"
 
-          present=false
-          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
-            present=true
-          fi
+          image="${REGISTRY_HOST}/${REGISTRY_REPOSITORY}/software-gateway-${COMPONENT}:${IMAGE_VERSION}"
 
-          if [ "${FORCED:-false}" = "true" ]; then
-            build=true
-            note="release cut by hand; rebuilt and republished"
-            [ "$present" = true ] && echo "::warning::$ref is being overwritten."
-          elif [ "$present" = false ]; then
-            # The version job reserves the tag before anything is built, so a
-            # previous run can have tagged and then failed. Build it.
-            build=true
-            note="not in the registry"
-          elif [ "$IMAGES_CHANGED" = "true" ]; then
-            echo "::error::$ref already exists and this run means to build it. An image tag is written once."
-            echo "::error::Dispatch this workflow with create_release to republish it."
-            exit 1
-          else
-            build=false
-            note="already published; reusing it"
-          fi
+          # A Go component authenticates to the module proxy with netrc. The
+          # web component authenticates to the npm registry with npmrc.
+          extra=()
 
-          echo "build=$build" >> "$GITHUB_OUTPUT"
-          echo "$ref: $note"
-          echo "- \`$ref\` - $note" >> "$GITHUB_STEP_SUMMARY"
+          case "$RUNTIME" in
+            go)
+              extra+=(--build-arg "GOPROXY=${GOPROXY}")
+              extra+=(--secret "id=netrc,src=${RUNNER_TEMP}/netrc")
+              ;;
+            node)
+              extra+=(--build-arg "NPM_REGISTRY=${NPM_REGISTRY}")
+              extra+=(--secret "id=npmrc,src=${RUNNER_TEMP}/npmrc")
+              ;;
+            *)
+              echo "::error::unknown runtime '$RUNTIME' for component '$COMPONENT'"
+              exit 1
+              ;;
+          esac
 
-      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        id: build
-        if: steps.plan.outputs.build == 'true'
+          docker buildx build \
+            --load \
+            --platform linux/amd64 \
+            --file "deploy/build/Dockerfile.${COMPONENT}" \
+            --tag "$image" \
+            --build-arg "VERSION=${IMAGE_VERSION}" \
+            --build-arg "COMMIT=${GITHUB_SHA}" \
+            --build-arg "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --build-arg "HTTP_PROXY=${HTTP_PROXY}" \
+            --build-arg "HTTPS_PROXY=${HTTPS_PROXY}" \
+            --build-arg "NO_PROXY=${NO_PROXY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${IMAGE_VERSION}" \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            "${extra[@]}" \
+            .
+
+          echo "Built $image"
+          docker image inspect --format 'Image ID: {{.Id}}' "$image"
+
+      - name: Export the image
+        run: |
+          set -euo pipefail
+
+          image="${REGISTRY_HOST}/${REGISTRY_REPOSITORY}/software-gateway-${COMPONENT}:${IMAGE_VERSION}"
+
+          mkdir -p "$RUNNER_TEMP/image"
+
+          docker save "$image" -o "$RUNNER_TEMP/image/${COMPONENT}.tar"
+
+          ls -lh "$RUNNER_TEMP/image/${COMPONENT}.tar"
+
+      - name: Upload the image
+        uses: actions/upload-artifact@v7
         with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          push: true
-          platforms: linux/amd64
-          tags: ${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_REPOSITORY }}/software-gateway-${{ matrix.component }}:${{ needs.version.outputs.image_version }}
-          # A layer cache in the registry, keyed per component. The Go and pnpm
-          # dependency layers are the expensive ones and they change rarely, so
-          # a release that touches one package rebuilds one layer.
-          cache-from: type=registry,ref=${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_REPOSITORY }}/software-gateway-${{ matrix.component }}:buildcache
-          # Empty on the `docker` driver, which cannot export one. Written as a
-          # value rather than guarded with an `if:`, because a build that
-          # silently skips is worse than one that silently does not cache.
-          cache-to: ${{ vars.BUILDX_DRIVER == 'docker' && '' || format('type=registry,ref={0}/{1}/software-gateway-{2}:buildcache,mode=max', env.REGISTRY_HOST, env.REGISTRY_REPOSITORY, matrix.component) }}
-          # GOPROXY and GOSUMDB come from this workflow's env, so their defaults
-          # live in one place. GOSUMDB was never passed at all, though every
-          # Dockerfile here declares the ARG: an image built against a mirror that
-          # does not serve the checksum database had no way to be told so.
-          build-args: |
-            VERSION=${{ needs.version.outputs.image_version }}
-            COMMIT=${{ github.sha }}
-            BUILD_DATE=${{ github.event.repository.updated_at }}
-            HTTP_PROXY=${{ vars.HTTP_PROXY }}
-            HTTPS_PROXY=${{ vars.HTTPS_PROXY }}
-            NO_PROXY=${{ vars.NO_PROXY }}
-            GOPROXY=${{ env.GOPROXY }}
-            GOSUMDB=${{ env.GOSUMDB }}
-            NPM_REGISTRY=${{ vars.NPM_REGISTRY || 'https://registry.npmjs.org/' }}
-          # Mount credentials into builds; build arguments remain visible in image history.
-          secret-files: ${{ matrix.component == 'web' && format('npmrc={0}/npmrc', runner.temp) || format('netrc={0}/netrc', runner.temp) }}
-          provenance: false
+          name: image-${{ matrix.component }}
+          path: ${{ runner.temp }}/image/${{ matrix.component }}.tar
+          retention-days: 1
+          # Layers are already compressed. Re-compressing costs CPU on both
+          # ends and saves almost nothing.
+          compression-level: 0
 
+  # ===========================================================================
+  # 2b. VALIDATE AND PACKAGE THE CHART
+  #
+  # Runs beside the image builds, not after them. The chart is packaged here
+  # and published by `release`.
+  # ===========================================================================
+  validate-chart:
+    name: Validate and package chart
 
-  # ------------------------------------------------------------------ 3. chart
-  chart:
-    name: Package and publish the chart
-    needs: [version, images]
-    # Run even when the images job is skipped for a configuration-only release.
+    needs:
+      - prepare
+
     if: >-
-      always()
-      && needs.version.result == 'success'
-      && needs.version.outputs.should_release == 'true'
-      && needs.version.outputs.configured == 'true'
-      && (needs.images.result == 'success' || needs.images.result == 'skipped')
-    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    timeout-minutes: 20
-    outputs:
-      chart_version: ${{ needs.version.outputs.chart_version }}
-    steps:
-      - uses: actions/checkout@v7
+      needs.prepare.outputs.should_release == 'true'
+      && needs.prepare.outputs.configured == 'true'
 
-      - uses: ./.github/actions/toolchain
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 30
+
+    env:
+      CHART_VERSION: ${{ needs.prepare.outputs.chart_version }}
+      IMAGE_VERSION: ${{ needs.prepare.outputs.image_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install project toolchain
+        uses: ./.github/actions/toolchain
         with:
           go-version: ${{ env.GO_VERSION }}
-          helm: 'true'
+          helm: "true"
 
-      # Helm packages a directory, so stage the shared config into the chart.
-      - name: Stage config/ into the chart
-        run: go run ./deploy/chartstage/cmd/chartstage
-
-      - name: Lint
+      # Compiled once and reused by every invocation below instead of
+      # recompiling the tool on each `go run`.
+      - name: Compile chartstage
         run: |
+          set -euo pipefail
+
+          go build \
+            -o "$RUNNER_TEMP/chartstage" \
+            ./deploy/chartstage/cmd/chartstage
+
+      - name: Stage config into the chart
+        run: "$RUNNER_TEMP/chartstage"
+
+      - name: Lint Helm chart
+        run: |
+          set -euo pipefail
+
           helm lint deploy/charts/software-gateway \
             --set identity.masterkey.value=0123456789abcdef0123456789abcdef \
             --set identity.rootPassword.value=lint
 
-      # Render every instance, both layers, before publishing the chart. A
-      # values file that trips a validation rule must fail here rather than as a
-      # reconciliation error in a cluster.
-      - name: Render every instance
+      - name: Render every configured instance
         run: |
           set -euo pipefail
-          for instance in $(go run ./deploy/chartstage/cmd/chartstage -instances | awk '{print $1}'); do
-            go run ./deploy/chartstage/cmd/chartstage -values "$instance" > "$RUNNER_TEMP/$instance-values.yaml"
-            for layer in database application; do
-              db=false; app=false
-              [ "$layer" = database ] && db=true || app=true
-              helm template swgw deploy/charts/software-gateway \
-                --values "$RUNNER_TEMP/$instance-values.yaml" \
-                --set "layers.database=$db" --set "layers.application=$app" \
-                > "$RUNNER_TEMP/$instance-$layer.yaml"
-              echo "$instance/$layer: $(grep -c '^kind:' "$RUNNER_TEMP/$instance-$layer.yaml") objects"
-            done
-          done
 
-      - name: Package
-        env:
-          CHART_VERSION: ${{ needs.version.outputs.chart_version }}
-          IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
+          instances="$("$RUNNER_TEMP/chartstage" -instances)"
+
+          if [ -z "$instances" ]; then
+            echo "::error::chartstage listed no instances - nothing was rendered"
+            exit 1
+          fi
+
+          render_jobs="$RUNNER_TEMP/render-jobs.txt"
+          : > "$render_jobs"
+
+          while read -r instance current_version; do
+            [ -n "$instance" ] || continue
+
+            "$RUNNER_TEMP/chartstage" -values "$instance" \
+              > "$RUNNER_TEMP/${instance}-values.yaml"
+
+            printf '%s\n' "$instance database" >> "$render_jobs"
+            printf '%s\n' "$instance application" >> "$render_jobs"
+          done <<< "$instances"
+
+          # Renders are independent and CPU-bound, so fan them out.
+          xargs -r -P 4 -L 1 bash -c '
+            set -euo pipefail
+            instance="$0"
+            layer="$1"
+
+            database=false
+            application=false
+
+            if [ "$layer" = "database" ]; then
+              database=true
+            else
+              application=true
+            fi
+
+            output="$RUNNER_TEMP/${instance}-${layer}.yaml"
+
+            helm template swgw deploy/charts/software-gateway \
+              --values "$RUNNER_TEMP/${instance}-values.yaml" \
+              --set "layers.database=${database}" \
+              --set "layers.application=${application}" \
+              > "$output"
+
+            object_count="$(grep -c "^kind:" "$output" || true)"
+            echo "${instance}/${layer}: ${object_count} objects"
+          ' < "$render_jobs"
+
+      - name: Package Helm chart
         run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/chart"
+
           helm package deploy/charts/software-gateway \
             --version "$CHART_VERSION" \
             --app-version "$IMAGE_VERSION" \
             --destination "$RUNNER_TEMP/chart"
-          ls -l "$RUNNER_TEMP/chart"
 
-      - name: Publish
+          chart="$RUNNER_TEMP/chart/software-gateway-${CHART_VERSION}.tgz"
+
+          if [ ! -s "$chart" ]; then
+            echo "::error::Helm did not create $chart"
+            exit 1
+          fi
+
+          sha256sum "$chart"
+
+      - name: Upload the packaged chart
+        uses: actions/upload-artifact@v7
+        with:
+          name: chart
+          path: ${{ runner.temp }}/chart/software-gateway-${{ needs.prepare.outputs.chart_version }}.tgz
+          retention-days: 1
+
+  # ===========================================================================
+  # 3. PUBLISH, BUILD INFO 
+  #
+  # Reached only when all three image builds AND the chart validation have
+  # succeeded, so the first byte sent to Artifactory implies the whole build is
+  # already known good.
+  # ===========================================================================
+  release:
+    name: Publish Release
+
+    needs:
+      - prepare
+      - build-image
+      - validate-chart
+
+    if: >-
+      needs.prepare.outputs.should_release == 'true'
+      && needs.prepare.outputs.configured == 'true'
+
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 60
+
+    env:
+      REGISTRY_HOST: ${{ needs.prepare.outputs.registry_host }}
+      REGISTRY_REPOSITORY: ${{ needs.prepare.outputs.registry_repository }}
+      JF_URL: ${{ needs.prepare.outputs.jf_url }}
+
+      CHART_VERSION: ${{ needs.prepare.outputs.chart_version }}
+      IMAGE_VERSION: ${{ needs.prepare.outputs.image_version }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+
+      JFROG_CLI_BUILD_NAME: ngusp-software-gateway
+      JFROG_CLI_BUILD_NUMBER: ${{ needs.prepare.outputs.chart_version }}
+      JFROG_CLI_BUILD_URL: >-
+        ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{
+        github.run_id }}
+
+      # REGISTRY_TOKEN is an Artifactory REFERENCE token, not a JWT. Handing it
+      # to the CLI as JF_ACCESS_TOKEN leaves the server entry with no username,
+      # and the docker login that `jf docker push` performs internally then
+      # fails with "username is empty". Basic auth is the supported path for a
+      # reference token.
+      JF_USER: ${{ secrets.REGISTRY_USERNAME }}
+      JF_PASSWORD: ${{ secrets.REGISTRY_TOKEN }}
+
+    steps:
+      - name: Checkout complete Git history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      # The tag exists only in this workspace at this point. It is not pushed
+      # until images, chart, and Build Info all succeed.
+      - name: Create local Git tag
+        id: local_tag
+        run: |
+          set -euo pipefail
+
+          if git rev-parse --verify \
+            "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            tag_commit="$(
+              git rev-list -n 1 "$RELEASE_TAG"
+            )"
+
+            if [ "$tag_commit" != "$GITHUB_SHA" ]; then
+              echo "::error::Local tag $RELEASE_TAG points at $tag_commit"
+              echo "::error::Expected source commit $GITHUB_SHA"
+              exit 1
+            fi
+
+            echo "Local tag already exists and points at $GITHUB_SHA"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email \
+              "41898282+github-actions[bot]@users.noreply.github.com"
+
+            git tag \
+              -a "$RELEASE_TAG" \
+              -m "Software Gateway ${CHART_VERSION}" \
+              "$GITHUB_SHA"
+          fi
+
+          git show \
+            --no-patch \
+            --format='Local tag: %D%nCommit: %H' \
+            "$RELEASE_TAG"
+
+          echo "created=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install project toolchain
+        uses: ./.github/actions/toolchain
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          helm: "true"
+
+      - name: Configure Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+        with:
+          driver: docker
+
+      # -----------------------------------------------------------------------
+      # FAIL FAST ON CREDENTIALS
+      #
+      # Established before the artifacts are pulled down so a credential problem
+      # costs seconds. Nothing is pushed here.
+      # -----------------------------------------------------------------------
+      - name: Install and configure JFrog CLI
+        uses: jfrog/setup-jfrog-cli@v4
+        env:
+          JF_URL: ${{ needs.prepare.outputs.jf_url }}
+          JF_USER: ${{ secrets.REGISTRY_USERNAME }}
+          JF_PASSWORD: ${{ secrets.REGISTRY_TOKEN }}
+
+      - name: Verify JFrog connectivity and authenticate Docker
         env:
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-          CHART_VERSION: ${{ needs.version.outputs.chart_version }}
         run: |
-          registry="${REGISTRY_URL#https://}"
-          registry="${registry#http://}"
-          # On stdin, so the token never appears in a process listing.
-          helm registry login "$registry" --username "$REGISTRY_USERNAME" --password-stdin <<<"$REGISTRY_TOKEN"
-          helm push "$RUNNER_TEMP/chart/software-gateway-${CHART_VERSION}.tgz" \
-            "oci://${registry}/${REGISTRY_REPOSITORY}"
+          set -euo pipefail
 
-  # ---------------------------------------------------------------- 4. promote
+          jf --version
+
+          # Shows the resolved server entry. A blank user here means the
+          # reference token was taken as an access token again.
+          jf config show
+
+          jf rt ping
+
+          printf '%s' "$REGISTRY_TOKEN" |
+            docker login "$REGISTRY_HOST" \
+              --username "$REGISTRY_USERNAME" \
+              --password-stdin
+
+      # -----------------------------------------------------------------------
+      # COLLECT WHAT THE BUILD JOBS PRODUCED
+      # -----------------------------------------------------------------------
+      - name: Download every image
+        uses: actions/download-artifact@v7
+        with:
+          pattern: image-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/images
+
+      - name: Download the packaged chart
+        uses: actions/download-artifact@v7
+        with:
+          name: chart
+          path: ${{ runner.temp }}/chart
+
+      - name: Load and verify every image
+        run: |
+          set -euo pipefail
+
+          for component in coordinator worker web; do
+            tar="$RUNNER_TEMP/images/${component}.tar"
+
+            if [ ! -s "$tar" ]; then
+              echo "::error::missing image tarball for ${component}"
+              exit 1
+            fi
+
+            docker load -i "$tar"
+          done
+
+          # Assert every expected tag is present after loading, so a renamed or
+          # mismatched artifact fails here rather than mid-publication.
+          for component in coordinator worker web; do
+            image="${REGISTRY_HOST}/${REGISTRY_REPOSITORY}/software-gateway-${component}:${IMAGE_VERSION}"
+
+            image_id="$(
+              docker image inspect \
+                --format '{{.Id}}' \
+                "$image"
+            )"
+
+            echo "Loaded $image"
+            echo "Image ID: $image_id"
+          done
+
+      # -----------------------------------------------------------------------
+      # PUBLISH IMAGES
+      #
+      # Pushes stay sequential on purpose: JFrog CLI accumulates Build Info for
+      # the same build name/number in a shared local partials directory, and
+      # concurrent writers can corrupt it.
+      # -----------------------------------------------------------------------
+      - name: Push all images and collect Build Info
+        id: push_images
+        run: |
+          set -euo pipefail
+
+          for component in coordinator worker web; do
+            image="${REGISTRY_HOST}/${REGISTRY_REPOSITORY}/software-gateway-${component}:${IMAGE_VERSION}"
+
+            echo "Publishing $image"
+
+            jf docker push "$image" \
+              --build-name="$JFROG_CLI_BUILD_NAME" \
+              --build-number="$JFROG_CLI_BUILD_NUMBER"
+          done
+
+          echo "completed=true" >> "$GITHUB_OUTPUT"
+
+      # Read-only registry lookups, safe to run concurrently.
+      - name: Verify every published image
+        run: |
+          set -euo pipefail
+
+          printf '%s\n' coordinator worker web |
+            xargs -r -P 3 -I {} bash -c '
+              set -euo pipefail
+              image="${REGISTRY_HOST}/${REGISTRY_REPOSITORY}/software-gateway-{}:${IMAGE_VERSION}"
+              docker buildx imagetools inspect "$image" >/dev/null
+              echo "Verified published image: $image"
+            '
+
+      - name: Publish OCI Helm chart
+        env:
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          chart="$RUNNER_TEMP/chart/software-gateway-${CHART_VERSION}.tgz"
+
+          if [ ! -s "$chart" ]; then
+            echo "::error::packaged chart $chart was not downloaded"
+            exit 1
+          fi
+
+          printf '%s' "$REGISTRY_TOKEN" |
+            helm registry login "$REGISTRY_HOST" \
+              --username "$REGISTRY_USERNAME" \
+              --password-stdin
+
+          helm push \
+            "$chart" \
+            "oci://${REGISTRY_HOST}/${REGISTRY_REPOSITORY}"
+
+      # -----------------------------------------------------------------------
+      # BUILD INFO
+      # -----------------------------------------------------------------------
+      - name: Add Git and environment metadata to JFrog Build Info
+        env:
+          # Prevent credentials and similarly named variables from entering
+          # JFrog Build Info.
+          JFROG_CLI_ENV_EXCLUDE: >-
+            *password*;*secret*;*key*;*token*;*auth*;*credential*
+        run: |
+          set -euo pipefail
+
+          jf rt build-add-git \
+            "$JFROG_CLI_BUILD_NAME" \
+            "$JFROG_CLI_BUILD_NUMBER" \
+            .
+
+          jf rt build-collect-env \
+            "$JFROG_CLI_BUILD_NAME" \
+            "$JFROG_CLI_BUILD_NUMBER"
+
+      - name: Publish JFrog Build Info
+        id: build_info
+        run: |
+          set -euo pipefail
+
+          jf rt build-publish \
+            "$JFROG_CLI_BUILD_NAME" \
+            "$JFROG_CLI_BUILD_NUMBER"
+
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      # REMOTE GIT TAG
+      #
+      # The Git tag is not pushed until image publication, chart publication,
+      # Build Info publication have succeeded.
+      # -----------------------------------------------------------------------
+      - name: Push release Git tag
+        id: push_tag
+        run: |
+          set -euo pipefail
+
+          remote_tag="$(
+            git ls-remote \
+              --tags origin \
+              "refs/tags/${RELEASE_TAG}" |
+              awk '{print $1}'
+          )"
+
+          remote_peeled_tag="$(
+            git ls-remote \
+              --tags origin \
+              "refs/tags/${RELEASE_TAG}^{}" |
+              awk '{print $1}'
+          )"
+
+          if [ -n "$remote_tag" ] || [ -n "$remote_peeled_tag" ]; then
+            remote_commit="$remote_peeled_tag"
+
+            if [ -z "$remote_commit" ]; then
+              remote_commit="$remote_tag"
+            fi
+
+            if [ "$remote_commit" != "$GITHUB_SHA" ]; then
+              echo "::error::Remote tag $RELEASE_TAG already exists"
+              echo "::error::Remote commit: $remote_commit"
+              echo "::error::Expected commit: $GITHUB_SHA"
+              exit 1
+            fi
+
+            echo "Remote tag already points at $GITHUB_SHA"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git push origin "refs/tags/${RELEASE_TAG}"
+
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Release summary
+        if: success()
+        run: |
+          {
+            echo "### JFrog Build ${CHART_VERSION}"
+            echo
+            echo "- Git tag: \`${RELEASE_TAG}\`"
+            echo "- JFrog Build: \`${JFROG_CLI_BUILD_NAME}/${JFROG_CLI_BUILD_NUMBER}\`"
+            echo "- repository: \`${REGISTRY_REPOSITORY}\`"
+            echo "- image version: \`${IMAGE_VERSION}\`"
+            echo "- coordinator image: published and verified"
+            echo "- worker image: published and verified"
+            echo "- web image: published and verified"
+            echo "- OCI Helm chart: published"
+            echo "- JFrog Project: not used"
+            echo "- Release Bundle: not created"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A failure before publication deletes the local tag.
+      #
+      # The remote tag is not normally present during a failure because it is
+      # pushed only after Build Info succeed.
+      #
+      # If a later step is added after tag publication and fails, this cleanup
+      # removes that remote tag as explicitly required.
+      - name: Delete Git tag after release failure
+        if: failure() && steps.local_tag.outputs.created == 'true'
+        env:
+          REMOTE_TAG_PUSHED: ${{ steps.push_tag.outputs.pushed }}
+          IMAGES_PUSHED: ${{ steps.push_images.outputs.completed }}
+        run: |
+          set +e
+
+          echo "::warning::Release failed. Removing local Git tag $RELEASE_TAG."
+
+          git tag -d "$RELEASE_TAG" >/dev/null 2>&1 || true
+
+          if [ "${REMOTE_TAG_PUSHED:-false}" = "true" ]; then
+            echo "::warning::Removing remote Git tag $RELEASE_TAG."
+            git push origin ":refs/tags/${RELEASE_TAG}" || true
+          fi
+
+          # Images are intentionally not deleted automatically.
+          #
+          # Docker/OCI publication is not transactional. If one JFrog push
+          # succeeded and a later push failed, an artifact might exist under
+          # this version. Deleting it requires Artifactory delete permission
+          # and could remove an artifact another run is examining.
+          if [ "${IMAGES_PUSHED:-false}" != "true" ]; then
+            echo "::warning::Image publication did not complete."
+            echo "::warning::Check Artifactory for partial artifacts tagged ${IMAGE_VERSION}."
+          fi
+
+  # ===========================================================================
+  # 4. FLUX POINTER PR
   #
-  # Deployment is a Git pointer update; Flux performs the cluster reconciliation
-  # once a person merges the PR this job opens.
+  # This starts only after the JFrog Build was published and the
+  # release Git tag was pushed.
+  # ===========================================================================
   promote:
-    name: Point ${{ needs.version.outputs.instance }} at it
-    needs: [version, chart]
+    name: Point ${{ needs.prepare.outputs.instance }} at the build
+
+    needs:
+      - prepare
+      - release
+
     if: >-
-      always()
-      && needs.version.result == 'success'
-      && needs.version.outputs.should_release == 'true'
-      && needs.chart.result == 'success'
-    # Self-hosted runners are selected with the RUNNER_LABEL repository variable.
+      needs.prepare.outputs.should_release == 'true'
+
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 10
+
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout complete Git history
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          filter: blob:none
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: ./.github/actions/toolchain
+      - name: Install project toolchain
+        uses: ./.github/actions/toolchain
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      # main is rule-protected ("Changes must be made through a pull request"),
-      # so the pointer update goes out on a side branch and a person merges it.
-      # This job neither merges the PR nor deletes the branch afterwards: both
-      # are forbidden by policy here, and the token has no permission for
-      # either.
-      - name: Move the pointer
+      - name: Move Flux pointer and open PR
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          INSTANCE: ${{ needs.version.outputs.instance }}
-          CHART_VERSION: ${{ needs.version.outputs.chart_version }}
-          IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
-          IMAGES_CHANGED: ${{ needs.version.outputs.images_changed }}
+          INSTANCE: ${{ needs.prepare.outputs.instance }}
+          CHART_VERSION: ${{ needs.prepare.outputs.chart_version }}
+          IMAGE_VERSION: ${{ needs.prepare.outputs.image_version }}
+          IMAGES_CHANGED: ${{ needs.prepare.outputs.images_changed }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           BASE_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
-          # The same command a person runs to roll back: it creates the patch
-          # directory for this version if it does not exist and repoints the
-          # instance at it.
-          previous_version="$(go run ./deploy/chartstage/cmd/chartstage -instances \
-            | awk -v i="$INSTANCE" '$1 == i {print $2}')"
-          go run ./deploy/chartstage/cmd/chartstage -instance "$INSTANCE" -set-version "$CHART_VERSION"
-          file="deploy/flux/instances/${INSTANCE}/release/kustomization.yaml"
+          chartstage="$RUNNER_TEMP/chartstage"
 
-          # NOTHING TO SAY. chartstage is idempotent, so a re-run against a
-          # version the instance already points at leaves the tree clean. An
-          # empty commit and an empty PR are noise a reviewer has to read.
+          go build -o "$chartstage" ./deploy/chartstage/cmd/chartstage
+
+          previous_version="$(
+            "$chartstage" -instances |
+              awk -v instance="$INSTANCE" \
+                '$1 == instance { print $2 }'
+          )"
+
+          "$chartstage" \
+            -instance "$INSTANCE" \
+            -set-version "$CHART_VERSION"
+
+          pointer_file="deploy/flux/instances/${INSTANCE}/release/kustomization.yaml"
+
           if git diff --quiet -- deploy/flux; then
             echo "opened=false" >> "$GITHUB_OUTPUT"
-            echo "${INSTANCE} already points at ${CHART_VERSION}; no PR opened"
+
+            {
+              echo "### No pointer PR required"
+              echo
+              echo "**${INSTANCE}** already points at \`${CHART_VERSION}\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+
             exit 0
           fi
 
-          if [ "$IMAGES_CHANGED" = "true" ]; then
-            image_note="New images were built and pushed for this release (tag \`${IMAGE_VERSION}\`)."
-          else
-            image_note="No code changed, so this release reuses the existing images (tag \`${IMAGE_VERSION}\`) - only configuration moved."
+          branch="deploy/${INSTANCE}-${CHART_VERSION}"
+
+          # Reuse or replace only the automation branch for this exact
+          # instance and version.
+          if git ls-remote \
+            --exit-code \
+            --heads origin \
+            "$branch" >/dev/null 2>&1; then
+            echo "::warning::Replacing existing automation branch $branch"
+            git push origin --delete "$branch"
           fi
 
-          body=$(cat <<EOF
+          body="$RUNNER_TEMP/pointer-pr.md"
+
+          cat > "$body" <<EOF
           ## What this PR does
-          Points **${INSTANCE}** at release **${CHART_VERSION}** (previously \`${previous_version}\`).
 
-          This repoints \`${file}\` at \`deploy/flux/software/patch/${CHART_VERSION}\`. [Flux](https://fluxcd.io/) picks up the change once this PR is merged and applies it to the cluster - no manual deployment step is needed.
+          Points **${INSTANCE}** at build **${CHART_VERSION}**, previously
+          \`${previous_version}\`.
 
-          | | |
+          This repoints \`${pointer_file}\` to
+          \`deploy/flux/software/patch/${CHART_VERSION}\`.
+
+          Flux picks up the pointer after a person merges this PR. This
+          workflow does not access the cluster and does not merge the PR.
+
+          | Build field | Value |
           |---|---|
           | Instance | \`${INSTANCE}\` |
-          | Chart version | \`${CHART_VERSION}\` (was \`${previous_version}\`) |
-          | Image tag | \`${IMAGE_VERSION}\` |
-          | Images rebuilt? | ${IMAGES_CHANGED} |
-          | Source commit | ${GITHUB_SHA} |
-          | Triggered by | [this CD run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) |
+          | Chart version | \`${CHART_VERSION}\` |
+          | Previous chart version | \`${previous_version}\` |
+          | Image version | \`${IMAGE_VERSION}\` |
+          | Git tag | \`${RELEASE_TAG}\` |
+          | Images rebuilt | \`${IMAGES_CHANGED}\` |
+          | JFrog Build Info | \`ngusp-software-gateway/${CHART_VERSION}\` |
+          | Source commit | \`${GITHUB_SHA}\` |
+          | CD run | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |
 
-          ${image_note}
-
-          Opened automatically by the CD pipeline; no cluster credential was used to produce it. **A person merges this** - the pipeline does not, and does not delete the branch.
+          All images and the OCI Helm chart were published successfully. JFrog
+          Build Info was published before
+          this PR was opened.
           EOF
-          )
 
-          branch="deploy/${INSTANCE}-${CHART_VERSION}"
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
           git checkout -b "$branch"
           git add deploy/flux
+
           git commit \
             -m "deploy(${INSTANCE}): ${CHART_VERSION}" \
-            -m "Points ${INSTANCE} at release ${CHART_VERSION} (was ${previous_version}). ${image_note}"
+            -m "Point ${INSTANCE} at build ${CHART_VERSION}, previously ${previous_version}."
+
           git push origin "$branch"
 
-          pr_url=$(gh pr create \
-            --base "$BASE_REF" \
-            --head "$branch" \
-            --title "deploy(${INSTANCE}): ${previous_version} -> ${CHART_VERSION}" \
-            --body "$body")
+          pr_url="$(
+            gh pr create \
+              --base "$BASE_REF" \
+              --head "$branch" \
+              --title "deploy(${INSTANCE}): ${previous_version} -> ${CHART_VERSION}" \
+              --body-file "$body"
+          )"
 
           echo "opened=true" >> "$GITHUB_OUTPUT"
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
 
-      - name: Summary
+      - name: Deployment pointer summary
         env:
           OPENED: ${{ steps.pr.outputs.opened }}
           PR_URL: ${{ steps.pr.outputs.url }}
-          INSTANCE: ${{ needs.version.outputs.instance }}
-          CHART_VERSION: ${{ needs.version.outputs.chart_version }}
-          IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
+          INSTANCE: ${{ needs.prepare.outputs.instance }}
+          CHART_VERSION: ${{ needs.prepare.outputs.chart_version }}
+          IMAGE_VERSION: ${{ needs.prepare.outputs.image_version }}
         run: |
           {
-            echo "### Released ${CHART_VERSION}"
+            echo "### Build ${CHART_VERSION}"
             echo
-            echo "- chart \`${CHART_VERSION}\`"
-            echo "- images \`${IMAGE_VERSION}\`"
+            echo "- chart: \`${CHART_VERSION}\`"
+            echo "- images: \`${IMAGE_VERSION}\`"
+            echo "- JFrog Build Info: published"
+            echo "- Git tag: pushed"
+
             if [ "$OPENED" = "true" ]; then
               echo "- pointer PR for **${INSTANCE}**: ${PR_URL}"
               echo
-              echo "Merge that PR to deploy. Flux applies it within a minute."
+              echo "Merge the PR to deploy through Flux."
             else
               echo
-              echo "${INSTANCE} already pointed at this version; no PR was opened."
+              echo "${INSTANCE} already points at this build."
             fi
+
             echo
-            echo "Nothing here touched a cluster."
+            echo "No cluster credential was used."
           } >> "$GITHUB_STEP_SUMMARY"

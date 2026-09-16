@@ -45,11 +45,6 @@ set -euo pipefail
 CHANNEL="${CHANNEL:?CHANNEL must be main or lab}"
 RUN="${GITHUB_RUN_NUMBER:-0}"
 
-# A HAND-STARTED RUN CUTS A RELEASE. Not a variation on the push path: somebody
-# opened this workflow and asked for one, so there is a new version, a new tag,
-# and every image is rebuilt and republished under it whatever the registry
-# already holds. The alternative - working out what a manual run "probably"
-# meant - is how a person asks for a release and gets told nothing changed.
 FORCE_RELEASE="${FORCE_RELEASE:-false}"
 
 # ANYTHING AN IMAGE IS BUILT FROM. Adding a path here is how a new input starts

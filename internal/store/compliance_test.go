@@ -3,9 +3,10 @@ package store
 import (
 	"errors"
 	"fmt"
-	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
 	"testing"
 	"time"
+
+	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
 )
 
 func seedRun(t *testing.T, p *Packages, packageID int64, id string) {

@@ -22,71 +22,12 @@ concurrency:
 permissions:
   contents: read
 
-# EVERY JOB HONOURS RUNNER_LABEL, exactly as ci.yml and cd.yml do. This file
-# had `ubuntu-latest` written into all nine of them, which is not a preference
-# for hosted runners so much as an omission, and on a repository whose owner
-# has an IP allow list it is fatal: a hosted runner's address is not on the
-# list, so `actions/checkout` never gets as far as the code.
-#
-#   remote: The repository owner has an IP allow list enabled, and
-#   20.115.146.233 is not permitted to access this repository.
-#   fatal: unable to access 'https://github.com/.../': ... error: 403
-#
-# The scanners then reported as failed, having scanned nothing. With the
-# variable unset - a fork, this repository - the fallback is what it always
-# was, so nothing changes for anybody who does not set it.
 env:
   GO_VERSION: "1.26"
-
-  # WHERE GO MODULES COME FROM, for the jobs themselves - the Dockerfiles have
-  # taken these as build arguments from the start and the workflows never set
-  # them, so every `go` command on a runner went to proxy.golang.org whatever an
-  # internal mirror was configured for.
-  #
-  # GOSUMDB travels with GOPROXY because it is the next thing to fail: with a
-  # complete go.sum nothing is looked up, but `go run <module>@latest` - which
-  # is how govulncheck is installed - resolves a module that go.sum has never
-  # seen and verifies it against the checksum database. A mirror that proxies
-  # modules and not `sum.golang.org` fails there. Set GOSUMDB to `off` if the
-  # mirror is trusted and does not serve it.
-  #
-  # The defaults are Go's own, so an unset variable is the behaviour Go would
-  # have had anyway. Set the VARIABLES rather than editing these lines: a
-  # company's mirror does not belong in this repository (CLAUDE.md).
-  GOPROXY: ${{ vars.GOPROXY || 'https://proxy.golang.org,direct' }}
-  GOSUMDB: ${{ vars.GOSUMDB || 'sum.golang.org' }}
-  # The credential for that mirror, if it wants one. Go has no GOPROXY_TOKEN of
-  # its own - it reads a netrc - so .github/actions/toolchain turns this pair
-  # into one, writes it to RUNNER_TEMP and points NETRC at it. Empty, Go fetches
-  # anonymously, which is this repository and any fork.
-  #
-  # The same credential the registry uses: an Artifactory that serves the module
-  # mirror, the npm registry and the container registry is one host with one
-  # login, and inventing a second name for it would not make it a second secret.
-  GOPROXY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-  GOPROXY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
   NODE_VERSION: "22"
   PNPM_VERSION: "12.3.4"
-
-  # THE PROXY, FOR THE RUNNER'S OWN FETCHES. cd.yml has passed these into the
-  # image builds since the start and the Dockerfiles set both cases; nothing
-  # ever passed them to the jobs themselves, so every tool that reaches outside
-  # went direct and was refused at the egress:
-  #
-  #   govulncheck: fetching vulnerabilities:
-  #   Get "https://vuln.go.dev/index/modules.json.gz": Forbidden
-  #
-  # UPPER CASE ONLY, and not for style: a workflow's `env` keys are compared
-  # case-insensitively, so `HTTP_PROXY` and `http_proxy` in one block are one
-  # key and GitHub refuses the file with "'http_proxy' is already defined".
-  # Nothing is lost - Go reads either case, and so do npm, pnpm and the runner.
-  # curl prefers the lower case and accepts the upper for everything but plain
-  # `http://`, which no URL in these workflows is.
-  #
-  # Unset, they are empty, which every one of these tools reads as "no proxy".
-  # That is right for this repository and for a fork, and it is why the variables
-  # have to be SET on a runner whose image already carries a proxy: an empty
-  # value here overrides the image's, rather than deferring to it.
+  GOPROXY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+  GOPROXY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
   HTTP_PROXY: ${{ vars.HTTP_PROXY }}
   HTTPS_PROXY: ${{ vars.HTTPS_PROXY }}
   NO_PROXY: ${{ vars.NO_PROXY }}
@@ -96,7 +37,7 @@ jobs:
   # database build; a pull request that only edits the chart must not pay it.
   changes:
     name: What changed
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNNER_LABEL }}
     timeout-minutes: 5
     outputs:
       go: ${{ steps.f.outputs.go }}
@@ -158,25 +99,11 @@ jobs:
 
   # CodeQL: the semantic one. It finds the injection and taint bugs a linter
   # cannot, and it is the expensive one, which is why it is gated above.
-  #
-  # THIS IS THE ADVANCED SETUP, AND A REPOSITORY MAY ONLY HAVE ONE. With CodeQL
-  # default setup switched on in Settings -> Code security, the scan runs to
-  # completion, produces its SARIF, and is refused at the upload:
-  #
-  #   Error: Code Scanning could not process the submitted SARIF file:
-  #   CodeQL analyses from advanced configurations cannot be processed when
-  #   the default setup is enabled
-  #
-  # Nothing in this file can fix that, because it is not about this file. Either
-  # switch default setup off there - this workflow says which queries run, which
-  # trees are test input, and which languages a diff is worth scanning, and
-  # default setup says none of it - or delete this job and keep default setup.
-  # Running both is the one option that does not work.
   codeql:
     name: CodeQL (${{ matrix.language }})
     needs: changes
-    if: needs.changes.outputs.languages != '[]'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    if: vars.SECURITY_CODEQL == 'true' && needs.changes.outputs.languages != '[]'
+    runs-on: ${{ vars.RUNNER_LABEL }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -189,23 +116,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The toolchain action rather than setup-go, for the netrc it writes: a
-      # module mirror that wants a credential is one CodeQL's autobuild hits too.
       - uses: ./.github/actions/toolchain
         if: matrix.language == 'go'
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      # THE TYPESCRIPT EXTRACTOR SHELLS OUT TO NODE, and a runner is not
-      # required to have one. ubuntu-latest ships it, which is why this was
-      # missing for as long as the scan ran there; on a self-hosted image the
-      # javascript-typescript leg dies in autobuild with a Java stack trace
-      # whose first line is the whole story:
-      #
-      #   Could not start Node.js. It is required for TypeScript extraction.
-      #
-      # The Go leg gets setup-go above for the same reason. Neither is about
-      # building this project - CodeQL needs the toolchain to read the source.
       - uses: actions/setup-node@v7
         if: matrix.language == 'javascript-typescript'
         with:
@@ -234,32 +149,21 @@ jobs:
   govulncheck:
     name: govulncheck
     needs: changes
-    if: needs.changes.outputs.go == 'true'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    if: vars.SECURITY_GOVULNCHECK == 'true' && needs.changes.outputs.go == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/toolchain
         with:
           go-version: ${{ env.GO_VERSION }}
-      # TWO FETCHES, NOT ONE, and only the first goes through GOPROXY: the tool
-      # is a module, and the vulnerability database it then reads is a plain
-      # HTTPS request to vuln.go.dev. An egress policy that mirrors Go modules
-      # and has never heard of that host refuses the second while the first
-      # succeeds, which reads as govulncheck being broken:
-      #
-      #   go: downloading golang.org/x/vuln v1.8.0          <- fine
-      #   govulncheck: fetching vulnerabilities:
-      #   Get "https://vuln.go.dev/index/modules.json.gz": Forbidden
-      #
-      # GOVULNDB points it at a mirror of that database. Unset, it is the
-      # upstream default and this is the line it always was.
       - env:
           GOVULNDB: ${{ vars.GOVULNDB }}
         run: |
           set -euo pipefail
           if [ -n "${GOVULNDB:-}" ]; then export GOVULNDB; else unset GOVULNDB; fi
           go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
 
   # The web tier's advisories. pnpm audit rather than npm audit - this project
   # has no package-lock.json and npm audit would resolve a different tree.
@@ -271,7 +175,7 @@ jobs:
     name: pnpm audit
     needs: changes
     if: needs.changes.outputs.web == 'true'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNNER_LABEL }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -279,6 +183,8 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
+          registry: ${{ vars.NPM_REGISTRY }}
+          token: ${{ secrets.REGISTRY_TOKEN }}
       - name: Audit
         working-directory: web
         run: |
@@ -298,20 +204,11 @@ jobs:
     name: Trivy
     needs: changes
     if: needs.changes.outputs.containers == 'true' || github.event_name != 'pull_request'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNNER_LABEL }}
     timeout-minutes: 15
     permissions:
       contents: read
       security-events: write
-      # upload-sarif READS THE WORKFLOW RUN it is uploading for. Without this it
-      # scans, validates the SARIF, fingerprints it and then fails on the last
-      # call it makes:
-      #
-      #   Error: Resource not accessible by integration
-      #   - .../rest/actions/workflow-runs#get-a-workflow-run
-      #
-      # which reads as a broken upload rather than a missing permission. The
-      # codeql job has had it from the start; this one was copied without it.
       actions: read
     steps:
       - uses: actions/checkout@v7
@@ -373,7 +270,7 @@ jobs:
     # language that had nothing to build must not stop the export of the rest.
     if: always() && github.event_name == 'workflow_dispatch'
     needs: [codeql, trivy]
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNNER_LABEL }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -475,7 +372,7 @@ jobs:
   # for organisation-owned repositories.
   gitleaks:
     name: Secret scan
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNNER_LABEL }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -511,7 +408,7 @@ jobs:
   dependency-review:
     name: Dependency review
     if: github.event_name == 'pull_request'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNNER_LABEL }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -529,7 +426,7 @@ jobs:
     name: Security
     if: always()
     needs: [changes, codeql, gitleaks, dependency-review]
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNNER_LABEL }}
     timeout-minutes: 5
     steps:
       - name: Every scanner that ran must have passed

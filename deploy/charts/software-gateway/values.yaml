@@ -471,6 +471,28 @@ metrics:
     interval: 30s
     labels: {}
 
+# THE PROFILER, for working out where a slow request spends its time.
+#
+# Leave it off. A profiler hands the heap of the Coordinator - registry
+# credentials and access tokens included - to anything that can reach its
+# address, and a CPU profile is a denial of service anybody can ask for. It
+# runs on a listener of ITS OWN and is never mounted on the API port, so no
+# Ingress rule can publish it by accident.
+#
+# Turn it on for as long as it takes to answer a question, then turn it off:
+#
+#   helm upgrade ... --set profiling.enabled=true
+#   kubectl port-forward deploy/coordinator 6060:6060
+#   go tool pprof -http=: http://127.0.0.1:6060/debug/pprof/profile?seconds=30
+#
+# `address` is loopback on purpose, which is why the port-forward is needed.
+# Setting it to :6060 or 0.0.0.0:6060 publishes the heap to the pod network;
+# the Coordinator logs a warning at startup when you do, and nothing else
+# stops you.
+profiling:
+  enabled: false
+  address: 127.0.0.1:6060
+
 # ------------------------------------------------------------------- logging
 #
 # How much each plane says. Empty leaves config/config.yaml's own value, which

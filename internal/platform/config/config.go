@@ -764,9 +764,45 @@ type WorkerConfig struct {
 }
 
 type ObservabilityConfig struct {
-	Log     LogConfig     `koanf:"log"`
-	Metrics MetricsConfig `koanf:"metrics"`
-	Tracing TracingConfig `koanf:"tracing"`
+	Log       LogConfig       `koanf:"log"`
+	Metrics   MetricsConfig   `koanf:"metrics"`
+	Tracing   TracingConfig   `koanf:"tracing"`
+	Profiling ProfilingConfig `koanf:"profiling"`
+}
+
+// ProfilingConfig exposes net/http/pprof, on a listener of its own.
+//
+// # Why this exists
+//
+// Because without it the only way to find out where a slow request spends its
+// time is to reproduce the estate somewhere else and read query plans. That is
+// how docs/design/32-performance.md was written, and it took an afternoon for
+// an answer a thirty-second profile would have given.
+//
+// # Why it is not on the API listener, and not behind a flag on /metrics
+//
+// A profiler will dump the heap to anybody who can reach it, and the heap of
+// this process holds registry credentials. It is also a denial of service on
+// request: a CPU profile stops the world for its duration, and an unbounded
+// number of concurrent ones will exhaust the process.
+//
+// The repository's own compliance policy already says so - `/pprof` and
+// `/debug` are in cel.operationalPaths, which NET-06 fails a deployment for
+// publishing through an Ingress. Mounting it on the API router would put it one
+// Ingress rule away from the internet, and the check that is supposed to catch
+// that cannot see a route inside a Go program.
+//
+// So it is a SEPARATE listener, off by default, bound to loopback by default.
+// Reaching it is then a deliberate act - `kubectl port-forward` - rather than
+// something a routing change can do by accident.
+type ProfilingConfig struct {
+	// Enabled starts the listener. Off unless somebody is diagnosing
+	// something: see the denial-of-service note above.
+	Enabled bool `koanf:"enabled"`
+	// Address the profiler listens on. LOOPBACK BY DEFAULT: 0.0.0.0 here
+	// publishes the heap to the pod network, and the Coordinator warns at
+	// startup if it is set to anything else.
+	Address string `koanf:"address"`
 }
 
 type LogConfig struct {
@@ -995,6 +1031,8 @@ func Defaults() SystemConfig {
 			Log:     LogConfig{Level: "info", Format: "json"},
 			Metrics: MetricsConfig{Enabled: true, Path: "/metrics"},
 			Tracing: TracingConfig{Enabled: false, SampleRatio: 0.05},
+			// Off, and on loopback when it is turned on. See ProfilingConfig.
+			Profiling: ProfilingConfig{Enabled: false, Address: "127.0.0.1:6060"},
 		},
 		Concurrency: ConcurrencyConfig{
 			// Matches what the previous seven knobs multiplied out to, so this

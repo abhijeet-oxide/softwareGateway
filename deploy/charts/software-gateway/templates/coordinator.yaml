@@ -89,6 +89,15 @@ spec:
             - name: SWGW_OBSERVABILITY_LOG_LEVEL
               value: {{ . | quote }}
             {{- end }}
+            {{- if .Values.profiling.enabled }}
+            # The profiler, on its own listener. Never added to the `http` port
+            # above, and deliberately not declared as a containerPort: reaching
+            # it is a port-forward, not a Service. See values.yaml.
+            - name: SWGW_OBSERVABILITY_PROFILING_ENABLED
+              value: "true"
+            - name: SWGW_OBSERVABILITY_PROFILING_ADDRESS
+              value: {{ .Values.profiling.address | quote }}
+            {{- end }}
             # The driver as well as the DSN: it defaults to sqlite, so a DSN on
             # its own gives a Coordinator that opens a local file and loses it
             # with the pod.

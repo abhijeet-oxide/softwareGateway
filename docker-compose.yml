@@ -601,6 +601,51 @@ services:
       start_period: 45s
 
   # --- the UI ----------------------------------------------------------------
+  # --- observability ---------------------------------------------------------
+  #
+  # WHY THIS IS IN THE DEFAULT STACK, and not behind a profile.
+  #
+  # Nobody reports a slow page. They stop using it. The only way that gets
+  # noticed is if the numbers are already on screen the first time somebody
+  # asks, so bringing the stack up brings up the thing that answers "which
+  # endpoint is slow, and why" - with dashboards already written.
+  #
+  # ONE CONTAINER, no Grafana. VictoriaMetrics scrapes on its own
+  # (-promscrape.config) and serves its own query interface at /vmui, which
+  # reads the dashboards in deploy/observability. Grafana would be a second
+  # image, a second configuration language and a provisioning directory, to
+  # draw nine panels this already draws.
+  #
+  #   http://localhost:8428/vmui       the dashboards and an ad-hoc query box
+  #   http://localhost:8428/targets    what it is scraping and whether that works
+  victoriametrics:
+    image: ${VICTORIAMETRICS_IMAGE:-victoriametrics/victoria-metrics:v1.111.0}
+    restart: unless-stopped
+    command:
+      - -promscrape.config=/etc/vm/scrape.yml
+      - -storageDataPath=/victoria-metrics-data
+      # A month, which is long enough to compare this week against the last
+      # time somebody said it felt slow, and small enough that nobody has to
+      # think about the volume.
+      - -retentionPeriod=31d
+      - -vmui.customDashboardsPath=/etc/vm/dashboards
+      # Scraping a target that is down is normal here - the stack starts in an
+      # order and this does not wait for it - so a failed scrape is not worth
+      # a line per interval.
+      - -promscrape.suppressScrapeErrors=true
+    ports:
+      - "${VICTORIAMETRICS_PORT:-8428}:8428"
+    volumes:
+      - ./deploy/observability/scrape.yml:/etc/vm/scrape.yml:ro
+      - ./deploy/observability:/etc/vm/dashboards:ro
+      - vmdata:/victoria-metrics-data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8428/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   web:
     image: ${WEB_IMAGE:-software-gateway-web:local}
     build:
@@ -654,6 +699,9 @@ services:
     # proxy. Overriding it here would replace three facts with one.
 
 volumes:
+  # VictoriaMetrics' own storage. A named volume so history survives a
+  # `compose down`, which is the point of keeping a month of it.
+  vmdata:
   pgdata:
   patshare:
   # The SPA's OIDC client id, which ZITADEL generates and only the seeder ever

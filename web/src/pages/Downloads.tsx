@@ -911,7 +911,9 @@ export default function Downloads() {
             <DataTable<WithProduct<DownloadView>>
               tableEnhancedKey="downloads-by-product"
               size="small"
-              pagination={false}
+              /* A row per rule per product, so it grows with the estate - paged
+                 for the reason Repositories is, and hidden below 25 rows. */
+              pagination={{}}
               dataSource={visibleRules}
               rowKey={(d) => `${d.product}-${d.name || 'default'}`}
               scroll={{ x: 900 }}

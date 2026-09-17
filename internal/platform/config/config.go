@@ -808,6 +808,25 @@ type ProfilingConfig struct {
 type LogConfig struct {
 	Level  string `koanf:"level"`
 	Format string `koanf:"format"`
+	// Ship sends a copy of every line to a log store, ALONGSIDE stdout rather
+	// than instead of it. See internal/platform/log.Shipper.
+	Ship LogShipConfig `koanf:"ship"`
+}
+
+// LogShipConfig points the logger at a VictoriaLogs instance.
+//
+// Off by default. A deployment that has somewhere to send logs says so; one
+// that does not keeps the behaviour it has always had, which is stdout and
+// whatever the platform does with it.
+type LogShipConfig struct {
+	// Endpoint is the base URL, e.g. http://victorialogs:9428. Empty disables
+	// shipping, which is also what an unreachable one degrades to.
+	Endpoint string `koanf:"endpoint"`
+	// MaxLines and MaxBytes bound what is held while the store is unreachable.
+	// Past either, lines are DROPPED and counted rather than queued: a log
+	// shipper that grows without limit is how an incident becomes two.
+	MaxLines int `koanf:"maxLines"`
+	MaxBytes int `koanf:"maxBytes"`
 }
 
 type MetricsConfig struct {

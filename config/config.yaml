@@ -136,6 +136,27 @@ observability:
     # cannot cope with the other one. `task run` and `task dev:*` override it
     # to `text` for a terminal.
     format: json
+    # A COPY of every line to a log store, alongside stdout rather than instead
+    # of it. Empty here and set by the deployment: compose points it at its own
+    # VictoriaLogs, a cluster at whatever it runs.
+    #
+    # The process pushes its own lines, so this works identically under
+    # `task run`, Docker and Podman - none of which agree on where a
+    # container's log file lives. It is best effort by construction: an
+    # unreachable store drops lines and counts them
+    # (softwaregateway_log_lines_total{outcome="dropped"}) rather than slowing
+    # the service down, and stdout is unaffected either way.
+    #
+    # NOTE that shipping requires `format: json`. A text line is not something
+    # the store can index by field, so it arrives as one opaque message and
+    # every query below stops working.
+    ship:
+      endpoint: ""
+      # What may be held while the store is unreachable. Past either, lines are
+      # dropped - a log shipper that grows without limit turns one incident
+      # into two.
+      maxLines: 10000
+      maxBytes: 8388608
   metrics:
     enabled: true
     path: /metrics

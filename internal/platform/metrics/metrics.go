@@ -66,6 +66,11 @@ type Registry struct {
 	// internal/api/middleware.ActiveUsers for why it is a count and not a
 	// label.
 	ActiveUsers prometheus.Gauge
+	// LogLines is what the log shipper did with each line, by outcome.
+	LogLines *prometheus.CounterVec
+	// logShipped is the last total seen per outcome, so ObserveLogShipping can
+	// turn the shipper's cumulative counts into counter increments.
+	logShipped map[string]int64
 
 	// Discovery (docs/design/07 §7, docs/design/12 §2.3).
 	// Delegated replication (docs/design/12 §2.6.1). Note what is NOT here:
@@ -128,7 +133,8 @@ func New(component string) *Registry {
 	)
 
 	m := &Registry{
-		reg: reg,
+		reg:        reg,
+		logShipped: map[string]int64{},
 
 		BuildInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: namespace,
@@ -231,6 +237,20 @@ func New(component string) *Registry {
 			Name:      "api_active_users",
 			Help:      "Distinct people who made a request in the last fifteen minutes.",
 		}),
+
+		// `outcome` is sent, dropped or failed.
+		//
+		// WITHOUT THIS, LOG LOSS IS INVISIBLE. A shipper that is dropping
+		// looks exactly like a quiet service from inside the log store: the
+		// lines that would have said otherwise are the ones that went
+		// missing. `dropped` means the buffer was full, which is the service
+		// logging faster than the store accepts; `failed` means the store
+		// refused or could not be reached. Both leave stdout intact.
+		LogLines: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "log_lines_total",
+			Help:      "Log lines by what the shipper did with them.",
+		}, []string{"outcome"}),
 
 		MirrorSyncs: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
@@ -471,6 +491,7 @@ func New(component string) *Registry {
 		m.APIQueries,
 		m.APIDBSeconds,
 		m.ActiveUsers,
+		m.LogLines,
 		m.MirrorSyncs,
 		m.MirrorSyncDuration,
 		m.MirrorConfigDrift,
@@ -522,6 +543,32 @@ func StatusClass(code int) string {
 		return "4xx"
 	default:
 		return "5xx"
+	}
+}
+
+// ObserveLogShipping publishes what the log shipper has done.
+//
+// Counters rather than a collector, set from cumulative totals: the shipper
+// counts with atomics on the logging path, where taking a Prometheus counter's
+// lock per line would be the most expensive thing about logging.
+//
+// Set rather than added, because the shipper's numbers are already cumulative.
+// A counter that only ever rises is what Prometheus needs, and re-deriving the
+// delta here would be a second place to get it wrong.
+func (m *Registry) ObserveLogShipping(sent, dropped, failed int64) {
+	if m == nil {
+		return
+	}
+	for outcome, n := range map[string]int64{
+		"sent": sent, "dropped": dropped, "failed": failed,
+	} {
+		c := m.LogLines.WithLabelValues(outcome)
+		// The counter is monotonic and so are the shipper's totals, so the
+		// difference is what has happened since the last pass.
+		if delta := n - m.logShipped[outcome]; delta > 0 {
+			c.Add(float64(delta))
+			m.logShipped[outcome] = n
+		}
 	}
 }
 

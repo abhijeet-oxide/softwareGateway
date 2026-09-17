@@ -111,10 +111,24 @@ func run() error {
 
 	workerID := workerName(cfg.Worker.WorkerID, cfg.Worker.Name)
 
+	// A copy of every line to a log store when one is configured, ALONGSIDE
+	// stdout rather than instead of it - see internal/platform/log.Shipper for
+	// why the application ships its own, and why an unreachable store costs
+	// this process nothing.
+	logShipper, err := plog.NewShipper(plog.ShipConfig{
+		Endpoint:  cfg.Observability.Log.Ship.Endpoint,
+		Component: component,
+		MaxLines:  cfg.Observability.Log.Ship.MaxLines,
+		MaxBytes:  cfg.Observability.Log.Ship.MaxBytes,
+	})
+	if err != nil {
+		return fmt.Errorf("configure log shipping: %w", err)
+	}
+
 	logger := plog.New(plog.Config{
 		Level:  cfg.Observability.Log.Level,
 		Format: cfg.Observability.Log.Format,
-	}, os.Stdout, component).With(plog.KeyWorkerID, workerID)
+	}, plog.Writer(os.Stdout, logShipper), component).With(plog.KeyWorkerID, workerID)
 
 	info := version.Get(component)
 	logger.Info("starting",
@@ -146,6 +160,16 @@ func run() error {
 	defer func() {
 		if err := shutdownTracing(context.WithoutCancel(ctx)); err != nil {
 			logger.Warn("tracing shutdown", "error", err)
+		}
+	}()
+	// LAST, so it carries the shutdown lines the defers above write. Bounded,
+	// because a log store that has stopped answering must not stop this
+	// process exiting.
+	defer func() {
+		flush, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := logShipper.Close(flush); err != nil {
+			logger.Warn("log shipping shutdown", "error", err)
 		}
 	}()
 

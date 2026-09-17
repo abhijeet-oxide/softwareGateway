@@ -59,6 +59,13 @@ type Registry struct {
 	// APIQueries is round trips per request - see where it is built for why
 	// latency alone cannot see an N+1.
 	APIQueries *prometheus.HistogramVec
+	// APIDBSeconds is the part of a request's latency spent waiting on the
+	// database. Against APILatency it is the whole latency breakdown there is.
+	APIDBSeconds *prometheus.HistogramVec
+	// ActiveUsers is distinct people in a rolling window - see
+	// internal/api/middleware.ActiveUsers for why it is a count and not a
+	// label.
+	ActiveUsers prometheus.Gauge
 
 	// Discovery (docs/design/07 §7, docs/design/12 §2.3).
 	// Delegated replication (docs/design/12 §2.6.1). Note what is NOT here:
@@ -192,6 +199,38 @@ func New(component string) *Registry {
 				"size is asking once per row.",
 			Buckets: []float64{0, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233},
 		}, []string{"route", "method"}),
+
+		// TIME IN THE DATABASE, per request.
+		//
+		// The count above says an endpoint is asking too often; this says
+		// whether asking is what it is slow doing. Subtract it from
+		// api_request_duration_seconds and what is left is the handler, the
+		// serialisation and whatever upstream registry the route talks to -
+		// and those are fixed in completely different places, so the split is
+		// most of the work of deciding where to look.
+		//
+		// Same buckets as the latency histogram on purpose: the two are read
+		// beside each other, and quantiles from different bucket boundaries
+		// are not comparable.
+		APIDBSeconds: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "api_request_db_seconds",
+			Help: "Time one API request spent waiting on the database, by " +
+				"route template. The rest of its latency is the handler.",
+			Buckets: apiLatencyBuckets,
+		}, []string{"route", "method"}),
+
+		// THE ONE THAT NOTICES PEOPLE LEAVING.
+		//
+		// Nobody files a ticket about a slow page; they stop opening it.
+		// Request rate cannot see that - one person refreshing a dashboard
+		// outnumbers ten people doing a day's work - and this can: latency up
+		// and this down, over the same week, is one event rather than two.
+		ActiveUsers: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "api_active_users",
+			Help:      "Distinct people who made a request in the last fifteen minutes.",
+		}),
 
 		MirrorSyncs: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
@@ -430,6 +469,8 @@ func New(component string) *Registry {
 		m.APIRequests,
 		m.APILatency,
 		m.APIQueries,
+		m.APIDBSeconds,
+		m.ActiveUsers,
 		m.MirrorSyncs,
 		m.MirrorSyncDuration,
 		m.MirrorConfigDrift,

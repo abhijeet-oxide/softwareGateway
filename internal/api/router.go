@@ -360,6 +360,9 @@ func (s *Server) routes() chi.Router {
 	})
 	if s.deps.Metrics != nil {
 		r.Use(middleware.Metrics(s.deps.Metrics))
+		// OUTSIDE Auth, which is installed below, so it observes the identity
+		// that middleware established. Inside it there is nothing to count.
+		r.Use(middleware.ActiveUsers(s.deps.Metrics))
 	}
 	r.Use(middleware.Recovery(internalErrorWriter(s.deps.Logger)))
 	auth := s.deps.Authenticator

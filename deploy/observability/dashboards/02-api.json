@@ -1,6 +1,6 @@
 {
   "title": "Software Gateway - API",
-  "filename": "dashboard-api.json",
+  "filename": "02-api.json",
   "rows": [
     {
       "title": "Which endpoints are slow",
@@ -9,25 +9,25 @@
           "title": "Slowest endpoints (p95)",
           "description": "The 95th percentile by route template. This is the panel to open first: it answers 'which page feels slow' directly, and the route label is the answer. The buckets reach five minutes, so a genuinely stuck endpoint reads as its real duration rather than as 'over ten seconds'.",
           "unit": "s",
-          "expr": [
-            "topk(10, histogram_quantile(0.95, sum by (route, le) (rate(softwaregateway_api_request_duration_seconds_bucket[5m]))))"
-          ]
+          "width": 6,
+          "alias": ["{{route}}"],
+          "expr": ["topk(10, histogram_quantile(0.95, sum by (route, le) (rate(softwaregateway_api_request_duration_seconds_bucket[5m]))))"]
         },
         {
           "title": "Slowest endpoints (p99)",
           "description": "The tail. p95 is what most people meet and p99 is what the unluckiest one in a hundred meets - and a p99 far above p95 means the slowness is occasional rather than constant, which points at contention or a cold cache rather than at the query itself.",
           "unit": "s",
-          "expr": [
-            "topk(10, histogram_quantile(0.99, sum by (route, le) (rate(softwaregateway_api_request_duration_seconds_bucket[5m]))))"
-          ]
+          "width": 6,
+          "alias": ["{{route}}"],
+          "expr": ["topk(10, histogram_quantile(0.99, sum by (route, le) (rate(softwaregateway_api_request_duration_seconds_bucket[5m]))))"]
         },
         {
           "title": "Requests per second, by route",
-          "description": "What is actually being asked for. A slow endpoint nobody calls is a different problem from a slow endpoint on every page, and this is how to tell them apart before spending an afternoon.",
+          "description": "What is actually being asked for. A slow endpoint nobody calls is a different problem from a slow endpoint on every page, and this is how to tell them apart before spending an afternoon. It is also where a browser polling loop shows up: a route an order of magnitude above the others is usually a page asking again before its last answer arrived.",
           "unit": "req/s",
-          "expr": [
-            "topk(10, sum by (route) (rate(softwaregateway_api_requests_total[5m])))"
-          ]
+          "width": 12,
+          "alias": ["{{route}}"],
+          "expr": ["topk(10, sum by (route) (rate(softwaregateway_api_requests_total[5m])))"]
         }
       ]
     },
@@ -35,28 +35,36 @@
       "title": "Why they are slow",
       "panels": [
         {
+          "title": "Time in the database (p95)",
+          "description": "THE LATENCY BREAKDOWN. Read against the p95 panel above: what is left over is the handler, the serialisation and whatever upstream registry the route talks to. A route at 2s with 1.9s here is a query to fix; the same route with 0.01s here is a handler or a dependency, and no amount of index work will touch it.",
+          "unit": "s",
+          "width": 6,
+          "alias": ["{{route}}"],
+          "expr": ["topk(10, histogram_quantile(0.95, sum by (route, le) (rate(softwaregateway_api_request_db_seconds_bucket[5m]))))"]
+        },
+        {
           "title": "Database round trips per request (p95)",
           "description": "THE PANEL THAT FINDS AN N+1. A route whose query count rises with the size of its page is asking the database once per row. Latency cannot show this on a small database - twenty-five extra round trips cost forty milliseconds there and minutes in a real deployment - but the count is wrong at any size. Anything above single digits for a listing deserves a look.",
           "unit": "queries",
-          "expr": [
-            "topk(10, histogram_quantile(0.95, sum by (route, le) (rate(softwaregateway_api_request_queries_bucket[5m]))))"
-          ]
+          "width": 6,
+          "alias": ["{{route}}"],
+          "expr": ["topk(10, histogram_quantile(0.95, sum by (route, le) (rate(softwaregateway_api_request_queries_bucket[5m]))))"]
         },
         {
           "title": "Database connection pool",
           "description": "in_use against max. A pool pinned at max is the difference between 'one endpoint is slow' and 'everything is slow': a request that cannot get a connection waits without doing any work, and that wait is charged to whatever route it happened to be serving - so the route labels above start pointing at victims rather than the cause.",
           "unit": "conns",
-          "expr": [
-            "softwaregateway_db_connections"
-          ]
+          "width": 6,
+          "alias": ["{{state}}"],
+          "expr": ["sum by (state) (softwaregateway_db_connections)"]
         },
         {
           "title": "Time spent waiting for a connection",
           "description": "Seconds per second spent queueing for the pool. Zero is healthy. Anything sustained here means the pool is the bottleneck and no amount of query tuning on the slow route will help until it is raised or the contention is removed.",
           "unit": "s/s",
-          "expr": [
-            "rate(softwaregateway_db_connection_wait_seconds_total[5m])"
-          ]
+          "width": 6,
+          "alias": ["waiting"],
+          "expr": ["sum(rate(softwaregateway_db_connection_wait_seconds_total[5m]))"]
         }
       ]
     },
@@ -67,25 +75,33 @@
           "title": "Error rate by route",
           "description": "5xx as a share of each route's traffic. Separate from the latency panels on purpose: a route that fails fast looks healthy on a latency graph, and a route that is slow because it is retrying a failing dependency looks like a slow query until this panel is read beside it.",
           "unit": "%",
-          "expr": [
-            "100 * sum by (route) (rate(softwaregateway_api_requests_total{status_class=\"5xx\"}[5m]) or 0 * rate(softwaregateway_api_requests_total[5m])) / clamp_min(sum by (route) (rate(softwaregateway_api_requests_total[5m])), 0.001)"
-          ]
+          "width": 6,
+          "alias": ["{{route}}"],
+          "expr": ["100 * sum by (route) (rate(softwaregateway_api_requests_total{status_class=\"5xx\"}[5m]) or 0 * rate(softwaregateway_api_requests_total[5m])) / clamp_min(sum by (route) (rate(softwaregateway_api_requests_total[5m])), 0.001)"]
         },
         {
           "title": "Requests by status class",
           "description": "The whole estate's answers. A rise in 4xx without a rise in 5xx is usually authorization or a client that has got ahead of a deployment; a rise in both is the service.",
           "unit": "req/s",
-          "expr": [
-            "sum by (status_class) (rate(softwaregateway_api_requests_total[5m]))"
-          ]
+          "width": 6,
+          "alias": ["{{status_class}}"],
+          "expr": ["sum by (status_class) (rate(softwaregateway_api_requests_total[5m]))"]
+        },
+        {
+          "title": "People using it",
+          "description": "Here as well as on the overview, because it is the denominator for everything above. A latency regression during a week when this was near zero affected almost nobody; the same regression at full occupancy is the whole team.",
+          "unit": "people",
+          "width": 6,
+          "alias": ["active in the last 15m"],
+          "expr": ["max(softwaregateway_api_active_users)"]
         },
         {
           "title": "Is anything being scraped",
-          "description": "One per target. A dashboard that has stopped updating looks exactly like a system that has stopped doing anything, and this is what tells those two apart. Zero here means the graphs above are stale, not that the estate is quiet.",
+          "description": "One line per target. A gap here means the graphs above are stale rather than quiet.",
           "unit": "up",
-          "expr": [
-            "up"
-          ]
+          "width": 6,
+          "alias": ["{{job}}"],
+          "expr": ["up"]
         }
       ]
     }

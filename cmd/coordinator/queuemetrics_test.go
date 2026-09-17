@@ -1,9 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
@@ -136,4 +141,44 @@ func gather(t *testing.T, m *metrics.Registry) string {
 // assertions above can be written as the lines an operator would see.
 func trimFloat(v float64) string {
 	return strconv.FormatFloat(v, 'g', -1, 64)
+}
+
+// TestASamplerTimeoutIsLogged is the bug a running deployment found.
+//
+// The sampler suppressed its warning when the context was done, meaning to
+// stay quiet during shutdown. But the context it asked was the TIMEOUT it had
+// just derived, so the one failure most worth knowing about - the sample could
+// not get a database connection inside its budget - was the one it never
+// mentioned. Eight of them happened before anybody noticed, and only the
+// counter showed it.
+func TestASamplerTimeoutIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+	s := &queueSampler{
+		metrics:  metrics.New("coordinator"),
+		logger:   slog.New(slog.NewTextHandler(&buf, nil)),
+		packages: nil, // never reached: the snapshot is stubbed below
+		interval: time.Second,
+	}
+
+	// A sample whose context is already past its deadline, which is what a
+	// contended pool produces.
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	s.observeFailure(expired, context.Background(), errors.New("context deadline exceeded"))
+
+	if !strings.Contains(buf.String(), "queue sample failed") {
+		t.Errorf("a sample that timed out logged nothing:\n%q\n\n"+
+			"A timeout is the failure worth a line - it means the gauges are stale\n"+
+			"because the sample could not get a connection. Only a shutdown should\n"+
+			"be quiet.", buf.String())
+	}
+
+	// A shutdown stays quiet.
+	buf.Reset()
+	stopped, stop := context.WithCancel(context.Background())
+	stop()
+	s.observeFailure(stopped, stopped, errors.New("context canceled"))
+	if buf.Len() != 0 {
+		t.Errorf("shutting down logged a failure:\n%q", buf.String())
+	}
 }

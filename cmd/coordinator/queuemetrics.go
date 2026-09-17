@@ -63,8 +63,8 @@ func (s *queueSampler) Run(ctx context.Context) error {
 	}
 }
 
-func (s *queueSampler) sample(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, queueSampleTimeout)
+func (s *queueSampler) sample(parent context.Context) {
+	ctx, cancel := context.WithTimeout(parent, queueSampleTimeout)
 	defer cancel()
 
 	start := time.Now()
@@ -75,13 +75,28 @@ func (s *queueSampler) sample(ctx context.Context) {
 		// would report an empty queue, which is the one reading that must
 		// never come from a failure - hence the counter, which is what an
 		// alert should watch.
-		s.metrics.QueueSampleFailures.Inc()
-		if ctx.Err() == nil {
-			s.logger.Warn("queue sample failed", "error", err)
-		}
+		s.observeFailure(ctx, parent, err)
 		return
 	}
 	observeQueue(s.metrics, snap)
+}
+
+// observeFailure records a sample that did not complete.
+//
+// PARENT decides whether to log, not the timeout context derived from it.
+// Asking the derived one silences the timeout as well - which is the single
+// failure most worth a line, because it means the sample could not get a
+// database connection inside its budget and every gauge below is now stale.
+// Only a shutdown is expected, and only a shutdown is quiet.
+func (s *queueSampler) observeFailure(ctx, parent context.Context, err error) {
+	s.metrics.QueueSampleFailures.Inc()
+	if parent.Err() != nil {
+		return
+	}
+	s.logger.Warn("queue sample failed",
+		"error", err,
+		"timedOut", ctx.Err() != nil,
+		"timeout", queueSampleTimeout)
 }
 
 // observeQueue writes one snapshot into the registry.

@@ -18,29 +18,51 @@ import (
 
 // dashboard is the shape vmui reads. Only the parts an assertion needs.
 type dashboard struct {
-	Title string `json:"title"`
-	Rows  []struct {
+	Title    string `json:"title"`
+	Filename string `json:"filename"`
+	Rows     []struct {
 		Title  string `json:"title"`
 		Panels []struct {
 			Title       string   `json:"title"`
 			Description string   `json:"description"`
 			Expr        []string `json:"expr"`
+			Alias       []string `json:"alias"`
+			Width       int      `json:"width"`
 		} `json:"panels"`
 	} `json:"rows"`
 }
 
-func readDashboard(t *testing.T) dashboard {
+// dashboardsDir is the directory the chart globs and compose mounts. Read
+// rather than listed, so a dashboard added without being added here is not a
+// dashboard that goes unchecked.
+var dashboardsDir = filepath.Join(repoRoot, "deploy", "observability", "dashboards")
+
+func readDashboards(t *testing.T) map[string]dashboard {
 	t.Helper()
-	path := filepath.Join(repoRoot, "deploy", "observability", "dashboard-api.json")
-	raw, err := os.ReadFile(path)
+
+	names, err := filepath.Glob(filepath.Join(dashboardsDir, "*.json"))
 	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
+		t.Fatal(err)
 	}
-	var d dashboard
-	if err := json.Unmarshal(raw, &d); err != nil {
-		t.Fatalf("%s is not valid JSON, so vmui will serve an empty dashboard: %v", path, err)
+	if len(names) == 0 {
+		t.Fatalf("no dashboards in %s; the chart and compose would serve an "+
+			"empty vmui", dashboardsDir)
 	}
-	return d
+
+	out := make(map[string]dashboard, len(names))
+	for _, path := range names {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		var d dashboard
+		if err := json.Unmarshal(raw, &d); err != nil {
+			t.Fatalf("%s is not valid JSON, so vmui will serve it as an empty "+
+				"dashboard: %v", path, err)
+		}
+		out[filepath.Base(path)] = d
+	}
+	return out
 }
 
 // exported is every metric name the coordinator's registry declares.
@@ -111,11 +133,14 @@ func metricsIn(expr string) []string {
 // expression in deploy/observability/dashboard-api.json to the new name.
 func TestTheDashboardOnlyPlotsMetricsWeExport(t *testing.T) {
 	known := exported(t)
-	for _, row := range readDashboard(t).Rows {
-		for _, panel := range row.Panels {
-			for _, expr := range panel.Expr {
-				for _, name := range metricsIn(expr) {
-					if !known[name] {
+	for file, d := range readDashboards(t) {
+		for _, row := range d.Rows {
+			for _, panel := range row.Panels {
+				for _, expr := range panel.Expr {
+					for _, name := range metricsIn(expr) {
+						if known[name] {
+							continue
+						}
 						have := make([]string, 0, len(known))
 						for n := range known {
 							if strings.HasPrefix(n, "softwaregateway_") {
@@ -123,10 +148,10 @@ func TestTheDashboardOnlyPlotsMetricsWeExport(t *testing.T) {
 							}
 						}
 						sort.Strings(have)
-						t.Errorf("panel %q plots %s, which no metric exports.\n"+
+						t.Errorf("%s: panel %q plots %s, which no metric exports.\n"+
 							"Either the metric was renamed and this expression was not, or the\n"+
 							"expression has a typo. Exported names:\n  %s\n",
-							panel.Title, name, strings.Join(have, "\n  "))
+							file, panel.Title, name, strings.Join(have, "\n  "))
 					}
 				}
 			}
@@ -141,23 +166,46 @@ func TestTheDashboardOnlyPlotsMetricsWeExport(t *testing.T) {
 // front of them is bad. The description is where the panel says what it is for
 // and what a wrong-looking value means, and vmui shows it on the info icon.
 func TestEveryPanelSaysWhatItIsFor(t *testing.T) {
-	d := readDashboard(t)
-	if len(d.Rows) == 0 {
-		t.Fatal("the dashboard has no rows")
-	}
-	for _, row := range d.Rows {
-		if len(row.Panels) == 0 {
-			t.Errorf("row %q has no panels", row.Title)
+	for file, d := range readDashboards(t) {
+		if d.Title == "" {
+			t.Errorf("%s has no title, so vmui labels its tab with the filename", file)
 		}
-		for _, panel := range row.Panels {
-			switch {
-			case panel.Title == "":
-				t.Errorf("row %q has a panel with no title", row.Title)
-			case len(panel.Expr) == 0:
-				t.Errorf("panel %q has no expression, so it draws nothing", panel.Title)
-			case len(panel.Description) < 40:
-				t.Errorf("panel %q has no description worth reading; say what the panel is\n"+
-					"for and what a wrong-looking value means.", panel.Title)
+		// vmui resolves a dashboard by the `filename` INSIDE it, not by the
+		// name on disk. A copied file that kept the original's value serves
+		// one dashboard under two tabs.
+		if d.Filename != file {
+			t.Errorf("%s declares filename %q. vmui identifies a dashboard by "+
+				"this field, so two files that share one value collapse into a "+
+				"single tab.", file, d.Filename)
+		}
+		if len(d.Rows) == 0 {
+			t.Errorf("%s has no rows", file)
+		}
+		for _, row := range d.Rows {
+			if len(row.Panels) == 0 {
+				t.Errorf("%s: row %q has no panels", file, row.Title)
+			}
+			for _, panel := range row.Panels {
+				switch {
+				case panel.Title == "":
+					t.Errorf("%s: row %q has a panel with no title", file, row.Title)
+				case len(panel.Expr) == 0:
+					t.Errorf("%s: panel %q has no expression, so it draws nothing",
+						file, panel.Title)
+				case len(panel.Description) < 40:
+					t.Errorf("%s: panel %q has no description worth reading; say what "+
+						"the panel is for and what a wrong-looking value means.",
+						file, panel.Title)
+				case panel.Width < 0 || panel.Width > 12:
+					t.Errorf("%s: panel %q has width %d. vmui lays a row out on a "+
+						"twelve-column grid; anything outside 1..12 (or 0 for the "+
+						"full width) renders wrong.", file, panel.Title, panel.Width)
+				case len(panel.Alias) > 0 && len(panel.Alias) != len(panel.Expr):
+					t.Errorf("%s: panel %q has %d aliases for %d expressions. vmui "+
+						"pairs them by position, so the extras are silently ignored "+
+						"and the legend shows raw label sets instead.",
+						file, panel.Title, len(panel.Alias), len(panel.Expr))
+				}
 			}
 		}
 	}

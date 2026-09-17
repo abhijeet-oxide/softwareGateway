@@ -35,8 +35,13 @@ data:
   # cluster cannot drift from the one a developer edits.
   scrape.yml: |
 {{ .Files.Get "files/observability/scrape.yml" | indent 4 }}
-  dashboard-api.json: |
-{{ .Files.Get "files/observability/dashboard-api.json" | indent 4 }}
+  # Globbed rather than listed: a new dashboard is a new file in
+  # deploy/observability/dashboards and nothing else. Listing them here meant
+  # that adding one silently produced a cluster with the old set.
+{{- range $path, $bytes := .Files.Glob "files/observability/dashboards/*.json" }}
+  {{ base $path }}: |
+{{ $bytes | toString | indent 4 }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -93,9 +98,10 @@ spec:
       labels:
         {{- include "swgw.componentLabels" (dict "ctx" . "component" "observability") | nindent 8 }}
       annotations:
-        # Both files are read at startup, so a change to either has to restart
-        # the pod to be seen.
-        checksum/observability: {{ printf "%s%s" (.Files.Get "files/observability/scrape.yml") (.Files.Get "files/observability/dashboard-api.json") | sha256sum }}
+        # Every staged file. All of them are read at startup and never again,
+        # so a change to any - including a dashboard that was only added -
+        # has to restart the pod to be seen.
+        checksum/observability: {{ .Files.Glob "files/observability/**" | toYaml | sha256sum }}
     spec:
       enableServiceLinks: false
       serviceAccountName: {{ include "swgw.fullname" . }}-observability
@@ -150,6 +156,11 @@ spec:
               mountPath: /etc/vm/scrape.yml
               subPath: scrape.yml
               readOnly: true
+            # The whole ConfigMap, scrape.yml included. vmui reads only the
+            # .json files in this directory and ignores the rest, which is
+            # what lets the dashboards be globbed rather than listed here as
+            # well - and a list in two places is a list that goes stale in
+            # one of them.
             - name: config
               mountPath: /etc/vm/dashboards
               readOnly: true

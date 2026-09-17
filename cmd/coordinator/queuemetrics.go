@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	plog "github.com/abhijeet-oxide/softwareGateway/internal/platform/log"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 )
@@ -37,6 +38,11 @@ type queueSampler struct {
 	metrics  *metrics.Registry
 	logger   *slog.Logger
 	interval time.Duration
+	// logs is the log shipper, whose counters ride this same timer. It has no
+	// timer of its own and needs none: publishing "how many log lines were
+	// dropped" on the interval the other gauges use is one goroutine instead
+	// of two, and the number does not need to be fresher than that.
+	logs *plog.Shipper
 }
 
 func newQueueSampler(p *store.Packages, m *metrics.Registry, l *slog.Logger) *queueSampler {
@@ -50,6 +56,7 @@ func (s *queueSampler) Run(ctx context.Context) error {
 	// Once immediately, so a freshly started Coordinator does not serve a
 	// minute of zeros that read as an empty queue.
 	s.sample(ctx)
+	s.observeLogs()
 
 	t := time.NewTicker(s.interval)
 	defer t.Stop()
@@ -59,8 +66,16 @@ func (s *queueSampler) Run(ctx context.Context) error {
 			return nil
 		case <-t.C:
 			s.sample(ctx)
+			s.observeLogs()
 		}
 	}
+}
+
+// logShipping is the shipper whose counters are published alongside the queue
+// gauges. Nil when shipping is off, which is the default.
+func (s *queueSampler) withLogShipper(sh *plog.Shipper) *queueSampler {
+	s.logs = sh
+	return s
 }
 
 func (s *queueSampler) sample(parent context.Context) {
@@ -79,6 +94,14 @@ func (s *queueSampler) sample(parent context.Context) {
 		return
 	}
 	observeQueue(s.metrics, snap)
+}
+
+// observeLogs publishes the shipper's totals. Separate from the queue sample
+// because it must happen even when that sample failed - a database that has
+// stopped answering is exactly when the dropped-log count matters.
+func (s *queueSampler) observeLogs() {
+	sent, dropped, failed := s.logs.Stats()
+	s.metrics.ObserveLogShipping(sent, dropped, failed)
 }
 
 // observeFailure records a sample that did not complete.

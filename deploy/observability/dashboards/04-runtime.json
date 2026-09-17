@@ -10,23 +10,34 @@
           "description": "Cores, per process. One whole core means a process saturating a single CPU - which for a Go service usually means one hot loop rather than genuine load, because the runtime would otherwise spread the work. Compare with the request rate on the API dashboard: CPU that rises without traffic is a retry storm or a busy-wait.",
           "unit": "cores",
           "width": 6,
-          "alias": ["{{job}}"],
-          "expr": ["sum by (job) (rate(process_cpu_seconds_total[5m]))"]
+          "alias": [
+            "{{job}}"
+          ],
+          "expr": [
+            "sum by (job) (rate(process_cpu_seconds_total[5m]))"
+          ]
         },
         {
           "title": "Resident memory",
           "description": "What the operating system says each process is holding - the number a container limit is enforced against, and therefore the one that decides whether a pod is killed. It sits above the Go heap below, and the difference is the runtime's own overhead plus memory freed to the heap but not yet returned to the OS.",
           "unit": "MiB",
           "width": 6,
-          "alias": ["{{job}}"],
-          "expr": ["sum by (job) (process_resident_memory_bytes) / 1048576"]
+          "alias": [
+            "{{job}}"
+          ],
+          "expr": [
+            "sum by (job) (process_resident_memory_bytes) / 1048576"
+          ]
         },
         {
           "title": "Go heap in use",
           "description": "Live objects, against GOMEMLIMIT where one is set. The limit line is what the garbage collector is steering towards; the heap approaching it means collections get more frequent and more of the CPU above is spent on them rather than on requests. A heap that climbs and never falls between collections is a leak.",
           "unit": "MiB",
           "width": 6,
-          "alias": ["heap in use ({{job}})", "GOMEMLIMIT ({{job}})"],
+          "alias": [
+            "heap in use ({{job}})",
+            "GOMEMLIMIT ({{job}})"
+          ],
           "expr": [
             "sum by (job) (go_memstats_heap_inuse_bytes) / 1048576",
             "sum by (job) (go_gc_gomemlimit_bytes < 1e15) / 1048576"
@@ -37,7 +48,10 @@
           "description": "Against the process limit. Every registry connection, database connection and inbound request holds one, and running out does not degrade gracefully: accepts start failing and the service looks down while every other graph here looks healthy.",
           "unit": "fds",
           "width": 6,
-          "alias": ["open ({{job}})", "limit ({{job}})"],
+          "alias": [
+            "open ({{job}})",
+            "limit ({{job}})"
+          ],
           "expr": [
             "sum by (job) (process_open_fds)",
             "sum by (job) (process_max_fds)"
@@ -53,32 +67,48 @@
           "description": "Seconds per second in GC pauses. This is CPU the service is not spending on requests, and it is the mechanism by which memory pressure becomes latency - which is why a slow endpoint with a flat query count and flat database time is usually found here rather than on the API dashboard.",
           "unit": "s/s",
           "width": 6,
-          "alias": ["{{job}}"],
-          "expr": ["sum by (job) (rate(go_gc_duration_seconds_sum[5m]))"]
+          "alias": [
+            "{{job}}"
+          ],
+          "expr": [
+            "sum by (job) (rate(go_gc_duration_seconds_sum[5m]))"
+          ]
         },
         {
           "title": "Allocation rate",
           "description": "Bytes allocated per second. Not the same as memory used - most of it is collected almost immediately - but it is what drives the collection rate above. A handler that allocates per row rather than per page shows up here long before it shows up as memory.",
           "unit": "MiB/s",
           "width": 6,
-          "alias": ["{{job}}"],
-          "expr": ["sum by (job) (rate(go_memstats_alloc_bytes_total[5m])) / 1048576"]
+          "alias": [
+            "{{job}}"
+          ],
+          "expr": [
+            "sum by (job) (rate(go_memstats_alloc_bytes_total[5m])) / 1048576"
+          ]
         },
         {
           "title": "Goroutines",
           "description": "A count that rises and never comes back down is the classic Go leak: a handler starting work it never waits for, or a context nobody cancels. It is worth watching even when memory looks fine, because each one is only a couple of kilobytes and thousands can leak before the heap notices.",
           "unit": "goroutines",
           "width": 6,
-          "alias": ["{{job}}"],
-          "expr": ["sum by (job) (go_goroutines)"]
+          "alias": [
+            "{{job}}"
+          ],
+          "expr": [
+            "sum by (job) (go_goroutines)"
+          ]
         },
         {
           "title": "Threads",
           "description": "OS threads the Go runtime is holding. It grows when goroutines block in syscalls - a slow filesystem, or a database driver making blocking calls - and unlike goroutines the runtime never gives them back. A steady climb here alongside flat goroutines points at blocking I/O rather than at concurrency.",
           "unit": "threads",
           "width": 6,
-          "alias": ["{{job}}"],
-          "expr": ["sum by (job) (go_threads)"]
+          "alias": [
+            "{{job}}"
+          ],
+          "expr": [
+            "sum by (job) (go_threads)"
+          ]
         }
       ]
     },
@@ -90,32 +120,60 @@
           "description": "What the database occupies on disk. The growth rate matters more than the value: this table keeps every job ever run until the archiver removes it, so a curve that steepens is retention that has stopped working rather than an estate that got busier.",
           "unit": "GiB",
           "width": 6,
-          "alias": ["database"],
-          "expr": ["max(softwaregateway_database_bytes) / 1073741824"]
+          "alias": [
+            "database"
+          ],
+          "expr": [
+            "max(softwaregateway_database_bytes) / 1073741824"
+          ]
         },
         {
           "title": "Manifest cache",
           "description": "Bodies held, in bytes, against the count of them. Evictions by reason are the signal to act on: steady `expired` is the cache working, sustained `budget` means the budget is smaller than the working set and every transfer is paying to re-fetch manifests it had.",
           "unit": "MiB",
           "width": 6,
-          "alias": ["cached bodies"],
-          "expr": ["max(softwaregateway_manifest_cache_bytes) / 1048576"]
+          "alias": [
+            "cached bodies"
+          ],
+          "expr": [
+            "max(softwaregateway_manifest_cache_bytes) / 1048576"
+          ]
         },
         {
           "title": "Manifest cache evictions",
           "description": "By reason. `budget` climbing is the one to act on - it means the cache is too small for what is passing through it, and the cost is paid as extra registry round trips on every transfer.",
           "unit": "evictions/s",
           "width": 6,
-          "alias": ["{{reason}}"],
-          "expr": ["sum by (reason) (rate(softwaregateway_manifest_cache_evicted_total[5m]))"]
+          "alias": [
+            "{{reason}}"
+          ],
+          "expr": [
+            "sum by (reason) (rate(softwaregateway_manifest_cache_evicted_total[5m]))"
+          ]
         },
         {
           "title": "Cost of watching the queue",
           "description": "How long one queue sample takes. It runs on a timer forever, so it is watched for one specific regression: if it starts growing with the size of the table, the partial indexes behind it have stopped being used and the measurement has become the load.",
           "unit": "s",
           "width": 6,
-          "alias": ["p95 sample"],
-          "expr": ["histogram_quantile(0.95, sum by (le) (rate(softwaregateway_queue_sample_duration_seconds_bucket[5m])))"]
+          "alias": [
+            "p95 sample"
+          ],
+          "expr": [
+            "histogram_quantile(0.95, sum by (le) (rate(softwaregateway_queue_sample_duration_seconds_bucket[5m])))"
+          ]
+        },
+        {
+          "title": "Log lines shipped",
+          "description": "By outcome. `dropped` means the buffer filled - the service is logging faster than the store accepts - and `failed` means the store refused or could not be reached. EITHER ONE MEANS THE LOG SEARCH IS INCOMPLETE, which is the one failure a log store cannot tell you about itself: the lines that would have said so are the missing ones. stdout is unaffected by both, so `docker compose logs` remains the fallback.",
+          "unit": "lines/s",
+          "width": 6,
+          "alias": [
+            "{{outcome}}"
+          ],
+          "expr": [
+            "sum by (outcome) (rate(softwaregateway_log_lines_total[5m]))"
+          ]
         }
       ]
     }

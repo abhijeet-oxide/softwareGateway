@@ -454,6 +454,12 @@ services:
       SWGW_SECRETSDIR: /etc/softwaregateway/secrets
       SWGW_DATABASE_DRIVER: postgres
       SWGW_DATABASE_DSN: postgres://swgw:${POSTGRES_PASSWORD:-INSECURE-local-dev-password}@postgres:5432/swgw?sslmode=disable
+      # A copy of every log line to VictoriaLogs, alongside stdout. Pushed by
+      # the process itself rather than scraped by a collector, so it works the
+      # same under `task run`, Docker and Podman - none of which agree on where
+      # a container's log file lives. Unset it and nothing changes but the
+      # search box.
+      SWGW_OBSERVABILITY_LOG_SHIP_ENDPOINT: ${LOG_SHIP_ENDPOINT-http://victorialogs:9428}
       # The issuer must be the PUBLIC url: it is what ZITADEL stamps into the
       # token's `iss`, so validating against the internal name fails.
       SWGW_AUTH_ENABLED: ${AUTH_ENABLED:-true}
@@ -550,6 +556,10 @@ services:
         condition: service_completed_successfully
     environment:
       SWGW_WORKER_COORDINATORENDPOINT: http://controller:8080
+      # The same copy-to-VictoriaLogs as the Coordinator, so one search covers
+      # both halves of a transfer - which is the whole point of shipping the
+      # worker's lines at all.
+      SWGW_OBSERVABILITY_LOG_SHIP_ENDPOINT: ${LOG_SHIP_ENDPOINT-http://victorialogs:9428}
       # As on the controller: one configuration file, two paths that a
       # container places differently.
       SWGW_CONFIGDIR: /etc/softwaregateway
@@ -634,9 +644,9 @@ services:
   #
   # ONE CONTAINER, no Grafana. VictoriaMetrics scrapes on its own
   # (-promscrape.config) and serves its own query interface at /vmui, which
-  # reads the dashboards in deploy/observability. Grafana would be a second
-  # image, a second configuration language and a provisioning directory, to
-  # draw nine panels this already draws.
+  # reads every .json in deploy/observability/dashboards - one tab per file.
+  # Grafana would be a second image, a second configuration language and a
+  # provisioning directory, to draw panels this already draws.
   #
   #   http://localhost:8428/vmui       the dashboards and an ad-hoc query box
   #   http://localhost:8428/targets    what it is scraping and whether that works
@@ -659,10 +669,49 @@ services:
       - "${VICTORIAMETRICS_PORT:-8428}:8428"
     volumes:
       - ./deploy/observability/scrape.yml:/etc/vm/scrape.yml:ro
-      - ./deploy/observability:/etc/vm/dashboards:ro
+      - ./deploy/observability/dashboards:/etc/vm/dashboards:ro
       - vmdata:/victoria-metrics-data
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8428/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # The same idea for logs. A SECOND UI, not a second pane of the first: this
+  # is a separate product with its own query language (LogsQL) served at
+  # /select/vmui. Grafana is what would put logs and metrics on one screen, and
+  # that remains the trade this stack has not taken.
+  #
+  #   http://localhost:9428/select/vmui   search, with the fields already parsed
+  #
+  # THE COORDINATOR AND WORKER PUSH TO IT THEMSELVES - there is no collector
+  # here, no Docker socket mounted and no host log path, because those differ
+  # between Docker and Podman and do not exist at all under `task run`. See
+  # internal/platform/log/ship.go. stdout still carries every line, so
+  # `docker compose logs` is unchanged and this being down costs nothing.
+  #
+  # Useful first queries, pasted into the UI:
+  #
+  #   level:ERROR                       everything that went wrong
+  #   dbSeconds:>1                      requests that waited on the database
+  #   _time:5m AND queries:>20          this five minutes' N+1 suspects
+  #   trace_id:<id>                     one request across both components
+  victorialogs:
+    image: ${VICTORIALOGS_IMAGE:-victoriametrics/victoria-logs:v1.40.0-victorialogs}
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/victoria-logs-data
+      # The same month the metrics keep, so a graph and the lines behind it
+      # cover the same period. Nothing is more annoying than a spike you can
+      # see and cannot read.
+      - -retentionPeriod=31d
+    ports:
+      - "${VICTORIALOGS_PORT:-9428}:9428"
+    volumes:
+      - vldata:/victoria-logs-data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9428/health"]
       interval: 10s
       timeout: 3s
       retries: 10
@@ -724,6 +773,8 @@ volumes:
   # VictoriaMetrics' own storage. A named volume so history survives a
   # `compose down`, which is the point of keeping a month of it.
   vmdata:
+  # VictoriaLogs' storage, for the same reason and the same month.
+  vldata:
   pgdata:
   patshare:
   # The SPA's OIDC client id, which ZITADEL generates and only the seeder ever

@@ -1,24 +1,24 @@
 import { useMemo } from 'react'
-import { Button, Card, Col, Row, Space, Tabs, Typography } from 'antd'
+import { Button, Card, Col, Row, Tabs } from 'antd'
 import { Table as DataTable } from '../tablekit'
 import { c, FieldLabel } from '../uikit'
 import { CloudDownloadOutlined, DashboardOutlined, RadarChartOutlined } from '../icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { useAllPackages, useProducts, useReports, useTransfers } from '../api/queries'
+import { useAllPackages, useProducts, useTransfers } from '../api/queries'
 import {
   deriveLocations, deriveStatus, downloadSeconds, isRecent, releaseHref,
   failureReason, verification, version, type SoftwareStatus,
 } from '../domain/derive'
-import { formatBytes, formatDuration, formatSpeed } from '../domain/format'
-import { Stat, Value } from '../components/value'
+import { formatDuration } from '../domain/format'
+import { Value } from '../components/value'
 import { DiscoveryPanel, DiscoverySummary } from '../components/discovery'
 import { AvailabilityPanel } from '../components/availability'
 import { SystemPanel } from '../components/system'
+import { DownloadPerformancePanel } from '../components/downloadperformance'
 import {
   LocationChip, ProductChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
 } from '../components/chips'
 import { AttentionBand, EmptyStateCard, ErrorState, type Attention } from '../components/layout'
-import { Guard } from '../components/access'
 import { useCan } from '../auth/permissions'
 import type { Package, Product, Transfer } from '../api/types'
 
@@ -84,7 +84,6 @@ export default function Overview() {
   const packageLists = useAllPackages({ pageSize: 30 })
 
   const transfers = useTransfers({ pageSize: 100, view: 'summary' })
-  const reports = useReports({ period: '7d' })
 
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = []
@@ -187,7 +186,6 @@ export default function Overview() {
   // be skipped whenever the first came back true, and React would see a
   // different number of hooks between two renders of the same component.
   const sidebar = maySeeFleet || maySeeReports || maySeeAvailability
-  const totals = reports.data?.totals
 
   return (
     <>
@@ -279,8 +277,48 @@ export default function Overview() {
         </div>
       </Card>
 
-      <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
-        <Col xs={24} xl={sidebar ? 17 : 24}>
+      {/*
+        THE DEPLOYMENT, AS THREE PANELS ACROSS.
+
+        These were a narrow right-hand column beside the packages table: three
+        summaries stacked in a seven-twentyfourths strip, each squeezed to a
+        width that let none of them draw anything - the availability record had
+        no room for a timeline and the week's throughput was two numbers with
+        nowhere to put a trend.
+
+        They are one row now, and they are one row because they answer one
+        question between them - IS THIS DEPLOYMENT WORKING - in the order
+        somebody asks it: is the service up, what is it made of, and what has
+        it been getting through. The packages table keeps the full width below,
+        which is what it wanted all along.
+
+        Each is guarded separately and the row collapses to what is left: these
+        are estate facts with no product tier on their policies, so a caller
+        scoped to products is refused all three and gets a page that never
+        mentions them rather than a strip of empty cards.
+      */}
+      {sidebar && (
+        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+          {maySeeAvailability && (
+            <Col xs={24} lg={12} xxl={8}>
+              <AvailabilityPanel />
+            </Col>
+          )}
+          {maySeeFleet && (
+            <Col xs={24} lg={12} xxl={8}>
+              <SystemPanel />
+            </Col>
+          )}
+          {maySeeReports && (
+            <Col xs={24} lg={12} xxl={8}>
+              <DownloadPerformancePanel />
+            </Col>
+          )}
+        </Row>
+      )}
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24}>
           <Card
             title="Packages published in the last 7 days"
             extra={<Link to="/packages">View all packages</Link>}
@@ -394,80 +432,6 @@ export default function Overview() {
           </Card>
         </Col>
 
-        {/*
-          NO COLUMN WHEN THERE IS NOTHING TO PUT IN IT.
-
-          Both panels here are ESTATE facts that cannot be narrowed to a
-          product, so a caller scoped to products is refused both and each
-          Guard renders nothing. The column stayed, though, reserving a
-          seven-twentyfourths strip of blank page beside a packages table
-          squeezed into the rest - a reader without these permissions got a
-          worse-laid-out page than one with them, which is backwards.
-
-          Asked with the same permissions the Guards use, so the two can never
-          disagree about whether anything is going to be drawn.
-        */}
-        {sidebar && (
-        <Col xs={24} xl={7}>
-          <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-            {/*
-              THE FLEET AND THE ROLLUPS ARE ESTATE FACTS, and this column showed
-              them to everybody.
-
-              Neither can be narrowed to a product - there is no product tier on
-              either policy - so a caller scoped to products is refused both, and
-              the panels rendered their refusals as answers: "no worker has
-              reported in" over a fleet that is running, and a download-speed
-              card of dashes. A confident statement about an estate somebody
-              cannot see is worse than no statement, so they are not offered at
-              all. See the Reports and Settings pages, which the navigation
-              drops for the same reason.
-            */}
-            {/*
-              FIRST IN THE COLUMN, and the panel is on this page at all
-              because "was it up?" is the first question anybody has about a
-              service - it was the one question the product could not answer,
-              while a browser inferring outages from failing requests answered
-              it wrongly. See components/availability.
-            */}
-            <Guard permission="system.view">
-              <AvailabilityPanel />
-            </Guard>
-
-            <Guard permission="worker.view">
-              <SystemPanel />
-            </Guard>
-
-            <Guard permission="report.view">
-            <Card title="Download Performance" extra={<Link to="/reports">View report</Link>}>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Last 7 days
-              </Typography.Text>
-              <Row gutter={16} style={{ marginTop: 12 }}>
-                <Col span={12}>
-                  <Stat
-                    title="Average download speed"
-                    value={formatSpeed(totals?.averageBytesPerSecond)}
-                    reason="No download whose bytes we moved completed in this period."
-                  />
-                  {!totals?.averageBytesPerSecond && !reports.isLoading && (
-                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                      No download whose bytes we moved completed in this period.
-                    </Typography.Text>
-                  )}
-                </Col>
-                <Col span={12}>
-                  <Stat
-                    title="Total data downloaded"
-                    value={formatBytes(totals?.bytesTransferred)}
-                  />
-                </Col>
-              </Row>
-            </Card>
-            </Guard>
-          </Space>
-        </Col>
-        )}
       </Row>
               </>
             ),

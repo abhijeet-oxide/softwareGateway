@@ -1,16 +1,18 @@
-import { useMemo, useState, type ReactNode } from 'react'
-import { Card, Segmented, Space, Tooltip, Typography } from 'antd'
-import { Link } from 'react-router-dom'
+import { useMemo, useState } from 'react'
+import { Segmented, Tooltip, Typography } from 'antd'
 import { useAvailability } from '../api/queries'
 import { formatCount, formatDuration, formatPercent } from '../domain/format'
 import { TimeAgo } from './chips'
-import { c, StatusPill } from '../uikit'
-import type { AvailabilityResponse, AvailabilityStatus, AvailabilityWindow, Outage } from '../api/types'
+import { PanelFoot } from './panel'
+import { c, CardHead, Figure, SectionCard, StatusPill } from '../uikit'
+import { PulseOutlined } from '../icons'
+import type { PillTone } from '../uikit'
+import type { AvailabilityResponse, AvailabilityStatus, AvailabilityWindow } from '../api/types'
 
 /**
  * WAS THE SERVICE UP, AND HOW OFTEN HAS IT NOT BEEN.
  *
- * # Why this is on the Overview and not on a dashboard
+ * # Why this is in the product and not only on a dashboard
  *
  * Because it is the first question anybody has about a service, and the answer
  * lived somewhere the people asking could not reach. The deployment ships a
@@ -37,12 +39,18 @@ export function AvailabilityPanel() {
   const data = availability.data
 
   return (
-    <Card
+    <SectionCard
+      className="ui-card-lead"
+      style={{ height: '100%' }}
       title={
-        <Space size={8}>
-          Service availability
-          {data && <StatusPill tone={toneFor(data.status)}>{labelFor(data.status)}</StatusPill>}
-        </Space>
+        <CardHead
+          icon={<PulseOutlined />}
+          tone="brand"
+          title="Service availability"
+          status={
+            data && <StatusPill tone={toneFor(data.status)} size="sm">{labelFor(data.status)}</StatusPill>
+          }
+        />
       }
       extra={
         <Segmented
@@ -56,208 +64,171 @@ export function AvailabilityPanel() {
           ]}
         />
       }
-      loading={availability.isLoading}
     >
-      {data ? <Recorded data={data} /> : <NotRecorded />}
-    </Card>
+      {data?.recordedFrom ? <Recorded data={data} /> : <NotRecorded loading={availability.isLoading} />}
+    </SectionCard>
   )
 }
 
 /**
  * A deployment where nothing has been recorded yet.
  *
- * It says so rather than showing an empty timeline, because an empty timeline
- * is indistinguishable from an unbroken one and means the opposite.
+ * It says so rather than drawing an empty strip, because an empty strip is
+ * indistinguishable from an unbroken one and means the opposite.
  */
-function NotRecorded() {
+function NotRecorded({ loading }: { loading: boolean }) {
   return (
     <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-      No availability has been recorded. The Coordinator records the periods it was serving; the
-      record begins when a Coordinator carrying it first starts.
+      {loading
+        ? 'Reading the availability record.'
+        : 'No availability has been recorded. The Coordinator records the periods it was serving; ' +
+          'the record begins when a Coordinator carrying it first starts.'}
     </Typography.Text>
   )
 }
 
 function Recorded({ data }: { data: AvailabilityResponse }) {
   const outages = data.outages ?? []
-  const segments = useMemo(() => timeline(data), [data])
-
-  if (!data.recordedFrom) return <NotRecorded />
+  const segments = useMemo(() => buckets(data), [data])
+  const ongoing = outages.some((o) => o.ongoing)
 
   return (
     <>
-      <Space size={24} wrap style={{ marginBottom: 12 }}>
+      <div className="ui-figures" style={{ marginBottom: 16 }}>
+        <Figure label="Uptime" value={formatPercent(data.uptime * 100) ?? '—'} />
         <Figure
           label={data.status === 'DOWN' ? 'Not serving since' : 'Serving since'}
           value={<TimeAgo at={data.statusSince} />}
         />
-        <Figure label="Uptime" value={formatPercent(data.uptime * 100) ?? '—'} />
         <Figure
           label="Outages"
-          value={
-            outages.length === 0
-              ? 'None'
-              : `${formatCount(outages.length)} · ${formatDuration(data.downSeconds) ?? '0s'}`
-          }
+          value={outages.length === 0 ? 'None' : `${formatCount(outages.length)} · ${formatDuration(data.downSeconds) ?? '0s'}`}
         />
-        {data.degradedSeconds > 0 && (
-          <Figure label="Degraded" value={formatDuration(data.degradedSeconds) ?? '0s'} />
-        )}
         <Figure label="Starts" value={formatCount(data.starts) ?? '0'} />
-      </Space>
+      </div>
 
       {/*
-        THE WINDOW, DRAWN TO SCALE. A list of outages answers "what happened";
-        this answers "when", which is the question somebody arrives with - they
-        were told it broke at about nine, and they want to see whether anything
-        happened at about nine.
+        THE WINDOW, CUT INTO EQUAL BUCKETS. A number says how much; this says
+        WHEN, which is the question somebody arrives with - they were told it
+        broke at about nine, and they want to see whether anything happened at
+        about nine.
 
-        Segments are proportional to real time, so a two-minute outage in a day
-        is a sliver rather than a third of the strip: an outage drawn larger
-        than it was is a panel arguing with the number beside it.
+        Each segment is the same slice of time, so the shape is a sequence of
+        intervals rather than a proportion of a bar. A tooltip names the period
+        and what happened in it; the sentence below carries the same fact in
+        words, so nothing here is stated by colour alone.
       */}
-      <div
-        style={{
-          display: 'flex',
-          height: 10,
-          borderRadius: 3,
-          overflow: 'hidden',
-          background: c.border,
-          marginBottom: 6,
-        }}
-      >
-        {segments.map((seg, i) => (
-          <Tooltip key={i} title={seg.title}>
-            <div style={{ flexGrow: seg.weight, background: seg.colour, minWidth: 1 }} />
+      <div className="ui-strip">
+        {segments.map((seg) => (
+          <Tooltip key={seg.key} title={seg.title}>
+            <div className="ui-strip-seg" style={{ background: seg.colour }} />
           </Tooltip>
         ))}
       </div>
-      {/* The strip's two ends, labelled as an axis rather than as a sentence:
-          the left edge is where the record being drawn starts, which is the
-          window asked for or the start of the record, whichever is later. */}
-      <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
         <Typography.Text type="secondary" style={{ fontSize: 11 }}>
           <TimeAgo at={data.since} />
         </Typography.Text>
         <Typography.Text type="secondary" style={{ fontSize: 11 }}>
           Now
         </Typography.Text>
-      </Space>
+      </div>
 
-      {outages.length > 0 && (
-        <Space orientation="vertical" size={2} style={{ width: '100%' }}>
-          {/* Newest first: the one somebody is asking about is almost always
-              the last one. */}
-          {[...outages].reverse().slice(0, 4).map((o) => (
-            <Typography.Text key={o.began} style={{ fontSize: 12 }}>
-              <span style={{ color: c.danger }}>●</span>{' '}
-              {o.ongoing ? 'Not serving since ' : 'Not serving for '}
-              {o.ongoing ? null : <b>{formatDuration(o.seconds) ?? '0s'}</b>}
-              {o.ongoing ? <TimeAgo at={o.began} /> : <>, ending <TimeAgo at={o.ended} /></>}
-            </Typography.Text>
-          ))}
-          {outages.length > 4 && (
-            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              {formatCount(outages.length - 4)} earlier outages are not listed.
-            </Typography.Text>
-          )}
-        </Space>
-      )}
-
-      {/*
-        THE RESOLUTION, STATED. Every number here is sampled, and a record that
-        did not say how often would invite somebody to conclude that a
-        thirty-second outage did not happen because it is not listed.
-      */}
-      <Typography.Text
-        type="secondary"
-        style={{ fontSize: 11, display: 'block', marginTop: 10 }}
-      >
-        Recorded by the Coordinator every {formatDuration(data.beatSeconds) ?? '15s'}. An
-        interruption shorter than that is not recorded. <Link to="/settings">View health</Link>
-      </Typography.Text>
+      <PanelFoot to="/settings" action="View health">
+        <span style={{ color: outages.length === 0 ? c.ok : c.danger, marginInlineEnd: 6 }}>●</span>
+        {outages.length === 0 ? (
+          <>No interruptions recorded. Checked every {formatDuration(data.beatSeconds) ?? '15s'}.</>
+        ) : ongoing ? (
+          <>Not serving since <TimeAgo at={data.statusSince} />.</>
+        ) : (
+          <>
+            Last interruption <TimeAgo at={outages[outages.length - 1]!.ended} />, lasting{' '}
+            {formatDuration(outages[outages.length - 1]!.seconds) ?? '0s'}.
+          </>
+        )}
+      </PanelFoot>
     </>
   )
 }
 
-function Figure({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <Space orientation="vertical" size={0}>
-      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-        {label}
-      </Typography.Text>
-      <Typography.Text style={{ fontSize: 14 }}>{value}</Typography.Text>
-    </Space>
-  )
-}
-
-interface Segment {
-  weight: number
+interface Bucket {
+  key: string
   colour: string
   title: string
 }
 
 /**
- * The window as proportional segments: served, and not served.
+ * The window as equal segments, each coloured by what happened in it.
  *
- * Built from the OUTAGES rather than from the runs, because the outages are
- * what the service is certain about - a run is one replica's record and the
- * summary has already unioned them. Anything not inside an outage is time the
- * service was answering.
+ * # Why buckets rather than the outages drawn to scale
+ *
+ * Because an outage drawn to scale in a thirty-day window is a hairline: the
+ * honest proportion is invisible, so the picture says "nothing happened" about
+ * a day the service spent an hour down. Equal buckets trade exact width for
+ * legibility at a fixed one - a bucket is down if ANY of it was down, which
+ * over-reports duration and never under-reports an incident. The figures above
+ * carry the exact minutes; this carries where they fell.
+ *
+ * `partial` exists so the two cannot be confused: a bucket that was down for
+ * part of itself is not the same as one that was down throughout, and colouring
+ * both red would turn a two-minute blip into a red block an hour wide.
  */
-function timeline(data: AvailabilityResponse): Segment[] {
+function buckets(data: AvailabilityResponse, count = 44): Bucket[] {
   const from = Date.parse(data.since)
   const to = Date.parse(data.now)
   const span = to - from
   if (!Number.isFinite(span) || span <= 0) return []
 
-  const out: Segment[] = []
-  let cursor = from
-  const served = (until: number) => {
-    if (until <= cursor) return
-    out.push({
-      weight: (until - cursor) / span,
-      // ONE COLOUR FOR SERVED TIME. Painting it by the CURRENT status would
-      // turn a whole day amber because the last minute was degraded, which is
-      // a claim about history drawn from a fact about now. The strip answers
-      // served or not served; degraded time is stated as a figure above,
-      // where it can carry its own number.
-      colour: c.ok,
-      title: 'Serving',
-    })
-    cursor = until
-  }
+  const width = span / count
+  const outages = (data.outages ?? [])
+    .map((o) => ({ from: Date.parse(o.began), to: Date.parse(o.ended) }))
+    .filter((o) => Number.isFinite(o.from) && Number.isFinite(o.to))
 
-  for (const o of sortedOutages(data.outages ?? [])) {
-    const began = Date.parse(o.began)
-    const ended = Date.parse(o.ended)
-    if (!Number.isFinite(began) || !Number.isFinite(ended)) continue
-    served(began)
-    out.push({
-      weight: Math.max(ended - began, 0) / span,
-      colour: c.danger,
-      title: `Not serving for ${formatDuration(o.seconds) ?? '0s'}`,
-    })
-    cursor = Math.max(cursor, ended)
+  const out: Bucket[] = []
+  for (let i = 0; i < count; i++) {
+    const start = from + i * width
+    const end = start + width
+    let down = 0
+    for (const o of outages) {
+      const overlap = Math.min(end, o.to) - Math.max(start, o.from)
+      if (overlap > 0) down += overlap
+    }
+    const when = `${clock(start)} to ${clock(end)}`
+    if (down <= 0) {
+      out.push({ key: String(start), colour: c.ok, title: `Serving · ${when}` })
+    } else if (down >= width - 1) {
+      out.push({ key: String(start), colour: c.danger, title: `Not serving · ${when}` })
+    } else {
+      out.push({
+        key: String(start),
+        colour: c.pending,
+        title: `Not serving for ${formatDuration(down / 1000) ?? '0s'} · ${when}`,
+      })
+    }
   }
-  served(to)
   return out
 }
 
-function sortedOutages(outages: Outage[]): Outage[] {
-  return [...outages].sort((a, b) => Date.parse(a.began) - Date.parse(b.began))
+/** A bucket's boundary, in the reader's own clock. */
+function clock(at: number): string {
+  return new Date(at).toLocaleString(undefined, {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
-function toneFor(status: AvailabilityStatus) {
+function toneFor(status: AvailabilityStatus): PillTone {
   switch (status) {
     case 'HEALTHY':
-      return 'ok' as const
+      return 'ok'
     case 'DEGRADED':
-      return 'pending' as const
+      return 'pending'
     case 'DOWN':
-      return 'danger' as const
+      return 'danger'
     default:
-      return 'neutral' as const
+      return 'neutral'
   }
 }
 

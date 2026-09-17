@@ -1,8 +1,8 @@
 package api
 
 import (
-	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -14,6 +14,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/querycount"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/replication"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 )
 
 // WHAT EVERY READ ENDPOINT COSTS, IN ROUND TRIPS, AT TWO SIZES OF ESTATE.
@@ -90,6 +91,61 @@ func TestEveryReadEndpointCostsAFixedNumberOfQueries(t *testing.T) {
 				"the database once per row. Give the store a call that takes the "+
 				"whole page, as TransferContentBytesFor does.",
 				name, growth, large-small)
+		}
+	}
+
+	assertTheSweepMeasuredSomething(t, largeCost)
+}
+
+// mustCostQueries are endpoints that CANNOT answer without reading the
+// database, and are therefore the canaries for the measurement itself.
+//
+// Several rows in the table above are legitimately zero - /api/v1/products and
+// /api/v1/discovery answer from the in-memory product registry - so "some
+// endpoint costs nothing" proves nothing. These cannot: a transfer listing that
+// reads no rows is not a cheap listing, it is a broken measurement.
+var mustCostQueries = []string{
+	"/api/v1/transfers",
+	"/api/v1/packages",
+	"/api/v1/replication",
+	"/api/v1/auditEvents",
+}
+
+// assertTheSweepMeasuredSomething is the guard against a vacuous pass.
+//
+// # The failure it exists for
+//
+// This table read ZERO for every endpoint in it, for weeks, and passed every
+// time. The counter is installed by the logging middleware on the way in, and
+// it used to overwrite whatever the caller had already put in the context - so
+// this test's counter was shadowed the instant the request reached the
+// handler, the driver incremented the middleware's, and every assertion was
+// comparing zero against zero.
+//
+// A growth assertion cannot notice that: zero does not grow. Nor can a
+// threshold on any single endpoint, because a legitimate zero exists. What
+// notices it is asserting that the endpoints which MUST touch the database
+// were seen to touch it, which is a statement about the apparatus rather than
+// about the code under test.
+//
+// The general rule, and the second time this file has needed it: a measurement
+// that can silently collapse to a constant has to be asserted against.
+func assertTheSweepMeasuredSomething(t *testing.T, cost map[string]endpointCost) {
+	t.Helper()
+	for _, name := range mustCostQueries {
+		c, ok := cost[name]
+		if !ok {
+			t.Errorf("%s is not in the sweep at all, so nothing holds it to a shape", name)
+			continue
+		}
+		if c.queries == 0 {
+			t.Errorf("%s was measured at zero database round trips.\n\n"+
+				"It cannot answer without reading the database, so this is the\n"+
+				"measurement failing rather than the endpoint being cheap - and a\n"+
+				"sweep that measures zero passes for every N+1 in the table above.\n"+
+				"Check that querycount.With is still returning the counter this\n"+
+				"test installed rather than one the middleware layered over it.",
+				name)
 		}
 	}
 }
@@ -223,35 +279,102 @@ func withEverythingRead(d *Deps) {
 	d.Downloads = download.NewService(d.Packages, nil, nil)
 	// Only to register the worker-plane routes; /workers reads the store.
 	d.Queue = &fakeQueue{}
-	d.Replication = &instantReplicator{}
+
+	// THE REAL REPLICATION SERVICE, OVER THE REAL STORE.
+	//
+	// This was a fake that returned a status without touching the database,
+	// and it is the reason this sweep reported zero queries for
+	// /api/v1/replication while a running deployment was measuring twenty per
+	// request. The endpoint was in the table, the assertion passed, and the
+	// number it was asserting about was a fake's.
+	//
+	// A fake is the right call for the REGISTRY - the sweep is about the shape
+	// of what the Coordinator asks its own database, and a real registry would
+	// make the numbers depend on the network - but it was never the right call
+	// for the database reads. It does not need to be either: the targets in
+	// these documents are copy targets, so Status answers from the store and
+	// returns before any registry is contacted.
+	//
+	// The general lesson, which cost two N+1s in production: a cost test whose
+	// subject is a fake measures the fake.
+	d.Replication = replication.NewService(
+		replication.NewResolver(product.NewSecretResolver(""), slog.New(slog.DiscardHandler), "test"),
+		store.NewReplication(d.Store),
+		slog.New(slog.DiscardHandler),
+	)
 }
 
-// instantReplicator answers without a registry behind it.
+// THE SECOND DIMENSION, and the one that was missing.
 //
-// The sweep is about the SHAPE of what the Coordinator asks its own database,
-// not about how long somebody else's registry takes - and a real one here
-// would make the numbers depend on the network.
-type instantReplicator struct{}
+// The sweep above varies the size of the ESTATE - packages, transfers, jobs -
+// because that is where the two N+1s this repository shipped lived. It cannot
+// see a handler whose cost grows with the CONFIGURATION instead, and
+// /api/v1/replication is exactly that: it reads every target of every visible
+// product, so its query count tracks the target count in the product documents
+// and does not move at all when the estate grows.
+//
+// It shipped making sixteen round trips for eight targets - the product id
+// resolved once per target, the applied record read once per target, and the
+// same id resolved a second time to write the observation down. A running
+// deployment reported 20.6 on the api_request_queries histogram. This sweep
+// reported nothing, because the Replicator it measured was a fake with no
+// database behind it.
+//
+// Both halves are fixed: withEverythingRead now builds the real service over
+// the real store, and this test varies the dimension that endpoint actually
+// scales on.
+func TestReplicationCostDoesNotGrowWithTargetCount(t *testing.T) {
+	const few, many = 2, 8
 
-func (*instantReplicator) Status(
-	_ context.Context, p *product.Product, t product.Target,
-) (*replication.Status, error) {
-	return &replication.Status{
-		Product: p.Metadata.Name, Target: t.Name, Mode: t.ReplicationMode(),
-	}, nil
+	cost := func(targets int) endpointCost {
+		h := newAPIHarnessWith(t, withEverythingRead, targetCountDoc("vendor-a", targets))
+		return h.cost(t, "/api/v1/replication")
+	}
+
+	small, large := cost(few), cost(many)
+	t.Logf("replication listing: %d targets = %d round trips, %d targets = %d",
+		few, small.queries, many, large.queries)
+
+	if large.queries > small.queries {
+		t.Errorf("/api/v1/replication makes %d round trips for %d targets and %d "+
+			"for %d - it is asking the database once per target.\n\n"+
+			"Every target of one product resolves the same product id and reads "+
+			"from the same table. Prefetch them: replication.Service.Snapshot "+
+			"reads the lot in two queries, and StatusWith takes the result.",
+			large.queries, many, small.queries, few)
+	}
 }
 
-func (*instantReplicator) Apply(context.Context, *product.Product, product.Target,
-	replication.ApplyOptions) (*replication.ApplyResult, error) {
-	return nil, nil //nolint:nilnil // unused by this sweep
-}
-
-func (*instantReplicator) Sync(context.Context, *product.Product, product.Target,
-	string) (*replication.SyncOutcome, error) {
-	return nil, nil //nolint:nilnil // unused by this sweep
-}
-
-func (*instantReplicator) CancelSync(context.Context, *product.Product, product.Target,
-	string) (*replication.SyncOutcome, error) {
-	return nil, nil //nolint:nilnil // unused by this sweep
+// targetCountDoc is one product with n copy targets.
+//
+// Copy targets rather than delegated ones, so Status answers from the store and
+// returns before any registry is contacted - the sweep is about round trips to
+// our own database, and a delegated target would put somebody else's network in
+// the measurement.
+func targetCountDoc(name string, n int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+metadata:
+  name: %s
+spec:
+  sources:
+    - name: vendor
+      registry: registry.example.com
+      repository: %s/platform
+      anonymous: true
+  targets:
+`, name, name)
+	for i := range n {
+		fmt.Fprintf(&b, `    - name: target-%d
+      registry: target-%d.example.com
+      repository: mirror/%s
+      anonymous: true
+`, i, i, name)
+		if i == 0 {
+			b.WriteString("      default: true\n")
+		}
+	}
+	return b.String()
 }

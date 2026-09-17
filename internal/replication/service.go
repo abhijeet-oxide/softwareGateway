@@ -85,6 +85,17 @@ type Status struct {
 // Status reads configuration, the last apply and - where reachable - the
 // registry. It never writes to the registry.
 func (s *Service) Status(ctx context.Context, p *product.Product, t product.Target) (*Status, error) {
+	return s.StatusWith(ctx, p, t, nil)
+}
+
+// StatusWith is Status against a prefetched Snapshot.
+//
+// A nil snapshot reads per target, which is what a handler acting on one
+// target wants. A listing passes one built by Snapshot and makes no per-target
+// reads at all - see snapshot.go for the round-trip count that motivated it.
+func (s *Service) StatusWith(
+	ctx context.Context, p *product.Product, t product.Target, snap *Snapshot,
+) (*Status, error) {
 	out := &Status{Product: p.Metadata.Name, Target: t.Name, Mode: t.ReplicationMode()}
 
 	desired, err := s.resolver.Desired(p, t)
@@ -95,7 +106,7 @@ func (s *Service) Status(ctx context.Context, p *product.Product, t product.Targ
 		out.Desired = desired
 	}
 
-	applied := s.appliedRecord(ctx, p.Metadata.Name, t.Name, out)
+	applied := s.appliedRecord(ctx, p.Metadata.Name, t.Name, out, snap)
 	if !t.Delegated() {
 		return out, nil
 	}
@@ -113,7 +124,7 @@ func (s *Service) Status(ctx context.Context, p *product.Product, t product.Targ
 	}
 	out.Observation = obs
 
-	s.recordObservation(ctx, p.Metadata.Name, t, obs)
+	s.recordObservation(ctx, p.Metadata.Name, t, obs, snap)
 	s.reportObservation(ctx, p.Metadata.Name, t, obs)
 	return out, nil
 }
@@ -122,21 +133,35 @@ func (s *Service) Status(ctx context.Context, p *product.Product, t product.Targ
 //
 // A missing record is not an error: it means nobody has applied this target
 // yet, which is the state every target starts in.
-func (s *Service) appliedRecord(ctx context.Context, productName, target string, out *Status) Applied {
+func (s *Service) appliedRecord(
+	ctx context.Context, productName, target string, out *Status, snap *Snapshot,
+) Applied {
 	if s.store == nil {
 		return Applied{}
 	}
-	productID, err := s.store.ProductID(ctx, productName)
-	if err != nil {
+
+	rec, found, known := snap.record(productName, target)
+	switch {
+	case known && !found:
+		// The snapshot covers this product and holds no row for this target,
+		// which IS the answer: nobody has applied it. Reading the database to
+		// be told the same thing is the N+1 the snapshot removes.
 		return Applied{}
-	}
-	rec, err := s.store.Get(ctx, productID, target)
-	if errors.Is(err, store.ErrNoRecord) {
-		return Applied{}
-	}
-	if err != nil {
-		s.log.Warn("read replication record", "product", productName, "target", target, "error", err)
-		return Applied{}
+	case !known:
+		productID, err := s.store.ProductID(ctx, productName)
+		if err != nil {
+			return Applied{}
+		}
+		var readErr error
+		rec, readErr = s.store.Get(ctx, productID, target)
+		if errors.Is(readErr, store.ErrNoRecord) {
+			return Applied{}
+		}
+		if readErr != nil {
+			s.log.Warn("read replication record",
+				"product", productName, "target", target, "error", readErr)
+			return Applied{}
+		}
 	}
 	out.HasApplied = rec.AppliedAt.Valid
 	out.AppliedConfigHash = rec.AppliedConfigHash
@@ -151,13 +176,22 @@ func (s *Service) appliedRecord(ctx context.Context, productName, target string,
 // Failures are logged and swallowed: an observation is a convenience, and a
 // database hiccup must not turn a successful read of the registry into an
 // error the operator has to interpret.
-func (s *Service) recordObservation(ctx context.Context, productName string, t product.Target, obs *Observation) {
+func (s *Service) recordObservation(
+	ctx context.Context, productName string, t product.Target,
+	obs *Observation, snap *Snapshot,
+) {
 	if s.store == nil {
 		return
 	}
-	productID, err := s.store.ProductID(ctx, productName)
-	if err != nil {
-		return
+	// The same id appliedRecord already has. Resolving it again here was the
+	// other half of the listing's query count: two lookups of one unchanging
+	// value, per target.
+	productID, ok := snap.productID(productName)
+	if !ok {
+		var err error
+		if productID, err = s.store.ProductID(ctx, productName); err != nil {
+			return
+		}
 	}
 	if err := s.store.Observed(ctx, productID, t.Name, string(t.ReplicationMode()),
 		obs.Drift.Drifted(), obs.Drift.Summary(), s.resolver.Now()); err != nil {
@@ -247,7 +281,7 @@ func (s *Service) Apply(ctx context.Context, p *product.Product, t product.Targe
 	}
 
 	var status Status
-	applied := s.appliedRecord(ctx, p.Metadata.Name, t.Name, &status)
+	applied := s.appliedRecord(ctx, p.Metadata.Name, t.Name, &status, nil)
 
 	plan, err := PlanApply(ctx, api, desired, applied)
 	if err != nil {

@@ -7,11 +7,12 @@ import Icons from 'unplugin-icons/vite'
 // guessing and no directory indexes: `./src/brand` is simply not found. It is
 // the planned default, and the current loader already warns about every
 // specifier that would break under it, so the config's own module graph -
-// vitePluginBrand, brand, and the uikit files those two reach - spells its
-// imports out. The app's other 60-odd imports are resolved by Vite and need
-// nothing.
+// vitePluginBrand, brand, vitePluginRuntimeConfig, and the uikit files those
+// reach - spells its imports out. The app's other 60-odd imports are resolved
+// by Vite and need nothing.
 import brandPlugin from './src/uikit/vitePluginBrand.ts'
 import brand from './src/brand.ts'
+import runtimeConfigPlugin from './vitePluginRuntimeConfig.ts'
 
 // The Coordinator installs no CORS middleware, so the browser must reach the
 // API on its own origin. In development that means proxying rather than
@@ -37,6 +38,9 @@ export default defineConfig({
     // brand as an argument because nothing inside uikit/ may name a product -
     // that rule is what lets the folder be copied between tools unchanged.
     brandPlugin(brand),
+    // The deployment's own runtime document, which in a deployment is written
+    // by the web container's entrypoint and here has no author at all.
+    runtimeConfigPlugin(),
   ],
   server: {
     port: 5173,

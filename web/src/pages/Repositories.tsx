@@ -94,7 +94,7 @@ export default function Repositories() {
               expandedRowRender: (r) => {
                 const result = resultFor(r.product, r.repo.name)
                 return (
-                  <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                  <Space orientation="vertical" size={10} style={{ width: '100%' }}>
                     <Space size={16} wrap>
                       <Typography.Text type="secondary">
                         <SafetyOutlined /> Credential:{' '}
@@ -151,7 +151,7 @@ export default function Repositories() {
                 fixed: 'left',
                 width: 180,
                 render: (_, r) => (
-                  <Space direction="vertical" size={0}>
+                  <Space orientation="vertical" size={0}>
                     <Space size={6}>
                       <Icon as={repositoryIcon(r.repo)} title={r.repo.type} />
                       <Typography.Text strong>{r.repo.name}</Typography.Text>
@@ -166,7 +166,7 @@ export default function Repositories() {
                 title: 'Role',
                 width: 120,
                 render: (_, r) => (
-                  <Space size={4} direction="vertical">
+                  <Space size={4} orientation="vertical">
                     <Tag color={r.kind === 'Source' ? 'blue' : 'purple'}>{r.kind}</Tag>
                     {r.repo.environment && (
                       <Tag

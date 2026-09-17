@@ -56,7 +56,7 @@ export function VersionChip({
   const repository = showRepository ? pkg.displayRepository || pkg.sourceRepository : undefined
 
   return (
-    <Space direction="vertical" size={0}>
+    <Space orientation="vertical" size={0}>
       <Link to={releaseHref(product, pkg)} style={{ fontFamily: mono }}>
         <Typography.Text ellipsis={{ tooltip: version }} style={{ maxWidth: 150 }}>
           {version}

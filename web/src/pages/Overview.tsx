@@ -407,7 +407,7 @@ export default function Overview() {
         */}
         {sidebar && (
         <Col xs={24} xl={7}>
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={16} style={{ width: '100%' }}>
             {/*
               THE FLEET AND THE ROLLUPS ARE ESTATE FACTS, and this column showed
               them to everybody.

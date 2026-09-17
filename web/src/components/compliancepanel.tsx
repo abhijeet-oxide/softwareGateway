@@ -289,7 +289,7 @@ export function ComplianceTab({ product, reference, repository, archivedIn }: {
    */
   if (compliance.isLoading && !data) {
     return (
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         <Card>
           <Skeleton active paragraph={{ rows: 3 }} />
         </Card>
@@ -322,7 +322,7 @@ export function ComplianceTab({ product, reference, repository, archivedIn }: {
   if (data && !data.analysed && !data.run && !data.progress) {
     const started = Boolean(inspect.data?.started) || inspect.isPending
     return (
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         <HelmMissingNotice helm={data.helm} />
         <EmptyStateCard
           title={
@@ -340,7 +340,7 @@ export function ComplianceTab({ product, reference, repository, archivedIn }: {
                 + 'themselves, so there is nothing to open until then.'
           }
           action={
-            <Space direction="vertical" size={10}>
+            <Space orientation="vertical" size={10}>
               {started ? (
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   <LoadingOutlined spin style={{ color: c.brand, marginRight: 6 }} />
@@ -407,7 +407,7 @@ export function ComplianceTab({ product, reference, repository, archivedIn }: {
       )
     }
     return (
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         <HelmMissingNotice helm={data.helm} />
         <EmptyStateCard
           title={run.isPending ? 'Starting the compliance check' : 'This release has not been checked'}
@@ -419,7 +419,7 @@ export function ComplianceTab({ product, reference, repository, archivedIn }: {
                 + 'as passing them.'
           }
           action={
-            <Space direction="vertical" size={10}>
+            <Space orientation="vertical" size={10}>
               {/* `compliance_report.run` - an operator's, because a run renders
                   every chart and reaches a registry. A reader still sees the
                   link below, which is the part of this that is a read. */}
@@ -472,7 +472,7 @@ export function ComplianceTab({ product, reference, repository, archivedIn }: {
    */
   if (running && data?.progress) {
     return (
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         {data && <HelmMissingNotice helm={data.helm} />}
         <ComplianceRunPanel
           progress={data.progress}
@@ -513,7 +513,7 @@ export function ComplianceTab({ product, reference, repository, archivedIn }: {
   const partial = (data?.total ?? 0) > results.length
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       {/*
         THE PROVENANCE ROW, above the cards and outside them.
 
@@ -962,7 +962,7 @@ function ChartCoverage({
   const broken = (charts ?? []).filter((ch) => ch.status !== 'ok')
 
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={12} style={{ width: '100%' }}>
       <Space size={10} wrap style={{ width: '100%' }}>
         <Input
           allowClear
@@ -1019,7 +1019,7 @@ function ChartCoverage({
             render: (_: unknown, ch) => (
               <Space size={8} align="start">
                 <HelmOutlined style={{ color: c.text2, fontSize: 14, marginTop: 1 }} />
-                <Space direction="vertical" size={0}>
+                <Space orientation="vertical" size={0}>
                   <span style={{ fontFamily: mono, fontSize: 12 }}>{ch.name}</span>
                   {ch.version && (
                     <span style={{ fontFamily: mono, fontSize: 11, color: c.text3 }}>
@@ -1279,7 +1279,7 @@ function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, onSearchT
         {
           title: 'Check', width: 350,
           render: (_: unknown, g: CheckGroup) => (
-            <Space direction="vertical" size={2}>
+            <Space orientation="vertical" size={2}>
               <Space size={6}>
                 <Typography.Link
                   onClick={() => onOpenGroup(g)}
@@ -1304,7 +1304,7 @@ function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, onSearchT
           title: 'Affects', width: 210,
           sorter: (a: CheckGroup, b: CheckGroup) => a.rows.length - b.rows.length,
           render: (_: unknown, g: CheckGroup) => (
-            <Space direction="vertical" size={0}>
+            <Space orientation="vertical" size={0}>
               <Typography.Text style={{ fontSize: 12 }}>
                 <strong>{g.rows.length.toLocaleString()}</strong>
                 {g.rows.length === 1 ? ' place' : ' places'}
@@ -1408,7 +1408,7 @@ function occurrenceColumns(onOpen: (r: ComplianceResult) => void) {
       render: (_: unknown, r: ComplianceResult) => (
         <Space size={6} align="start">
           <HelmOutlined style={{ color: c.text3, marginTop: 2 }} />
-          <Space direction="vertical" size={0}>
+          <Space orientation="vertical" size={0}>
             <Typography.Text
               style={{ fontFamily: mono, fontSize: 12, maxWidth: 158 }}
               ellipsis={{ tooltip: r.chart }}
@@ -1440,7 +1440,7 @@ function occurrenceColumns(onOpen: (r: ComplianceResult) => void) {
       */
       title: 'Resource', dataIndex: 'name',
       render: (_: unknown, r: ComplianceResult) => (
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <span style={{ fontSize: 12 }}>
             {r.kind} {r.namespace ? `${r.namespace}/` : ''}{r.name}
             {r.container && <span style={{ color: c.text2 }}> · container {r.container}</span>}
@@ -1460,7 +1460,7 @@ function occurrenceColumns(onOpen: (r: ComplianceResult) => void) {
     {
       title: 'Found', dataIndex: 'observed', width: 150,
       render: (_: unknown, r: ComplianceResult) => (
-        <Space direction="vertical" size={2}>
+        <Space orientation="vertical" size={2}>
           <span style={{ fontFamily: mono, fontSize: 11 }}>{r.observed || '(absent)'}</span>
           <DeterminacyTag determinacy={r.determinacy} label={r.determinacyLabel} />
         </Space>
@@ -1530,7 +1530,7 @@ function CheckDrawer({ group, onClose, onOpenResult }: {
     <Drawer
       open={Boolean(group)}
       onClose={onClose}
-      width={820}
+      size={820}
       title={
         group && (
           <Space size={10} wrap>
@@ -1542,7 +1542,7 @@ function CheckDrawer({ group, onClose, onOpenResult }: {
       }
     >
       {group && (
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={16} style={{ width: '100%' }}>
           <Typography.Title level={5} style={{ margin: 0 }}>{group.title}</Typography.Title>
 
           {/*
@@ -1615,7 +1615,7 @@ function ResultsTable({ results, loading, onOpen, onSearchTerm, emptyText }: {
     {
       title: 'Check', dataIndex: 'check', width: 310,
       render: (_: unknown, r: ComplianceResult) => (
-        <Space direction="vertical" size={2}>
+        <Space orientation="vertical" size={2}>
           <Space size={6}>
             <Typography.Link onClick={() => onOpen(r)} style={{ fontFamily: mono, fontSize: 12 }}>
               {r.check}
@@ -1636,7 +1636,7 @@ function ResultsTable({ results, loading, onOpen, onSearchTerm, emptyText }: {
     {
       title: 'Finding', dataIndex: 'message', width: 650,
       render: (_: unknown, r: ComplianceResult) => (
-        <Space direction="vertical" size={4}>
+        <Space orientation="vertical" size={4}>
           <span style={{ fontSize: 13 }}>{r.message || r.error}</span>
           <Space size={6} wrap>
             <DeterminacyTag determinacy={r.determinacy} label={r.determinacyLabel} />
@@ -1694,7 +1694,7 @@ function ResultDrawer({ result, product, reference, repository, onClose, onOpenM
     <Drawer
       open={Boolean(result)}
       onClose={onClose}
-      width={640}
+      size={640}
       title={
         result && (
           <Space size={10} wrap>
@@ -1706,7 +1706,7 @@ function ResultDrawer({ result, product, reference, repository, onClose, onOpenM
       }
     >
       {result && (
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={16} style={{ width: '100%' }}>
           <Typography.Title level={5} style={{ margin: 0 }}>{result.title}</Typography.Title>
 
           {(result.message || result.error) && (
@@ -2019,7 +2019,7 @@ function ChartFailure({ chart }: { chart: ComplianceChart }) {
   if (!chart.error && !chart.errorLabel) return null
 
   return (
-    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={4} style={{ width: '100%' }}>
       <Space size={6} wrap>
         {chart.errorLabel && (
           <Tooltip title={chart.errorHint}>

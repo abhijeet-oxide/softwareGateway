@@ -242,7 +242,7 @@ export function SecurityTab({ product, reference, repository }: {
    */
   if (security.isLoading) {
     return (
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         <Skeleton active title={{ width: 260 }} paragraph={false} />
         <Row gutter={[12, 12]}>
           {[0, 1, 2, 3].map((i) => (
@@ -274,7 +274,7 @@ export function SecurityTab({ product, reference, repository }: {
   const syncing = (data.sync.state === 'syncing' && !data.sync.stalled) || sync.isPending
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       <div
         style={{
           width: '100%',
@@ -509,7 +509,7 @@ function NeverSynced({ product, onSync, pending }: {
 }) {
   return (
     <Card>
-      <Space direction="vertical" size={10} align="center" style={{ width: '100%', padding: '28px 0' }}>
+      <Space orientation="vertical" size={10} align="center" style={{ width: '100%', padding: '28px 0' }}>
         <Typography.Title level={5} style={{ margin: 0 }}>
           This release has not been scanned yet
         </Typography.Title>
@@ -1522,7 +1522,7 @@ function FindingsSection({
   if (syncing && data.reports.length === 0) {
     return (
       <Card size="small" id="security-findings">
-        <Space direction="vertical" size={10} align="center" style={{ width: '100%', padding: '36px 0' }}>
+        <Space orientation="vertical" size={10} align="center" style={{ width: '100%', padding: '36px 0' }}>
           <Spin />
           <Typography.Text strong>Retrieving results</Typography.Text>
           <Typography.Text type="secondary" style={{ maxWidth: 460, textAlign: 'center' }}>
@@ -1756,7 +1756,7 @@ function FindingsSection({
                 type="success"
                 showIcon
                 style={{ marginBottom: 12 }}
-                message="No known-exploited vulnerabilities in this release"
+                title="No known-exploited vulnerabilities in this release"
                 description={
                   `${(data.sources ?? []).map((s) => s.label).join(' and ') || 'The scanner'} checked `
                   + 'this release against a known-exploited vulnerability catalogue and found '
@@ -1770,7 +1770,7 @@ function FindingsSection({
                 type="warning"
                 showIcon
                 style={{ marginBottom: 12 }}
-                message="Detailed vulnerability rows are unavailable"
+                title="Detailed vulnerability rows are unavailable"
                 description={
                   `This release reports ${expectedTotal.toLocaleString()} vulnerabilities in summary counts, `
                   + 'but no per-CVE rows are stored for its artifacts any more. '
@@ -1801,7 +1801,7 @@ function FindingsSection({
         )
         : tab === 'artifacts'
           ? (
-            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Space orientation="vertical" size={8} style={{ width: '100%' }}>
               {scannedImages < imageReports.length && (
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   {scannedImages.toLocaleString()} of {imageReports.length.toLocaleString()} images
@@ -1856,7 +1856,7 @@ const MalwareTable = memo(function MalwareTable({ rows, scanUrlFor }: {
       <Alert
         type="success"
         showIcon
-        message="No malicious packages found"
+        title="No malicious packages found"
         description={
           'The scanner was asked about malicious and known-bad packages in this release '
           + 'and reported none. This is not the same as a release with no vulnerabilities - '
@@ -1878,7 +1878,7 @@ const MalwareTable = memo(function MalwareTable({ rows, scanUrlFor }: {
         type="error"
         showIcon
         style={{ marginBottom: 12 }}
-        message={`${rows.length.toLocaleString()} malicious ${rows.length === 1 ? 'package' : 'packages'}`}
+        title={`${rows.length.toLocaleString()} malicious ${rows.length === 1 ? 'package' : 'packages'}`}
         description={
           'These are packages the scanner identifies as malicious rather than merely '
           + 'vulnerable. There is no version to upgrade to: the package has to come out.'
@@ -1966,7 +1966,7 @@ const PolicyTable = memo(function PolicyTable({ rows }: { rows: FlatViolation[] 
       <Alert
         type="info"
         showIcon
-        message="No policy violations"
+        title="No policy violations"
         description={
           'The scanner\'s watches raised nothing against this release. A release with '
           + 'vulnerabilities and no violations is normal: a violation exists only where '
@@ -1988,7 +1988,7 @@ const PolicyTable = memo(function PolicyTable({ rows }: { rows: FlatViolation[] 
           title: 'Watch',
           width: 180,
           render: (_, r) => (
-            <Space direction="vertical" size={0}>
+            <Space orientation="vertical" size={0}>
               <Typography.Text strong style={{ fontSize: 13 }}>{r.watch || '-'}</Typography.Text>
               {r.policy && (
                 <Typography.Text type="secondary" style={{ fontSize: 11 }}>{r.policy}</Typography.Text>
@@ -2170,7 +2170,7 @@ function ProblemsPanel({ problems, scanned, notApplicable, repository }: {
 }) {
   if (problems.length === 0) {
     return (
-      <Space direction="vertical" size={4} style={{ padding: 24, width: '100%' }} align="center">
+      <Space orientation="vertical" size={4} style={{ padding: 24, width: '100%' }} align="center">
         <Typography.Text strong>No problems</Typography.Text>
         <Typography.Text type="secondary">
           Every image in this release returned a scan result.
@@ -2180,7 +2180,7 @@ function ProblemsPanel({ problems, scanned, notApplicable, repository }: {
   }
 
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={12} style={{ width: '100%' }}>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         {scanned.toLocaleString()} of {(scanned + problems.reduce((n, p) => n + p.reports.length, 0)).toLocaleString()}
         {' '}images were scanned.
@@ -2195,7 +2195,7 @@ function ProblemsPanel({ problems, scanned, notApplicable, repository }: {
           label: (
             <Space size={10} align="start" wrap={false} style={{ width: '100%' }}>
               <ScanStatusTag status={p.status} />
-              <Space direction="vertical" size={0}>
+              <Space orientation="vertical" size={0}>
                 <Typography.Text strong>
                   {problemHeadline(p.status, p.reports.length, repository)}
                 </Typography.Text>
@@ -2204,7 +2204,7 @@ function ProblemsPanel({ problems, scanned, notApplicable, repository }: {
             </Space>
           ),
           children: (
-            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Space orientation="vertical" size={8} style={{ width: '100%' }}>
               {PROBLEM_ADVICE[p.status] && (
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   {PROBLEM_ADVICE[p.status]}
@@ -2222,7 +2222,7 @@ function ProblemsPanel({ problems, scanned, notApplicable, repository }: {
                   {
                     title: 'Artifact',
                     render: (_, r) => (
-                      <Space direction="vertical" size={0}>
+                      <Space orientation="vertical" size={0}>
                         <Typography.Text style={{ fontFamily: mono, fontSize: 12 }}>
                           {r.artifact.display || r.artifact.name}
                         </Typography.Text>
@@ -2483,7 +2483,7 @@ const UniqueCveTable = memo(function UniqueCveTable({ groups, state, detailRowsU
       locale={{
         emptyText: detailRowsUnavailable
           ? (
-            <Space direction="vertical" size={4} style={{ padding: 24 }}>
+            <Space orientation="vertical" size={4} style={{ padding: 24 }}>
               <Typography.Text strong>No detailed rows returned</Typography.Text>
               <Typography.Text type="secondary">
                 Summary counts exist, but this response has no per-CVE detail rows to render.
@@ -2514,7 +2514,7 @@ const UniqueCveTable = memo(function UniqueCveTable({ groups, state, detailRowsU
           width: 170,
           sorter: (a, b) => a.images.length - b.images.length,
           render: (_, g) => (
-            <Space direction="vertical" size={0}>
+            <Space orientation="vertical" size={0}>
               <Typography.Text style={{ fontSize: 12 }}>
                 <strong>{g.packages.length}</strong> {g.packages.length === 1 ? 'package' : 'packages'}
                 {' in '}
@@ -2963,11 +2963,11 @@ function AdvisoryDrawer({
       // Wide, because the widest thing in here is an advisory's prose and the
       // panel exists to give it room. Bounded by the viewport so it never
       // becomes the whole screen on a laptop.
-      width="min(920px, 92vw)"
+      size="min(920px, 92vw)"
       open={open}
       onClose={onClose}
       title={
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Space size={10} align="center" wrap>
             <Typography.Text strong style={{ fontFamily: mono, fontSize: 15 }}>
               {identifier ?? 'Vulnerability'}
@@ -3025,7 +3025,7 @@ function AdvisoryDrawer({
         )
       }
     >
-      <Space direction="vertical" size={20} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={20} style={{ width: '100%' }}>
         <Descriptions column={{ xs: 1, sm: 2 }} size="small" bordered items={facts} />
         {summary && description && summary !== description && (
           <Section title="Summary">
@@ -3079,7 +3079,7 @@ function AdvisoryDrawer({
                 {
                   title: 'Source',
                   render: (_: unknown, o) => (
-                    <Space direction="vertical" size={0}>
+                    <Space orientation="vertical" size={0}>
                       <Typography.Text>{o.providerLabel || providerLabel(o.provider)}</Typography.Text>
                       {o.source && (
                         <Typography.Text type="secondary" style={{ fontSize: 11 }}>{o.source}</Typography.Text>
@@ -3129,7 +3129,7 @@ function AdvisoryDrawer({
 
         {references && references.length > 0 && (
           <Section title="References">
-            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            <Space orientation="vertical" size={4} style={{ width: '100%' }}>
               {references.map((r) => (
                 <a key={r} href={r} target="_blank" rel="noreferrer" style={{ fontSize: 13, wordBreak: 'break-all' }}>
                   {r} <ExportOutlined style={{ fontSize: 10 }} />
@@ -3164,7 +3164,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
  */
 function ImageCell({ name, tag, href }: { name: string; tag?: string; href?: string }) {
   return (
-    <Space direction="vertical" size={0}>
+    <Space orientation="vertical" size={0}>
       {href
         ? (
           <a href={href} target="_blank" rel="noreferrer" style={{ fontFamily: mono, fontSize: 12 }}>
@@ -3223,7 +3223,7 @@ const VulnerabilityTable = memo(function VulnerabilityTable({
       locale={{
         emptyText: detailRowsUnavailable
           ? (
-            <Space direction="vertical" size={4} style={{ padding: 24 }}>
+            <Space orientation="vertical" size={4} style={{ padding: 24 }}>
               <Typography.Text strong>No detailed rows returned</Typography.Text>
               <Typography.Text type="secondary">
                 Summary counts exist, but this response has no per-CVE detail rows to render.
@@ -3375,7 +3375,7 @@ const ArtifactTable = memo(function ArtifactTable({ reports, whole, freshness }:
         {
           title: 'Image',
           render: (_, r) => (
-            <Space direction="vertical" size={0}>
+            <Space orientation="vertical" size={0}>
               <a
                 onClick={() => setOpen(r)}
                 style={{
@@ -3419,7 +3419,7 @@ const ArtifactTable = memo(function ArtifactTable({ reports, whole, freshness }:
               : r.counts.total === 0
                 ? <Typography.Text>None found</Typography.Text>
                 : (
-                  <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                  <Space orientation="vertical" size={2} style={{ width: '100%' }}>
                     <Space size={8}>
                       <strong>{r.counts.total.toLocaleString()}</strong>
                       {SEVERITIES.slice(0, 3).map((s) => (
@@ -3646,7 +3646,7 @@ function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
   const tooLargeToShow = (selected?.bytes ?? 0) > 4 * 1024 * 1024
 
   return (
-    <Space direction="vertical" size={10} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={10} style={{ width: '100%' }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <Segmented
           size="small"
@@ -3703,7 +3703,7 @@ function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
           <Alert
             type="info"
             showIcon
-            message="Nothing is held for this image"
+            title="Nothing is held for this image"
             description={
               selected?.message
               || `No ${selected?.label ?? 'document'} was stored for this image. A sync keeps `
@@ -3716,7 +3716,7 @@ function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
             <Alert
               type="info"
               showIcon
-              message="This document is too large to show here"
+              title="This document is too large to show here"
               description={
                 `It is ${formatBytesShort(selected?.bytes ?? 0)}, which the browser would `
                 + 'stall on. Download it and open it in an editor.'
@@ -3725,7 +3725,7 @@ function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
           )
           : doc.isLoading
             ? (
-              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={10} style={{ width: '100%' }}>
                 {/*
                   Named while it happens, because producing an SBOM is not a
                   read. It is Xray walking a container image, and for a large
@@ -3746,7 +3746,7 @@ function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
                 <Alert
                   type="warning"
                   showIcon
-                  message="That document could not be read"
+                  title="That document could not be read"
                   description={doc.error instanceof Error ? doc.error.message : undefined}
                 />
               )
@@ -3834,11 +3834,11 @@ function ImageDetailDrawer({ report, onClose }: {
   return (
     <>
     <Drawer
-      width="min(920px, 92vw)"
+      size="min(920px, 92vw)"
       open={Boolean(report)}
       onClose={onClose}
       title={
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Space size={10} align="center" wrap>
             <Typography.Text strong style={{ fontFamily: mono, fontSize: 15 }}>
               {report?.artifact.display || report?.artifact.name}
@@ -3870,7 +3870,7 @@ function ImageDetailDrawer({ report, onClose }: {
       }
     >
       {report && (
-        <Space direction="vertical" size={20} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={20} style={{ width: '100%' }}>
           <Descriptions
             column={{ xs: 1, sm: 2 }}
             size="small"

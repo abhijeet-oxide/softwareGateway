@@ -236,7 +236,7 @@ function EvidenceFooter({ excerpt }: { excerpt: ComplianceExcerpt }) {
 
   return (
     <div style={{ padding: '6px 10px', borderTop: `1px solid ${c.border}` }}>
-      <Space direction="vertical" size={2} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={2} style={{ width: '100%' }}>
         {focus > 0 ? (
           <Typography.Text type="secondary" style={{ fontSize: 11 }}>
             Line <b>{focus}</b> is <span style={{ fontFamily: mono }}>{excerpt.locus}</span>.
@@ -364,7 +364,7 @@ export function NoEvidenceNotice({ checked }: { checked: boolean }) {
     <Alert
       type="info"
       showIcon
-      message="No rendered manifests retained for this run"
+      title="No rendered manifests retained for this run"
       description={
         'Findings can be read but not verified against the manifests they were derived '
         + 'from. Either this run predates manifest retention, a later run has superseded it, '
@@ -422,7 +422,7 @@ export function ManifestDrawer({ document, product, reference, repository, onClo
     <Drawer
       open={Boolean(document)}
       onClose={onClose}
-      width={880}
+      size={880}
       title={
         <Space size={10} wrap>
           <span>Rendered manifest</span>

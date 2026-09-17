@@ -197,7 +197,7 @@ export function FileViewer({
       width={980}
       destroyOnHidden
       title={
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Typography.Text strong style={{ fontFamily: mono }}>{path}</Typography.Text>
           <Space size={12} wrap style={{ fontSize: 12 }}>
             {file.data?.component && (
@@ -231,11 +231,11 @@ export function FileViewer({
       ) : file.isError ? (
         <ErrorState error={file.error} retry={() => void file.refetch()} />
       ) : file.data?.tooLarge ? (
-        <Space direction="vertical" size={10}>
+        <Space orientation="vertical" size={10}>
           <Alert
             type="info"
             showIcon
-            message="This file is too large to open here"
+            title="This file is too large to open here"
             description={
               `It is ${formatBytes(bytes(file.data.sizeBytes)) ?? 'larger'}, and this view reads up to `
               + `${formatBytes(file.data.limit ?? 0) ?? '2 MB'}.`
@@ -248,11 +248,11 @@ export function FileViewer({
           )}
         </Space>
       ) : file.data?.binary ? (
-        <Space direction="vertical" size={10}>
+        <Space orientation="vertical" size={10}>
           <Alert
             type="info"
             showIcon
-            message="This file is not text"
+            title="This file is not text"
             description={
               'The bytes are not valid text - an archive, an image or a compiled artifact. '
               + 'It is shown as what it is rather than as a screen of replacement characters.'
@@ -265,7 +265,7 @@ export function FileViewer({
           )}
         </Space>
       ) : (
-        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={10} style={{ width: '100%' }}>
           {shown?.reformatted && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               Indented for reading - the publisher shipped it on one line.

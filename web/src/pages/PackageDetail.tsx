@@ -197,9 +197,9 @@ function MeasurePanel({ pkg, inspect, cancel, disabled }: {
         style={{ marginTop: 12 }}
         type="error"
         showIcon
-        message="This package could not be analyzed"
+        title="This package could not be analyzed"
         description={
-          <Space direction="vertical" size={4}>
+          <Space orientation="vertical" size={4}>
             <Typography.Text>
               {inspect.error instanceof Error ? inspect.error.message : 'The registry did not answer.'}
             </Typography.Text>
@@ -234,7 +234,7 @@ function MeasurePanel({ pkg, inspect, cancel, disabled }: {
         style={{ marginTop: 12 }}
         type="success"
         showIcon
-        message={
+        title={
           // "in 0s" for a walk that took a third of a second is a number
           // pretending to be a measurement. Under a second states the bound.
           startedAt && elapsed >= 1
@@ -273,7 +273,7 @@ function MeasurePanel({ pkg, inspect, cancel, disabled }: {
         style={{ marginTop: 12 }}
         type="success"
         showIcon
-        message={
+        title={
           r.alreadyExpanded
             ? 'Already analyzed - the vendor registry was not contacted'
             : `Analyzed in ${formatDuration(elapsed) ?? 'a moment'}`
@@ -325,9 +325,9 @@ function MeasurePanel({ pkg, inspect, cancel, disabled }: {
         style={{ marginTop: 12 }}
         type="error"
         showIcon
-        message="The last analysis of this release did not finish"
+        title="The last analysis of this release did not finish"
         description={
-          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={6} style={{ width: '100%' }}>
             <Typography.Text style={{ fontFamily: mono, fontSize: 12 }}>
               {analysisError}
             </Typography.Text>
@@ -371,7 +371,7 @@ function MeasurePanel({ pkg, inspect, cancel, disabled }: {
    */
   if (analysed) {
     return (
-      <Space direction="vertical" size={4} style={{ marginTop: 12 }}>
+      <Space orientation="vertical" size={4} style={{ marginTop: 12 }}>
         <ActionButton
           permission="package.inspect"
           scope={{ product: pkg?.product }}
@@ -392,7 +392,7 @@ function MeasurePanel({ pkg, inspect, cancel, disabled }: {
   }
 
   return (
-    <Space direction="vertical" size={4} style={{ marginTop: 12 }}>
+    <Space orientation="vertical" size={4} style={{ marginTop: 12 }}>
       <ActionButton
         permission="package.inspect"
         scope={{ product: pkg?.product }}
@@ -456,7 +456,7 @@ function AnalysingBar({ requested, elapsedSeconds, onStop }: {
         }
       />
       {onStop && (
-        <Space direction="vertical" size={2} style={{ marginTop: 8 }}>
+        <Space orientation="vertical" size={2} style={{ marginTop: 8 }}>
           <Button
             size="small"
             danger
@@ -596,7 +596,7 @@ function ComponentTable({ artifacts, kind }: { artifacts: Artifact[]; kind: stri
   }, [artifacts, search])
 
   return (
-    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={8} style={{ width: '100%' }}>
       {/*
         THE SEARCH AND THE EXPORT, on one line, and the export is the SAME
         control as every other export in this product.
@@ -733,7 +733,7 @@ function FileTree({
     [shown, onView, product, reference, repository, downloadEnabled])
 
   return (
-    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={8} style={{ width: '100%' }}>
       <SearchBar
         value={search}
         onChange={setSearch}
@@ -996,7 +996,7 @@ function DownloadsTab({ transfers, onDownload, downloadHref, product }: {
               different application from the page its rows link to.
             */
             render: (_, t) => (
-              <Space direction="vertical" size={2}>
+              <Space orientation="vertical" size={2}>
                 <TransferStateTag state={t.state} />
                 {t.failureReason && (
                   <Typography.Text type="danger" style={{ fontSize: 11 }} ellipsis={{ tooltip: t.failureReason }}>
@@ -1268,7 +1268,7 @@ export default function PackageDetail() {
             <Typography.Text type="secondary">{prod?.displayName || productName}</Typography.Text>
             {p && (
               <>
-                <Divider type="vertical" style={{ margin: 0 }} />
+                <Divider orientation="vertical" style={{ margin: 0 }} />
                 <StatusBadge status={status!} reason={failureReason(p)} />
                 <AnalysisTag pkg={p} />
                 <VerificationBadge state={verification(p)} />
@@ -1385,7 +1385,7 @@ export default function PackageDetail() {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="No longer published by the vendor"
+          title="No longer published by the vendor"
           description={
             `This release is no longer in ${p.displayRepository || p.sourceRepository}. `
             + `It was last seen there on ${formatAbsolute(p.archivedAt) ?? p.archivedAt}, `
@@ -1450,7 +1450,7 @@ export default function PackageDetail() {
                   </Space>
                 ),
                 children: (
-                  <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         <Card title="Release" loading={pkg.isLoading}>
                     <Descriptions column={2} size="small">
                       {/*
@@ -1546,7 +1546,7 @@ export default function PackageDetail() {
                           return (
                             <Col span={8} key={kind}>
                               <Card size="small">
-                                <Space direction="vertical" size={0} style={{ width: '100%' }}>
+                                <Space orientation="vertical" size={0} style={{ width: '100%' }}>
                                   <Space size={6}>
                                     <Icon as={ARTIFACT_ICONS[kind]} size={15} title={kind} />
                                     <Typography.Text type="secondary">{kind}</Typography.Text>

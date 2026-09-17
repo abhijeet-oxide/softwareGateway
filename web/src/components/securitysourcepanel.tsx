@@ -60,7 +60,7 @@ export function SourceComparisonPanel({ sources, comparison, onFilter }: {
       }
       styles={{ body: { paddingTop: 10 } }}
     >
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={12} style={{ width: '100%' }}>
         <SourceTable sources={sources} onFilter={onFilter} />
         <AgreementLine sources={sources} comparison={comparison} />
       </Space>
@@ -268,7 +268,7 @@ export function SourceComparisonPending({ configured, answered }: {
         image={null}
         styles={{ image: { display: 'none' } }}
         description={
-          <Space direction="vertical" size={4}>
+          <Space orientation="vertical" size={4}>
             <Typography.Text style={{ fontSize: 13 }}>
               {missing.map(providerName).join(' and ')}{' '}
               {missing.length === 1 ? 'has' : 'have'} not answered for this release yet.

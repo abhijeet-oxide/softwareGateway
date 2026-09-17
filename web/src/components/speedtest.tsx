@@ -131,7 +131,7 @@ export function SpeedTest({ product: fixedProduct }: {
         </Space>
       }
     >
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={12} style={{ width: '100%' }}>
         <Typography.Text type="secondary">
           Select and run a speed test for the chosen path. This checks how many streams at once each registry can actually carry, and reports the
           max thoughput. this moves real data in both directions however nothing is committed anywhere. This test may take few minutes.
@@ -141,7 +141,7 @@ export function SpeedTest({ product: fixedProduct }: {
           <Alert
             type="info"
             showIcon
-            message="Measuring"
+            title="Measuring"
             description={
               <Typography.Text type="secondary">
                 Each concurrency level runs for {budget} seconds against each end of the path.
@@ -155,9 +155,9 @@ export function SpeedTest({ product: fixedProduct }: {
           <Alert
             type="error"
             showIcon
-            message="The path could not be measured"
+            title="The path could not be measured"
             description={
-              <Space direction="vertical" size={4}>
+              <Space orientation="vertical" size={4}>
                 <Typography.Text>
                   {calibrate.error instanceof Error
                     ? calibrate.error.message
@@ -177,7 +177,7 @@ export function SpeedTest({ product: fixedProduct }: {
             <Alert
               type="info"
               showIcon
-              message={`Measured from ${report.measuredFrom}`}
+              title={`Measured from ${report.measuredFrom}`}
               description={
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   {/*
@@ -200,7 +200,7 @@ export function SpeedTest({ product: fixedProduct }: {
             <SidePanel side={report.target} />
 
             {(report.notes?.length ?? 0) > 0 && (
-              <Space direction="vertical" size={2}>
+              <Space orientation="vertical" size={2}>
                 {report.notes?.map((note) => (
                   <Typography.Text key={note} type="secondary" style={{ fontSize: 12 }}>
                     {note}
@@ -230,7 +230,7 @@ function Suggestions({ suggestions }: { suggestions: CalibrationSuggestion[] }) 
       <Alert
         type="success"
         showIcon
-        message="Nothing to change"
+        title="Nothing to change"
         description={
           <Typography.Text type="secondary">
             The configured concurrency is at or near what this path will carry, and no route
@@ -267,7 +267,7 @@ function Suggestions({ suggestions }: { suggestions: CalibrationSuggestion[] }) 
           width: 220,
           render: (_, s) => (s.setting
             ? (
-                <Space direction="vertical" size={0}>
+                <Space orientation="vertical" size={0}>
                   <Typography.Text style={{ fontFamily: mono, fontSize: 12 }}>
                     {s.setting}
                   </Typography.Text>
@@ -325,9 +325,9 @@ function SidePanel({ side }: { side: CalibrationSide }) {
       }
     >
       {side.skipped ? (
-        <Alert type="info" showIcon message="Not measured" description={side.skipped} />
+        <Alert type="info" showIcon title="Not measured" description={side.skipped} />
       ) : (
-        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={10} style={{ width: '100%' }}>
           <Descriptions column={{ xs: 1, sm: 2, lg: 4 }} size="small">
             <Descriptions.Item label="Registry">
               <Typography.Text style={{ fontFamily: mono, fontSize: 12 }}>
@@ -361,7 +361,7 @@ function SidePanel({ side }: { side: CalibrationSide }) {
             <Alert
               type="warning"
               showIcon
-              message="The sweep ended before the path did"
+              title="The sweep ended before the path did"
               description={
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   Throughput was still rising at the highest concurrency tried, so this path
@@ -459,9 +459,9 @@ function RouteNote({ side }: { side: CalibrationSide }) {
     <Alert
       type={faster ? 'warning' : 'info'}
       showIcon
-      message={faster ? 'A direct route measured faster than the proxy' : 'Traffic goes through a proxy'}
+      title={faster ? 'A direct route measured faster than the proxy' : 'Traffic goes through a proxy'}
       description={
-        <Space direction="vertical" size={2}>
+        <Space orientation="vertical" size={2}>
           <Typography.Text style={{ fontFamily: mono, fontSize: 12 }}>{r.configured}</Typography.Text>
           {r.directTested && !r.directReachable && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>

@@ -133,8 +133,8 @@ export default function Profile() {
               <Alert
                 type="error"
                 showIcon
-                message={
-                  <Space direction="vertical" size={4}>
+                title={
+                  <Space orientation="vertical" size={4}>
                     <Typography.Text>
                       Authentication is not enabled.
                     </Typography.Text>
@@ -505,7 +505,7 @@ function PermissionSummary() {
       <Alert
         type="warning"
         showIcon
-        message="Permissions could not be resolved"
+        title="Permissions could not be resolved"
         description={
           'The policy engine did not answer, so this account\u2019s permissions are unknown - not empty. '
           + 'Requests are being refused while that is true. This is a deployment fault rather than '

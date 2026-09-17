@@ -405,7 +405,7 @@ export function VulnerabilityCell({
 
   if (summary.counts.total === 0) {
     return (
-      <Space direction="vertical" size={2}>
+      <Space orientation="vertical" size={2}>
         <Space size={4}>
           <CheckCircleOutlined style={{ color: c.ok }} />
           <Typography.Text>None found</Typography.Text>
@@ -546,7 +546,7 @@ export function CoverageMeter({ coverage }: { coverage: SecurityCoverage }) {
   const scannable = coverage.scannable || 1
   const percent = Math.round((coverage.scanned / scannable) * 100)
   return (
-    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={4} style={{ width: '100%' }}>
       <Progress
         percent={percent}
         size="small"
@@ -593,9 +593,9 @@ export function SecurityStateNotice({ state, message, onRefresh, onShowProblems,
       type={type}
       showIcon
       style={{ marginBottom: 16 }}
-      message={title}
+      title={title}
       description={
-        <Space direction="vertical" size={4}>
+        <Space orientation="vertical" size={4}>
           <span>{message}</span>
           {onShowProblems && (problemCount ?? 0) > 0 && (
             <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={onShowProblems}>
@@ -626,7 +626,7 @@ export function SecurityNotConfigured({ what = 'This deployment' }: { what?: str
       type="info"
       showIcon
       icon={<MinusCircleOutlined />}
-      message="No vulnerability scanner is configured"
+      title="No vulnerability scanner is configured"
       description={
         <>
           {what} has no scanner configured, so no results are available. Scanning is enabled per
@@ -718,7 +718,7 @@ export function VerdictBanner({
         marginBottom: 16,
       }}
     >
-      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={10} style={{ width: '100%' }}>
         <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
           <Space size={10} align="center">
             <span
@@ -752,7 +752,7 @@ export function VerdictBanner({
         {caveats && caveats.length > 0 && (
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
             <WarningOutlined style={{ color: c.pending, marginTop: 3, flexShrink: 0 }} />
-            <Space direction="vertical" size={2}>
+            <Space orientation="vertical" size={2}>
               {caveats.map((caveat) => (
                 <Typography.Text key={caveat} type="secondary">{caveat}</Typography.Text>
               ))}
@@ -1030,9 +1030,9 @@ export function SyncInterrupted({ sync, onSync, pending }: {
     <Alert
       type="warning"
       showIcon
-      message="The last sync was interrupted"
+      title="The last sync was interrupted"
       description={
-        <Space direction="vertical" size={4}>
+        <Space orientation="vertical" size={4}>
           <Typography.Text>
             The Coordinator running it stopped
             {sync.heartbeatAt ? ` - it last reported ${formatRelative(sync.heartbeatAt)}` : ''}
@@ -1400,7 +1400,7 @@ export function SyncLogButton({ sync, size = 'middle' }: {
       </Button>
       <Drawer
         title="Vulnerability sync log"
-        width={720}
+        size={720}
         open={open}
         onClose={() => setOpen(false)}
         extra={
@@ -1413,7 +1413,7 @@ export function SyncLogButton({ sync, size = 'middle' }: {
           </Button>
         }
       >
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={16} style={{ width: '100%' }}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {running
               ? 'This sync is running. The log updates as it goes.'
@@ -1438,11 +1438,11 @@ export function SyncLogButton({ sync, size = 'middle' }: {
                 slow sync from a stuck one.
               */
               <Timeline
-                mode="left"
+                mode="start"
                 items={entries.map((e, i) => ({
                   key: `${e.at ?? ''}-${i}`,
                   color: LOG_COLOUR[e.level] ?? c.text2,
-                  children: <LogLine entry={e} showDate={showDates} />,
+                  content: <LogLine entry={e} showDate={showDates} />,
                 }))}
               />
             )}
@@ -1475,7 +1475,7 @@ function LogLine({ entry, showDate }: { entry: SecurityLogEntry; showDate: boole
   const colour = LOG_COLOUR[entry.level] ?? c.text2
 
   return (
-    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={2} style={{ width: '100%' }}>
       <Space size={8} wrap style={{ lineHeight: 1.2 }}>
         <Typography.Text
           type="secondary"
@@ -1614,7 +1614,7 @@ export function CveCell({ cve, id, link, kev, kevSource }: {
 }) {
   if (!cve && !id) return <Typography.Text type="secondary">-</Typography.Text>
   return (
-    <Space direction="vertical" size={0}>
+    <Space orientation="vertical" size={0}>
       <Space size={6} align="center">
         <Typography.Text
           style={{
@@ -1714,7 +1714,7 @@ export function DescriptionCell({ summary, description, title, onOpen }: {
 export function ComponentCell({ name, version, type }: { name?: string; version?: string; type?: string }) {
   if (!name) return <Typography.Text type="secondary">-</Typography.Text>
   return (
-    <Space direction="vertical" size={0}>
+    <Space orientation="vertical" size={0}>
       <Typography.Text style={{ fontFamily: mono }}>{name}</Typography.Text>
       <Typography.Text type="secondary" style={{ fontSize: 11 }}>
         {[version, type].filter(Boolean).join(' · ')}
@@ -1735,7 +1735,7 @@ export function FixCell({ fixable, fixedIn }: { fixable: boolean; fixedIn?: stri
   if (!fixedIn || fixedIn.length === 0) return <StatusPill tone="ok">Fixable</StatusPill>
   return (
     <Tooltip title={fixedIn.join(', ')}>
-      <Space direction="vertical" size={0}>
+      <Space orientation="vertical" size={0}>
         <StatusPill tone="ok" style={{ marginInlineEnd: 0 }}>Fixable</StatusPill>
         <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 11 }}>
           {fixedIn[0]}
@@ -1750,7 +1750,7 @@ export function FixCell({ fixable, fixedIn }: { fixable: boolean; fixedIn?: stri
 export function FindingsEmpty({ status }: { status?: ScanStatus | SecurityState }) {
   if (status === 'scanned' || status === 'ok') {
     return (
-      <Space direction="vertical" size={4} style={{ padding: 24 }}>
+      <Space orientation="vertical" size={4} style={{ padding: 24 }}>
         <CheckCircleOutlined style={{ fontSize: 22, color: c.ok }} />
         <Typography.Text strong>No vulnerabilities found</Typography.Text>
         <Typography.Text type="secondary">All artifacts in scope were scanned and returned no findings.</Typography.Text>
@@ -1758,7 +1758,7 @@ export function FindingsEmpty({ status }: { status?: ScanStatus | SecurityState 
     )
   }
   return (
-    <Space direction="vertical" size={4} style={{ padding: 24 }}>
+    <Space orientation="vertical" size={4} style={{ padding: 24 }}>
       <QuestionCircleOutlined style={{ fontSize: 22, color: c.text2 }} />
       <Typography.Text strong>No results available</Typography.Text>
       <Typography.Text type="secondary">

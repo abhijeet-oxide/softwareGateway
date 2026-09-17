@@ -129,7 +129,7 @@ function JobsPanel({ transferId, hasFailures }: { transferId: string; hasFailure
             render: (_, j) => (
               <Space size={6}>
                 <Icon as={JOB_ICONS[j.kind] ?? OciIcon} size={15} title={j.kind} />
-                <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
+                <Space orientation="vertical" size={0} style={{ minWidth: 0 }}>
                   <Tooltip title={j.digest}>
                     <Typography.Text style={{ fontFamily: mono, fontSize: 12, maxWidth: 270 }} ellipsis>
                       {j.digest}
@@ -201,7 +201,7 @@ function JobProgress({ job }: { job: Job }) {
   const measurable = job.kind === 'blob' && size !== undefined && size > 0
 
   return (
-    <Space direction="vertical" size={0} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={0} style={{ width: '100%' }}>
       {measurable && (
         <Progress
           percent={Number(Math.min(100, ((moved ?? 0) / size) * 100).toFixed(1))}
@@ -741,13 +741,13 @@ export default function DownloadDetail() {
           // reading the sentence.
           type={hold.actionable ? 'warning' : 'info'}
           showIcon
-          message={
+          title={
             <Typography.Text style={{ fontSize: 13 }}>
               {hold.kind === 'no-workers' ? 'Nothing is moving this download' : hold.label}
             </Typography.Text>
           }
           description={
-            <Space direction="vertical" size={2}>
+            <Space orientation="vertical" size={2}>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 {hold.detail}
               </Typography.Text>
@@ -778,12 +778,12 @@ export default function DownloadDetail() {
           items={[
             {
               title: t?.strategy === 'relocate' ? 'Promoting' : 'Downloading',
-              description: <StepTime at={t?.startedAt} />,
+              content: <StepTime at={t?.startedAt} />,
             },
             ...(mirrored
               ? [{
                   title: 'Mirroring',
-                  description: <StepTime at={lastSync?.completedAt ?? lastSync?.startedAt} />,
+                  content: <StepTime at={lastSync?.completedAt ?? lastSync?.startedAt} />,
                 }]
               : []),
             /*
@@ -792,8 +792,8 @@ export default function DownloadDetail() {
               exists to say the stage is in the chain and stays blank until
               there is a moment to report.
             */
-            { title: 'Verification', description: <StepTime at={undefined} /> },
-            { title: 'Completed', description: <StepTime at={t?.completedAt} /> },
+            { title: 'Verification', content: <StepTime at={undefined} /> },
+            { title: 'Completed', content: <StepTime at={t?.completedAt} /> },
           ]}
         />
       </Card>
@@ -805,7 +805,7 @@ export default function DownloadDetail() {
       */}
       <Row gutter={[16, 16]} align="stretch">
         <Col xs={24} xl={15} style={{ display: 'flex' }}>
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={16} style={{ width: '100%' }}>
             <Card
               style={{ height: '100%' }}
               loading={transfer.isLoading}
@@ -816,7 +816,7 @@ export default function DownloadDetail() {
               */
               title={promotionTitle(t?.strategy, t?.targetName, mirrored)}
             >
-              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={12} style={{ width: '100%' }}>
                 <RepoLink
                   url={t?.target ? `https://${t.target}` : undefined}
                   label={[t?.targetName, repositoryOf(t?.target)].filter(Boolean).join('/')}
@@ -1056,7 +1056,7 @@ export default function DownloadDetail() {
 
             {mirrored && (
               <Card title="Step 2 - configuring the mirror">
-                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <Space orientation="vertical" size={12} style={{ width: '100%' }}>
                   <StateStrip
                     state={mirrorState}
                     label={

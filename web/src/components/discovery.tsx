@@ -182,7 +182,7 @@ function SourceProgress({ s }: { s: DiscoverySourceState }) {
   const percent = Math.min(99, (s.progress ?? 0) * 100)
 
   return (
-    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={2} style={{ width: '100%' }}>
       <Progress percent={Number(percent.toFixed(0))} size="small" status="active" />
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         {scanPosition(s)}
@@ -577,7 +577,7 @@ export function DiscoverySummary({
       ) : (
         <div className="slm-discovery-summary-body">
           <DiscoveryOutcome newReleases={newSinceLastRun} failedSources={errors.length} />
-          <Button icon={<ArrowRightOutlined />} iconPosition="end" onClick={onViewAll}>
+          <Button icon={<ArrowRightOutlined />} iconPlacement="end" onClick={onViewAll}>
             View sources
           </Button>
         </div>
@@ -760,7 +760,7 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                   title: 'Source',
                   width: 150,
                   render: (_, s) => (
-                    <Space direction="vertical" size={0}>
+                    <Space orientation="vertical" size={0}>
                       <Typography.Text strong>{s.source}</Typography.Text>
                       <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                         {s.product}
@@ -856,7 +856,7 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                       title: 'Source',
                       width: 170,
                       render: (_, s) => (
-                        <Space direction="vertical" size={0}>
+                        <Space orientation="vertical" size={0}>
                           <Typography.Text strong>{s.source}</Typography.Text>
                           <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                             {s.product}

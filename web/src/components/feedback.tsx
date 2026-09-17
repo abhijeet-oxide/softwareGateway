@@ -145,7 +145,7 @@ export function FeedbackBridge() {
     notify = (failure) => {
       notification.open({
         type: failure.kind === 'denied' ? 'warning' : 'error',
-        message: failure.title,
+        title: failure.title,
         description: <FailureDetail failure={failure} />,
         // Long enough to read a sentence and a request id, and dismissible.
         // A refusal is worth longer than a blip: the reader's next move is to

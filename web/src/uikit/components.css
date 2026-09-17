@@ -95,6 +95,151 @@
   border-radius: var(--r-lg);
 }
 
+/* --- a card that leads with a mark ----------------------------------------
+
+   The plain head is one line of bold text. That is right for a card whose
+   title is the whole of its subject ("Recent packages"), and thin for a panel
+   that has to say WHAT it is, WHAT STATE it is in and OVER WHAT PERIOD before
+   the reader reaches a number - three facts that cannot all be the title.
+
+   So: a tinted mark on the left for recognition at a glance, the name and an
+   optional second line beside it, and the controls on the right. The mark is
+   TINTED RATHER THAN COLOURED - a wash of the hue behind a glyph in the hue -
+   because a saturated block at 40px beside a page of text is the loudest thing
+   on the screen, and none of these panels is the most important thing here. */
+.ui-card-lead > .ui-card-head {
+  align-items: center;
+  padding: var(--sp-4) var(--sp-4) var(--sp-3);
+  font-weight: 400;
+}
+/* The plain head clips its title to one line. A rich head holds a mark, a name
+   and a status beside each other, so it lays them out instead - and must not
+   inherit an ellipsis that would eat the status. */
+.ui-card-lead > .ui-card-head > .ui-card-head-title {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: var(--sp-3);
+  overflow: visible;
+  white-space: normal;
+}
+/* A LEADING CARD stacks its body and pins the last row to the bottom.
+
+   Three summary panels side by side have bodies of different natural height -
+   a fleet of one worker is shorter than a fleet of five - and without this
+   their closing lines land at three different heights, which reads as three
+   cards that were laid out separately. The row is only as tall as its tallest
+   member either way; this decides where the slack goes. */
+.ui-card-lead > .ui-card-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.ui-card-icon {
+  display: flex;
+  height: 38px;
+  width: 38px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  font-size: var(--fs-20);
+  color: var(--text-2);
+}
+.ui-card-icon.tone-brand { background: var(--brand-soft); color: var(--brand); }
+.ui-card-icon.tone-ok { background: var(--c-ok-bg); color: var(--c-ok); }
+.ui-card-icon.tone-review { background: var(--c-review-bg); color: var(--c-review); }
+.ui-card-icon.tone-pending { background: var(--c-pending-bg); color: var(--c-pending); }
+.ui-card-icon.tone-danger { background: var(--c-danger-bg); color: var(--c-danger); }
+.ui-card-head-name {
+  min-width: 0;
+  flex: 1;
+}
+.ui-card-head-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.ui-card-head-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-14);
+  font-weight: 600;
+  letter-spacing: var(--tr-snug);
+  color: var(--text);
+}
+.ui-card-head-sub {
+  margin-top: 1px;
+  font-size: var(--fs-12);
+  font-weight: 400;
+  color: var(--text-2);
+}
+
+/* --- a row of figures -----------------------------------------------------
+
+   Several small numbers about ONE subject, read left to right: uptime, since
+   when, how many outages. Cards would break the sentence into three subjects
+   and take three times the height to say less, so they are columns of one card
+   with a hairline between them - the divider is what stops "100.0%" and "3m
+   ago" reading as one figure and its unit. */
+.ui-figures {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+}
+.ui-figure {
+  min-width: 0;
+  flex: 1;
+  padding-inline-end: var(--sp-3);
+}
+.ui-figure + .ui-figure {
+  border-inline-start: 1px solid var(--border);
+  padding-inline-start: var(--sp-3);
+}
+.ui-figure-label {
+  margin-bottom: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-11);
+  color: var(--text-2);
+}
+.ui-figure-value {
+  font-size: var(--fs-16);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: var(--tr-snug);
+  color: var(--text);
+}
+
+/* --- a period, as segments ------------------------------------------------
+
+   A window of time cut into equal buckets, each coloured by what happened in
+   it. Segments rather than one continuous bar, and the gap is the reason: a
+   solid strip with a red slice in it reads as a PROPORTION - "a third of the
+   day was down" - while discrete ticks read as a SEQUENCE of intervals, which
+   is what it is. It is also the shape every status page has taught people to
+   read.
+
+   The gap is 2px of the card's own surface. Nothing is drawn around a segment:
+   a border here would be ink that is not data. */
+.ui-strip {
+  display: flex;
+  min-width: 0;
+  gap: 2px;
+  align-items: stretch;
+  height: 16px;
+}
+.ui-strip-seg {
+  min-width: 2px;
+  flex: 1 1 0;
+  border-radius: 2px;
+}
+
 /* --- stat tile ------------------------------------------------------------ */
 .ui-stat {
   display: flex;

@@ -84,6 +84,8 @@ export { default as PageHeader } from "./primitives/PageHeader";
 export { default as FieldLabel } from "./primitives/FieldLabel";
 export { default as PageTransition } from "./primitives/PageTransition";
 export { default as SectionCard } from "./primitives/SectionCard";
+export { default as CardHead, Figure } from "./primitives/CardHead";
+export type { CardIconTone } from "./primitives/CardHead";
 export { default as AttentionCard } from "./primitives/AttentionCard";
 export type { AttentionSeverity } from "./primitives/AttentionCard";
 export { default as Toolbar } from "./primitives/Toolbar";

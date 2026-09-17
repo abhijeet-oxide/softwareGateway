@@ -91,6 +91,7 @@ import PhPackage from '~icons/ph/package'
 import PhPause from '~icons/ph/pause'
 import PhPlayCircle from '~icons/ph/play-circle'
 import PhPlugsConnected from '~icons/ph/plugs-connected'
+import PhPulse from '~icons/ph/pulse'
 import PhProhibit from '~icons/ph/prohibit'
 import PhQuestion from '~icons/ph/question'
 import PhRocketLaunch from '~icons/ph/rocket-launch'
@@ -225,6 +226,11 @@ export const FlowConnection= make('flow-connection', FlowConnectionIcon)
 // and the rest are still moving. A half-filled disc says "partly" in one
 // shape, which a word in a tag cannot do at ten pixels.
 export const PartialOutlined = make('partial', PhCircleHalf)
+// A SERVICE'S OWN HEARTBEAT, not a dashboard. A trace with a beat in it is the
+// one shape that says "is this thing alive" without a word; a gauge or a chart
+// would promise measurement, which is the metrics stack's job and not this
+// panel's.
+export const PulseOutlined = make('pulse', PhPulse)
 export const ThunderboltOutlined = make('thunderbolt', PhLightning)
 export const RocketOutlined = make('rocket', PhRocketLaunch)
 export const ScaleOutlined = make('compare', PhScales)

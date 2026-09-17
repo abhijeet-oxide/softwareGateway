@@ -698,7 +698,7 @@ services:
   #   _time:5m AND queries:>20          this five minutes' N+1 suspects
   #   trace_id:<id>                     one request across both components
   victorialogs:
-    image: ${VICTORIALOGS_IMAGE:-victoriametrics/victoria-logs:v1.40.0-victorialogs}
+    image: ${VICTORIALOGS_IMAGE:-victoriametrics/victoria-logs:v1.40.0}
     restart: unless-stopped
     command:
       - -storageDataPath=/victoria-logs-data

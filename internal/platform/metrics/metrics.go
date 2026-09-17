@@ -83,6 +83,24 @@ type Registry struct {
 	ManifestCacheBytes     prometheus.Gauge
 	ManifestCacheManifests prometheus.Gauge
 	ManifestCacheEvicted   *prometheus.CounterVec
+
+	// The queue, sampled from the database on a timer - see
+	// store.QueueSnapshot for why these are read rather than counted, and
+	// ObserveQueue for what drives them.
+	//
+	// This is the product's own work. Everything above measures the service
+	// that fronts it; without these, a deployment where the API is fast and
+	// nothing is being transferred looks perfectly healthy.
+	QueueJobs           *prometheus.GaugeVec
+	QueueJobsPaused     prometheus.Gauge
+	QueueOldestPending  prometheus.Gauge
+	QueueBytes          *prometheus.GaugeVec
+	QueueTransfers      *prometheus.GaugeVec
+	Workers             *prometheus.GaugeVec
+	WorkerSlots         *prometheus.GaugeVec
+	DatabaseBytes       prometheus.Gauge
+	QueueSampleFailures prometheus.Counter
+	QueueSampleDuration prometheus.Histogram
 }
 
 // New builds the registry for a component and registers the Go runtime and
@@ -255,6 +273,91 @@ func New(component string) *Registry {
 			Name:      "manifest_cache_evicted_total",
 			Help:      "Manifest bodies reclaimed, by reason.",
 		}, []string{"reason"}),
+
+		// `state` is blocked/pending/leased. Settled jobs are NOT here: a
+		// gauge of them would fall when rows are archived, which reads as
+		// work being undone.
+		QueueJobs: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "queue_jobs",
+			Help:      "Jobs outstanding, by state.",
+		}, []string{"state"}),
+
+		QueueJobsPaused: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "queue_jobs_paused",
+			Help: "Outstanding jobs whose transfer is paused. A deep queue " +
+				"that is paused is a decision; a deep queue that is not is an incident.",
+		}),
+
+		// THE ONE TO ALERT ON. Depth cannot tell a busy queue from a stuck
+		// one - it is large in both - but this stays flat in a moving queue
+		// however deep the backlog gets, and climbs in real time in a stalled
+		// one. Alert on this, not on depth.
+		QueueOldestPending: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "queue_oldest_pending_seconds",
+			Help:      "How long the oldest unstarted job has been waiting.",
+		}),
+
+		// `kind` is pending (planned size of what has not started) or
+		// in_flight (what leased jobs have moved so far). Bytes rather than
+		// job count because a queue of nine manifests and one 23 GB blob is
+		// one job from done and hours from finished.
+		QueueBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "queue_bytes",
+			Help:      "Bytes outstanding, by kind.",
+		}, []string{"kind"}),
+
+		QueueTransfers: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "queue_transfers",
+			Help:      "Transfers not yet settled, by state.",
+		}, []string{"state"}),
+
+		// By state, never by worker id: a worker id is a pod name, and pod
+		// names are unbounded over a cluster's life. See the package comment.
+		Workers: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "workers",
+			Help:      "Workers known to the Coordinator, by state.",
+		}, []string{"state"}),
+
+		// `kind` is active/granted/max. Granted below max is the budget
+		// controller holding back on a vendor registry; active at granted
+		// with a deep queue is the fleet being the bottleneck. Those are
+		// different problems and the gap between the lines says which.
+		WorkerSlots: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "worker_slots",
+			Help:      "Fleet concurrency across active workers, by kind.",
+		}, []string{"kind"}),
+
+		DatabaseBytes: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "database_bytes",
+			Help:      "What the database occupies on disk.",
+		}),
+
+		// Without these the queue gauges have a failure mode that looks like
+		// good news: a sampler erroring every pass leaves the last values
+		// frozen, and a frozen zero is indistinguishable from an empty queue.
+		QueueSampleFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "queue_sample_failures_total",
+			Help: "Queue samples that failed. Non-zero means every gauge " +
+				"below is stale, not that the queue is empty.",
+		}),
+
+		QueueSampleDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "queue_sample_duration_seconds",
+			Help: "How long one queue sample took. Watched because it runs " +
+				"on a timer forever: if it grows with the table, the index " +
+				"behind it has stopped being used.",
+			Buckets: []float64{.001, .005, .01, .05, .1, .5, 1, 5},
+		}),
 	}
 
 	reg.MustRegister(
@@ -278,6 +381,16 @@ func New(component string) *Registry {
 		m.ManifestCacheBytes,
 		m.ManifestCacheManifests,
 		m.ManifestCacheEvicted,
+		m.QueueJobs,
+		m.QueueJobsPaused,
+		m.QueueOldestPending,
+		m.QueueBytes,
+		m.QueueTransfers,
+		m.Workers,
+		m.WorkerSlots,
+		m.DatabaseBytes,
+		m.QueueSampleFailures,
+		m.QueueSampleDuration,
 	)
 
 	info := version.Get(component)

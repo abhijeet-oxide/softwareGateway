@@ -832,6 +832,10 @@ func run() error {
 	g.Go(func() error { return queueCtl.Run(gctx) })
 	g.Go(func() error { return replicationWatcher.Run(gctx) })
 
+	// The queue's own gauges. Every other metric in this process measures the
+	// service that fronts the work; this is the work.
+	g.Go(func() error { return newQueueSampler(packages, mreg, logger).Run(gctx) })
+
 	// Graceful shutdown: stop accepting, drain in-flight requests, then exit.
 	g.Go(func() error {
 		<-gctx.Done()

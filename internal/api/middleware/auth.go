@@ -200,9 +200,27 @@ func IdentityFrom(ctx context.Context) Identity {
 
 // PublicPaths reports the endpoints that must answer without credentials:
 // probes and metrics. Everything else is authenticated.
+//
+// # Why a reachability probe is one of them
+//
+// `/api/v1/system/ping` exists so that "can this browser reach the service?"
+// can be asked without asking "and who is asking?". The interface's connection
+// monitor used to put that question to /api/v1/system/version with no token on
+// it deliberately - REACHABILITY IS NOT AUTHORISATION, and a service that
+// refuses an anonymous caller has demonstrably received the request - but a
+// check that answers 401 every forty-five seconds is indistinguishable, in a
+// console and in an audit trail, from a session that has gone wrong. Somebody
+// signed in as an administrator watched their own health check being refused
+// and reasonably concluded their sign-in was broken.
+//
+// So the probe has an endpoint that is anonymous BY DESIGN rather than by
+// accident. It carries nothing: not the version, not the component, not
+// whether any dependency is healthy - only that something answered here, in
+// this API's own words. Readiness remains /readyz, which is a different
+// question asked by a different caller.
 func PublicPaths(r *http.Request) bool {
 	switch r.URL.Path {
-	case "/healthz", "/readyz", "/livez", "/metrics":
+	case "/healthz", "/readyz", "/livez", "/metrics", "/api/v1/system/ping":
 		return true
 	}
 	return false

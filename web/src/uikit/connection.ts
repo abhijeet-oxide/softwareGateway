@@ -298,7 +298,19 @@ function createMonitor(): ConnectionMonitor {
 
   /** The service answered. */
   function succeed() {
-    const wasDown = snapshot.phase !== "online" && snapshot.phase !== "starting";
+    // A RECOVERY IS FROM A CONFIRMED OUTAGE, and `unstable` is by definition
+    // not one.
+    //
+    // Recovering from it too is what turned a single failing endpoint into a
+    // loop. One read answered 503, the phase moved, the confirming probe found
+    // the service perfectly healthy a second later - and this called that a
+    // recovery, which announced itself and refetched every query on screen.
+    // One of those was the same failing read, so it all began again, several
+    // times a minute, for as long as the page was open.
+    //
+    // `unstable` exists precisely so a blip says nothing. Coming out of one is
+    // the blip resolving, which is the state's whole purpose, not an event.
+    const wasDown = snapshot.phase === "offline" || snapshot.phase === "unavailable";
     const now = Date.now();
     set({
       phase: "online",
@@ -349,15 +361,29 @@ function createMonitor(): ConnectionMonitor {
     if (fresh) lastCountedFailure = now;
     const failures = fresh ? snapshot.failures + 1 : snapshot.failures;
 
-    // A service that answers 503 has answered: there is nothing to confirm and
-    // no ambiguity to protect the reader from, and the state it is in has its
-    // own name and its own sentence.
-    const phase: ConnectionPhase =
-      report.verdict === "unavailable"
+    // ONLY A PROBE MAY DECLARE AN OUTAGE. A report from ordinary traffic buys
+    // a check and nothing else, whatever status it carries.
+    //
+    // A 503 used to be exempt from that, on the reasoning that a service which
+    // answers 503 has answered and there is nothing left to confirm. The
+    // reasoning is sound about the SERVICE and wrong about the REQUEST: a 503
+    // arrives from one endpoint, and one endpoint is not the service. A single
+    // read whose query was broken - a handler mapping its own failure to 503,
+    // a rate limiter, one route behind a proxy that is down - took the entire
+    // application offline on screen while every other page went on working.
+    //
+    // The probe asks the service itself, and its 503 still means what it
+    // always meant, because it is the one request that speaks for the whole.
+    const phase: ConnectionPhase = confirmed
+      ? report.verdict === "unavailable"
         ? "unavailable"
-        : confirmed || snapshot.phase === "offline" || snapshot.phase === "unavailable"
-          ? "offline"
-          : "unstable";
+        : "offline"
+      : // Already confirmed down: an unconfirmed failure is no news, and
+        // moving between the two down states on it would rewrite the sentence
+        // on screen from evidence weaker than the one that put it there.
+        snapshot.phase === "offline" || snapshot.phase === "unavailable"
+        ? snapshot.phase
+        : "unstable";
     const moved = phase !== snapshot.phase;
 
     set({

@@ -43,6 +43,7 @@ A cloud-native platform that continuously discovers software packages published 
 | 30 | [Continuous delivery](30-continuous-delivery.md) | One `config/` for three runtimes, a Helm chart published to JFrog, Flux reconciling two environments, and which changes cost a restart |
 | 31 | [Code scanning](31-code-scanning.md) | Which scanners gate a merge, which trees they are pointed at, and the findings this repository has classified as noise with the proof |
 | 32 | [Performance](32-performance.md) | What the read path costs measured, why the transfer listing is the constraint, and the two tools that keep it measured |
+| 33 | [Availability and failure reporting](33-availability-and-failure-reporting.md) | What 503 promises and who may say it, why only a probe declares an outage, and the record the Coordinator keeps of when it was serving |
 
 ## Reading order
 

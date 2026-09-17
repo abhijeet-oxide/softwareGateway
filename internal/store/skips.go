@@ -192,7 +192,7 @@ func (p *Packages) PresentComponents(ctx context.Context, transferID string) ([]
 		SELECT pa.digest,
 		       pa.media_type,
 		       COALESCE(pa.artifact_type, ''),
-		       COALESCE(pa.annotations, ''),
+		       `+p.dialect.JSONText("pa.annotations")+`,
 		       COALESCE((SELECT b.media_type
 		                   FROM artifact_blobs ab
 		                   JOIN blobs b ON b.digest = ab.digest

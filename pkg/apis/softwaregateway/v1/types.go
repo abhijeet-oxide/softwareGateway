@@ -28,6 +28,81 @@ type Int64String string
 // System
 // ---------------------------------------------------------------------------
 
+// AvailabilityStatus is what the service is doing now, or was doing during a
+// recorded period.
+//
+// UNKNOWN IS NOT DOWN. They are identical in the data - no record - and
+// opposite in meaning: one is "it was not serving", the other is "nobody was
+// writing this down yet". A deployment upgraded into the availability record
+// yesterday knows nothing about last week, and reporting that as an outage
+// would have the product raising a false alarm about itself.
+type AvailabilityStatus string
+
+const (
+	AvailabilityHealthy  AvailabilityStatus = "HEALTHY"
+	AvailabilityDegraded AvailabilityStatus = "DEGRADED"
+	AvailabilityDown     AvailabilityStatus = "DOWN"
+	AvailabilityUnknown  AvailabilityStatus = "UNKNOWN"
+)
+
+// Outage is a period in which no replica recorded that it was serving.
+type Outage struct {
+	Began string `json:"began"`
+	// Ended is when it finished, or the moment of this response when it has
+	// not.
+	Ended   string `json:"ended"`
+	Seconds int64  `json:"seconds"`
+	Ongoing bool   `json:"ongoing,omitempty"`
+}
+
+// AvailabilityResponse is returned by GET /api/v1/system/availability.
+//
+// Every second of the window is accounted for: upSeconds + degradedSeconds +
+// downSeconds is the window's length. A client that has to derive one of them
+// by subtraction is a client that will disagree with this one.
+type AvailabilityResponse struct {
+	// Since is the start of the period these numbers describe, ALREADY CLIPPED
+	// to the start of the record. A client asking for 30 days from a service
+	// that has been recording for two gets two, and is told so here rather
+	// than being handed 28 days of fictional outage.
+	Since string `json:"since"`
+	Now   string `json:"now"`
+	// RecordedFrom is when the service first recorded anything. Empty means
+	// never, which is what a fresh deployment looks like and is the one case
+	// where a client must say nothing rather than something reassuring.
+	RecordedFrom string `json:"recordedFrom,omitempty"`
+
+	Status AvailabilityStatus `json:"status"`
+	// Since when it has been in that state: the uptime a reader quotes, or the
+	// moment the outage began.
+	StatusSince string `json:"statusSince"`
+
+	WindowSeconds   int64 `json:"windowSeconds"`
+	UpSeconds       int64 `json:"upSeconds"`
+	DegradedSeconds int64 `json:"degradedSeconds"`
+	DownSeconds     int64 `json:"downSeconds"`
+	// Uptime is the served fraction of the window, degraded included - a
+	// degraded service answered every request it was asked.
+	Uptime float64 `json:"uptime"`
+
+	Outages []Outage `json:"outages"`
+	// Starts is how many times a replica began serving in the window. Starts
+	// without outages is a deployment; starts with them is a service falling
+	// over, and a single "restarts" number cannot tell anybody which.
+	Starts int `json:"starts"`
+	// BeatSeconds is the recording interval, which is the resolution of every
+	// number above. An outage shorter than this cannot be seen.
+	BeatSeconds int64 `json:"beatSeconds"`
+}
+
+// PingResponse is returned by GET /api/v1/system/ping.
+//
+// One field, and it stays that way. The endpoint answers without credentials,
+// so anything added here is published to anybody who can reach the address.
+type PingResponse struct {
+	Status string `json:"status"`
+}
+
 // VersionResponse is returned by GET /api/v1/system/version.
 // These four identifiers are what is needed to interpret a bug report.
 type VersionResponse struct {

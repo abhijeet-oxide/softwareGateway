@@ -61,7 +61,7 @@ func (s *Server) handleLeaseJobs(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.deps.Logger.ErrorContext(r.Context(), "lease failed",
 			"worker", req.WorkerID, "error", err)
-		Error(w, r, v1.CodeUnavailable, "could not lease work: "+err.Error())
+		s.fault(w, r, "could not lease work", err)
 		return
 	}
 
@@ -211,7 +211,7 @@ func (s *Server) completeJob(w http.ResponseWriter, r *http.Request, jobID int64
 	if err != nil {
 		s.deps.Logger.ErrorContext(r.Context(), "could not record job completion",
 			"job", jobID, "worker", req.WorkerID, "error", err)
-		Error(w, r, v1.CodeUnavailable, "could not record the completion: "+err.Error())
+		s.fault(w, r, "could not record the completion", err)
 		return
 	}
 
@@ -273,7 +273,7 @@ func (s *Server) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.deps.Logger.ErrorContext(r.Context(), "heartbeat failed",
 			"worker", workerID, "error", err)
-		Error(w, r, v1.CodeUnavailable, "could not renew leases: "+err.Error())
+		s.fault(w, r, "could not renew leases", err)
 		return
 	}
 

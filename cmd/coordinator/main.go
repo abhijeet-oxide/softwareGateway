@@ -552,6 +552,16 @@ func run() error {
 	})
 
 	// ---- leader election ----
+	// THE SERVICE'S OWN RECORD OF WHEN IT WAS SERVING, which is what the
+	// Overview page's availability panel reads. Not leader-gated: each replica
+	// records its own runs, because a recorder that went quiet when the leader
+	// died would miss the one event it exists to capture. See
+	// internal/maintenance/availability.go.
+	availabilityRecorder := maintenance.NewAvailabilityRecorder(
+		store.NewAvailability(st), hreg,
+		"coordinator", coordinatorInstance(), version.Version,
+		store.DefaultAvailabilityInterval, logger)
+
 	var elector leader.Interface
 	if cfg.Coordinator.LeaderElection.Enabled && st.SupportsAdvisoryLocks() {
 		elector = leader.New(st.DB(), leader.Options{
@@ -574,6 +584,8 @@ func run() error {
 					complianceSweep.SetLeader(isLeader)
 				}
 				replicationWatcher.SetLeader(isLeader)
+				// Recording is not gated; trimming the history is.
+				availabilityRecorder.SetLeader(isLeader)
 			},
 		})
 	} else {
@@ -594,6 +606,7 @@ func run() error {
 			}
 			replicationWatcher.SetLeader(isLeader)
 			queueCtl.SetLeader(isLeader)
+			availabilityRecorder.SetLeader(isLeader)
 		})
 	}
 
@@ -777,6 +790,9 @@ func run() error {
 		ReplicationStore: replicationStore,
 		Leader:           elector,
 		Component:        component,
+		// The same record the recorder above writes, read back for the
+		// Overview page's availability panel.
+		Availability: store.NewAvailability(st),
 	})
 
 	httpServer := &http.Server{
@@ -856,6 +872,7 @@ func run() error {
 	}
 	g.Go(func() error { return queueCtl.Run(gctx) })
 	g.Go(func() error { return replicationWatcher.Run(gctx) })
+	g.Go(func() error { return availabilityRecorder.Run(gctx) })
 
 	// The queue's own gauges. Every other metric in this process measures the
 	// service that fronts the work; this is the work.
@@ -1006,4 +1023,22 @@ func loopbackAddr(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// coordinatorInstance names this process in the availability record.
+//
+// It MUST differ between replicas and stay the same across a beat: two
+// replicas sharing a name interleave their beats into one run, which would
+// report a rolling restart as uninterrupted service - the one claim that
+// record must never make falsely. A hostname is what Kubernetes gives each pod
+// and what Docker gives each container, so it is both by default.
+//
+// The fallback is deliberately not a random id. A process that restarts under
+// a generated name leaves a run nothing will ever extend, and the record fills
+// with orphans that look like a fleet.
+func coordinatorInstance() string {
+	if host, err := os.Hostname(); err == nil && host != "" {
+		return host
+	}
+	return "coordinator"
 }

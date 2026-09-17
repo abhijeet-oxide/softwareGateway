@@ -131,7 +131,7 @@ func (s *Server) handleReplicatePackageSecurity(w http.ResponseWriter, r *http.R
 		case errors.Is(err, security.ErrNotRegistrable):
 			continue
 		case err != nil:
-			Error(w, r, v1.CodeUnavailable, err.Error())
+			s.fault(w, r, "", err)
 			return
 		default:
 			out.Started = true

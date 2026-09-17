@@ -85,7 +85,7 @@ type Requirement struct {
 // description of the caller's own permissions.
 func AlwaysAllowed(r *http.Request) bool {
 	switch r.URL.Path {
-	case "/api/v1/whoami", "/api/v1/system/version":
+	case "/api/v1/whoami", "/api/v1/system/version", "/api/v1/system/ping":
 		return true
 	}
 	return false

@@ -78,7 +78,7 @@ func (p *Packages) ChartCandidates(ctx context.Context, packageID int64) ([]Char
 	// artifacts this exists to find.
 	query := p.dialect.Rewrite(`
 		SELECT pa.id, pa.digest, pa.media_type, COALESCE(pa.artifact_type, ''),
-		       COALESCE(cfgb.media_type, ''), COALESCE(pa.annotations, ''),
+		       COALESCE(cfgb.media_type, ''), ` + p.dialect.JSONText("pa.annotations") + `,
 		       layer.digest, COALESCE(b.size_bytes, 0), layer.ordinal
 		  FROM package_artifacts pa
 		  JOIN artifact_blobs layer ON layer.artifact_id = pa.id AND layer.kind = 'layer'

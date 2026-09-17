@@ -225,7 +225,7 @@ func (s *Server) handleListTransfers(w http.ResponseWriter, r *http.Request) {
 	// without a COUNT, and without claiming a page that turns out empty.
 	rows, err := s.deps.Packages.ListTransfers(r.Context(), filter)
 	if err != nil {
-		Error(w, r, v1.CodeUnavailable, "could not list transfers: "+err.Error())
+		s.fault(w, r, "could not list transfers", err)
 		return
 	}
 
@@ -308,7 +308,7 @@ func (s *Server) handleListTransfers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTransferActivity(w http.ResponseWriter, r *http.Request) {
 	a, err := s.deps.Packages.Activity(r.Context())
 	if err != nil {
-		Error(w, r, v1.CodeUnavailable, "could not summarise activity: "+err.Error())
+		s.fault(w, r, "could not summarise activity", err)
 		return
 	}
 	WriteJSON(w, r, http.StatusOK, v1.TransferActivityResponse{
@@ -402,7 +402,7 @@ func (s *Server) handleListTransferJobs(w http.ResponseWriter, r *http.Request) 
 
 	jobs, err := s.deps.Packages.ListJobs(r.Context(), id, state, pageSize)
 	if err != nil {
-		Error(w, r, v1.CodeUnavailable, "could not list jobs: "+err.Error())
+		s.fault(w, r, "could not list jobs", err)
 		return
 	}
 
@@ -656,7 +656,7 @@ func (s *Server) handleListPresentComponents(w http.ResponseWriter, r *http.Requ
 
 	rows, err := s.deps.Packages.PresentComponents(r.Context(), id)
 	if err != nil {
-		Error(w, r, v1.CodeUnavailable, "could not list what was already there: "+err.Error())
+		s.fault(w, r, "could not list what was already there", err)
 		return
 	}
 

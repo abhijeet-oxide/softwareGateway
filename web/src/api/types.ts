@@ -1390,6 +1390,48 @@ export interface VersionResponse {
 export interface HealthCheck { name: string; status: string; detail?: string; durationMs?: number }
 export interface HealthCheckResponse { status: string; checks: HealthCheck[] }
 
+/**
+ * The service's own record of when it was serving.
+ *
+ * UNKNOWN IS NOT DOWN, and the difference is the whole reason this type has
+ * four states rather than two: no record and no service look identical in the
+ * data and mean opposite things to whoever is reading. A deployment that
+ * started recording yesterday knows nothing about last week.
+ */
+export type AvailabilityStatus = 'HEALTHY' | 'DEGRADED' | 'DOWN' | 'UNKNOWN'
+
+export interface Outage {
+  began: string
+  /** The moment of the response when the outage has not ended. */
+  ended: string
+  seconds: number
+  ongoing?: boolean
+}
+
+export interface AvailabilityResponse {
+  /** The start of the period described, already clipped to the record's own start. */
+  since: string
+  now: string
+  /** Absent when nothing has ever been recorded. */
+  recordedFrom?: string
+  status: AvailabilityStatus
+  statusSince: string
+  windowSeconds: number
+  upSeconds: number
+  degradedSeconds: number
+  downSeconds: number
+  /** The served fraction of the window, degraded included. */
+  uptime: number
+  outages: Outage[]
+  /** Replica starts in the window. Starts without outages is a deployment. */
+  starts: number
+  /** The recording interval: the resolution of every number here. */
+  beatSeconds: number
+}
+
+/** The windows the service will summarise. */
+export type AvailabilityWindow = '1h' | '24h' | '7d' | '30d'
+
 // ---------------------------------------------------------------------------
 // Audit and reports
 // ---------------------------------------------------------------------------

@@ -48,6 +48,28 @@
 # origin in front of both is what makes them a single identity provider. See
 # deploy/zitadel/nginx.conf.
 #
+# WHEN THE STACK NEVER COMES UP AND NOTHING SAYS WHY, read ZITADEL's log
+# first. It is the only service here whose failure is silent from the outside:
+# everything downstream waits on `zitadel: condition: service_healthy`, so the
+# Coordinator, the Worker and the interface sit in `created` indefinitely with
+# empty logs of their own, and `restart: unless-stopped` keeps ZITADEL trying
+# rather than leaving a stopped container to notice.
+#
+#   docker compose logs zitadel | grep -i "migration failed"
+#
+# The one that has actually happened:
+#
+#   level=ERROR msg="migration failed" name=03_default_instance
+#     ... policy_password_complexity_model.go ... err.kind=InvalidArgument
+#
+# That is ZITADEL_ROOT_PASSWORD failing the password policy - eight characters
+# with an upper case letter, a lower case letter, a digit and a symbol - so the
+# first-boot migration cannot create the root account. The value inline below
+# satisfies it; a .env that does not is the usual way in, since copying
+# .env.example is the documented first step. `grep ZITADEL_ROOT_PASSWORD .env`
+# settles it in one line, and deploy/env_test.go holds the template to the
+# policy so the shipped placeholder cannot be one that hangs.
+#
 # SHUTDOWN is the exact reverse: `docker compose down` stops web first and
 # postgres last, so nothing writes to a database that has already gone.
 # Add -v to that command to discard the data as well.

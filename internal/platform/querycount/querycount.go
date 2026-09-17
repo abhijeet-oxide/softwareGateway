@@ -91,7 +91,25 @@ func (c *Counter) Record(d time.Duration) {
 }
 
 // With returns a context that counts, and the counter to read afterwards.
+//
+// IDEMPOTENT. A context that already carries a counter gets that same counter
+// back, rather than a fresh one layered over it.
+//
+// This is not a nicety. The middleware installs a counter on every request, so
+// a caller that installed its own first - which is exactly what a test
+// measuring an endpoint's cost does - had it shadowed the moment the request
+// entered the handler: the driver incremented the middleware's counter and the
+// caller read its own, which nothing had touched.
+//
+// That made internal/api/apicost_test.go report zero round trips for every
+// endpoint in the table. It passed, in full, for a listing making sixteen
+// queries to draw eight rows - the precise failure the file exists to prevent.
+// The rule that catches this class is below: a measurement that can silently
+// become a constant has to be asserted against, not just recorded.
 func With(ctx context.Context) (context.Context, *Counter) {
+	if c := From(ctx); c != nil {
+		return ctx, c
+	}
 	c := &Counter{}
 	return context.WithValue(ctx, ctxKey{}, c), c
 }

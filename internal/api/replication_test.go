@@ -79,6 +79,19 @@ func (s *slowReplicator) Status(
 	}, nil
 }
 
+// StatusWith and Snapshot exist so this fake satisfies the interface. The
+// concurrency and budget tests this fake serves are about the fan-out, not
+// about prefetching, so the snapshot is ignored and the timing is unchanged.
+func (s *slowReplicator) StatusWith(
+	ctx context.Context, p *product.Product, t product.Target, _ *replication.Snapshot,
+) (*replication.Status, error) {
+	return s.Status(ctx, p, t)
+}
+
+func (s *slowReplicator) Snapshot(context.Context, []string) *replication.Snapshot {
+	return nil
+}
+
 func (s *slowReplicator) Apply(context.Context, *product.Product, product.Target,
 	replication.ApplyOptions) (*replication.ApplyResult, error) {
 	return nil, nil //nolint:nilnil // unused by these tests

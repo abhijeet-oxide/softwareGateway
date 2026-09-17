@@ -26,6 +26,14 @@ import (
 // clients, secret resolution and drift arithmetic (docs/design/15 §6).
 type Replicator interface {
 	Status(ctx context.Context, p *product.Product, t product.Target) (*replication.Status, error)
+	// StatusWith is Status against a prefetched Snapshot, and Snapshot builds
+	// one. A listing reads every target of every visible product; without
+	// these it re-resolved the same product id and re-read the same table once
+	// per target, which measured twenty database round trips per request
+	// against one for the transfers listing.
+	StatusWith(ctx context.Context, p *product.Product, t product.Target,
+		snap *replication.Snapshot) (*replication.Status, error)
+	Snapshot(ctx context.Context, productNames []string) *replication.Snapshot
 	Apply(ctx context.Context, p *product.Product, t product.Target,
 		opts replication.ApplyOptions) (*replication.ApplyResult, error)
 	Sync(ctx context.Context, p *product.Product, t product.Target, actor string) (*replication.SyncOutcome, error)
@@ -207,12 +215,27 @@ func (s *Server) replicationViews(
 		}
 	}
 
+	// EVERY APPLIED RECORD, IN TWO QUERIES, BEFORE THE FAN-OUT BEGINS.
+	//
+	// Each Status call otherwise resolves the product's row id and reads its
+	// applied record, then resolves the same id a second time to write the
+	// observation down - four round trips per target, all of them for values
+	// that do not differ between the targets of one product.
+	//
+	// Done here rather than inside the goroutines on purpose: prefetching
+	// concurrently would just be the same reads with less ordering.
+	names := make([]string, 0, len(products))
+	for _, p := range products {
+		names = append(names, p.Metadata.Name)
+	}
+	snap := s.deps.Replication.Snapshot(ctx, names)
+
 	views := make([]v1.ReplicationView, len(slots))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(limit)
 	for i, sl := range slots {
 		g.Go(func() error {
-			st, err := s.deps.Replication.Status(gctx, sl.p, sl.t)
+			st, err := s.deps.Replication.StatusWith(gctx, sl.p, sl.t, snap)
 			if err != nil {
 				// A target the BUDGET ran out on, rather than one that
 				// refused: "context deadline exceeded" is true and tells a

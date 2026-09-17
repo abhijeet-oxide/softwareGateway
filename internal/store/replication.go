@@ -45,6 +45,45 @@ func (r *Replication) ProductID(ctx context.Context, name string) (int64, error)
 	return id, nil
 }
 
+// ProductIDs resolves many product names in one round trip.
+//
+// The single-name form above is right for a handler acting on one product. It
+// is wrong for the fleet listing, which asks about every target of every
+// product a person can see: called once per target it resolved the SAME name
+// over and over, and the repeated lookup was most of that endpoint's query
+// count. See internal/replication.Service.Snapshot.
+//
+// Names with no catalog row are simply absent from the result, which is the
+// same "reconciliation has not run" state ProductID reports as ErrNoRecord.
+func (r *Replication) ProductIDs(ctx context.Context, names []string) (map[string]int64, error) {
+	out := make(map[string]int64, len(names))
+	if len(names) == 0 {
+		return out, nil
+	}
+
+	args := make([]any, len(names))
+	for i, n := range names {
+		args[i] = n
+	}
+	query := r.dialect.Rewrite(
+		`SELECT name, id FROM products WHERE name IN (` + placeholders(len(names)) + `)`)
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %d product names: %w", len(names), err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var id int64
+		if err := rows.Scan(&name, &id); err != nil {
+			return nil, err
+		}
+		out[name] = id
+	}
+	return out, rows.Err()
+}
+
 // TargetReplication is one target's applied state and last observation.
 type TargetReplication struct {
 	ProductID  int64

@@ -101,6 +101,14 @@ type Registry struct {
 	DatabaseBytes       prometheus.Gauge
 	QueueSampleFailures prometheus.Counter
 	QueueSampleDuration prometheus.Histogram
+
+	// What the fleet actually did. The queue gauges above are the present;
+	// these are the record, and they are counters because the rows they would
+	// otherwise be read from are archived.
+	JobsCompleted *prometheus.CounterVec
+	JobDuration   *prometheus.HistogramVec
+	JobBytes      *prometheus.CounterVec
+	JobErrors     *prometheus.CounterVec
 }
 
 // New builds the registry for a component and registers the Go runtime and
@@ -358,6 +366,59 @@ func New(component string) *Registry {
 				"behind it has stopped being used.",
 			Buckets: []float64{.001, .005, .01, .05, .1, .5, 1, 5},
 		}),
+
+		// `outcome` is succeeded/skipped/failed/cancelled; `kind` is
+		// blob/manifest. NOT labelled by product or repository: a completion
+		// happens per blob, and this is the highest-frequency event in the
+		// system - the two labels here are single digits each, and every
+		// further one multiplies the series by the size of the estate.
+		//
+		// `failed` here counts TERMINAL failures. A job that failed and will
+		// be retried is still outstanding and is counted by queue_jobs; the
+		// retry itself is job_errors_total, below.
+		JobsCompleted: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "jobs_completed_total",
+			Help:      "Jobs that reached a terminal state, by kind and outcome.",
+		}, []string{"kind", "outcome"}),
+
+		// Seconds from first lease to completion, which for a blob is how long
+		// it took to move. Buckets run to an hour: a 23 GB layer over a
+		// congested WAN is not a fast operation, and DefBuckets would put every
+		// one that matters in the overflow.
+		JobDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "job_duration_seconds",
+			Help:      "Time from a job's first lease to its completion, by kind.",
+			Buckets: []float64{
+				.1, .5, 1, 5, 15, 30, 60, 300, 900, 1800, 3600,
+			},
+		}, []string{"kind"}),
+
+		// THROUGHPUT LIVES HERE. rate() of this is bytes per second actually
+		// moved, which no gauge can give: queue_bytes falls as work drains and
+		// rises as work is planned, so its slope is not a transfer rate.
+		//
+		// `disposition` separates bytes that crossed the wire from bytes a
+		// dedupe or a server-side mount meant nobody had to move - which is
+		// the number that justifies this system existing, and it would be
+		// invisible if both were added together.
+		JobBytes: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "job_bytes_total",
+			Help:      "Bytes accounted for by completed jobs, by disposition.",
+		}, []string{"disposition"}),
+
+		// Every failure, retried or not, by the class that decides how many
+		// attempts it gets. The class is the actionable part: `auth` is a
+		// credential nobody rotated, `transient` is a registry having a bad
+		// day, `digest_mismatch` is corruption. An undifferentiated failure
+		// rate cannot tell a person which of those they are looking at.
+		JobErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "job_errors_total",
+			Help:      "Job failures by error class, whether or not they were retried.",
+		}, []string{"class", "kind"}),
 	}
 
 	reg.MustRegister(
@@ -391,6 +452,10 @@ func New(component string) *Registry {
 		m.DatabaseBytes,
 		m.QueueSampleFailures,
 		m.QueueSampleDuration,
+		m.JobsCompleted,
+		m.JobDuration,
+		m.JobBytes,
+		m.JobErrors,
 	)
 
 	info := version.Get(component)

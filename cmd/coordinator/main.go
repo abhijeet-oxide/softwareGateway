@@ -244,7 +244,8 @@ func run() error {
 	//
 	// The Coordinator is the SOLE database writer, so everything a worker does
 	// to the queue passes through here: leases out, results back. Bytes do not.
-	jobQueue := queue.New(packages, cfg.Coordinator.Reaper.LeaseDuration, logger)
+	jobQueue := queue.New(packages, cfg.Coordinator.Reaper.LeaseDuration, logger).
+		WithMetrics(mreg)
 
 	registryClients := regclient.NewClients(products, resolver, cfg.ProductsDir(), logger)
 	transferResolver := &resolverImpl{

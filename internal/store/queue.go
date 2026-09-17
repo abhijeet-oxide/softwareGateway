@@ -775,6 +775,27 @@ type CompletionResult struct {
 	// Repaired is what a rejected manifest push cost the placement cache: the
 	// records withdrawn and the blob jobs sent back for a forced upload.
 	Repaired RepairResult
+
+	// Kind is the job's kind, blob or manifest.
+	Kind string
+	// Settled reports that this completion was TERMINAL - the job will not be
+	// tried again. A failure with attempts left is not settled: the job went
+	// back to `pending` and is still outstanding work.
+	//
+	// Reported because the caller cannot work it out. Whether a failure is
+	// terminal depends on the row's attempt count and the class's cap, both of
+	// which are resolved inside this transaction.
+	Settled bool
+	// Seconds is how long the job was in a worker's hands, from its first
+	// lease. Zero when the job was never started.
+	Seconds float64
+	// Bytes is the job's planned size - the descriptor's, not what moved.
+	//
+	// Needed alongside Completion.BytesTransferred because a SKIPPED job moves
+	// nothing and reports zero, and the quantity worth counting for it is
+	// exactly this: the bytes a dedupe or a server-side mount meant nobody had
+	// to send.
+	Bytes int64
 }
 
 // ClassBlobUnknown is the error class the engine reports when a destination
@@ -815,11 +836,14 @@ func (p *Packages) CompleteJob(ctx context.Context, c Completion) (CompletionRes
 		state        string
 		rowMax       int
 	)
-	err = tx.QueryRowContext(ctx, p.dialect.Rewrite(`
+	var elapsed float64
+	err = tx.QueryRowContext(ctx, p.dialect.Rewrite(fmt.Sprintf(`
 		SELECT transfer_id, kind, digest, size_bytes, target_repo_id, wave, lease_owner,
-		       state, max_attempts
-		  FROM jobs WHERE id = ?`), c.JobID).
-		Scan(&transferID, &kind, &digest, &size, &targetRepoID, &wave, &owner, &state, &rowMax)
+		       state, max_attempts, COALESCE(%s, 0)
+		  FROM jobs WHERE id = ?`,
+		p.dialect.SecondsBetween("started_at", p.dialect.Now()))), c.JobID).
+		Scan(&transferID, &kind, &digest, &size, &targetRepoID, &wave, &owner, &state,
+			&rowMax, &elapsed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return res, fmt.Errorf("job %d not found", c.JobID)
 	}
@@ -833,6 +857,7 @@ func (p *Packages) CompleteJob(ctx context.Context, c Completion) (CompletionRes
 		return res, nil
 	}
 	res.Applied = true
+	res.Kind, res.Seconds, res.Bytes = kind, elapsed, size
 
 	// The effective cap is the LOWER of the row's budget and the class's.
 	// Computed here rather than in SQL because the two dialects spell the
@@ -845,6 +870,23 @@ func (p *Packages) CompleteJob(ctx context.Context, c Completion) (CompletionRes
 
 	if err := p.applyJobOutcome(ctx, tx, c, effectiveMax); err != nil {
 		return res, err
+	}
+	// Whether a failure was terminal is decided in SQL, against the row's own
+	// attempts - see applyJobOutcome, whose comment says why. So it is read
+	// back rather than recomputed here: a second copy of that arithmetic in Go
+	// is a copy that eventually disagrees, and it would disagree by reporting
+	// retries as permanent failures.
+	//
+	// Only on the failure path. A success is terminal by construction, and
+	// this is the hottest write in the system.
+	res.Settled = true
+	if c.Outcome == "failed" {
+		var after string
+		if err := tx.QueryRowContext(ctx, p.dialect.Rewrite(
+			`SELECT state FROM jobs WHERE id = ?`), c.JobID).Scan(&after); err != nil {
+			return res, fmt.Errorf("read back job %d: %w", c.JobID, err)
+		}
+		res.Settled = after == "failed"
 	}
 
 	// A blob that reached the destination - by transfer, by mount, or by being

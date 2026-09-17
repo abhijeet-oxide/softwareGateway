@@ -311,7 +311,7 @@ export function ComplianceSummary({
         {/* -------------------------------------------------- how bad it is -- */}
         <div style={{ padding: '18px 22px', minWidth: 0 }}>
           <ZoneLabel>Compliance</ZoneLabel>
-          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={10} style={{ width: '100%' }}>
             <VerdictPill verdict={verdict} label={verdictLabel} />
             {/*
               UNIQUE FIRST, and the total under it.
@@ -677,7 +677,7 @@ export function HelmMissingNotice({ helm }: { helm: ComplianceHelm }) {
     <Alert
       type="info"
       showIcon
-      message="Charts cannot be rendered on this Coordinator"
+      title="Charts cannot be rendered on this Coordinator"
       description={
         <>
           The <code>helm</code> binary is not available, so Helm charts cannot be turned into
@@ -702,7 +702,7 @@ export function TruncatedNotice({ run }: { run: ComplianceRun }) {
     <Alert
       type="warning"
       showIcon
-      message="This report is incomplete"
+      title="This report is incomplete"
       description={
         'The run produced more results than it is allowed to store, so the list was cut short. '
         + 'Raise coordinator.compliance.maxResults, or check fewer charts at a time.'
@@ -718,9 +718,9 @@ export function RunFailedNotice({ run }: { run: ComplianceRun }) {
     <Alert
       type={run.state === 'cancelled' ? 'info' : 'error'}
       showIcon
-      message={run.state === 'cancelled' ? 'The last check was cancelled' : 'The last check failed'}
+      title={run.state === 'cancelled' ? 'The last check was cancelled' : 'The last check failed'}
       description={
-        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={4} style={{ width: '100%' }}>
           {run.error && <span style={{ fontFamily: mono, fontSize: 12 }}>{run.error}</span>}
           <span style={{ color: c.text3 }}>
             This release has no result from that attempt. It is not the same as a release that
@@ -815,7 +815,7 @@ export function ResultAddress({ result, showChart = true }: {
     : ''
 
   return (
-    <Space direction="vertical" size={0} style={{ lineHeight: 1.45 }}>
+    <Space orientation="vertical" size={0} style={{ lineHeight: 1.45 }}>
       {showChart && result.chart && (
         <span style={{ fontFamily: mono, fontSize: 12 }}>
           {result.chart}

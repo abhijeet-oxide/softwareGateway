@@ -111,7 +111,7 @@ function ComparedEnd({ pkg, fallback }: { pkg?: Package; fallback: string }) {
   }
   const name = pkg.displayRepository || pkg.sourceRepository || ''
   return (
-    <Space direction="vertical" size={0} style={{ lineHeight: 1.3 }}>
+    <Space orientation="vertical" size={0} style={{ lineHeight: 1.3 }}>
       <Typography.Text strong style={{ fontFamily: mono, fontSize: 13 }}>
         {version(pkg)}
       </Typography.Text>
@@ -188,7 +188,7 @@ function ComparisonProgress({
 
 
   return (
-    <Space direction="vertical" size={10} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={10} style={{ width: '100%' }}>
       {sides.length === 0 ? (
         <WorkingBar
           label="Analysing packages"
@@ -412,7 +412,7 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
   const buckets = useMemo(() => summarise(content), [content])
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       <CompositionBand buckets={buckets} />
 
       <Card
@@ -520,7 +520,7 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
               title: 'Name',
               width: 300,
               render: (_, r) => (
-                <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
+                <Space orientation="vertical" size={0} style={{ minWidth: 0 }}>
                   <Tooltip title={r.name}>
                     <Typography.Text style={{ fontSize: 13, maxWidth: 280 }} ellipsis>
                       {r.name || <NA reason="This component carries no name of its own." />}
@@ -763,7 +763,7 @@ function FileRow({ entry, name }: { entry: FileEntry; name: string }) {
       */}
       <Tooltip
         title={
-          <Space direction="vertical" size={2}>
+          <Space orientation="vertical" size={2}>
             <span style={{ fontSize: 11 }}>{entry.component}</span>
             {entry.digestA && <span style={{ fontSize: 11 }}>before {entry.digestA}</span>}
             {entry.digestB && <span style={{ fontSize: 11 }}>after&nbsp; {entry.digestB}</span>}
@@ -876,7 +876,7 @@ function BucketFigure({ bucket, verdict }: { bucket: Bucket; verdict: CompareVer
             Nothing in this bucket.
           </Typography.Text>
         ) : (
-          <Space direction="vertical" size={4} style={{ minWidth: 220 }}>
+          <Space orientation="vertical" size={4} style={{ minWidth: 220 }}>
             {kinds.map(([kind, v]) => {
               const name = kindName(kind)
               const icon = ARTIFACT_ICONS[name as keyof typeof ARTIFACT_ICONS]
@@ -943,7 +943,7 @@ function SizeCell({ row }: { row: CompareRow }) {
   if (row.verdict === 'changed' && a !== undefined && b !== undefined && a !== b) {
     const delta = b - a
     return (
-      <Space direction="vertical" size={0}>
+      <Space orientation="vertical" size={0}>
         <Typography.Text style={{ fontSize: 12 }}>{formatBytes(b)}</Typography.Text>
         <Typography.Text
           type={delta > 0 ? 'warning' : 'success'}
@@ -974,7 +974,7 @@ function TagCell({ row }: { row: CompareRow }) {
 
   if (a && b && a !== b) {
     return (
-      <Space direction="vertical" size={0}>
+      <Space orientation="vertical" size={0}>
         <Typography.Text delete type="secondary" style={{ fontFamily: mono, fontSize: 11 }}>
           {a}
         </Typography.Text>
@@ -1009,7 +1009,7 @@ function DigestCell({ row }: { row: CompareRow }) {
   switch (row.verdict) {
     case 'changed':
       return (
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           {line('was', row.a?.digest)}
           {line('now', row.b?.digest)}
         </Space>

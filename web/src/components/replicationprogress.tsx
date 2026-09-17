@@ -234,7 +234,7 @@ function OutcomeList({ values }: { values?: string[] }) {
   const shown = values?.slice(0, 3) ?? []
   if (shown.length === 0) return <Typography.Text type="secondary">No image paths were recorded for this run.</Typography.Text>
   return (
-    <Space direction="vertical" size={6} style={{ width: 380, maxWidth: 'min(380px, calc(100vw - 48px))', maxHeight: 180, overflowY: 'auto', paddingInlineEnd: 4 }}>
+    <Space orientation="vertical" size={6} style={{ width: 380, maxWidth: 'min(380px, calc(100vw - 48px))', maxHeight: 180, overflowY: 'auto', paddingInlineEnd: 4 }}>
       {shown.map((value) => (
         <Typography.Text key={value} copyable={{ text: value }} style={{ fontFamily: 'monospace', fontSize: 11, overflowWrap: 'anywhere' }}>
           {value}
@@ -285,7 +285,7 @@ export function ReplicationLogButton({ registration, size = 'small' }: {
       label="Replication log"
       title={`Replication to ${registration.label}`}
       note={
-        <Space direction="vertical" size={2}>
+        <Space orientation="vertical" size={2}>
           <span>
             From the last replication
             {registration.registeredAt

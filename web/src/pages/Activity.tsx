@@ -288,7 +288,7 @@ export default function Activity() {
         </Card>
       )}
 
-      <Drawer open={Boolean(open)} onClose={() => setOpen(undefined)} width={560} title={open && describe(open)}>
+      <Drawer open={Boolean(open)} onClose={() => setOpen(undefined)} size={560} title={open && describe(open)}>
         {open && (
           <Descriptions column={1} size="small" bordered>
             <Descriptions.Item label="Event type">{open.eventType}</Descriptions.Item>

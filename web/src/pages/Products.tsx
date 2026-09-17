@@ -327,7 +327,7 @@ export default function Products() {
                 fixed: 'left',
                 width: 200,
                 render: (_, p) => (
-                  <Space direction="vertical" size={0}>
+                  <Space orientation="vertical" size={0}>
                     <Space size={6}>
                       {/*
                         A rejected product keeps its name in FULL contrast. It

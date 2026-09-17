@@ -86,7 +86,7 @@ export function ExportMenu({ choices, label = 'Export', disabled, icon }: {
     key: choice.key,
     icon: running === choice.key ? <LoadingOutlined /> : choice.icon,
     label: (
-      <Space direction="vertical" size={0}>
+      <Space orientation="vertical" size={0}>
         <Typography.Text>{choice.label}</Typography.Text>
         <Typography.Text type="secondary" style={{ fontSize: 11 }}>
           {choice.note}

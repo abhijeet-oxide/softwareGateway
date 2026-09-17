@@ -174,7 +174,7 @@ function MethodTag({ transfer }: { transfer: Transfer }) {
 function TransferState({ transfer, fleet }: { transfer: Transfer; fleet: Fleet }) {
   const hold = holdOn(transfer, fleet)
   return (
-    <Space direction="vertical" size={2}>
+    <Space orientation="vertical" size={2}>
       <TransferStateTag state={transfer.state} />
       {hold && (
         <Tooltip title={`${hold.detail} ${describeFleet(fleet)}`}>
@@ -493,9 +493,9 @@ export default function Downloads() {
           type="error"
           showIcon
           style={{ marginBottom: 16 }}
-          message={`${failed.length} download${failed.length === 1 ? '' : 's'} failed`}
+          title={`${failed.length} download${failed.length === 1 ? '' : 's'} failed`}
           description={
-            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            <Space orientation="vertical" size={4} style={{ width: '100%' }}>
               {failed.slice(0, 4).map((t) => (
                 <Typography.Text key={t.id}>
                   <Link to={`/downloads/${t.id}`}>
@@ -523,12 +523,12 @@ export default function Downloads() {
           type="warning"
           showIcon
           style={{ marginBottom: 16 }}
-          message={
+          title={
             `${stranded.length} download${stranded.length === 1 ? '' : 's'} `
             + `${stranded.length === 1 ? 'is' : 'are'} waiting, and no worker is running`
           }
           description={
-            <Space direction="vertical" size={4}>
+            <Space orientation="vertical" size={4}>
               <Typography.Text>{describeFleet(fleet)}</Typography.Text>
               <Typography.Text type="secondary">
                 Downloads are planned here and performed by workers, so these will not move -
@@ -546,9 +546,9 @@ export default function Downloads() {
           type="warning"
           showIcon
           style={{ marginBottom: 16 }}
-          message="A registry's configuration has drifted from what Git says"
+          title="A registry's configuration has drifted from what Git says"
           description={
-            <Space direction="vertical" size={4}>
+            <Space orientation="vertical" size={4}>
               {drifted.map((d) => (
                 <Typography.Text key={`${d.product}-${d.target}`}>
                   <strong>{d.product} · {d.target}</strong>:{' '}

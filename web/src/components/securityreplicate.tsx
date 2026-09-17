@@ -129,7 +129,7 @@ export function ReplicationNotice({ registrations, sources, onReplicate, pending
   if (outstanding.length === 0) return null
 
   return (
-    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={8} style={{ width: '100%' }}>
       {outstanding.map((r) => (
         <OutstandingNotice
           key={r.provider}
@@ -165,7 +165,7 @@ function OutstandingNotice({ registration: r, source, onReplicate, pending }: {
     <Alert
       type={type}
       showIcon
-      message={message}
+      title={message}
       // The RETRY in the action slot, not stacked under the text. As a row of
       // its own it needed a full-width flex container and left a band of empty
       // alert beneath the sentence it belonged to.
@@ -181,7 +181,7 @@ function OutstandingNotice({ registration: r, source, onReplicate, pending }: {
         </Button>
       }
       description={
-        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={6} style={{ width: '100%' }}>
           {/*
             The scanner's own words, and on a failure they are the WHOLE of it.
             A paragraph explaining what an absence of findings means is worth

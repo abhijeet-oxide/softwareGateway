@@ -120,7 +120,7 @@ export function KevBanner({ kevs, fixable, severity, capable, onShow }: {
         background: kevColour.soft,
         borderColor: kevColour.border,
       }}
-      message={
+      title={
         <Space size={10} wrap align="center">
           <span style={{ fontWeight: 600, color: kevColour.fill }}>
             {kevs.toLocaleString()} known-exploited{' '}

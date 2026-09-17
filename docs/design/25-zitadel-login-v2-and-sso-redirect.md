@@ -103,6 +103,23 @@ OIDC client has no secret, which is why this is a file served to every browser
 rather than a mounted secret. The entrypoint says on stdout whether sign-in is
 configured, so "why can nobody sign in" has an answer in `docker logs web`.
 
+`task run` has neither nginx nor a seeder, so for a long time the path did not
+exist there at all and every load opened on a red
+`GET /runtime-config.json 404 (Not Found)`. Nothing was broken - `session.ts`
+reads an absent document as "no sign-in configured", which is the right answer
+locally - but an error the browser reports and the code expects is a false
+alarm, and a console that cries wolf is one nobody reads. So the development
+server serves the same document from the same environment variables, with the
+same precedence, in `web/vitePluginRuntimeConfig.ts`.
+
+The alternative was a `web/public/runtime-config.json` checked into the
+repository. It was rejected because it is a second copy of a document whose one
+author is the entrypoint, and because a file of empty strings in `public/` is
+exactly the thing somebody fills in locally and then cannot deploy. What would
+change our mind: a local runtime setting that is NOT part of the deployed
+document - at that point dev has its own document and may as well have its own
+file.
+
 The seeder also RECONCILES the registered redirect URI rather than only
 creating it. It is derived from `WEB_PORT`; change that port on a stack that
 has already been seeded and every login used to end on ZITADEL's own error page
@@ -270,6 +287,7 @@ then `docker compose up -d`), driven through a real browser:
 - [`deploy/zitadel/nginx.conf`](../../deploy/zitadel/nginx.conf), [`docker-entrypoint.sh`](../../deploy/zitadel/docker-entrypoint.sh) - ZITADEL's front door
 - [`deploy/zitadel/bootstrap.mjs`](../../deploy/zitadel/bootstrap.mjs) - login-client PAT, published client id, redirect reconciliation, login policy
 - [`deploy/web/docker-entrypoint.sh`](../../deploy/web/docker-entrypoint.sh), [`nginx.conf`](../../deploy/web/nginx.conf) - `/runtime-config.json`
+- [`web/vitePluginRuntimeConfig.ts`](../../web/vitePluginRuntimeConfig.ts) - the same document, for `task run`
 - [`web/src/auth/session.ts`](../../web/src/auth/session.ts), [`SessionGate.tsx`](../../web/src/auth/SessionGate.tsx) - the flow
 - [`web/src/api/client.ts`](../../web/src/api/client.ts) - the bearer header, the one renewal, the one place a 401 is acted on
 - [`web/src/BootGate.tsx`](../../web/src/BootGate.tsx) - the six screens

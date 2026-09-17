@@ -28,6 +28,12 @@ cd web && npm install && npm run dev
 
 Point it at a different Coordinator with `COORDINATOR_URL=http://host:8080 npm run dev`.
 
+Sign-in is off by default here: the dev server serves `/runtime-config.json`
+with everything empty, which the app reads as "no identity provider". To develop
+against a seeded stack, set `OIDC_ISSUER` and `OIDC_CLIENT_ID` (or point
+`OIDC_CONFIG_FILE` at the document the seeder wrote), plus `SUPPORT_CONTACT` and
+`SSO_DISPLAY_NAME` - the same variables `deploy/web/docker-entrypoint.sh` reads.
+
 ```sh
 npm run build       # static bundle in dist/
 npm run typecheck

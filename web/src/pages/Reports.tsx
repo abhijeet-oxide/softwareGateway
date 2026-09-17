@@ -138,7 +138,7 @@ export default function Reports() {
                   <Statistic
                     title="Failed"
                     value={totals?.downloadsFailed ?? 0}
-                    valueStyle={{ color: (totals?.downloadsFailed ?? 0) > 0 ? c.danger : undefined }}
+                    styles={{ content: { color: (totals?.downloadsFailed ?? 0) > 0 ? c.danger : undefined } }}
                   />
                 </Col>
                 <Col span={8}><Statistic title="Promoted" value={totals?.promotions ?? 0} /></Col>
@@ -153,7 +153,7 @@ export default function Reports() {
                   No download completed on any day in this period.
                 </Typography.Text>
               ) : (
-                <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                <Space orientation="vertical" size={6} style={{ width: '100%' }}>
                   {volume.map((v) => {
                     const value = bytes(v.bytesTransferred) ?? 0
                     return (

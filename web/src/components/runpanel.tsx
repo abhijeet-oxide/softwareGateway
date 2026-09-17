@@ -167,7 +167,7 @@ export interface RunPanelProps {
  */
 export function RunPanel(props: RunPanelProps) {
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       <RunHeadline {...props} />
       <RunBar {...props} />
       <RunActive {...props} />
@@ -239,7 +239,7 @@ function RunHeadline({
 
   return (
     <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start" wrap>
-      <Space direction="vertical" size={0}>
+      <Space orientation="vertical" size={0}>
         <Space size={10}>
           {/* No spinner over work that has stopped, and no clock: a duration
               that ticks on a finished run is the panel claiming to be live. */}
@@ -282,9 +282,9 @@ function RunBar({ label, detail, done, total, estimate, indeterminate, finished,
   const stroke = tone === 'danger' ? c.danger : tone === 'ok' ? c.ok : c.brand
 
   return (
-    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={6} style={{ width: '100%' }}>
       <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start" wrap>
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Typography.Text strong>{label}</Typography.Text>
           {detail && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -292,7 +292,7 @@ function RunBar({ label, detail, done, total, estimate, indeterminate, finished,
             </Typography.Text>
           )}
         </Space>
-        <Space direction="vertical" size={0} align="end">
+        <Space orientation="vertical" size={0} align="end">
           <Typography.Text style={{ fontFamily: mono, fontSize: 13 }}>
             {total > 0 ? `${done.toLocaleString()} of ${total.toLocaleString()}` : 'Starting'}
           </Typography.Text>
@@ -323,7 +323,7 @@ function RunBar({ label, detail, done, total, estimate, indeterminate, finished,
           status={finished ? 'normal' : 'active'}
           showInfo={false}
           strokeColor={stroke}
-          trailColor={c.track}
+          railColor={c.track}
         />
       )}
     </Space>
@@ -436,13 +436,13 @@ export function RunRoute({ steps }: { steps?: RunStep[] }) {
 function RunNotes({ notes }: { notes?: string[] }) {
   if (!notes || notes.length === 0) return null
   return (
-    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={8} style={{ width: '100%' }}>
       {notes.map((note) => (
         <Alert
           key={note}
           type="warning"
           showIcon
-          message={note}
+          title={note}
           // Ant's compact Alert is padded for a few words. These carry a
           // scanner's own error and wrap, and at the default the text sat
           // against the top border.
@@ -499,11 +499,11 @@ export function RunLog({ events, newestFirst = true }: {
   const ordered = newestFirst ? [...events].reverse() : events
   return (
     <Timeline
-      mode="left"
+      mode="start"
       items={ordered.map((e, i) => ({
         key: `${e.sec ?? e.at ?? i}-${i}`,
         color: toneOf(e.kind),
-        children: (
+        content: (
           <Space size={10} align="start" style={{ lineHeight: 1.35 }}>
             {/*
               The ELAPSED SECOND, not a clock time. A run is minutes long and
@@ -584,7 +584,7 @@ export function RunLogButton({ events, title, label, note, truncatedNote, size =
       </Button>
       <Drawer
         title={title}
-        width={720}
+        size={720}
         open={open}
         onClose={() => setOpen(false)}
         extra={
@@ -597,14 +597,14 @@ export function RunLogButton({ events, title, label, note, truncatedNote, size =
           </Button>
         }
       >
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={16} style={{ width: '100%' }}>
           {note && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {note}
             </Typography.Text>
           )}
           {truncatedNote && (
-            <Alert type="info" showIcon message={truncatedNote} />
+            <Alert type="info" showIcon title={truncatedNote} />
           )}
           <RunLog events={events} newestFirst={false} />
         </Space>

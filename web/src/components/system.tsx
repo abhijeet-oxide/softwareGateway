@@ -108,7 +108,7 @@ export function SystemPanel() {
               {
                 title: 'Worker',
                 render: (_, w) => (
-                  <Space direction="vertical" size={0}>
+                  <Space orientation="vertical" size={0}>
                     <Typography.Text style={{ fontSize: 12 }} className="mono">
                       {w.workerId}
                     </Typography.Text>

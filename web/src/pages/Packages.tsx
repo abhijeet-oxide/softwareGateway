@@ -674,7 +674,7 @@ export default function Packages() {
           domain/compare.ts - and it is asked HERE rather than on the report
           because it decides what the list should contain.
         */
-        <Space direction="vertical" size={0} style={{ marginBottom: 4 }}>
+        <Space orientation="vertical" size={0} style={{ marginBottom: 4 }}>
           <Typography.Title level={4} style={{ margin: 0 }}>
             Select two packages to compare
           </Typography.Title>

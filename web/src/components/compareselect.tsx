@@ -202,7 +202,7 @@ function Slot({ label, pkg, fallback, position, muted }: {
       >
         {position}
       </span>
-      <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
+      <Space orientation="vertical" size={0} style={{ minWidth: 0 }}>
         <Typography.Text
           type="secondary"
           style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em' }}

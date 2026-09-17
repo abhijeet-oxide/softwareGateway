@@ -54,7 +54,7 @@ export function Value({
  * A Statistic whose value may be absent.
  *
  * Ant Design's Statistic takes a string, not a node, so the italic secondary
- * treatment is applied through valueStyle rather than by rendering <NA/>.
+ * treatment is applied to the value's own style rather than by rendering <NA/>.
  */
 export function Stat({
   title, value, reason, valueStyle, prefix, suffix,
@@ -73,11 +73,11 @@ export function Stat({
       value={absent ? NOT_AVAILABLE : value}
       prefix={prefix}
       suffix={absent ? undefined : suffix}
-      valueStyle={
-        absent
+      styles={{
+        content: absent
           ? { ...valueStyle, fontStyle: 'italic', color: c.text2 }
-          : valueStyle
-      }
+          : valueStyle,
+      }}
     />
   )
   return absent && reason ? <Tooltip title={reason}>{stat}</Tooltip> : stat

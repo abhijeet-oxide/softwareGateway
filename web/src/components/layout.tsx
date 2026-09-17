@@ -119,13 +119,13 @@ export function AttentionBand({ items }: { items: Attention[] }) {
   const shown = items.slice(0, 3)
 
   return (
-    <Space direction="vertical" size={8} style={{ width: '100%', marginBottom: 16 }}>
+    <Space orientation="vertical" size={8} style={{ width: '100%', marginBottom: 16 }}>
       {shown.map((item) => (
         <Alert
           key={item.key}
           type={item.severity ?? 'error'}
           showIcon
-          message={item.message}
+          title={item.message}
           description={item.detail}
           action={
             item.action &&
@@ -230,9 +230,9 @@ export function ErrorState({ error, retry }: { error: unknown; retry?: () => voi
       // those is true.
       type={failure.kind === 'denied' ? 'warning' : 'error'}
       showIcon
-      message={failure.title}
+      title={failure.title}
       description={
-        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={4} style={{ width: '100%' }}>
           <span>{failure.detail}</span>
           {failure.requestId && (
             <Typography.Text
@@ -460,8 +460,8 @@ export function LifecycleCell({ steps }: { steps: LifecycleStep[] }) {
             style={{ marginTop: 8 }}
             items={steps.map((s) => ({
               color: s.failed ? 'red' : s.current ? 'blue' : s.reached ? 'green' : 'gray',
-              children: (
-                <Space direction="vertical" size={0}>
+              content: (
+                <Space orientation="vertical" size={0}>
                   <span style={{ fontWeight: s.current || s.failed ? 600 : 400 }}>
                     {s.failed ? FAILED_STAGE_LABEL[s.stage] ?? s.stage : s.stage}
                   </span>
@@ -582,7 +582,7 @@ export function SavedPanel({
 }) {
   return (
     <Card size="small" style={{ background: c.okBg, borderColor: c.okBd }}>
-      <Space direction="vertical" size={4} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={4} style={{ width: '100%' }}>
         <Space size={8}>
           <SavedBreakdown transferId={transferId} content={content}>
             <Typography.Text
@@ -656,12 +656,12 @@ export function SavedBreakdown({
       styles={{ content: { maxHeight: 420, overflow: 'auto' } }}
       content={
         <Space
-          direction="vertical"
+          orientation="vertical"
           size={12}
           style={{ width: 'min(520px, calc(100vw - 32px))', maxWidth: '100%' }}
         >
           {kinds.length > 0 && (
-            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            <Space orientation="vertical" size={4} style={{ width: '100%' }}>
               {kinds.map(({ group, saved }) => (
                 <KindLine key={group.kind} group={group} saved={saved} />
               ))}
@@ -727,7 +727,7 @@ function PresentList({ components }: { components: PresentComponent[] }) {
   const restBytes = rest.reduce((n, c) => n + (bytes(c.bytes) ?? 0), 0)
 
   return (
-    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={2} style={{ width: '100%' }}>
       <Typography.Text type="secondary" style={{ fontSize: 11 }}>
         The destination already holds these
       </Typography.Text>

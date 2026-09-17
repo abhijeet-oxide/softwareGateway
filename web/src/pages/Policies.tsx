@@ -162,7 +162,7 @@ export default function Policies() {
     <>
 
 
-      <Space direction="vertical" size={0} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={0} style={{ width: '100%' }}>
         {/*
           A broken pack first, and unmissable. Its checks will report as
           undecided on every release, and a reader looking at those has no way
@@ -172,9 +172,9 @@ export default function Policies() {
           <Alert
             type="error"
             showIcon
-            message={`${broken.length} policy pack${broken.length === 1 ? '' : 's'} did not load`}
+            title={`${broken.length} policy pack${broken.length === 1 ? '' : 's'} did not load`}
             description={
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={8} style={{ width: '100%' }}>
                 <span>
                   The checks these packs own will report as undecided on every release, and any
                   release checked while they are broken is INCONCLUSIVE rather than compliant.

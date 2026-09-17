@@ -279,11 +279,17 @@ function writePageSize(
 }
 const REORDER_TOOLTIP_CLASS = "antd-table-enhanced-reorder-tooltip";
 
-/**
- * Keeps AntD Dropdown overlays above Modal, Drawer, Mask, etc.
- * AntD Modal default z-index is usually 1000.
- */
-const DROPDOWN_OVERLAY_Z_INDEX = 9999;
+// STACKING IS ANT DESIGN'S JOB, and these overlays used to take it away from
+// it with a flat z-index of 9999.
+//
+// A Dropdown inside a Modal or a Drawer reads its container's z-index from
+// ZIndexContext and lands fifty above it, which is what the hard-coded number
+// was reaching for. The number only ever matched by luck, and it broke
+// everything BELOW the dropdown in the same tree: a Tooltip nested inside one
+// inherits 9999 and adds its own offset, which is the
+// `zIndex is over design token zIndexPopupBase too much` warning. Setting no
+// z-index at all is the fix; getPopupContainer below still escapes the
+// stacking context that made this look necessary.
 
 function getDefaultDropdownPopupContainer(
   triggerNode: HTMLElement,
@@ -1756,11 +1762,12 @@ function createHeaderCell(ExistingHeaderCell?: any) {
         getPopupContainer={
           enhancedGetPopupContainer ?? getDefaultDropdownPopupContainer
         }
-        overlayClassName={s.preferenceDropdown}
-        overlayStyle={{
-          width: "max-content",
-          minWidth: 240,
-          zIndex: DROPDOWN_OVERLAY_Z_INDEX,
+        classNames={{ root: s.preferenceDropdown }}
+        styles={{
+          root: {
+            width: "max-content",
+            minWidth: 240,
+          },
         }}
         onOpenChange={(open) => {
           enhancedOnContextMenuOpenChange(enhancedColumnKey, open);
@@ -3633,10 +3640,7 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
                 trigger={["click"]}
                 open={exportOpen}
                 onOpenChange={setExportOpen}
-                overlayClassName={s.toolbarDropdown}
-                overlayStyle={{
-                  zIndex: DROPDOWN_OVERLAY_Z_INDEX,
-                }}
+                classNames={{ root: s.toolbarDropdown }}
                 menu={{
                   items: exportMenuItems,
                   onClick: ({ key }) => {
@@ -3676,11 +3680,8 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
                   setColumnVisibilityOpen(open);
                   if (open) setColumnSearch("");
                 }}
-                overlayClassName={s.columnVisibilityOverlay}
-                overlayStyle={{
-                  zIndex: DROPDOWN_OVERLAY_Z_INDEX,
-                }}
-                dropdownRender={() => columnVisibilityDropdown}
+                classNames={{ root: s.columnVisibilityOverlay }}
+                popupRender={() => columnVisibilityDropdown}
               >
                 <Tooltip title="Columns">
                   <Button

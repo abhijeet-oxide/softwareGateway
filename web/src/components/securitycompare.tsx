@@ -98,7 +98,7 @@ export function SecurityComparison({
   )
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       {/*
         ONE BAND, not two cards with an arrow adrift between them.
 
@@ -175,14 +175,14 @@ export function SecurityComparison({
       {changed > 0 ? (
         <Row gutter={[16, 16]}>
           <Col xs={24} xl={17}>
-            <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Space orientation="vertical" size={16} style={{ width: '100%' }}>
               <VulnerabilityOverview report={report} />
               <ChangeBySeverity report={report} />
               <ArtifactDeltaCard report={report} onSync={onSync} syncing={syncing} />
             </Space>
           </Col>
           <Col xs={24} xl={7}>
-            <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Space orientation="vertical" size={16} style={{ width: '100%' }}>
               <SummaryCard report={report} />
               <TopCves title="Top introduced" changes={report.changes} types={['introduced', 'severity_increased']} tone="worse" />
               <TopCves title="Top resolved" changes={report.changes} types={['resolved', 'severity_decreased']} tone="better" />
@@ -190,7 +190,7 @@ export function SecurityComparison({
           </Col>
         </Row>
       ) : (
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={16} style={{ width: '100%' }}>
           <VulnerabilityOverview report={report} />
           <ArtifactDeltaCard report={report} onSync={onSync} syncing={syncing} />
         </Space>
@@ -200,7 +200,7 @@ export function SecurityComparison({
         <Alert
           type="info"
           showIcon
-          message={`${report.removedArtifact.total} findings left with artifacts that are no longer shipped`}
+          title={`${report.removedArtifact.total} findings left with artifacts that are no longer shipped`}
           description={
             'Shown separately rather than counted as fixed. The scan data does not confirm that dropping ' +
             'the artifact improved the release, so calling them resolved would credit a fix nobody made.'
@@ -292,7 +292,7 @@ function ReleaseEnd({ title, end, name, onSync, align }: {
           </Typography.Text>
         </>
       ) : (
-        <Space direction="vertical" size={8} style={{ marginTop: 12 }}>
+        <Space orientation="vertical" size={8} style={{ marginTop: 12 }}>
           <Typography.Text type="secondary">
             {end.sync.canSync
               ? 'This release has not been scanned, so it cannot be compared.'
@@ -390,7 +390,7 @@ function Stat({ label, value, colour, suffix }: {
   suffix?: string
 }) {
   return (
-    <Space direction="vertical" size={0}>
+    <Space orientation="vertical" size={0}>
       <Typography.Text type="secondary" style={{ fontSize: 12, textTransform: 'capitalize' }}>{label}</Typography.Text>
       <Typography.Text strong style={{ fontSize: 18, color: colour }}>
         {value.toLocaleString()}
@@ -741,7 +741,7 @@ function SummaryCard({ report }: { report: SecurityComparisonResponse }) {
   ]
   return (
     <Card size="small" title="Artifacts">
-      <Space direction="vertical" size={6} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={6} style={{ width: '100%' }}>
         {rows.map(([label, value]) => (
           <Space key={label} style={{ width: '100%', justifyContent: 'space-between' }}>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>{label}</Typography.Text>
@@ -784,7 +784,7 @@ function TopCves({ title, changes, types, tone }: {
 
   return (
     <Card size="small" title={title}>
-      <Space direction="vertical" size={6} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={6} style={{ width: '100%' }}>
         {top.map((row) => (
           <Space key={row.cve} style={{ width: '100%', justifyContent: 'space-between' }}>
             <Space size={6}>
@@ -892,13 +892,13 @@ function ArtifactDeltaCard({ report, onSync, syncing }: {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message={
+          title={
             pending.missing.length === 1
               ? 'One image has not been scanned yet'
               : `${pending.missing.length} images have not been scanned yet`
           }
           description={
-            <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            <Space orientation="vertical" size={6} style={{ width: '100%' }}>
               <Typography.Text>
                 {/*
                   The image NAME, not either side's display.
@@ -1110,7 +1110,7 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
         />
       }
     >
-      <Space direction="vertical" size={10} style={{ width: '100%', marginBottom: 12 }}>
+      <Space orientation="vertical" size={10} style={{ width: '100%', marginBottom: 12 }}>
         <Space wrap size={12} style={{ width: '100%', justifyContent: 'space-between' }}>
           <Segmented
             value={tab}
@@ -1173,7 +1173,7 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
             title: 'Change',
             width: 160,
             render: (_, r) => (
-              <Space direction="vertical" size={0}>
+              <Space orientation="vertical" size={0}>
                 <Tag color={CHANGE_COLOUR[r.type]}>{CHANGE_LABEL[r.type]}</Tag>
                 {r.viaRemoval && (
                   <Typography.Text type="secondary" style={{ fontSize: 11 }}>No longer present</Typography.Text>
@@ -1205,7 +1205,7 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
             title: 'Image',
             width: 200,
             render: (_, r) => (
-              <Space direction="vertical" size={0}>
+              <Space orientation="vertical" size={0}>
                 <Typography.Text style={{ fontFamily: mono }}>{r.artifact.name}</Typography.Text>
                 <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                   {ARTIFACT_CHANGE_LABEL[r.artifactChange].toLowerCase()} artifact

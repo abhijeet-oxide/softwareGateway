@@ -260,7 +260,7 @@ export default function Settings() {
           <Alert
             type="info"
             showIcon
-            message="This interface never edits configuration"
+            title="This interface never edits configuration"
             description={
               <Typography.Text type="secondary">
                 Products, downloads, rules, discovery intervals and verification policy are defined in

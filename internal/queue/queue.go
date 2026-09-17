@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
 )
@@ -45,6 +46,7 @@ const (
 type Queue struct {
 	packages *store.Packages
 	log      *slog.Logger
+	metrics  *metrics.Registry
 
 	leaseDuration time.Duration
 }
@@ -58,6 +60,16 @@ func New(packages *store.Packages, leaseDuration time.Duration, log *slog.Logger
 		leaseDuration = DefaultLeaseDuration
 	}
 	return &Queue{packages: packages, log: log, leaseDuration: leaseDuration}
+}
+
+// WithMetrics attaches the registry that records what the fleet did.
+//
+// Optional, and separate from New, because the queue's behaviour does not
+// depend on it: a test, and the worker's own in-process wiring, construct a
+// queue without one. Every use is nil-guarded through observe().
+func (q *Queue) WithMetrics(m *metrics.Registry) *Queue {
+	q.metrics = m
+	return q
 }
 
 // LeaseDuration is how long the leases this queue hands out are good for.
@@ -295,6 +307,8 @@ func (q *Queue) Complete(ctx context.Context, c store.Completion) (store.Complet
 			"job", c.JobID, "worker", c.Owner)
 		return res, nil
 	}
+
+	q.observe(c, res)
 
 	q.log.InfoContext(ctx, "job completed",
 		"job", c.JobID,
@@ -564,4 +578,67 @@ func (q *Queue) Retryable(ctx context.Context) ([]string, error) {
 // speaks to one type.
 func (q *Queue) AccrueActiveTime(ctx context.Context, since time.Duration) (int, error) {
 	return q.packages.AccrueActiveTime(ctx, since)
+}
+
+// observe records one completion.
+//
+// # Why here and not in the store
+//
+// Because the store is the data layer and has no business importing a metrics
+// registry, and because this is the one place every completion passes through
+// - the worker plane, the reaper's release path and the in-process test wiring
+// all reach the queue before they reach the database.
+//
+// # What each counter counts
+//
+// jobs_completed_total is TERMINAL outcomes only. A failure with attempts left
+// went back on the queue and is still outstanding work; counting it as a
+// completed failure would report a transient 503 as eight permanent failures
+// and make every dashboard read as an outage.
+//
+// job_errors_total is the opposite: every failure, retried or not, by class.
+// Retries are worth seeing - a class whose retries are climbing is a
+// dependency degrading before it breaks.
+//
+// job_bytes_total splits what crossed the wire from what a dedupe or a
+// server-side mount meant nobody had to move. Added together they would hide
+// the number that justifies this system existing.
+func (q *Queue) observe(c store.Completion, res store.CompletionResult) {
+	if q.metrics == nil || !res.Applied {
+		return
+	}
+	kind := res.Kind
+	if kind == "" {
+		kind = "unknown"
+	}
+
+	if c.Outcome == "failed" {
+		class := c.ErrorClass
+		if class == "" {
+			class = "unclassified"
+		}
+		q.metrics.JobErrors.WithLabelValues(class, kind).Inc()
+	}
+
+	if !res.Settled {
+		return
+	}
+	q.metrics.JobsCompleted.WithLabelValues(kind, c.Outcome).Inc()
+	if res.Seconds > 0 {
+		q.metrics.JobDuration.WithLabelValues(kind).Observe(res.Seconds)
+	}
+
+	// A skip is bytes that did not have to move. `mounted` is the registry
+	// relocating them server-side; the other reasons are content that was
+	// already at the destination. Both are saved bytes, and neither is
+	// throughput.
+	// A skip reports zero bytes transferred - nothing moved, which is the
+	// point - so the quantity to count for it is the descriptor's size.
+	disposition, bytes := "transferred", c.BytesTransferred
+	if c.Outcome == "skipped" {
+		disposition, bytes = "saved", res.Bytes
+	}
+	if bytes > 0 {
+		q.metrics.JobBytes.WithLabelValues(disposition).Add(float64(bytes))
+	}
 }

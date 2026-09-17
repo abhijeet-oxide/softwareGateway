@@ -244,7 +244,8 @@ func run() error {
 	//
 	// The Coordinator is the SOLE database writer, so everything a worker does
 	// to the queue passes through here: leases out, results back. Bytes do not.
-	jobQueue := queue.New(packages, cfg.Coordinator.Reaper.LeaseDuration, logger)
+	jobQueue := queue.New(packages, cfg.Coordinator.Reaper.LeaseDuration, logger).
+		WithMetrics(mreg)
 
 	registryClients := regclient.NewClients(products, resolver, cfg.ProductsDir(), logger)
 	transferResolver := &resolverImpl{
@@ -831,6 +832,10 @@ func run() error {
 	}
 	g.Go(func() error { return queueCtl.Run(gctx) })
 	g.Go(func() error { return replicationWatcher.Run(gctx) })
+
+	// The queue's own gauges. Every other metric in this process measures the
+	// service that fronts the work; this is the work.
+	g.Go(func() error { return newQueueSampler(packages, mreg, logger).Run(gctx) })
 
 	// Graceful shutdown: stop accepting, drain in-flight requests, then exit.
 	g.Go(func() error {

@@ -59,6 +59,13 @@ type Registry struct {
 	// APIQueries is round trips per request - see where it is built for why
 	// latency alone cannot see an N+1.
 	APIQueries *prometheus.HistogramVec
+	// APIDBSeconds is the part of a request's latency spent waiting on the
+	// database. Against APILatency it is the whole latency breakdown there is.
+	APIDBSeconds *prometheus.HistogramVec
+	// ActiveUsers is distinct people in a rolling window - see
+	// internal/api/middleware.ActiveUsers for why it is a count and not a
+	// label.
+	ActiveUsers prometheus.Gauge
 
 	// Discovery (docs/design/07 §7, docs/design/12 §2.3).
 	// Delegated replication (docs/design/12 §2.6.1). Note what is NOT here:
@@ -83,6 +90,32 @@ type Registry struct {
 	ManifestCacheBytes     prometheus.Gauge
 	ManifestCacheManifests prometheus.Gauge
 	ManifestCacheEvicted   *prometheus.CounterVec
+
+	// The queue, sampled from the database on a timer - see
+	// store.QueueSnapshot for why these are read rather than counted, and
+	// ObserveQueue for what drives them.
+	//
+	// This is the product's own work. Everything above measures the service
+	// that fronts it; without these, a deployment where the API is fast and
+	// nothing is being transferred looks perfectly healthy.
+	QueueJobs           *prometheus.GaugeVec
+	QueueJobsPaused     prometheus.Gauge
+	QueueOldestPending  prometheus.Gauge
+	QueueBytes          *prometheus.GaugeVec
+	QueueTransfers      *prometheus.GaugeVec
+	Workers             *prometheus.GaugeVec
+	WorkerSlots         *prometheus.GaugeVec
+	DatabaseBytes       prometheus.Gauge
+	QueueSampleFailures prometheus.Counter
+	QueueSampleDuration prometheus.Histogram
+
+	// What the fleet actually did. The queue gauges above are the present;
+	// these are the record, and they are counters because the rows they would
+	// otherwise be read from are archived.
+	JobsCompleted *prometheus.CounterVec
+	JobDuration   *prometheus.HistogramVec
+	JobBytes      *prometheus.CounterVec
+	JobErrors     *prometheus.CounterVec
 }
 
 // New builds the registry for a component and registers the Go runtime and
@@ -166,6 +199,38 @@ func New(component string) *Registry {
 				"size is asking once per row.",
 			Buckets: []float64{0, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233},
 		}, []string{"route", "method"}),
+
+		// TIME IN THE DATABASE, per request.
+		//
+		// The count above says an endpoint is asking too often; this says
+		// whether asking is what it is slow doing. Subtract it from
+		// api_request_duration_seconds and what is left is the handler, the
+		// serialisation and whatever upstream registry the route talks to -
+		// and those are fixed in completely different places, so the split is
+		// most of the work of deciding where to look.
+		//
+		// Same buckets as the latency histogram on purpose: the two are read
+		// beside each other, and quantiles from different bucket boundaries
+		// are not comparable.
+		APIDBSeconds: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "api_request_db_seconds",
+			Help: "Time one API request spent waiting on the database, by " +
+				"route template. The rest of its latency is the handler.",
+			Buckets: apiLatencyBuckets,
+		}, []string{"route", "method"}),
+
+		// THE ONE THAT NOTICES PEOPLE LEAVING.
+		//
+		// Nobody files a ticket about a slow page; they stop opening it.
+		// Request rate cannot see that - one person refreshing a dashboard
+		// outnumbers ten people doing a day's work - and this can: latency up
+		// and this down, over the same week, is one event rather than two.
+		ActiveUsers: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "api_active_users",
+			Help:      "Distinct people who made a request in the last fifteen minutes.",
+		}),
 
 		MirrorSyncs: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
@@ -255,6 +320,144 @@ func New(component string) *Registry {
 			Name:      "manifest_cache_evicted_total",
 			Help:      "Manifest bodies reclaimed, by reason.",
 		}, []string{"reason"}),
+
+		// `state` is blocked/pending/leased. Settled jobs are NOT here: a
+		// gauge of them would fall when rows are archived, which reads as
+		// work being undone.
+		QueueJobs: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "queue_jobs",
+			Help:      "Jobs outstanding, by state.",
+		}, []string{"state"}),
+
+		QueueJobsPaused: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "queue_jobs_paused",
+			Help: "Outstanding jobs whose transfer is paused. A deep queue " +
+				"that is paused is a decision; a deep queue that is not is an incident.",
+		}),
+
+		// THE ONE TO ALERT ON. Depth cannot tell a busy queue from a stuck
+		// one - it is large in both - but this stays flat in a moving queue
+		// however deep the backlog gets, and climbs in real time in a stalled
+		// one. Alert on this, not on depth.
+		QueueOldestPending: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "queue_oldest_pending_seconds",
+			Help:      "How long the oldest unstarted job has been waiting.",
+		}),
+
+		// `kind` is pending (planned size of what has not started) or
+		// in_flight (what leased jobs have moved so far). Bytes rather than
+		// job count because a queue of nine manifests and one 23 GB blob is
+		// one job from done and hours from finished.
+		QueueBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "queue_bytes",
+			Help:      "Bytes outstanding, by kind.",
+		}, []string{"kind"}),
+
+		QueueTransfers: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "queue_transfers",
+			Help:      "Transfers not yet settled, by state.",
+		}, []string{"state"}),
+
+		// By state, never by worker id: a worker id is a pod name, and pod
+		// names are unbounded over a cluster's life. See the package comment.
+		Workers: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "workers",
+			Help:      "Workers known to the Coordinator, by state.",
+		}, []string{"state"}),
+
+		// `kind` is active/granted/max. Granted below max is the budget
+		// controller holding back on a vendor registry; active at granted
+		// with a deep queue is the fleet being the bottleneck. Those are
+		// different problems and the gap between the lines says which.
+		WorkerSlots: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "worker_slots",
+			Help:      "Fleet concurrency across active workers, by kind.",
+		}, []string{"kind"}),
+
+		DatabaseBytes: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "database_bytes",
+			Help:      "What the database occupies on disk.",
+		}),
+
+		// Without these the queue gauges have a failure mode that looks like
+		// good news: a sampler erroring every pass leaves the last values
+		// frozen, and a frozen zero is indistinguishable from an empty queue.
+		QueueSampleFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "queue_sample_failures_total",
+			Help: "Queue samples that failed. Non-zero means every gauge " +
+				"below is stale, not that the queue is empty.",
+		}),
+
+		QueueSampleDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "queue_sample_duration_seconds",
+			Help: "How long one queue sample took. Watched because it runs " +
+				"on a timer forever: if it grows with the table, the index " +
+				"behind it has stopped being used.",
+			Buckets: []float64{.001, .005, .01, .05, .1, .5, 1, 5},
+		}),
+
+		// `outcome` is succeeded/skipped/failed/cancelled; `kind` is
+		// blob/manifest. NOT labelled by product or repository: a completion
+		// happens per blob, and this is the highest-frequency event in the
+		// system - the two labels here are single digits each, and every
+		// further one multiplies the series by the size of the estate.
+		//
+		// `failed` here counts TERMINAL failures. A job that failed and will
+		// be retried is still outstanding and is counted by queue_jobs; the
+		// retry itself is job_errors_total, below.
+		JobsCompleted: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "jobs_completed_total",
+			Help:      "Jobs that reached a terminal state, by kind and outcome.",
+		}, []string{"kind", "outcome"}),
+
+		// Seconds from first lease to completion, which for a blob is how long
+		// it took to move. Buckets run to an hour: a 23 GB layer over a
+		// congested WAN is not a fast operation, and DefBuckets would put every
+		// one that matters in the overflow.
+		JobDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "job_duration_seconds",
+			Help:      "Time from a job's first lease to its completion, by kind.",
+			Buckets: []float64{
+				.1, .5, 1, 5, 15, 30, 60, 300, 900, 1800, 3600,
+			},
+		}, []string{"kind"}),
+
+		// THROUGHPUT LIVES HERE. rate() of this is bytes per second actually
+		// moved, which no gauge can give: queue_bytes falls as work drains and
+		// rises as work is planned, so its slope is not a transfer rate.
+		//
+		// `disposition` separates bytes that crossed the wire from bytes a
+		// dedupe or a server-side mount meant nobody had to move - which is
+		// the number that justifies this system existing, and it would be
+		// invisible if both were added together.
+		JobBytes: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "job_bytes_total",
+			Help:      "Bytes accounted for by completed jobs, by disposition.",
+		}, []string{"disposition"}),
+
+		// Every failure, retried or not, by the class that decides how many
+		// attempts it gets. The class is the actionable part: `auth` is a
+		// credential nobody rotated, `transient` is a registry having a bad
+		// day, `digest_mismatch` is corruption. An undifferentiated failure
+		// rate cannot tell a person which of those they are looking at.
+		JobErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "job_errors_total",
+			Help:      "Job failures by error class, whether or not they were retried.",
+		}, []string{"class", "kind"}),
 	}
 
 	reg.MustRegister(
@@ -266,6 +469,8 @@ func New(component string) *Registry {
 		m.APIRequests,
 		m.APILatency,
 		m.APIQueries,
+		m.APIDBSeconds,
+		m.ActiveUsers,
 		m.MirrorSyncs,
 		m.MirrorSyncDuration,
 		m.MirrorConfigDrift,
@@ -278,6 +483,20 @@ func New(component string) *Registry {
 		m.ManifestCacheBytes,
 		m.ManifestCacheManifests,
 		m.ManifestCacheEvicted,
+		m.QueueJobs,
+		m.QueueJobsPaused,
+		m.QueueOldestPending,
+		m.QueueBytes,
+		m.QueueTransfers,
+		m.Workers,
+		m.WorkerSlots,
+		m.DatabaseBytes,
+		m.QueueSampleFailures,
+		m.QueueSampleDuration,
+		m.JobsCompleted,
+		m.JobDuration,
+		m.JobBytes,
+		m.JobErrors,
 	)
 
 	info := version.Get(component)

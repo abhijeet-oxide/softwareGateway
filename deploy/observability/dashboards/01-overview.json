@@ -1,0 +1,93 @@
+{
+  "title": "Software Gateway - Overview",
+  "filename": "01-overview.json",
+  "rows": [
+    {
+      "title": "Is anybody using it, and is it answering",
+      "panels": [
+        {
+          "title": "People using it",
+          "description": "Distinct people who made a request in the last fifteen minutes. THE PANEL TO READ BESIDE A LATENCY GRAPH. Nobody files a ticket about a slow page - they stop opening it - and request rate cannot tell that from a quiet week, because one person refreshing a dashboard outnumbers ten people doing a day's work. Latency rising while this falls, over the same week, is one event rather than two.",
+          "unit": "people",
+          "width": 4,
+          "alias": ["active in the last 15m"],
+          "expr": ["max(softwaregateway_api_active_users)"]
+        },
+        {
+          "title": "Requests answered",
+          "description": "By status class. A rise in 4xx without 5xx is usually authorization, or a browser that has got ahead of a deployment; a rise in both is the service.",
+          "unit": "req/s",
+          "width": 4,
+          "alias": ["{{status_class}}"],
+          "expr": ["sum by (status_class) (rate(softwaregateway_api_requests_total[5m]))"]
+        },
+        {
+          "title": "Requests failing",
+          "description": "5xx as a share of all traffic. Zero is the normal reading, and it is drawn as a line at zero rather than as an empty panel on purpose: a blank graph during an incident is indistinguishable from a broken one.",
+          "unit": "%",
+          "width": 4,
+          "alias": ["5xx share"],
+          "expr": ["100 * sum(rate(softwaregateway_api_requests_total{status_class=\"5xx\"}[5m]) or 0 * rate(softwaregateway_api_requests_total[5m])) / clamp_min(sum(rate(softwaregateway_api_requests_total[5m])), 0.001)"]
+        }
+      ]
+    },
+    {
+      "title": "Is the work moving",
+      "panels": [
+        {
+          "title": "Queue depth",
+          "description": "Jobs outstanding, by state. Deep is not the same as stuck - a busy queue is deep too - so read it beside the panel on its right, which is what tells them apart.",
+          "unit": "jobs",
+          "width": 4,
+          "alias": ["{{state}}"],
+          "expr": ["sum by (state) (softwaregateway_queue_jobs)"]
+        },
+        {
+          "title": "Oldest job still waiting",
+          "description": "THE ONE TO ALERT ON. In a queue that is moving this stays flat however deep the backlog gets, because work leaves as fast as it arrives. In a stalled one it climbs in real time, minute for minute. Depth cannot make that distinction and this can.",
+          "unit": "s",
+          "width": 4,
+          "alias": ["oldest unstarted job"],
+          "expr": ["max(softwaregateway_queue_oldest_pending_seconds)"]
+        },
+        {
+          "title": "Throughput",
+          "description": "Bytes per second, split by whether they crossed the wire. `saved` is content a dedupe or a server-side mount meant nobody had to move - the number that justifies this system existing - and it is kept separate because adding the two together would report bandwidth nobody used.",
+          "unit": "MiB/s",
+          "width": 4,
+          "alias": ["{{disposition}}"],
+          "expr": ["sum by (disposition) (rate(softwaregateway_job_bytes_total[5m])) / 1048576"]
+        }
+      ]
+    },
+    {
+      "title": "Is anything broken",
+      "panels": [
+        {
+          "title": "Slowest endpoints (p95)",
+          "description": "The five slowest route templates. Open the API dashboard to find out why one of them is here.",
+          "unit": "s",
+          "width": 4,
+          "alias": ["{{route}}"],
+          "expr": ["topk(5, histogram_quantile(0.95, sum by (route, le) (rate(softwaregateway_api_request_duration_seconds_bucket[5m]))))"]
+        },
+        {
+          "title": "Jobs failing",
+          "description": "Terminal failures per second, by error class. The class is the actionable part: `auth` is a credential nobody rotated, `transient` is a registry having a bad day, `digest_mismatch` is corruption. Retries are not counted here - see the transfers dashboard.",
+          "unit": "jobs/s",
+          "width": 4,
+          "alias": ["{{outcome}}"],
+          "expr": ["sum by (outcome) (rate(softwaregateway_jobs_completed_total{outcome=~\"failed|cancelled\"}[5m]))"]
+        },
+        {
+          "title": "Is anything being scraped",
+          "description": "One line per target. A dashboard that has stopped updating looks exactly like a system that has stopped doing anything, and this is what tells those two apart. A gap here means every graph above is stale, not that the estate is quiet.",
+          "unit": "up",
+          "width": 4,
+          "alias": ["{{job}}"],
+          "expr": ["up"]
+        }
+      ]
+    }
+  ]
+}

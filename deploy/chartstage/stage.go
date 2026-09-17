@@ -95,10 +95,15 @@ var Sources = []Source{
 	// are `controller:8080` and `worker:8081`, which are the Service names in
 	// both runtimes, so what an operator sees in a lab is what a developer
 	// sees on a laptop. A second copy written in Helm would be a second thing
-	// to keep in step. The README is left behind - it is for somebody reading
-	// the repository, not for the cluster.
+	// to keep in step.
+	//
+	// The dashboards are staged as a DIRECTORY, and the chart globs it, so
+	// adding one is adding a file - not a file plus an entry here plus a line
+	// in the ConfigMap. The README is left behind: it is for somebody reading
+	// the repository, not for the cluster, which is also why the dashboards
+	// live in a subdirectory of their own.
 	{From: "deploy/observability/scrape.yml", To: "observability/scrape.yml"},
-	{From: "deploy/observability/dashboard-api.json", To: "observability/dashboard-api.json"},
+	{From: "deploy/observability/dashboards", To: "observability/dashboards"},
 
 	// ZITADEL gets its own database in the same instance, never a shared one:
 	// it claims `public` and about 150 tables. One statement, and it is the

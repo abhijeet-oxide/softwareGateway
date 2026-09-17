@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -32,10 +33,11 @@ func TestQueriesPerRequestReachTheMetric(t *testing.T) {
 	const queries = 7
 	handler := chainForTest(reg, http.HandlerFunc(
 		func(_ http.ResponseWriter, r *http.Request) {
-			// Stand in for the driver wrapper, which records against whatever
-			// counter the request's context carries.
+			// Stand in for the driver wrapper, which times each statement
+			// against whatever counter the request's context carries.
 			for range queries {
-				querycount.Record(r.Context())
+				_, _ = querycount.Observe(r.Context(),
+					func() (struct{}, error) { return struct{}{}, nil })
 			}
 		}))
 
@@ -156,4 +158,59 @@ func familyNames(families []*io_prometheus_client.MetricFamily) []string {
 		out = append(out, f.GetName())
 	}
 	return out
+}
+
+// THE LATENCY BREAKDOWN, held.
+//
+// api_request_duration_seconds says a route is slow. It cannot say what the
+// route is slow DOING, and the two answers lead to entirely different work: an
+// index and a query rewrite, or a handler and an upstream registry. The split
+// only exists if the database time reaches its own histogram, and it would
+// reach zero silently if the driver wrapper stopped timing or the middleware
+// stopped reading - neither of which breaks anything else.
+func TestTimeSpentInTheDatabaseReachesItsOwnMetric(t *testing.T) {
+	reg := metrics.New("test")
+
+	const perQuery = 20 * time.Millisecond
+	handler := chainForTest(reg, http.HandlerFunc(
+		func(_ http.ResponseWriter, r *http.Request) {
+			// Two statements that take real time, the way the driver wrapper
+			// sees them. The handler also does work of its own, below.
+			for range 2 {
+				_, _ = querycount.Observe(r.Context(), func() (struct{}, error) {
+					time.Sleep(perQuery)
+					return struct{}{}, nil
+				})
+			}
+			time.Sleep(4 * perQuery)
+		}))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/things", nil))
+
+	db := histogramSum(t, reg, "softwaregateway_api_request_db_seconds")
+	total := histogramSum(t, reg, "softwaregateway_api_request_duration_seconds")
+
+	if db < 0.03 {
+		t.Errorf("the database histogram recorded %.3fs for two statements of "+
+			"%v each.\nA near-zero here means the driver wrapper is no longer "+
+			"timing, or the metrics middleware is no longer reading what it "+
+			"recorded - and the reading is 'this route does no database work',\n"+
+			"which is the most misleading thing it could say.", db, perQuery)
+	}
+	if db >= total {
+		t.Errorf("database time %.3fs is not less than total time %.3fs.\n"+
+			"The point of the pair is that the remainder is the handler; if the\n"+
+			"database time swallows the whole request there is no breakdown.",
+			db, total)
+	}
+	// Two statements of perQuery against a handler that slept for four of
+	// them, so the remainder has to be the larger part. This is the assertion
+	// that fails if the database histogram is quietly fed the total.
+	if remainder := total - db; remainder < db {
+		t.Errorf("the handler's share came out at %.3fs against %.3fs in the "+
+			"database, but the handler slept twice as long as the statements "+
+			"did.\nThe database histogram is probably being given the "+
+			"request's total duration.", remainder, db)
+	}
 }

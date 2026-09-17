@@ -163,8 +163,9 @@ func (c *countingConn) QueryContext(
 	if !ok {
 		return nil, driver.ErrSkip
 	}
-	querycount.Record(ctx)
-	return qc.QueryContext(ctx, q, args)
+	return querycount.Observe(ctx, func() (driver.Rows, error) {
+		return qc.QueryContext(ctx, q, args)
+	})
 }
 
 func (c *countingConn) ExecContext(
@@ -174,8 +175,9 @@ func (c *countingConn) ExecContext(
 	if !ok {
 		return nil, driver.ErrSkip
 	}
-	querycount.Record(ctx)
-	return ec.ExecContext(ctx, q, args)
+	return querycount.Observe(ctx, func() (driver.Result, error) {
+		return ec.ExecContext(ctx, q, args)
+	})
 }
 
 func (c *countingConn) Ping(ctx context.Context) error {
@@ -220,8 +222,9 @@ func (s *countingStmt) ExecContext(
 	if !ok {
 		return nil, driver.ErrSkip
 	}
-	querycount.Record(ctx)
-	return e.ExecContext(ctx, args)
+	return querycount.Observe(ctx, func() (driver.Result, error) {
+		return e.ExecContext(ctx, args)
+	})
 }
 
 func (s *countingStmt) QueryContext(
@@ -231,6 +234,7 @@ func (s *countingStmt) QueryContext(
 	if !ok {
 		return nil, driver.ErrSkip
 	}
-	querycount.Record(ctx)
-	return q.QueryContext(ctx, args)
+	return querycount.Observe(ctx, func() (driver.Rows, error) {
+		return q.QueryContext(ctx, args)
+	})
 }

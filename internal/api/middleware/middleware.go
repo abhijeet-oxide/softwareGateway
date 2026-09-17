@@ -138,6 +138,12 @@ func Logging(base *slog.Logger) func(http.Handler) http.Handler {
 				slog.Int("bytes", ww.BytesWritten()),
 				slog.Duration("duration", took),
 				slog.Int64("queries", counted.N()),
+				// Beside the duration so one line answers "slow doing what".
+				// A request that took two seconds with 1.9 of them in the
+				// database is a query to fix; the same two seconds with 0.01
+				// in the database is a handler or an upstream registry, and
+				// no amount of index work will touch it.
+				slog.Float64("dbSeconds", counted.Seconds()),
 			)
 		})
 	}
@@ -188,6 +194,7 @@ func Metrics(reg *metrics.Registry) func(http.Handler) http.Handler {
 			reg.APIRequests.WithLabelValues(route, r.Method, metrics.StatusClass(ww.Status())).Inc()
 			reg.APILatency.WithLabelValues(route, r.Method).Observe(time.Since(start).Seconds())
 			reg.APIQueries.WithLabelValues(route, r.Method).Observe(float64(counted.N()))
+			reg.APIDBSeconds.WithLabelValues(route, r.Method).Observe(counted.Seconds())
 		})
 	}
 }

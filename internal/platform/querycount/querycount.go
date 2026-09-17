@@ -27,18 +27,35 @@
 // parallel without seeing each other's queries. The driver wrapper in
 // internal/store increments whatever counter the context carries, and a context
 // without one costs an interface comparison.
+//
+// # Why it also holds time
+//
+// Because "this endpoint is slow" has two answers and the count only
+// distinguishes them when the count is obviously wrong. A route making one
+// query and taking two seconds is a slow QUERY; a route making one query and
+// taking two seconds of which one is in the database is a slow query AND a
+// slow handler. Total latency alone cannot separate those, and the separation
+// is most of the work of deciding what to fix.
+//
+// The time measured is the driver call - from handing the statement to the
+// database to its first answer - which is the wait, not the row scanning that
+// follows. That is deliberately the part a person cannot make faster by
+// writing better Go.
 package querycount
 
 import (
 	"context"
 	"sync/atomic"
+	"time"
 )
 
 type ctxKey struct{}
 
-// Counter is the number of database round trips made under one context.
+// Counter is the database work done under one context: how many round trips,
+// and how long they waited.
 type Counter struct {
 	queries atomic.Int64
+	nanos   atomic.Int64
 }
 
 // N is how many round trips have been made.
@@ -49,13 +66,28 @@ func (c *Counter) N() int64 {
 	return c.queries.Load()
 }
 
-// add records one round trip. Safe on a nil counter, which is the case for
-// every context nobody asked to count.
-func (c *Counter) add() {
+// Seconds is how long those round trips spent waiting on the database.
+//
+// Wall clock summed per statement, so on a handler that queries concurrently
+// it can exceed the request's own duration. That is the honest reading -
+// "database work done on behalf of this request" - and the alternative,
+// measuring only the critical path, would report a fan-out that saturated the
+// pool as cheap.
+func (c *Counter) Seconds() float64 {
+	if c == nil {
+		return 0
+	}
+	return float64(c.nanos.Load()) / float64(time.Second)
+}
+
+// Record adds one round trip and what it cost. Safe on a nil counter, which is
+// the case for every context nobody asked to count.
+func (c *Counter) Record(d time.Duration) {
 	if c == nil {
 		return
 	}
 	c.queries.Add(1)
+	c.nanos.Add(int64(d))
 }
 
 // With returns a context that counts, and the counter to read afterwards.
@@ -73,10 +105,20 @@ func From(ctx context.Context) *Counter {
 	return c
 }
 
-// Record adds one round trip to whatever counter the context carries.
+// Observe times one statement against whatever counter the context carries.
 //
-// Called by the driver wrapper on every statement that reaches the database.
-// A context nobody is counting costs one type assertion and no allocation.
-func Record(ctx context.Context) {
-	From(ctx).add()
+// Called by the driver wrapper around every statement that reaches the
+// database. A context nobody is counting takes the nil branch: one type
+// assertion, no clock read, no allocation - which matters because this is the
+// wrapper every query in the process passes through, including the ones served
+// to a worker forty times a second.
+func Observe[T any](ctx context.Context, call func() (T, error)) (T, error) {
+	c := From(ctx)
+	if c == nil {
+		return call()
+	}
+	start := time.Now()
+	out, err := call()
+	c.Record(time.Since(start))
+	return out, err
 }

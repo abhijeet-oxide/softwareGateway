@@ -1,0 +1,117 @@
+{
+  "title": "Software Gateway - Transfers and fleet",
+  "filename": "03-transfers.json",
+  "rows": [
+    {
+      "title": "The queue",
+      "panels": [
+        {
+          "title": "Jobs outstanding",
+          "description": "By state. `blocked` is waiting on a dependency - a manifest whose blobs have not landed - and a large blocked count with an empty pending one usually means a dependency graph that never resolves rather than a busy fleet. Settled jobs are deliberately not here: they are counted, not gauged, because archiving old rows would otherwise read as work being undone.",
+          "unit": "jobs",
+          "width": 6,
+          "alias": ["{{state}}"],
+          "expr": ["sum by (state) (softwaregateway_queue_jobs)"]
+        },
+        {
+          "title": "Oldest job still waiting",
+          "description": "THE ONE TO ALERT ON. Flat in a moving queue however deep it is, climbing minute for minute in a stalled one. If this is rising while `leased` above is zero, no worker is taking work - check the fleet row below before looking at the queue at all.",
+          "unit": "s",
+          "width": 6,
+          "alias": ["oldest unstarted job"],
+          "expr": ["max(softwaregateway_queue_oldest_pending_seconds)"]
+        },
+        {
+          "title": "Bytes outstanding",
+          "description": "How much is actually left, which a job count cannot say: a queue of nine manifests and one 23 GB blob is one job from done and hours from finished. `pending` is the planned size of what has not started; `in_flight` is what leased jobs have moved so far.",
+          "unit": "GiB",
+          "width": 6,
+          "alias": ["{{kind}}"],
+          "expr": ["sum by (kind) (softwaregateway_queue_bytes) / 1073741824"]
+        },
+        {
+          "title": "Work that is paused",
+          "description": "Outstanding jobs whose transfer somebody paused. Read beside the depth panel: a deep queue that is paused is a decision, and a deep queue that is not is an incident. Without this they look identical.",
+          "unit": "jobs",
+          "width": 6,
+          "alias": ["paused"],
+          "expr": ["sum(softwaregateway_queue_jobs_paused)"]
+        }
+      ]
+    },
+    {
+      "title": "What the fleet did",
+      "panels": [
+        {
+          "title": "Throughput",
+          "description": "Bytes per second. `transferred` crossed the wire; `saved` is what a dedupe or a server-side mount meant nobody had to move. Kept apart because adding them together reports bandwidth nobody used - and because the saved line is the measure of whether this system is earning its keep.",
+          "unit": "MiB/s",
+          "width": 6,
+          "alias": ["{{disposition}}"],
+          "expr": ["sum by (disposition) (rate(softwaregateway_job_bytes_total[5m])) / 1048576"]
+        },
+        {
+          "title": "Jobs settled per second",
+          "description": "Terminal outcomes only. A failure with attempts left went back on the queue and is still outstanding work - it is counted by the depth panel above and by the failure panel below, not here. Without that distinction one bad afternoon at a registry reads as hundreds of permanent failures.",
+          "unit": "jobs/s",
+          "width": 6,
+          "alias": ["{{outcome}}"],
+          "expr": ["sum by (outcome) (rate(softwaregateway_jobs_completed_total[5m]))"]
+        },
+        {
+          "title": "How long a job takes (p95)",
+          "description": "First lease to completion, by kind. A manifest is metadata and should be sub-second; a blob is however large it is, so this line tracks the size of what is being moved as much as the speed of moving it. A sudden rise on manifests alone is the registry, not the network.",
+          "unit": "s",
+          "width": 6,
+          "alias": ["{{kind}}"],
+          "expr": ["histogram_quantile(0.95, sum by (kind, le) (rate(softwaregateway_job_duration_seconds_bucket[5m])))"]
+        },
+        {
+          "title": "Failures by class, retried or not",
+          "description": "Every failure, including the ones that were retried and then succeeded - which is the point. A class whose retries are climbing is a dependency degrading before it breaks, and it is invisible on the settled-outcome panel because the job eventually worked. `auth` is a credential nobody rotated; `transient` is a registry having a bad day; `digest_mismatch` is corruption.",
+          "unit": "errors/s",
+          "width": 6,
+          "alias": ["{{class}} ({{kind}})"],
+          "expr": ["sum by (class, kind) (rate(softwaregateway_job_errors_total[5m]))"]
+        }
+      ]
+    },
+    {
+      "title": "The fleet",
+      "panels": [
+        {
+          "title": "Workers",
+          "description": "By state. `stale` is a worker that stopped heartbeating - its leases will be reaped and its jobs redone, so a persistent stale count is work being repeated rather than lost. By state and never by worker id: a worker id is a pod name, and pod names are unbounded over a cluster's life.",
+          "unit": "workers",
+          "width": 6,
+          "alias": ["{{state}}"],
+          "expr": ["sum by (state) (softwaregateway_workers)"]
+        },
+        {
+          "title": "Fleet concurrency",
+          "description": "Three lines and two gaps, and the gaps are the diagnosis. `granted` below `max` is the budget controller holding back because a vendor registry is struggling. `active` at `granted` with a deep queue is the fleet being the bottleneck - add workers. `active` well below `granted` with a deep queue is neither, and means work is blocked rather than waiting.",
+          "unit": "slots",
+          "width": 6,
+          "alias": ["{{kind}}"],
+          "expr": ["sum by (kind) (softwaregateway_worker_slots)"]
+        },
+        {
+          "title": "Transfers not yet settled",
+          "description": "The transfers page, aggregated. A transfer wedged in `planning` or `verifying` has no jobs in the queue at all, so it is invisible on every panel above - this is the only place it shows.",
+          "unit": "transfers",
+          "width": 6,
+          "alias": ["{{state}}"],
+          "expr": ["sum by (state) (softwaregateway_queue_transfers)"]
+        },
+        {
+          "title": "Are the queue gauges trustworthy",
+          "description": "Failed samples per second. On a failed sample the gauges above KEEP their previous values rather than dropping to zero, because a frozen zero reads as an empty queue - the one thing a measurement failure must never say. Non-zero here means everything on this dashboard is stale.",
+          "unit": "failures/s",
+          "width": 6,
+          "alias": ["sample failures"],
+          "expr": ["sum(rate(softwaregateway_queue_sample_failures_total[5m]))"]
+        }
+      ]
+    }
+  ]
+}

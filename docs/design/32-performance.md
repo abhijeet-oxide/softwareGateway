@@ -5,8 +5,9 @@
 > and the `Performance` job in `.github/workflows/ci.yml`; §5.1 and §5.3 are in
 > `internal/store/queue.go` and `web/src/pages/Downloads.tsx`, §5.4 in
 > `cmd/coordinator`, §5.5 in `internal/api/replication.go`, §5.2 in
-> `internal/store/rollupcache.go` and §5.6 in `internal/api/events.go`. All six
-> are in.
+> `internal/store/rollupcache.go` and §5.6 in `internal/api/events.go`. §5.7 is
+> the browser rather than the Coordinator, in `web/src/pages/` and
+> `web/vite.config.ts`. All seven are in.
 
 ---
 
@@ -367,6 +368,68 @@ PostgreSQL `LISTEN/NOTIFY` - there is no connection pooler in front of the
 database, so it is available without new infrastructure. It was not taken now
 because it adds a second connection type, a reconnect loop and a dialect
 branch for latency nobody has asked for.
+
+### 5.7 Page the listings that grow with the estate - DONE
+
+Everything above §5.6 is the Coordinator. This one is the browser, and it is
+the only entry here that was reported the way §1 says reports arrive: "I click
+Repositories and it takes two or three seconds to appear."
+
+**What it was.** The URL changed in under 100 ms and then the main thread was
+busy. No request was in flight by then - the data was already cached - so none
+of the server work above was involved. `web/src/pages/Repositories.tsx` passed
+`pagination={false}` to a table with a row per source AND per target of every
+product, which is the one listing here that multiplies, and rendered all of
+them.
+
+Measured on a production build at 4x CPU throttle, from the click to the page
+on screen:
+
+| repository rows | before | after |
+|---|---|---|
+| 8 | 0.84 s | 0.87 s |
+| 40 | 1.73 s | 1.33 s |
+| 100 | 3.46 s | 1.29 s |
+| 200 | 6.09 s | 1.48 s |
+| 400 | 10.55 s | 1.46 s |
+
+Linear before, about 6 ms a row unthrottled; flat after. `Products` and the
+Downloads rules table have the same shape - a row per product, a row per rule
+per product - and were paged with it rather than waiting to be reported
+separately.
+
+The fix is the kit's own defaults, `pagination={{}}`, which include
+`hideOnSinglePage`: a deployment under 25 rows sees exactly what it saw before,
+no pager and every row. That is what made this safe to apply to three tables on
+one measurement.
+
+**What is NOT paged, deliberately.** The other seventeen `pagination={false}`
+call sites are bounded by their subject rather than by the estate - one
+release's artifacts, one download's stages, a health check's steps. A pager on
+a four-row table is furniture.
+
+**The measurement trap this sat behind.** `vite preview` had no `/api` proxy,
+so the only way to look at this interface against a running Coordinator was
+`pnpm dev` - and React's development build is 2 to 3 times slower to render
+than the one that ships. On the same machine, same throttle, same empty estate:
+
+| page | `pnpm dev` | production build |
+|---|---|---|
+| Products | 1.56 s | 0.61 s |
+| Repositories | 2.36 s | 0.85 s |
+| Overview | 0.70 s | 0.46 s |
+| Downloads | 0.45 s | 0.26 s |
+
+Both numbers were real and only one of them was actionable, and there was no
+way to tell them apart locally. `preview.proxy` in `web/vite.config.ts` is now
+the same object `server.proxy` is, so `pnpm build && pnpm preview` answers what
+a deployment will actually do.
+
+**What would change our mind.** A page size of 25 is a guess at how much of an
+estate somebody reads at once. If operators start paging through Repositories
+to find things, the answer is a server-side filter on that listing rather than
+a larger page - the cost measured above is per row rendered, so a bigger page
+buys the wait back at the same rate.
 
 ## 6. What is already right
 

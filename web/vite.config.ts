@@ -18,6 +18,13 @@ import runtimeConfigPlugin from './vitePluginRuntimeConfig.ts'
 // API on its own origin. In development that means proxying rather than
 // pointing the app at http://localhost:8080 - and same-origin is the right
 // production posture anyway, so dev and prod agree.
+const apiProxy = {
+  '/api': {
+    target: process.env.COORDINATOR_URL ?? 'http://localhost:8080',
+    changeOrigin: true,
+  },
+}
+
 export default defineConfig({
   plugins: [
     react(),
@@ -44,12 +51,19 @@ export default defineConfig({
   ],
   server: {
     port: 5173,
-    proxy: {
-      '/api': {
-        target: process.env.COORDINATOR_URL ?? 'http://localhost:8080',
-        changeOrigin: true,
-      },
-    },
+    proxy: apiProxy,
+  },
+  // THE SAME PROXY for `vite preview`, which is the only way to look at a
+  // production build against a running Coordinator without building an image.
+  //
+  // Without it `preview` served the bundle and 404ed every read, so the only
+  // local view of this interface was the development server - and a
+  // development React is several times slower to render than the one that
+  // ships. A page that takes two seconds to appear under `pnpm dev` and 300ms
+  // in a deployment is a performance report nobody can act on. See
+  // docs/design/32-performance.md.
+  preview: {
+    proxy: apiProxy,
   },
   build: {
     // Air-gapped by construction: everything the page needs ships in the

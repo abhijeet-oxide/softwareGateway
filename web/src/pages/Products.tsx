@@ -290,7 +290,10 @@ export default function Products() {
             loading={products.isLoading}
             dataSource={rows}
             rowKey={(p) => p.productId}
-            pagination={false}
+            /* One row per product, so it grows with the estate: paged for the
+               reason Repositories is, and with the same `hideOnSinglePage`
+               default, so a small deployment sees no pager. */
+            pagination={{}}
             scroll={ {
                   /*
                     `max-content`, not a number. A hardcoded width has to be

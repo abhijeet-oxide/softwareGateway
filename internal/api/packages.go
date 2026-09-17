@@ -58,7 +58,7 @@ func (s *Server) handleListUnavailable(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := s.deps.Packages.ListUnavailable(r.Context(), productName, pageSize)
 	if err != nil {
-		Error(w, r, v1.CodeUnavailable, "could not list unavailable packages: "+err.Error())
+		s.fault(w, r, "could not list unavailable packages", err)
 		return
 	}
 
@@ -660,13 +660,13 @@ func (s *Server) handleListPackageFiles(w http.ResponseWriter, r *http.Request) 
 
 	files, opaque, err := s.deps.Packages.PackageFiles(r.Context(), pkg.ID)
 	if err != nil {
-		Error(w, r, v1.CodeUnavailable, "could not list the files: "+err.Error())
+		s.fault(w, r, "could not list the files", err)
 		return
 	}
 
 	analysed, err := s.deps.Packages.PackageAnalysed(r.Context(), pkg.ID)
 	if err != nil {
-		Error(w, r, v1.CodeUnavailable, "could not tell whether this release has been analysed: "+err.Error())
+		s.fault(w, r, "could not tell whether this release has been analysed", err)
 		return
 	}
 
@@ -1849,7 +1849,7 @@ func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		Error(w, r, v1.CodeUnavailable, "could not expand the package: "+err.Error())
+		s.fault(w, r, "could not expand the package", err)
 		return
 	}
 

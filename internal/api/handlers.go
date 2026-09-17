@@ -105,6 +105,39 @@ func (s *Server) handleDeepHealth(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, r, http.StatusOK, resp)
 }
 
+// handlePing answers "is there a service at this address?" AND NOTHING ELSE.
+//
+// # Why this exists when /healthz already does
+//
+// Because /healthz is not on the path a browser actually uses. It lives at the
+// root rather than under /api/v1, so whether a page can reach it depends on
+// how the proxy in front of the deployment is routed - and an address that
+// answers 404 for a probe while the API works perfectly reports an outage that
+// does not exist. This is on the same prefix as every other read on screen,
+// which makes it the only honest answer to "can this page talk to its
+// service": if the probe reaches it, so can the page.
+//
+// # Why it is anonymous, and why that had to be deliberate
+//
+// The check runs every forty-five seconds in every open tab. Putting the
+// session's token on it would drag a background poll into the token renewal
+// path, where an expiry during an outage could start a sign-in nobody asked
+// for; leaving the token off an AUTHENTICATED endpoint - which is what this
+// replaced - logged a 401 on that same schedule, and an administrator watching
+// their own health check be refused has every reason to think their sign-in is
+// broken. See middleware.PublicPaths.
+//
+// It touches nothing: no database, no registry, no configuration. A probe that
+// checked a dependency would report a degraded deployment as an unreachable
+// one, and the reader would be told the network is down when the service is
+// answering perfectly and saying so.
+func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
+	// No version, no component, no build metadata. This answers without
+	// credentials, so it says only what an unauthenticated caller already
+	// knows by having connected: something is here.
+	WriteJSON(w, r, http.StatusOK, v1.PingResponse{Status: "ok"})
+}
+
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	info := version.Get(s.deps.Component)
 	resp := v1.VersionResponse{

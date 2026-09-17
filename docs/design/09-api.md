@@ -189,6 +189,8 @@ Schedules are created through `POST /transfers` with `scheduleAt` - one creation
 | `POST` | `/api/v1/jobs/{job}:complete` | // terminal outcome |
 | `GET` | `/api/v1/system:healthCheck` | Deep dependency check ([13](13-cli.md)) |
 | `GET` | `/api/v1/system/version` | Build info |
+| `GET` | `/api/v1/system/ping` | Reachability. **No credentials**, no dependencies ([33](33-availability-and-failure-reporting.md) §5) |
+| `GET` | `/api/v1/system/availability` | When the service was serving, and the outages ([33](33-availability-and-failure-reporting.md) §6) |
 | `GET` | `/healthz` | Liveness - **process-local only** |
 | `GET` | `/livez` | Liveness, under Kubernetes' own spelling. The same probe |
 | `GET` | `/readyz` | Readiness - database, schema version, config |
@@ -488,8 +490,18 @@ RFC 9457 `application/problem+json`:
 | `FAILED_PRECONDITION` | 409 | Illegal state transition; includes `currentState` |
 | `ABORTED` | 412 | `If-Match` mismatch |
 | `RESOURCE_EXHAUSTED` | 429 | Server-side throttle; `Retry-After` set |
-| `UNAVAILABLE` | 503 | Database or a critical dependency down; `Retry-After` set |
-| `INTERNAL` | 500 | Bug. `detail` is generic; specifics go to logs keyed by `requestId` |
+| `UNAVAILABLE` | 503 | **The service is not serving**: the database or a critical dependency cannot be REACHED; `Retry-After` set |
+| `INTERNAL` | 500 | Bug, including a statement the database refused. Specifics go to logs keyed by `requestId` |
+
+> **503 is a promise, and it is the strongest one in this table.** It is the
+> only code a client may act on by waiting, and every client here does: the
+> interface draws an outage over the whole application, the boot screen draws a
+> maintenance page, a CLI retries. An error that will fail identically on every
+> retry must therefore never wear it - a query with a bug in it once did, and a
+> fault on one tab was served to every browser as a service that had stood
+> down. `store.Unreachable` draws the line between a database that cannot be
+> reached and a statement it refused. See
+> [33](33-availability-and-failure-reporting.md) §3.
 
 `detail` names the offending field and why. `"invalid request"` forces the user into the logs, which they usually cannot read.
 
@@ -505,7 +517,16 @@ Three tiers, three questions, and they are not interchangeable:
 |---|---|---|---|
 | Liveness | Is this process wedged? | `/healthz`, `/livez` | Kubernetes restarts the container |
 | Readiness | Should it be given work? | `/readyz` | Kubernetes removes it from the Service; compose `depends_on` waits for it |
+| Reachability | Can a browser reach the API? | `/api/v1/system/ping` | The interface's connection monitor |
 | Deep | What is wrong? | `/api/v1/system:healthCheck` | A person, `transferctl health`, the Settings page |
+
+`/api/v1/system/ping` is the browser's tier and exists because the other three
+are not on the path a browser uses. It is on the `/api/v1` prefix, so reaching
+it proves the page can reach the API; it is anonymous by contract, so a check
+running every forty-five seconds in every open tab is neither in the token
+renewal path nor logging a 401 on a timer; and it touches no dependency,
+because a probe that checked one would report a degraded deployment as an
+unreachable one. See [33](33-availability-and-failure-reporting.md) §5.
 
 `/healthz` and `/livez` are the SAME probe under both spellings. This project's
 documentation and charts have always said `/healthz`; kubelet's own component

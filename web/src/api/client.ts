@@ -71,6 +71,14 @@ export class UnreachableError extends Error {
  * refusal is not an outage, and reporting one as an outage would put an
  * "unavailable" card on screen every time somebody opened a page they are not
  * allowed to see.
+ *
+ * THIS IS EVIDENCE, NOT A VERDICT. Nothing here declares an outage: the
+ * monitor takes one failing request as grounds for a check and asks the
+ * service itself. That distinction is load-bearing. A 503 reaches this
+ * function from ONE endpoint, and one endpoint is not the service - a handler
+ * reporting its own failure as 503 used to take the whole application offline
+ * on screen, and the recovery from the check that followed refetched
+ * everything into the same failure, over and over. See uikit/connection.
  */
 function noteAnswered(status: number): void {
   if (status === 502 || status === 504) {

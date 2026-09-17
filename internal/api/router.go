@@ -228,6 +228,12 @@ type Deps struct {
 	Vendors   *vendors.Registry
 	Component string
 
+	// Availability is the service's own record of when it was serving, which
+	// backs the Overview page's availability panel. Optional: without it the
+	// route is absent and a caller gets an honest 404 rather than a panel
+	// reporting an outage it made up out of an empty table.
+	Availability *store.Availability
+
 	// SecuritySync runs vulnerability syncs. Optional on the same terms as
 	// Comparer: it reaches a scanner through the configured client factory and
 	// the secrets behind it, which only a composition root holds. Without it
@@ -406,6 +412,10 @@ func (s *Server) routes() chi.Router {
 
 	// ---- API v1 ----
 	r.Route("/api/v1", func(r chi.Router) {
+		// Reachability, with no credentials and no dependencies: the one
+		// question a browser's connection monitor asks on a schedule. See
+		// handlePing.
+		r.Get("/system/ping", s.handlePing)
 		r.Get("/system/version", s.handleVersion)
 		// Who is calling. Registered unconditionally and with no dependency:
 		// a caller must always be able to discover that they are anonymous,
@@ -414,6 +424,12 @@ func (s *Server) routes() chi.Router {
 		// AIP-136 custom method: a colon, because a deep health check is a
 		// verb with side effects (it makes outbound calls), not a resource.
 		r.Get("/system:healthCheck", s.handleDeepHealth)
+		// The service's own record of when it was serving. Registered only
+		// where something records it: a route that answered "no outages" from
+		// an empty table would be the most reassuring lie in the product.
+		if s.deps.Availability != nil {
+			r.Get("/system/availability", s.handleGetAvailability)
+		}
 
 		r.Get("/products", s.handleListProducts)
 		r.Get("/products/{product}", s.handleGetProduct)

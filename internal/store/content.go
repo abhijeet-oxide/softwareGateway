@@ -392,7 +392,7 @@ type PackageFile struct {
 func (p *Packages) PackageFiles(ctx context.Context, packageID int64) ([]PackageFile, int, error) {
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
 		SELECT pa.id,
-		       COALESCE(pa.annotations, ''),
+		       `+p.dialect.JSONText("pa.annotations")+`,
 		       ab.title,
 		       COALESCE(b.size_bytes, 0),
 		       ab.digest,
@@ -482,7 +482,7 @@ func (p *Packages) FileInPackage(ctx context.Context, packageID int64, digest st
 	)
 	err := p.db.QueryRowContext(ctx, p.dialect.Rewrite(`
 		SELECT pa.id,
-		       COALESCE(pa.annotations, ''),
+		       `+p.dialect.JSONText("pa.annotations")+`,
 		       ab.title,
 		       COALESCE(b.size_bytes, 0),
 		       ab.digest,

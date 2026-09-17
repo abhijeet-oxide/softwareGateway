@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import { api, fetchText, query, packageRef } from './client'
 import { useIdentity } from '../auth/permissions'
 import type {
+  AvailabilityResponse, AvailabilityWindow,
   CalibrateRequest, CalibrateResponse,
   CancelAnalysisResponse, CancelSecuritySyncResponse, ReplicateSecurityResponse,
   CheckConnectivityResponse, CompareProgressResponse, CompareRequest, CompareResponse,
@@ -1060,6 +1061,34 @@ export function useCalibrate(product: string | undefined) {
     // A path being slow enough to investigate is a path whose probes may take
     // minutes and may fail. Retrying doubles the load for no new information.
     retry: false,
+  })
+}
+
+/**
+ * WAS THE SERVICE UP, AND HOW OFTEN HAS IT NOT BEEN.
+ *
+ * The service's own record, not this browser's opinion. The distinction is the
+ * point: the connection monitor knows what THIS TAB could reach in the last few
+ * minutes and nothing else, and an interface that presented that as the
+ * application's availability once turned one endpoint's broken query into a
+ * backend that appeared to restart every few seconds. This is what the
+ * Coordinator wrote down about itself, including the periods no browser was
+ * watching.
+ *
+ * Polled slowly. It changes on the scale of a restart, and the panel showing it
+ * is not the thing anybody opened the page for.
+ */
+export function useAvailability(window: AvailabilityWindow = '24h') {
+  const { can } = useIdentity()
+  return useQuery({
+    queryKey: ['availability', window],
+    queryFn: () => api.get<AvailabilityResponse>(`/system/availability?window=${window}`),
+    // An ESTATE read with no product tier, so this is the tenant-wide
+    // question: a product-scoped caller correctly answers no, and asking
+    // anyway would poll a refusal for the whole of their session.
+    enabled: can('system.view'),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
   })
 }
 

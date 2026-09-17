@@ -27,7 +27,7 @@ func (s *Server) handleListTransferFailures(w http.ResponseWriter, r *http.Reque
 
 	groups, err := s.deps.Packages.FailureGroups(r.Context(), id)
 	if err != nil {
-		Error(w, r, v1.CodeUnavailable, "could not summarise the failures: "+err.Error())
+		s.fault(w, r, "could not summarise the failures", err)
 		return
 	}
 

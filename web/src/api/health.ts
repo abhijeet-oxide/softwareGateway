@@ -8,30 +8,31 @@ import { connection, type Probe, type ProbeResult } from '../uikit'
  * about this deployment. This file is the other half: one request, and the
  * rules for reading what comes back.
  *
- * # Why the version endpoint rather than /healthz
+ * # Why this endpoint rather than /healthz
  *
  * Because /healthz is not on the path this application actually uses. It lives
  * at the root rather than under /api/v1, so whether a browser can reach it
  * depends on how the proxy in front of the deployment is routed - and an
  * address that answers 404 for the probe while the API works perfectly would
- * report an outage that does not exist. The version endpoint is on the same
- * prefix as every other read on screen, which makes it the only honest answer
- * to "can this page talk to its service": if the probe can reach it, so can
- * the page.
+ * report an outage that does not exist. This endpoint is on the same prefix as
+ * every other read on screen, which makes it the only honest answer to "can
+ * this page talk to its service": if the probe can reach it, so can the page.
  *
- * It is also what the boot gate already asks, so a deployment that gets past
- * the boot screen is a deployment where this probe is known to work.
+ * # No credentials, on purpose - and an endpoint that expects that
  *
- * # No credentials, on purpose
+ * REACHABILITY IS NOT AUTHORISATION. The probe sends no token, because a check
+ * that runs every forty-five seconds in every open tab has no business in the
+ * token renewal path, where an expiry during an outage could start a sign-in
+ * redirect nobody asked for.
  *
- * REACHABILITY IS NOT AUTHORISATION. The probe sends no token and reads a 401
- * as a healthy answer, because a service that refuses an anonymous caller has
- * demonstrably received the request, parsed it and replied - which is the
- * entire question. Sending the session's token instead would put a probe that
- * runs every forty-five seconds into the token renewal path, where an expiry
- * during an outage could start a sign-in redirect nobody asked for.
+ * It used to ask /system/version, which is authenticated, and read the 401 as
+ * a healthy answer - correct reasoning, and it looked exactly like a broken
+ * session. An administrator inspecting a page full of failures found their own
+ * health check being refused every forty-five seconds and had no way to tell
+ * that this was the design. /system/ping answers anonymously by contract and
+ * carries nothing that would matter if it did not.
  */
-const PROBE_PATH = '/api/v1/system/version'
+const PROBE_PATH = '/api/v1/system/ping'
 
 /**
  * What each answer means.

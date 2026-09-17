@@ -12,6 +12,7 @@ import {
 import { formatBytes, formatDuration, formatSpeed } from '../domain/format'
 import { Stat, Value } from '../components/value'
 import { DiscoveryPanel, DiscoverySummary } from '../components/discovery'
+import { AvailabilityPanel } from '../components/availability'
 import { SystemPanel } from '../components/system'
 import {
   LocationChip, ProductChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
@@ -180,11 +181,12 @@ export default function Overview() {
    * column. Read with the same permissions the Guards use. */
   const maySeeFleet = useCan('worker.view')
   const maySeeReports = useCan('report.view')
+  const maySeeAvailability = useCan('system.view')
   // Both asked BEFORE the or, never `useCan(a) || useCan(b)` - that is a
   // CONDITIONAL HOOK CALL. `||` short-circuits, so the second useContext would
   // be skipped whenever the first came back true, and React would see a
   // different number of hooks between two renders of the same component.
-  const sidebar = maySeeFleet || maySeeReports
+  const sidebar = maySeeFleet || maySeeReports || maySeeAvailability
   const totals = reports.data?.totals
 
   return (
@@ -421,6 +423,17 @@ export default function Overview() {
               all. See the Reports and Settings pages, which the navigation
               drops for the same reason.
             */}
+            {/*
+              FIRST IN THE COLUMN, and the panel is on this page at all
+              because "was it up?" is the first question anybody has about a
+              service - it was the one question the product could not answer,
+              while a browser inferring outages from failing requests answered
+              it wrongly. See components/availability.
+            */}
+            <Guard permission="system.view">
+              <AvailabilityPanel />
+            </Guard>
+
             <Guard permission="worker.view">
               <SystemPanel />
             </Guard>

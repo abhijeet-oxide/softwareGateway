@@ -87,6 +87,11 @@ coordinator:
   files:
     downloadEnabled: false
 
+  security:
+    anchore:
+      endpoint: https://anchore.example.com
+      secretName: anchore-creds
+      insecureSkipVerify: true
 
 worker:
   coordinatorEndpoint: http://localhost:8080
@@ -122,7 +127,7 @@ tls:
   # affected, so it is a deployment's decision:
   #
   #   SWGW_TLS_ALLOWNEGATIVESERIALNUMBERS=true
-  allowNegativeSerialNumbers: false
+  allowNegativeSerialNumbers: true
 
 observability:
   log:
